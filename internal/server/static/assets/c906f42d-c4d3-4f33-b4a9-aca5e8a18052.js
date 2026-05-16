@@ -816,6 +816,23 @@ const BranchSwitcher = ({ agent, action }) => {
 // ───────── Session Detail (terminal bridge) ─────────────────────────────
 const isTerminalLiveStatus = (status = '') => status === 'interactive' || status.startsWith('connected');
 
+const NativeTranscriptPanel = ({ agent }) => (
+  <div className="pane terminal-pane">
+    <div className="pane-head">
+      <Icon name="terminal" size={11}/>
+      <ProviderMark provider={agent.provider || 'claude'} size={12}/>
+      <span>{agent.provider === 'codex' ? 'codex' : 'claude'} · native terminal</span>
+      <div className="right">
+        <Dot status="running"/>
+        <span className="terminal-status mono">synced transcript</span>
+      </div>
+    </div>
+    <div className="pane-body">
+      <TranscriptView entries={agent.transcript || []} live provider={agent.provider || 'claude'}/>
+    </div>
+  </div>
+);
+
 const SessionDetail = ({ agent, goto, action }) => {
   const [liveAgent, setLiveAgent] = useState(agent);
   const [terminalStatus, setTerminalStatus] = useState('connecting');
@@ -832,13 +849,17 @@ const SessionDetail = ({ agent, goto, action }) => {
   }, [agent.slug, agent.session_id]);
 
   const provider = current.provider || 'claude';
+  const terminalMode = current.terminal?.mode || 'idle';
+  const nativeTranscriptMode = terminalMode === 'native';
   const providerAvailable = isCapabilityAvailable('providers', provider);
   const providerReason = capabilityReason('providers', provider);
-  const canRestartTerminal = providerAvailable && terminalStatus !== 'connecting' && !isTerminalLiveStatus(terminalStatus);
+  const canRestartTerminal = providerAvailable && !nativeTranscriptMode && terminalStatus !== 'connecting' && !isTerminalLiveStatus(terminalStatus);
   const restartTitle = canRestartTerminal
     ? 'Restart terminal'
     : !providerAvailable
       ? providerReason
+      : nativeTranscriptMode
+      ? 'Session is active in a native terminal'
       : isTerminalLiveStatus(terminalStatus)
       ? 'Terminal is running'
       : 'Terminal is connecting';
@@ -880,7 +901,9 @@ const SessionDetail = ({ agent, goto, action }) => {
       </div>
       <div className="bridge-layout">
         {providerAvailable ? (
-          <TaskTerminal key={`${current.slug}:${current.session_id || ''}:${terminalRestartKey}`} agent={current} onStatus={setTerminalStatus}/>
+          nativeTranscriptMode
+            ? <NativeTranscriptPanel agent={current}/>
+            : <TaskTerminal key={`${current.slug}:${current.session_id || ''}:${terminalRestartKey}`} agent={current} onStatus={setTerminalStatus}/>
         ) : (
           <div className="pane terminal-pane">
             <div className="pane-head">

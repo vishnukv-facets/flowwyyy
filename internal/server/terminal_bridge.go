@@ -62,11 +62,12 @@ type terminalSession struct {
 	tty       *os.File
 	done      chan struct{}
 
-	mu         sync.Mutex
-	clients    map[*terminalClient]struct{}
-	scrollback []byte
-	closed     bool
-	exitStatus string
+	mu           sync.Mutex
+	clients      map[*terminalClient]struct{}
+	scrollback   []byte
+	closed       bool
+	exitStatus   string
+	lastOutputAt time.Time
 }
 
 type terminalClient struct {
@@ -197,6 +198,18 @@ func (h *terminalHub) scrollbackText(slug string, limit int) (string, bool) {
 		data = data[len(data)-limit:]
 	}
 	return string(stripTerminalAltScreenControls(data)), true
+}
+
+func (h *terminalHub) lastOutputAt(slug string) (time.Time, bool) {
+	h.mu.Lock()
+	sess := h.sessions[slug]
+	h.mu.Unlock()
+	if sess == nil {
+		return time.Time{}, false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.lastOutputAt, !sess.lastOutputAt.IsZero()
 }
 
 func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) (*terminalSession, error) {
@@ -805,12 +818,20 @@ func (s *terminalSession) terminate() {
 	if s.tty != nil {
 		_ = s.tty.Close()
 	}
+	s.mu.Lock()
+	if !s.closed {
+		s.closed = true
+		s.exitStatus = "terminal stopped"
+		close(s.done)
+	}
+	s.mu.Unlock()
 }
 
 func (s *terminalSession) appendScrollback(data []byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scrollback = append(s.scrollback, data...)
+	s.lastOutputAt = time.Now()
 	if len(s.scrollback) > terminalScrollbackBytes {
 		s.scrollback = append([]byte(nil), s.scrollback[len(s.scrollback)-terminalScrollbackBytes:]...)
 	}

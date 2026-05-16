@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"flow/internal/agents"
 	"flow/internal/flowdb"
 )
 
@@ -195,6 +196,8 @@ type uiTerminal struct {
 	Feed    []uiTermLine `json:"feed"`
 	Appends []uiTermLine `json:"appends"`
 	Footer  []uiTermLine `json:"footer"`
+	Mode    string       `json:"mode,omitempty"`
+	Message string       `json:"message,omitempty"`
 }
 
 type uiTermLine struct {
@@ -673,6 +676,15 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	if tv.SessionID != nil {
 		sessionID = *tv.SessionID
 	}
+	bridgeRunning := s.terminals != nil && s.terminals.running(tv.Slug)
+	sessionLive := tv.SessionID != nil && live[strings.ToLower(*tv.SessionID)]
+	terminalMode := "idle"
+	switch {
+	case bridgeRunning:
+		terminalMode = "browser"
+	case sessionLive:
+		terminalMode = "native"
+	}
 	fullTranscript := s.fullUITranscriptForTask(tv)
 	transcript := fullTranscript
 	if len(transcript) > 24 {
@@ -682,6 +694,9 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		transcript = s.syntheticTranscript(tv)
 		fullTranscript = transcript
 	}
+	if terminalMode == "browser" && s.transcriptAheadOfBrowserTerminal(tv.Slug, fullTranscript) {
+		terminalMode = "native"
+	}
 	insights := s.sessionInsightsForTask(tv, provider, fullTranscript)
 	status := "idle"
 	switch tv.Status {
@@ -689,9 +704,9 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		switch {
 		case tv.WaitingOn != nil:
 			status = "waiting"
-		case s.terminals != nil && s.terminals.running(tv.Slug):
+		case bridgeRunning:
 			status = "running"
-		case tv.SessionID != nil && live[strings.ToLower(*tv.SessionID)]:
+		case sessionLive:
 			status = "running"
 		case tv.StaleDays != nil:
 			status = "stale"
@@ -786,7 +801,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		Brief:           readMarkdownSummary(tv.BriefPath),
 		RecentTools:     recentTools(transcript),
 		PRLinks:         s.uiPRLinks(tv.Slug),
-		Terminal:        terminalSample(withTaskWorkDir(tv, workDir), provider, transcript),
+		Terminal:        terminalSample(withTaskWorkDir(tv, workDir), provider, transcript, terminalMode),
 	}
 	if tv.WaitingOn != nil {
 		agent.WaitingFor = &uiWaitingFor{Kind: "flow", Cmd: "flow update task " + tv.Slug + " --clear-waiting", Why: *tv.WaitingOn}
@@ -958,7 +973,7 @@ func terminalPermissionPhrases() []string {
 }
 
 func terminalAttentionFromText(text string) (string, string) {
-	trimmed := strings.TrimSpace(text)
+	trimmed := strings.TrimSpace(stripTerminalANSIEscapes(text))
 	if trimmed == "" {
 		return "", ""
 	}
@@ -1016,6 +1031,15 @@ func terminalAttentionHasProgressAfter(text string) bool {
 		"\nthinking...",
 		"\nerror:",
 		"\nwarning:",
+		"\nuser has answered your questions",
+		"\nuser answered",
+		"\nboth saved",
+		"\nworked for",
+		"\nrecap:",
+		"\npress ctrl-c",
+		"\nresume this session with",
+		"\nwhen you want to start",
+		"\n> ",
 	}
 	for _, phrase := range progressPhrases {
 		if strings.Contains(lower, phrase) {
@@ -1023,6 +1047,15 @@ func terminalAttentionHasProgressAfter(text string) bool {
 		}
 	}
 	return false
+}
+
+var terminalANSIRe = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+
+func stripTerminalANSIEscapes(text string) string {
+	if text == "" {
+		return ""
+	}
+	return terminalANSIRe.ReplaceAllString(text, "")
 }
 
 func terminalAttentionExcerptAt(text string, idx int) string {
@@ -1550,10 +1583,13 @@ func recentTools(transcript []uiTranscript) []uiRecentTool {
 	return out
 }
 
-func terminalSample(tv TaskView, provider string, transcript []uiTranscript) uiTerminal {
+func terminalSample(tv TaskView, provider string, transcript []uiTranscript, mode string) uiTerminal {
 	session := "no session"
 	if tv.SessionID != nil {
 		session = *tv.SessionID
+	}
+	if strings.TrimSpace(mode) == "" {
+		mode = "idle"
 	}
 	name := "session"
 	marker := "✻"
@@ -1601,7 +1637,47 @@ func terminalSample(tv TaskView, provider string, transcript []uiTranscript) uiT
 			{C: "space", Text: ""},
 			{C: "status", Text: fmt.Sprintf("%s flow · %s · %s", marker, tv.Status, tv.Slug)},
 		},
+		Mode:    mode,
+		Message: terminalModeMessage(provider, mode),
 	}
+}
+
+func terminalModeMessage(provider, mode string) string {
+	if provider == "" {
+		provider = agents.ProviderClaude
+	}
+	switch mode {
+	case "browser":
+		return provider + " is attached to the browser terminal"
+	case "native":
+		return provider + " is attached to a native terminal"
+	default:
+		return provider + " transcript snapshot"
+	}
+}
+
+func (s *Server) transcriptAheadOfBrowserTerminal(slug string, transcript []uiTranscript) bool {
+	if s.terminals == nil || len(transcript) == 0 {
+		return false
+	}
+	lastOutput, ok := s.terminals.lastOutputAt(slug)
+	if !ok {
+		return false
+	}
+	var latest time.Time
+	for _, entry := range transcript {
+		if strings.TrimSpace(entry.Time) == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, entry.Time)
+		if err != nil {
+			continue
+		}
+		if t.After(latest) {
+			latest = t
+		}
+	}
+	return !latest.IsZero() && latest.After(lastOutput.Add(2*time.Second))
 }
 
 func gitBranch(dir string) string {

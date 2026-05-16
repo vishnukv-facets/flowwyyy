@@ -1749,7 +1749,12 @@ const App = () => {
   const rawSessionAgent = isSession ? AGENTS.find(a => a.slug === sessionSlug) : null;
   const doneAgent = isSession ? DONE_AGENTS.find(a => a.slug === sessionSlug) || ((window.MC.DEAD_AGENT && window.MC.DEAD_AGENT.slug === sessionSlug) ? window.MC.DEAD_AGENT : null) : null;
   const bridgeAgent = isSession ? bridgeAgents[sessionSlug] : null;
-  const sessionAgent = rawSessionAgent || (!doneAgent ? bridgeAgent : null);
+  const rawSessionTranscriptCount = (rawSessionAgent?.transcript || []).length;
+  const bridgeTranscriptCount = (bridgeAgent?.transcript || []).length;
+  const nativeSessionSnapshot = rawSessionAgent?.terminal?.mode === 'native' || bridgeAgent?.terminal?.mode === 'native';
+  const sessionAgent = rawSessionAgent && bridgeAgent && (nativeSessionSnapshot || bridgeTranscriptCount > rawSessionTranscriptCount)
+    ? { ...rawSessionAgent, ...bridgeAgent, terminal: { ...(rawSessionAgent.terminal || {}), ...(bridgeAgent.terminal || {}), mode: nativeSessionSnapshot ? 'native' : (bridgeAgent.terminal?.mode || rawSessionAgent.terminal?.mode) } }
+    : rawSessionAgent || (!doneAgent ? bridgeAgent : null);
   const isPlaybook = route.startsWith('playbook/');
   const playbookSlug = isPlaybook ? route.slice(9) : null;
   const isProject = route.startsWith('project/');
@@ -1766,31 +1771,36 @@ const App = () => {
   const liveRunning = AGENTS.filter(a => a.status === 'running').length;
   const waiting = AGENTS.filter(a => a.status === 'waiting').length;
   const doneTranscriptCount = (doneAgent?.transcript || []).length;
-  const bridgeTranscriptCount = (bridgeAgent?.transcript || []).length;
   const completedAgent = doneAgent ? (bridgeTranscriptCount > doneTranscriptCount ? bridgeAgent : doneAgent) : null;
 
   useEffect(() => {
-    if (!isSession || !doneAgent || !sessionSlug) return;
-    if (bridgeAgent && bridgeTranscriptCount >= doneTranscriptCount && bridgeTranscriptCount > 0) return;
+    if (!isSession || !sessionSlug || (!doneAgent && !nativeSessionSnapshot)) return;
+    if (doneAgent && bridgeAgent && bridgeTranscriptCount >= doneTranscriptCount && bridgeTranscriptCount > 0 && !nativeSessionSnapshot) return;
     let cancelled = false;
-    fetch(`/api/tasks/${encodeURIComponent(sessionSlug)}/bridge`, { cache: 'no-store' })
-      .then(resp => resp.ok ? resp.json() : null)
-      .then(agent => {
-        if (cancelled || !agent || !agent.slug) return;
-        setBridgeAgents(prev => {
-          const existing = prev[agent.slug];
-          const existingCount = (existing?.transcript || []).length;
-          const nextCount = (agent.transcript || []).length;
-          if (existing && existingCount >= nextCount) return prev;
-          return { ...prev, [agent.slug]: agent };
-        });
-        const doneIdx = DONE_AGENTS.findIndex(a => a.slug === agent.slug);
-        if (doneIdx >= 0) DONE_AGENTS[doneIdx] = agent;
-        if (window.MC.DEAD_AGENT && window.MC.DEAD_AGENT.slug === agent.slug) window.MC.DEAD_AGENT = agent;
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [isSession, sessionSlug, doneAgent?.slug, doneTranscriptCount, bridgeTranscriptCount]);
+    const loadBridge = () => {
+      fetch(`/api/tasks/${encodeURIComponent(sessionSlug)}/bridge`, { cache: 'no-store' })
+        .then(resp => resp.ok ? resp.json() : null)
+        .then(agent => {
+          if (cancelled || !agent || !agent.slug) return;
+          setBridgeAgents(prev => {
+            const existing = prev[agent.slug];
+            const existingCount = (existing?.transcript || []).length;
+            const nextCount = (agent.transcript || []).length;
+            const existingMode = existing?.terminal?.mode;
+            const nextMode = agent?.terminal?.mode;
+            if (existing && existingCount >= nextCount && existingMode === nextMode) return prev;
+            return { ...prev, [agent.slug]: agent };
+          });
+          const doneIdx = DONE_AGENTS.findIndex(a => a.slug === agent.slug);
+          if (doneIdx >= 0) DONE_AGENTS[doneIdx] = agent;
+          if (window.MC.DEAD_AGENT && window.MC.DEAD_AGENT.slug === agent.slug) window.MC.DEAD_AGENT = agent;
+        })
+        .catch(() => {});
+    };
+    loadBridge();
+    const timer = nativeSessionSnapshot ? setInterval(loadBridge, 2500) : null;
+    return () => { cancelled = true; if (timer) clearInterval(timer); };
+  }, [isSession, sessionSlug, doneAgent?.slug, doneTranscriptCount, bridgeTranscriptCount, nativeSessionSnapshot]);
 
   const navCounts = {
     mc: AGENTS.length,

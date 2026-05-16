@@ -809,8 +809,11 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(body, "setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }))") {
 		t.Fatal("spawn/attach actions must retain the action-returned agent locally until the terminal websocket updates the DB")
 	}
-	if !strings.Contains(body, "const sessionAgent = rawSessionAgent || (!doneAgent ? bridgeAgent : null)") {
-		t.Fatal("session routes must use the retained bridge agent so spawn does not fall back to backlog after ui-data refresh")
+	if !strings.Contains(body, "const nativeSessionSnapshot = rawSessionAgent?.terminal?.mode === 'native' || bridgeAgent?.terminal?.mode === 'native'") {
+		t.Fatal("session routes must detect native terminal transcript snapshots")
+	}
+	if !strings.Contains(body, "mode: nativeSessionSnapshot ? 'native' : (bridgeAgent.terminal?.mode || rawSessionAgent.terminal?.mode)") {
+		t.Fatal("session routes must merge retained bridge snapshots so spawn does not fall back to stale ui-data")
 	}
 	if !strings.Contains(body, "const completedAgent = doneAgent ? (bridgeTranscriptCount > doneTranscriptCount ? bridgeAgent : doneAgent) : null") {
 		t.Fatal("completed session routes must not let a stale retained bridge agent override the done task snapshot")
@@ -1168,7 +1171,7 @@ func TestNativeTerminalActionStillLaunchesWhenSessionAlreadyLive(t *testing.T) {
 	}
 }
 
-func TestNativeTerminalActionKeepsBrowserTerminalInteractive(t *testing.T) {
+func TestNativeTerminalActionStopsBrowserTerminalAfterHandoff(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	sessionID := "66666666-6666-4666-8666-666666666666"
@@ -1211,8 +1214,86 @@ func TestNativeTerminalActionKeepsBrowserTerminalInteractive(t *testing.T) {
 	srv.terminals.mu.Lock()
 	got := srv.terminals.sessions["build-ui"]
 	srv.terminals.mu.Unlock()
-	if got != browserSess || !browserSess.running() {
-		t.Fatalf("browser terminal session was stopped after native open; got=%p want=%p running=%v", got, browserSess, browserSess.running())
+	if got != nil || browserSess.running() {
+		t.Fatalf("browser terminal session should stop after native handoff; got=%p running=%v", got, browserSess.running())
+	}
+	if resp.Agent == nil || resp.Agent.Terminal.Mode != "native" {
+		t.Fatalf("native handoff response should mark terminal mode native, got %+v", resp.Agent)
+	}
+}
+
+func TestAgentSnapshotMarksNativeTerminalMode(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "77777777-7777-4777-8777-777777777777"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	oldPS := psRunner
+	psRunner = func() ([]byte, error) {
+		return []byte("123 claude --resume " + sessionID + "\n"), nil
+	}
+	t.Cleanup(func() { psRunner = oldPS })
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	agent, err := srv.agentForTask("build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Status != "running" || agent.Terminal.Mode != "native" {
+		t.Fatalf("agent status/mode = %q/%q, want running/native", agent.Status, agent.Terminal.Mode)
+	}
+}
+
+func TestAgentSnapshotUsesTranscriptWhenBrowserTerminalIsStale(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	sessionID := "88888888-8888-4888-8888-888888888888"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00Z",
+	); err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(home, ".claude", "projects", encodeCwdForClaude(root))
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"type":"assistant","timestamp":"2026-05-12T10:05:00Z","message":{"role":"assistant","content":[{"type":"text","text":"later native terminal reply"}]}}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, sessionID+".jsonl"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	lastOutput, err := time.Parse(time.RFC3339, "2026-05-12T10:01:30Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.terminals.mu.Lock()
+	srv.terminals.sessions["build-ui"] = &terminalSession{
+		slug:         "build-ui",
+		sessionID:    sessionID,
+		done:         make(chan struct{}),
+		clients:      map[*terminalClient]struct{}{},
+		scrollback:   []byte("old browser terminal output"),
+		lastOutputAt: lastOutput,
+	}
+	srv.terminals.mu.Unlock()
+
+	agent, err := srv.agentForTask("build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Terminal.Mode != "native" {
+		t.Fatalf("terminal mode = %q, want native for transcript ahead of browser PTY", agent.Terminal.Mode)
+	}
+	if len(agent.Transcript) == 0 || !strings.Contains(agent.Transcript[len(agent.Transcript)-1].Text, "later native terminal reply") {
+		t.Fatalf("agent transcript was not loaded from session jsonl: %+v", agent.Transcript)
 	}
 }
 

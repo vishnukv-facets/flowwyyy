@@ -63,6 +63,21 @@ func TestTerminalAttentionTracksOnlyUnansweredPermission(t *testing.T) {
 	}
 }
 
+func TestTerminalAttentionClearsAnsweredClaudeQuestion(t *testing.T) {
+	scrollback := "\x1b[38;2;153;153;153mSave both files as drafted above?\x1b[39m\n" +
+		"User has answered your questions: Save both\n" +
+		"Both saved:\n" +
+		"- /Users/vishnukv/.flow/tasks/harness/updates/2026-05-16-phase-1-2-spec.md\n" +
+		"- /Users/vishnukv/.flow/tasks/harness/plan.md\n" +
+		"* Worked for 9m 10s\n" +
+		"* recap: Goal captured. Next: implement phase 1 step 1.\n" +
+		"> "
+	kind, excerpt := terminalAttentionFromText(scrollback)
+	if kind != "" || excerpt != "" {
+		t.Fatalf("answered Claude question attention = kind %q excerpt %q, want none", kind, excerpt)
+	}
+}
+
 func TestTerminalScrollbackClearsStaleTranscriptAttention(t *testing.T) {
 	srv := &Server{}
 	srv.terminals = newTerminalHub(srv)

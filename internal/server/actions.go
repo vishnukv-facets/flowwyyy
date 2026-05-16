@@ -586,7 +586,13 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
+	s.terminals.stop(target)
 	agent, _ := s.agentForTask(target)
+	if agent != nil {
+		agent.Status = "running"
+		agent.Terminal.Mode = "native"
+		agent.Terminal.Message = terminalModeMessage(firstNonEmpty(agent.Provider, "claude"), "native")
+	}
 	return actionResponse{OK: true, Message: "opened " + target + " in " + terminalLabel(terminalKind), Agent: agent}, http.StatusOK
 }
 
