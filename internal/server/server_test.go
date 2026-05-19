@@ -2,11 +2,13 @@ package server
 
 import (
 	"bufio"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -1298,14 +1300,14 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(body, "setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }))") {
 		t.Fatal("spawn/attach actions must retain the action-returned agent locally until the terminal websocket updates the DB")
 	}
-	if !strings.Contains(body, "const nativeSessionSnapshot = rawSessionAgent?.terminal?.mode === 'native' || bridgeAgent?.terminal?.mode === 'native'") {
-		t.Fatal("session routes must detect native terminal transcript snapshots")
+	if !strings.Contains(body, "const mergedTerminalMode = (rawMode, bridgeMode) => {") {
+		t.Fatal("session routes must merge shared/browser terminal snapshots without pinning stale native mode")
 	}
 	if !strings.Contains(body, "rawSessionAgent && bridgeAgent") {
 		t.Fatal("session routes must prefer refreshed bridge snapshots for active session status")
 	}
-	if !strings.Contains(body, "mode: nativeSessionSnapshot ? 'native' : (bridgeAgent.terminal?.mode || rawSessionAgent.terminal?.mode)") {
-		t.Fatal("session routes must merge retained bridge snapshots so spawn does not fall back to stale ui-data")
+	if !strings.Contains(body, "mode: mergedTerminalMode(rawSessionAgent.terminal?.mode, bridgeAgent.terminal?.mode)") {
+		t.Fatal("session routes must prefer shared/browser bridge snapshots over stale native ui-data")
 	}
 	if !strings.Contains(body, "existing.status === agent.status") {
 		t.Fatal("session routes must refresh retained bridge snapshots when status changes without transcript growth")
@@ -1338,6 +1340,18 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	}
 	if strings.Contains(string(screens), "Attach to ") || strings.Contains(string(screens), ">Attach</button>") {
 		t.Fatal("session navigation copy should say Open instead of Attach")
+	}
+	if !strings.Contains(string(screens), "const completedTask = current.task_status === 'done' || current.status === 'done';") ||
+		!strings.Contains(string(screens), "const nativeTranscriptMode = terminalMode === 'native' && completedTask;") {
+		t.Fatal("in-progress native sessions must open the interactive terminal; transcript-only mode is for completed tasks")
+	}
+	if !strings.Contains(string(screens), "stripTerminalGeneratedInput(data)") {
+		t.Fatal("browser terminal must filter generated capability replies before sending input to the PTY")
+	}
+	if !strings.Contains(string(screens), "/attachments") ||
+		!strings.Contains(string(screens), "terminalClipboardFiles(event.clipboardData)") ||
+		!strings.Contains(string(screens), "host.addEventListener('drop', dropHandler)") {
+		t.Fatal("browser terminal must support pasted and dropped file attachments")
 	}
 	if !strings.Contains(string(screens), "<th>Dependencies</th>") || strings.Count(string(screens), "DependencyBadges task=") < 3 {
 		t.Fatal("task screens should render dependencies in backlog, table, and project rows")
@@ -1560,6 +1574,7 @@ func TestAgentSnapshotIncludesOptionalPRLinks(t *testing.T) {
 
 func TestITermActionOpensNativeTerminalNotBrowserBridge(t *testing.T) {
 	root, db := testRootDB(t)
+	commands := enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
 	sessionID := "44444444-4444-4444-8444-444444444444"
 	if _, err := db.Exec(
@@ -1585,14 +1600,20 @@ func TestITermActionOpensNativeTerminalNotBrowserBridge(t *testing.T) {
 		t.Fatalf("expected native terminal response without browser bridge, got %+v", resp)
 	}
 	body := readITermLaunchScriptBody(t, script)
-	if !strings.Contains(script, "iTerm2") || !strings.Contains(script, "newline yes") ||
-		!strings.Contains(body, "claude") || !strings.Contains(body, sessionID) {
+	if !strings.Contains(script, "iTerm2") || !strings.Contains(script, "newline yes") || !strings.Contains(body, "tmux attach-session -t flow-build-ui") {
 		t.Fatalf("unexpected iTerm script: %s", script)
+	}
+	if !strings.Contains(fmt.Sprint(*commands), "claude --resume "+sessionID) {
+		t.Fatalf("shared tmux session did not resume claude session %s: %#v", sessionID, *commands)
+	}
+	if resp.Agent == nil || resp.Agent.Terminal.Mode != "shared" {
+		t.Fatalf("native open should return shared terminal agent, got %+v", resp.Agent)
 	}
 }
 
 func TestITermActionResumesCodexSession(t *testing.T) {
 	root, db := testRootDB(t)
+	commands := enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
 	sessionID := "11111111-2222-4333-8444-555555555555"
 	workDir := t.TempDir()
@@ -1619,14 +1640,18 @@ func TestITermActionResumesCodexSession(t *testing.T) {
 	if !strings.Contains(script, "newline yes") {
 		t.Fatalf("iTerm script should submit launcher:\n%s", script)
 	}
+	if !strings.Contains(body, "tmux attach-session -t flow-build-ui") {
+		t.Fatalf("iTerm should attach to the shared tmux terminal:\n%s", body)
+	}
+	tmuxCommands := fmt.Sprint(*commands)
 	for _, want := range []string{
 		"codex resume",
 		"--include-non-interactive",
 		"--add-dir " + root,
 		sessionID,
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("iTerm codex resume launcher missing %q:\n%s", want, body)
+		if !strings.Contains(tmuxCommands, want) {
+			t.Fatalf("shared tmux codex launcher missing %q:\n%#v", want, *commands)
 		}
 	}
 }
@@ -1647,6 +1672,7 @@ func readITermLaunchScriptBody(t *testing.T, script string) string {
 
 func TestNativeTerminalActionStillLaunchesWhenSessionAlreadyLive(t *testing.T) {
 	root, db := testRootDB(t)
+	enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
 	sessionID := "55555555-5555-4555-8555-555555555555"
 	if _, err := db.Exec(
@@ -1679,10 +1705,14 @@ func TestNativeTerminalActionStillLaunchesWhenSessionAlreadyLive(t *testing.T) {
 	if spawns != 1 {
 		t.Fatalf("iTerm spawns = %d, want 1", spawns)
 	}
+	if resp.Agent == nil || resp.Agent.Terminal.Mode != "shared" {
+		t.Fatalf("native live open should return shared terminal agent, got %+v", resp.Agent)
+	}
 }
 
-func TestNativeTerminalActionStopsBrowserTerminalAfterHandoff(t *testing.T) {
+func TestNativeTerminalActionKeepsSharedBrowserTerminalAfterNativeOpen(t *testing.T) {
 	root, db := testRootDB(t)
+	enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
 	sessionID := "66666666-6666-4666-8666-666666666666"
 	if _, err := db.Exec(
@@ -1706,10 +1736,11 @@ func TestNativeTerminalActionStopsBrowserTerminalAfterHandoff(t *testing.T) {
 
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	browserSess := &terminalSession{
-		slug:      "build-ui",
-		sessionID: sessionID,
-		done:      make(chan struct{}),
-		clients:   map[*terminalClient]struct{}{},
+		slug:       "build-ui",
+		sessionID:  sessionID,
+		sharedName: "flow-build-ui",
+		done:       make(chan struct{}),
+		clients:    map[*terminalClient]struct{}{},
 	}
 	srv.terminals.mu.Lock()
 	srv.terminals.sessions["build-ui"] = browserSess
@@ -1719,16 +1750,18 @@ func TestNativeTerminalActionStopsBrowserTerminalAfterHandoff(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	_ = readITermLaunchScriptBody(t, script)
 
 	srv.terminals.mu.Lock()
 	got := srv.terminals.sessions["build-ui"]
 	srv.terminals.mu.Unlock()
-	if got != nil || browserSess.running() {
-		t.Fatalf("browser terminal session should stop after native handoff; got=%p running=%v", got, browserSess.running())
+	if got != browserSess || !browserSess.running() {
+		t.Fatalf("shared browser terminal should stay attached after native open; got=%p running=%v", got, browserSess.running())
 	}
-	if resp.Agent == nil || resp.Agent.Terminal.Mode != "native" {
-		t.Fatalf("native handoff response should mark terminal mode native, got %+v", resp.Agent)
+	if !strings.Contains(readITermLaunchScriptBody(t, script), "tmux attach-session -t flow-build-ui") {
+		t.Fatalf("native handoff should attach to the shared tmux session:\n%s", script)
+	}
+	if resp.Agent == nil || resp.Agent.Terminal.Mode != "shared" {
+		t.Fatalf("native handoff response should mark terminal mode shared, got %+v", resp.Agent)
 	}
 }
 
@@ -1875,6 +1908,57 @@ func TestTaskBridgeEndpointReturnsAgentSnapshot(t *testing.T) {
 	}
 }
 
+func TestTaskAttachmentUploadStoresFileAndReturnsInsertText(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("files", "screen shot.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("png bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/build-ui/attachments", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp terminalAttachmentUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Files) != 1 {
+		t.Fatalf("files = %#v, want one", resp.Files)
+	}
+	file := resp.Files[0]
+	if !strings.Contains(file.Filename, "screen-shot.png") {
+		t.Fatalf("filename = %q, want sanitized original name", file.Filename)
+	}
+	if !strings.Contains(file.Path, filepath.Join(root, "tasks", "build-ui", "attachments")) {
+		t.Fatalf("path = %q, want task attachment dir", file.Path)
+	}
+	if !strings.Contains(resp.InsertText, shellQuoteArg(file.Path)) {
+		t.Fatalf("insert_text = %q, want quoted path %q", resp.InsertText, file.Path)
+	}
+	saved, err := os.ReadFile(file.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != "png bytes" {
+		t.Fatalf("saved body = %q", saved)
+	}
+}
+
 func TestTaskBridgeEndpointUsesCodexProviderForTranscript(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -1983,8 +2067,77 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
+func TestStripTerminalGeneratedInput(t *testing.T) {
+	got := stripTerminalGeneratedInput("typed\x1b[>0;276;0c text\x1b[?1;2c")
+	if got != "typed text" {
+		t.Fatalf("stripTerminalGeneratedInput = %q, want %q", got, "typed text")
+	}
+}
+
+func enableSharedTerminalForTest(t *testing.T) *[][]string {
+	t.Helper()
+	commands := [][]string{}
+	sessions := map[string]bool{}
+	sharedTerminalLookPath = func(name string) (string, error) {
+		if name == "tmux" {
+			return "/usr/bin/tmux", nil
+		}
+		return "", exec.ErrNotFound
+	}
+	// sharedTerminalAvailable() memoizes its first call via sync.Once for
+	// production CPU savings; tests that swap sharedTerminalLookPath must
+	// reset that memo so the new mock takes effect for this test (and
+	// again on cleanup so the next test starts from a clean slate).
+	resetSharedTerminalAvailable()
+	t.Cleanup(resetSharedTerminalAvailable)
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		if len(args) == 0 {
+			return nil, nil
+		}
+		switch args[0] {
+		case "has-session":
+			name := args[len(args)-1]
+			if sessions[name] {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session %s", name)
+		case "new-session":
+			for i := 0; i+1 < len(args); i++ {
+				if args[i] == "-s" {
+					sessions[args[i+1]] = true
+					break
+				}
+			}
+			return nil, nil
+		case "kill-session":
+			delete(sessions, args[len(args)-1])
+			return nil, nil
+		default:
+			return nil, nil
+		}
+	}
+	return &commands
+}
+
 func testRootDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
+	oldSharedLookPath := sharedTerminalLookPath
+	oldSharedCommand := sharedTerminalCommand
+	sharedTerminalLookPath = func(string) (string, error) {
+		return "", exec.ErrNotFound
+	}
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		return nil, exec.ErrNotFound
+	}
+	// Force sharedTerminalAvailable() to re-resolve under the new mock —
+	// otherwise an earlier test's cached "true" would leak into this one.
+	resetSharedTerminalAvailable()
+	t.Cleanup(func() {
+		sharedTerminalLookPath = oldSharedLookPath
+		sharedTerminalCommand = oldSharedCommand
+		resetSharedTerminalAvailable()
+	})
 	root := t.TempDir()
 	for _, dir := range []string{
 		filepath.Join(root, "tasks", "build-ui", "updates"),

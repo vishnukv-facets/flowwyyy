@@ -16,6 +16,7 @@ type Server struct {
 	events      *eventHub
 	reconcile   *livenessReconciler
 	transcripts *transcriptCache
+	caches      *uiCaches
 }
 
 type HealthView struct {
@@ -68,6 +69,7 @@ type TaskView struct {
 	PlaybookSlug        *string       `json:"playbook_slug"`
 	ParentSlug          *string       `json:"parent_slug"`
 	Parent              *TaskSummary  `json:"parent,omitempty"`
+	Parents             []TaskSummary `json:"parents,omitempty"`
 	Children            []TaskSummary `json:"children,omitempty"`
 	Priority            string        `json:"priority"`
 	WorkDir             string        `json:"work_dir"`

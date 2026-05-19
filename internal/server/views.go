@@ -97,12 +97,26 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 		}
 	}
 
-	// Dependencies: parent_slug means this task depends on the parent task;
-	// children are tasks that depend on this task.
-	if t.ParentSlug.Valid && t.ParentSlug.String != "" {
+	// Dependencies: task_dependencies is the source of truth. Parents is
+	// the full list; Parent is the first parent (backwards-compat for any
+	// caller / test that still reads the singular field).
+	view.Parents = loadParents(db, t.Slug)
+	if len(view.Parents) > 0 {
+		first := view.Parents[0]
+		view.Parent = &first
+	} else if t.ParentSlug.Valid && t.ParentSlug.String != "" {
+		// Defensive fallback: row exists with parent_slug set but no
+		// task_dependencies row (e.g. external insert that bypassed
+		// AddTaskParent). Surface that single parent.
 		view.Parent = loadParent(db, t.ParentSlug.String)
+		if view.Parent != nil {
+			view.Parents = []TaskSummary{*view.Parent}
+		}
 	}
-	// Children: tasks whose parent_slug points at this task.
+	// Children: tasks whose parent_slug points at this task (kept on the
+	// legacy column as the dep mirror) plus any task_dependencies row
+	// pointing here. The dep table is authoritative; the column read is a
+	// defensive fallback for the same reasons as above.
 	view.Children = loadChildren(db, t.Slug)
 
 	// Runtime status: latest agent_runtime_states row for this session.
@@ -129,6 +143,33 @@ func loadParent(db *sql.DB, parentSlug string) *TaskSummary {
 		return nil
 	}
 	return &s
+}
+
+// loadParents returns every parent task (via task_dependencies) for the
+// given child, in dependency-creation order. Excludes soft-deleted rows.
+func loadParents(db *sql.DB, childSlug string) []TaskSummary {
+	rows, err := db.Query(
+		`SELECT t.slug, t.name, t.status, t.priority, t.project_slug, t.updated_at
+		 FROM task_dependencies d
+		 JOIN tasks t ON t.slug = d.parent_slug
+		 WHERE d.child_slug = ?
+		   AND t.deleted_at IS NULL
+		 ORDER BY d.created_at ASC, d.parent_slug ASC`,
+		childSlug,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []TaskSummary
+	for rows.Next() {
+		s, err := scanTaskSummary(rows)
+		if err != nil {
+			return out
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func loadChildren(db *sql.DB, parentSlug string) []TaskSummary {
@@ -169,6 +210,12 @@ func scanTaskSummary(row interface{ Scan(dest ...any) error }) (TaskSummary, err
 
 func BuildTaskViews(db *sql.DB, root string, tasks []*flowdb.Task) ([]TaskView, error) {
 	live, _ := liveAgentSessions()
+	return buildTaskViewsWithLive(db, root, tasks, live)
+}
+
+// buildTaskViewsWithLive lets callers that already hold a recent live snapshot
+// (e.g. buildUIData via cachedLiveAgentSessions) avoid re-forking `ps`.
+func buildTaskViewsWithLive(db *sql.DB, root string, tasks []*flowdb.Task, live map[string]bool) ([]TaskView, error) {
 	out := make([]TaskView, 0, len(tasks))
 	for _, t := range tasks {
 		v, err := BuildTaskView(db, root, t, live)

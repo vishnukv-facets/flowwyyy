@@ -116,14 +116,19 @@ func cmdSpawn(args []string) int {
 		return 1
 	}
 
-	// Patch parent_slug. cmdAdd doesn't write it because parent linkage
-	// is spawn-specific.
+	// Record parent linkage. cmdAdd doesn't write it because parent linkage
+	// is spawn-specific. AddTaskParent inserts the row into task_dependencies
+	// and mirrors the first parent into tasks.parent_slug for backwards
+	// compat. updated_at is bumped separately.
 	if parentSlug != "" {
+		if err := flowdb.AddTaskParent(db, createdSlug, parentSlug); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: set parent: %v\n", err)
+		}
 		if _, err := db.Exec(
-			`UPDATE tasks SET parent_slug = ?, updated_at = ? WHERE slug = ?`,
-			parentSlug, flowdb.NowISO(), createdSlug,
+			`UPDATE tasks SET updated_at = ? WHERE slug = ?`,
+			flowdb.NowISO(), createdSlug,
 		); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: set parent_slug: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: bump updated_at: %v\n", err)
 		}
 	}
 

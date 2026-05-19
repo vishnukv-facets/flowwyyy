@@ -170,6 +170,18 @@ CREATE TABLE IF NOT EXISTS task_pr_links (
     PRIMARY KEY (task_slug, repo, pr_number)
 );
 
+-- Many-to-many task dependencies. A child can depend on N parents;
+-- the start-blocker logic requires all non-deleted parents to be done.
+-- tasks.parent_slug is kept as a denormalized first-parent mirror for
+-- backwards compat with older code paths and ad-hoc queries.
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    child_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+    parent_slug  TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (child_slug, parent_slug),
+    CHECK (child_slug <> parent_slug)
+);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
@@ -184,6 +196,8 @@ CREATE INDEX IF NOT EXISTS idx_automation_rules_source_kind ON automation_rules(
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_state ON task_pr_links(state);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_repo_number ON task_pr_links(repo, pr_number);
 CREATE INDEX IF NOT EXISTS idx_monitor_event_actions_action ON monitor_event_actions(action);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
+CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
@@ -249,15 +263,24 @@ type Task struct {
 	DeletedAt          sql.NullString
 }
 
+// PendingParent is one parent task that is preventing the child from
+// starting (status != 'done' or row is missing/deleted).
+type PendingParent struct {
+	Slug    string
+	Name    string
+	Status  string
+	Deleted bool
+	Missing bool // true when the parent_slug refers to a row that no longer exists.
+}
+
 // TaskStartBlocker describes why a task session must not be started yet.
+// Kind=="waiting" surfaces the freeform waiting_on note.
+// Kind=="dependency" surfaces every non-done parent in Parents.
 type TaskStartBlocker struct {
-	Kind          string
-	TaskSlug      string
-	WaitingOn     string
-	ParentSlug    string
-	ParentName    string
-	ParentStatus  string
-	ParentDeleted bool
+	Kind      string
+	TaskSlug  string
+	WaitingOn string
+	Parents   []PendingParent
 }
 
 func (b *TaskStartBlocker) Error() string {
@@ -268,73 +291,269 @@ func (b *TaskStartBlocker) Error() string {
 	case "waiting":
 		return fmt.Sprintf("task %q is blocked: waiting on %s", b.TaskSlug, b.WaitingOn)
 	case "dependency":
-		status := b.ParentStatus
-		if status == "" {
-			status = "unknown"
+		if len(b.Parents) == 0 {
+			return fmt.Sprintf("task %q is blocked: dependency unresolved", b.TaskSlug)
 		}
-		extra := ""
-		if b.ParentDeleted {
-			extra = " and is deleted"
+		if len(b.Parents) == 1 {
+			p := b.Parents[0]
+			status := p.Status
+			if status == "" {
+				status = "unknown"
+			}
+			extra := ""
+			if p.Deleted {
+				extra = " and is deleted"
+			}
+			if p.Missing {
+				extra += " (missing)"
+			}
+			if p.Name != "" {
+				return fmt.Sprintf("task %q depends on %q (%s, %s%s); complete or clear the dependency before starting",
+					b.TaskSlug, p.Slug, p.Name, status, extra)
+			}
+			return fmt.Sprintf("task %q depends on %q (%s%s); complete or clear the dependency before starting",
+				b.TaskSlug, p.Slug, status, extra)
 		}
-		if b.ParentName != "" {
-			return fmt.Sprintf("task %q depends on %q (%s, %s%s); complete or clear the dependency before starting",
-				b.TaskSlug, b.ParentSlug, b.ParentName, status, extra)
+		parts := make([]string, 0, len(b.Parents))
+		for _, p := range b.Parents {
+			status := p.Status
+			if status == "" {
+				status = "unknown"
+			}
+			extra := ""
+			if p.Deleted {
+				extra = ", deleted"
+			}
+			if p.Missing {
+				extra += ", missing"
+			}
+			parts = append(parts, fmt.Sprintf("%q (%s%s)", p.Slug, status, extra))
 		}
-		return fmt.Sprintf("task %q depends on %q (%s%s); complete or clear the dependency before starting",
-			b.TaskSlug, b.ParentSlug, status, extra)
+		return fmt.Sprintf("task %q is blocked by %d dependencies: %s; complete or clear them before starting",
+			b.TaskSlug, len(b.Parents), strings.Join(parts, ", "))
 	default:
 		return fmt.Sprintf("task %q is blocked", b.TaskSlug)
 	}
 }
 
 // TaskStartBlockerFor returns the reason a task should not start, if any.
-// waiting_on is an explicit blocker. parent_slug is a task dependency:
-// the child cannot start until the parent is done.
+// waiting_on is an explicit blocker. task_dependencies rows are formal
+// dependencies: the child cannot start until every non-deleted parent is
+// done.
+//
+// Special case: when waiting_on text was written at intake describing a
+// dependency (e.g. "depends on notif-autospawn - …") and the parent later
+// transitions to done, the waiting_on note no longer reflects reality. We
+// treat it as resolved when ALL parents (≥1) are done/not-deleted AND the
+// note mentions at least one of the parents' slugs. Unrelated waiting_on
+// notes continue to block.
 func TaskStartBlockerFor(db *sql.DB, task *Task) (*TaskStartBlocker, error) {
 	if task == nil {
 		return nil, errors.New("task is nil")
 	}
-	if waiting := strings.TrimSpace(task.WaitingOn.String); task.WaitingOn.Valid && waiting != "" {
+	waiting := strings.TrimSpace(task.WaitingOn.String)
+	hasWaiting := task.WaitingOn.Valid && waiting != ""
+
+	parents, err := loadParentsForBlocker(db, task.Slug)
+	if err != nil {
+		return nil, err
+	}
+	// Fall back to the legacy parent_slug column when the dependency table
+	// has no row for this child (e.g. a code path inserted parent_slug
+	// without calling AddTaskParent). The migration backfills existing
+	// rows, so this should be rare in practice.
+	if len(parents) == 0 && task.ParentSlug.Valid {
+		if legacy := strings.TrimSpace(task.ParentSlug.String); legacy != "" {
+			var p PendingParent
+			p.Slug = legacy
+			var del sql.NullString
+			scanErr := db.QueryRow(
+				`SELECT name, status, deleted_at FROM tasks WHERE slug = ?`,
+				legacy,
+			).Scan(&p.Name, &p.Status, &del)
+			if errors.Is(scanErr, sql.ErrNoRows) {
+				p.Missing = true
+			} else if scanErr != nil {
+				return nil, scanErr
+			} else {
+				p.Deleted = del.Valid
+			}
+			parents = []PendingParent{p}
+		}
+	}
+
+	pendingParents := make([]PendingParent, 0, len(parents))
+	allDone := len(parents) > 0
+	for _, p := range parents {
+		done := !p.Missing && !p.Deleted && p.Status == "done"
+		if !done {
+			pendingParents = append(pendingParents, p)
+			allDone = false
+		}
+	}
+
+	if hasWaiting && allDone {
+		// Stale "depends on <parent>" note left over from intake — drop the
+		// waiting_on block if the note mentions any (now-done) parent slug.
+		lower := strings.ToLower(waiting)
+		for _, p := range parents {
+			if p.Slug != "" && strings.Contains(lower, strings.ToLower(p.Slug)) {
+				hasWaiting = false
+				break
+			}
+		}
+	}
+
+	if hasWaiting {
 		return &TaskStartBlocker{
 			Kind:      "waiting",
 			TaskSlug:  task.Slug,
 			WaitingOn: waiting,
 		}, nil
 	}
-	parentSlug := strings.TrimSpace(task.ParentSlug.String)
-	if !task.ParentSlug.Valid || parentSlug == "" {
-		return nil, nil
-	}
-	var parent struct {
-		Name      string
-		Status    string
-		DeletedAt sql.NullString
-	}
-	err := db.QueryRow(
-		`SELECT name, status, deleted_at FROM tasks WHERE slug = ?`,
-		parentSlug,
-	).Scan(&parent.Name, &parent.Status, &parent.DeletedAt)
-	if errors.Is(err, sql.ErrNoRows) {
+	if len(pendingParents) > 0 {
 		return &TaskStartBlocker{
-			Kind:       "dependency",
-			TaskSlug:   task.Slug,
-			ParentSlug: parentSlug,
+			Kind:     "dependency",
+			TaskSlug: task.Slug,
+			Parents:  pendingParents,
 		}, nil
 	}
+	return nil, nil
+}
+
+// loadParentsForBlocker returns one PendingParent per row in task_dependencies
+// for the given child, joined with tasks for status/name/deleted info.
+// Rows in task_dependencies that reference a now-missing tasks row appear
+// with Missing=true (the FK cascade should have cleaned this up, but we
+// surface it defensively).
+func loadParentsForBlocker(db *sql.DB, childSlug string) ([]PendingParent, error) {
+	rows, err := db.Query(`
+		SELECT d.parent_slug,
+		       COALESCE(t.name, ''),
+		       COALESCE(t.status, ''),
+		       t.deleted_at,
+		       CASE WHEN t.slug IS NULL THEN 1 ELSE 0 END AS missing
+		FROM task_dependencies d
+		LEFT JOIN tasks t ON t.slug = d.parent_slug
+		WHERE d.child_slug = ?
+		ORDER BY d.created_at ASC, d.parent_slug ASC
+	`, childSlug)
 	if err != nil {
 		return nil, err
 	}
-	if parent.Status == "done" && !parent.DeletedAt.Valid {
-		return nil, nil
+	defer rows.Close()
+	var out []PendingParent
+	for rows.Next() {
+		var p PendingParent
+		var del sql.NullString
+		var missing int
+		if err := rows.Scan(&p.Slug, &p.Name, &p.Status, &del, &missing); err != nil {
+			return nil, err
+		}
+		p.Deleted = del.Valid
+		p.Missing = missing == 1
+		out = append(out, p)
 	}
-	return &TaskStartBlocker{
-		Kind:          "dependency",
-		TaskSlug:      task.Slug,
-		ParentSlug:    parentSlug,
-		ParentName:    parent.Name,
-		ParentStatus:  parent.Status,
-		ParentDeleted: parent.DeletedAt.Valid,
-	}, nil
+	return out, rows.Err()
+}
+
+// ListParentSlugs returns the parent slugs for a child task, ordered by
+// when the dependency was added (oldest first).
+func ListParentSlugs(db *sql.DB, childSlug string) ([]string, error) {
+	rows, err := db.Query(`
+		SELECT parent_slug FROM task_dependencies
+		WHERE child_slug = ?
+		ORDER BY created_at ASC, parent_slug ASC
+	`, childSlug)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// AddTaskParent declares childSlug as depending on parentSlug. Idempotent
+// (INSERT OR IGNORE on the composite PK). Also mirrors the first remaining
+// parent into tasks.parent_slug for the legacy single-parent reads.
+func AddTaskParent(db *sql.DB, childSlug, parentSlug string) error {
+	childSlug = strings.TrimSpace(childSlug)
+	parentSlug = strings.TrimSpace(parentSlug)
+	if childSlug == "" || parentSlug == "" {
+		return errors.New("child and parent slugs are required")
+	}
+	if childSlug == parentSlug {
+		return errors.New("a task cannot depend on itself")
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(
+		`INSERT OR IGNORE INTO task_dependencies (child_slug, parent_slug, created_at) VALUES (?, ?, ?)`,
+		childSlug, parentSlug, now,
+	); err != nil {
+		return err
+	}
+	return syncLegacyParentSlug(db, childSlug)
+}
+
+// RemoveTaskParent drops the (child, parent) edge if present. Mirrors the
+// new first parent (if any) back into tasks.parent_slug.
+func RemoveTaskParent(db *sql.DB, childSlug, parentSlug string) error {
+	childSlug = strings.TrimSpace(childSlug)
+	parentSlug = strings.TrimSpace(parentSlug)
+	if childSlug == "" || parentSlug == "" {
+		return errors.New("child and parent slugs are required")
+	}
+	if _, err := db.Exec(
+		`DELETE FROM task_dependencies WHERE child_slug = ? AND parent_slug = ?`,
+		childSlug, parentSlug,
+	); err != nil {
+		return err
+	}
+	return syncLegacyParentSlug(db, childSlug)
+}
+
+// ClearTaskParents removes every dependency edge for the child and clears
+// the legacy tasks.parent_slug mirror.
+func ClearTaskParents(db *sql.DB, childSlug string) error {
+	childSlug = strings.TrimSpace(childSlug)
+	if childSlug == "" {
+		return errors.New("child slug is required")
+	}
+	if _, err := db.Exec(`DELETE FROM task_dependencies WHERE child_slug = ?`, childSlug); err != nil {
+		return err
+	}
+	return syncLegacyParentSlug(db, childSlug)
+}
+
+// syncLegacyParentSlug rewrites tasks.parent_slug to the first remaining
+// parent in task_dependencies (NULL if there are none). Called after any
+// add/remove/clear so the denormalized mirror stays consistent.
+func syncLegacyParentSlug(db *sql.DB, childSlug string) error {
+	var first sql.NullString
+	err := db.QueryRow(`
+		SELECT parent_slug FROM task_dependencies
+		WHERE child_slug = ?
+		ORDER BY created_at ASC, parent_slug ASC
+		LIMIT 1
+	`, childSlug).Scan(&first)
+	if errors.Is(err, sql.ErrNoRows) {
+		first = sql.NullString{}
+	} else if err != nil {
+		return err
+	}
+	if first.Valid {
+		_, err = db.Exec(`UPDATE tasks SET parent_slug = ? WHERE slug = ?`, first.String, childSlug)
+	} else {
+		_, err = db.Exec(`UPDATE tasks SET parent_slug = NULL WHERE slug = ?`, childSlug)
+	}
+	return err
 }
 
 // EnsureTaskStartable fails when task dependencies or blockers say the task
@@ -702,6 +921,58 @@ func runMigrations(db *sql.DB) error {
 	// pre-existing duplicates.
 	if err := migrateTasksSessionIDUnique(db); err != nil {
 		return fmt.Errorf("migrate session-id uniqueness: %w", err)
+	}
+
+	// task_dependencies: many-to-many dependency table. Backfill from
+	// the legacy single-parent column once so existing tasks keep their
+	// dep wiring after the upgrade. Idempotent via INSERT OR IGNORE.
+	if err := migrateTaskDependencies(db); err != nil {
+		return fmt.Errorf("migrate task_dependencies: %w", err)
+	}
+	return nil
+}
+
+// migrateTaskDependencies ensures the task_dependencies table exists and
+// backfills it from tasks.parent_slug. Idempotent — INSERT OR IGNORE means
+// a row already present from a prior run or from a fresh CREATE TABLE is
+// left untouched. tasks.parent_slug stays in place as a write-through
+// mirror of the first parent for backwards compatibility.
+func migrateTaskDependencies(db *sql.DB) error {
+	// schemaDDL also creates this table on a fresh DB; the CREATE here is
+	// belt-and-braces for an older DB that has every other migration but
+	// hasn't yet been opened with the new schemaDDL.
+	if _, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS task_dependencies (
+		    child_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+		    parent_slug  TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
+		    created_at   TEXT NOT NULL,
+		    PRIMARY KEY (child_slug, parent_slug),
+		    CHECK (child_slug <> parent_slug)
+		);
+		CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
+		CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
+	`); err != nil {
+		return fmt.Errorf("create task_dependencies: %w", err)
+	}
+	// The session-invariant rebuild can transiently drop tasks.parent_slug
+	// from older DBs; on the next runMigrations pass it gets re-added. Skip
+	// the backfill if the column isn't present yet — there are no rows to
+	// migrate from anyway, and the subsequent open will retry.
+	has, err := columnExists(db, "tasks", "parent_slug")
+	if err != nil {
+		return err
+	}
+	if !has {
+		return nil
+	}
+	if _, err := db.Exec(`
+		INSERT OR IGNORE INTO task_dependencies (child_slug, parent_slug, created_at)
+		SELECT slug, parent_slug, COALESCE(created_at, datetime('now'))
+		FROM tasks
+		WHERE parent_slug IS NOT NULL AND TRIM(parent_slug) <> ''
+		  AND slug <> parent_slug
+	`); err != nil {
+		return fmt.Errorf("backfill task_dependencies: %w", err)
 	}
 	return nil
 }

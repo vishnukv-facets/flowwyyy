@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var psRunner = func() ([]byte, error) {
@@ -46,6 +47,18 @@ func liveAgentSessions() (map[string]bool, error) {
 		}
 	}
 	return live, nil
+}
+
+// cachedLiveAgentSessions wraps liveAgentSessions with a per-server TTL cache.
+// SSE-driven endpoints (events.go ticks at 2s) would otherwise fork `ps` on
+// every tick — and historically multiple call sites within one buildUIData
+// each forked their own `ps`. The cache collapses concurrent and back-to-back
+// calls into one fork per 1.5s window.
+func (s *Server) cachedLiveAgentSessions() (map[string]bool, error) {
+	if s == nil || s.caches == nil {
+		return liveAgentSessions()
+	}
+	return s.caches.live.load(time.Now(), liveAgentSessions)
 }
 
 func anySessionUUIDs(line string) []string {

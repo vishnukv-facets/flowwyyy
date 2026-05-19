@@ -40,6 +40,12 @@ type terminalHub struct {
 	server   *Server
 	mu       sync.Mutex
 	sessions map[string]*terminalSession
+	// sharedRunningCache backs sharedRunning, which is invoked once per task
+	// per SSE tick (every 2s). Each raw call forks `tmux has-session` — with
+	// N tasks visible that's N forks per tick. The cache collapses repeats
+	// within a 2.5s window; we explicitly invalidate on create/kill so the
+	// UI never lies after a state change the user just triggered.
+	sharedRunningCache *ttlCache[string, bool]
 }
 
 type terminalLaunch struct {
@@ -54,14 +60,15 @@ type terminalLaunch struct {
 }
 
 type terminalSession struct {
-	hub       *terminalHub
-	slug      string
-	sessionID string
-	provider  string
-	workDir   string
-	cmd       *exec.Cmd
-	tty       *os.File
-	done      chan struct{}
+	hub        *terminalHub
+	slug       string
+	sessionID  string
+	provider   string
+	workDir    string
+	sharedName string
+	cmd        *exec.Cmd
+	tty        *os.File
+	done       chan struct{}
 
 	mu           sync.Mutex
 	clients      map[*terminalClient]struct{}
@@ -88,8 +95,9 @@ type terminalWSMessage struct {
 
 func newTerminalHub(s *Server) *terminalHub {
 	return &terminalHub{
-		server:   s,
-		sessions: map[string]*terminalSession{},
+		server:             s,
+		sessions:           map[string]*terminalSession{},
+		sharedRunningCache: newTTLCache[string, bool](2500 * time.Millisecond),
 	}
 }
 
@@ -213,19 +221,56 @@ func (h *terminalHub) lastOutputAt(slug string) (time.Time, bool) {
 	return sess.lastOutputAt, !sess.lastOutputAt.IsZero()
 }
 
+func (h *terminalHub) sharedSessionName(slug string) (string, bool) {
+	h.mu.Lock()
+	sess := h.sessions[slug]
+	h.mu.Unlock()
+	if sess == nil || !sess.running() {
+		return "", false
+	}
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+	return sess.sharedName, sess.sharedName != ""
+}
+
+func (h *terminalHub) sharedRunning(slug string) bool {
+	if v, ok := h.sharedRunningCache.get(slug); ok {
+		return v
+	}
+	var running bool
+	if name, ok := h.sharedSessionName(slug); ok {
+		running = sharedTerminalHasSession(name)
+	} else {
+		running = sharedTerminalHasSession(sharedTerminalSessionName(slug))
+	}
+	h.sharedRunningCache.set(slug, running)
+	return running
+}
+
 func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) (*terminalSession, error) {
 	provider := launch.Provider
 	if provider == "" {
 		provider = agents.ProviderClaude
 	}
-	bin := provider
-	if provider == agents.ProviderClaude {
-		bin = "claude"
-	}
 	if err := h.server.ensureProviderAvailable(provider); err != nil {
 		return nil, err
 	}
-	cmd := exec.Command(bin, launch.Args...)
+	var cmd *exec.Cmd
+	sharedName := ""
+	if sharedTerminalAvailable() {
+		name, _, err := h.server.ensureSharedTerminalSession(launch, cols, rows)
+		if err != nil {
+			return nil, err
+		}
+		sharedName = name
+		cmd = exec.Command("tmux", "attach-session", "-t", name)
+	} else {
+		bin := provider
+		if provider == agents.ProviderClaude {
+			bin = "claude"
+		}
+		cmd = exec.Command(bin, launch.Args...)
+	}
 	cmd.Dir = launch.WorkDir
 	cmd.Env = append(terminalEnvWithHook(h.server.cfg.FlowRoot, h.server.cfg.CommandPath, h.server.cfg.HookURL),
 		"FLOW_TASK="+launch.Slug,
@@ -237,21 +282,25 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 		return nil, fmt.Errorf("start %s terminal: %w", provider, err)
 	}
 	sess := &terminalSession{
-		hub:       h,
-		slug:      launch.Slug,
-		sessionID: launch.SessionID,
-		provider:  provider,
-		workDir:   launch.WorkDir,
-		cmd:       cmd,
-		tty:       f,
-		done:      make(chan struct{}),
-		clients:   map[*terminalClient]struct{}{},
+		hub:        h,
+		slug:       launch.Slug,
+		sessionID:  launch.SessionID,
+		provider:   provider,
+		workDir:    launch.WorkDir,
+		sharedName: sharedName,
+		cmd:        cmd,
+		tty:        f,
+		done:       make(chan struct{}),
+		clients:    map[*terminalClient]struct{}{},
 	}
 	go sess.readPTY()
 	go sess.wait()
 	if launch.NeedsCapture {
 		go sess.captureCodexSession(launch.StartedAt)
 	}
+	// A new session just started; force the next sharedRunning check to
+	// re-query tmux so the UI flips to "running" within one tick.
+	h.sharedRunningCache.invalidate(launch.Slug)
 	return sess, nil
 }
 
@@ -283,6 +332,29 @@ func terminalEnvWithHook(flowRoot, commandPath, hookURL string) []string {
 		env = setEnvValue(env, "FLOW_HOOK_URL", hookURL)
 	}
 	return env
+}
+
+func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider string) map[string]string {
+	env := terminalEnvWithHook(flowRoot, commandPath, hookURL)
+	out := map[string]string{
+		"TERM":                      "xterm-256color",
+		"COLORTERM":                 "truecolor",
+		"FORCE_COLOR":               "1",
+		"TERM_PROGRAM":              "flow-ui",
+		"CLAUDE_CODE_NO_FLICKER":    "0",
+		"CLAUDE_CODE_DISABLE_MOUSE": "1",
+		"LANG":                      "en_US.UTF-8",
+		"LC_CTYPE":                  "en_US.UTF-8",
+		"FLOW_HOOK_OWNED":           "1",
+		"FLOW_TASK":                 slug,
+		"FLOW_SESSION_PROVIDER":     provider,
+	}
+	for _, key := range []string{"PATH", "FLOW_ROOT", "FLOW_HOOK_URL"} {
+		if value := envValueLocal(env, key); value != "" {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func setEnvValue(env []string, key, value string) []string {
@@ -340,7 +412,120 @@ func envValueLocal(env []string, key string) string {
 	return ""
 }
 
+var (
+	sharedTerminalLookPath = exec.LookPath
+	sharedTerminalCommand  = func(args ...string) ([]byte, error) {
+		return exec.Command("tmux", args...).CombinedOutput()
+	}
+
+	// sharedTerminalAvailable resolves once per process and is the result of
+	// an exec.LookPath("tmux") — which walks every directory in $PATH doing
+	// stat() syscalls. Before caching, this ran on every per-task UI refresh
+	// (~15 tasks × every 2s). Tests that swap sharedTerminalLookPath must
+	// call resetSharedTerminalAvailable() to invalidate.
+	sharedTerminalAvailableOnce sync.Once
+	sharedTerminalAvailableVal  bool
+)
+
+func sharedTerminalAvailable() bool {
+	sharedTerminalAvailableOnce.Do(func() {
+		_, err := sharedTerminalLookPath("tmux")
+		sharedTerminalAvailableVal = err == nil
+	})
+	return sharedTerminalAvailableVal
+}
+
+// resetSharedTerminalAvailable forces the next sharedTerminalAvailable call to
+// re-run LookPath. Tests that swap sharedTerminalLookPath rely on this.
+func resetSharedTerminalAvailable() {
+	sharedTerminalAvailableOnce = sync.Once{}
+	sharedTerminalAvailableVal = false
+}
+
+func sharedTerminalSessionName(slug string) string {
+	var b strings.Builder
+	b.WriteString("flow-")
+	for _, r := range slug {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	name := b.String()
+	if len(name) > 80 {
+		return name[:80]
+	}
+	return name
+}
+
+func sharedTerminalHasSession(name string) bool {
+	if strings.TrimSpace(name) == "" || !sharedTerminalAvailable() {
+		return false
+	}
+	_, err := sharedTerminalCommand("has-session", "-t", name)
+	return err == nil
+}
+
+func sharedTerminalKillSession(name string) error {
+	if strings.TrimSpace(name) == "" || !sharedTerminalAvailable() {
+		return nil
+	}
+	_, err := sharedTerminalCommand("kill-session", "-t", name)
+	return err
+}
+
+func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows int) (string, bool, error) {
+	if !sharedTerminalAvailable() {
+		return "", false, errors.New("read-write native/browser terminal sharing requires tmux on PATH")
+	}
+	name := sharedTerminalSessionName(launch.Slug)
+	if sharedTerminalHasSession(name) {
+		return name, false, nil
+	}
+	if cols <= 0 {
+		cols = 120
+	}
+	if rows <= 0 {
+		rows = 32
+	}
+	if cols > 500 {
+		cols = 500
+	}
+	if rows > 500 {
+		rows = 500
+	}
+	provider := launch.Provider
+	if provider == "" {
+		provider = agents.ProviderClaude
+	}
+	command := agentShellCommand(provider, launch.Args)
+	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider)
+	args := []string{
+		"new-session",
+		"-d",
+		"-s", name,
+		"-c", launch.WorkDir,
+		"-x", strconv.Itoa(cols),
+		"-y", strconv.Itoa(rows),
+		shellCommandLine(command, env),
+	}
+	out, err := sharedTerminalCommand(args...)
+	if err != nil {
+		if sharedTerminalHasSession(name) {
+			return name, false, nil
+		}
+		return "", false, fmt.Errorf("start shared terminal session %s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return name, true, nil
+}
+
 var terminalAltScreenRE = regexp.MustCompile(`\x1b\[\?([0-9;]*)([hl])`)
+var terminalGeneratedInputRE = regexp.MustCompile(`\x1b\[(?:\?[0-9;]*|>[0-9;]*)c`)
 
 func stripTerminalAltScreenControls(data []byte) []byte {
 	return terminalAltScreenRE.ReplaceAllFunc(data, func(seq []byte) []byte {
@@ -356,6 +541,10 @@ func stripTerminalAltScreenControls(data []byte) []byte {
 		}
 		return seq
 	})
+}
+
+func stripTerminalGeneratedInput(data string) string {
+	return terminalGeneratedInputRE.ReplaceAllString(data, "")
 }
 
 func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
@@ -831,9 +1020,13 @@ func (s *terminalSession) wait() {
 		delete(s.hub.sessions, s.slug)
 	}
 	s.hub.mu.Unlock()
+	s.hub.sharedRunningCache.invalidate(s.slug)
 }
 
 func (s *terminalSession) terminate() {
+	if s.sharedName != "" {
+		_ = sharedTerminalKillSession(s.sharedName)
+	}
 	if s.cmd != nil && s.cmd.Process != nil {
 		_ = s.cmd.Process.Signal(syscall.SIGTERM)
 	}
@@ -844,9 +1037,14 @@ func (s *terminalSession) terminate() {
 	if !s.closed {
 		s.closed = true
 		s.exitStatus = "terminal stopped"
-		close(s.done)
+		if s.done != nil {
+			close(s.done)
+		}
 	}
 	s.mu.Unlock()
+	if s.hub != nil && s.hub.sharedRunningCache != nil {
+		s.hub.sharedRunningCache.invalidate(s.slug)
+	}
 }
 
 func (s *terminalSession) appendScrollback(data []byte) {
@@ -906,7 +1104,9 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 		}
 		switch msg.Type {
 		case "input":
-			_ = sess.write(msg.Data)
+			if input := stripTerminalGeneratedInput(msg.Data); input != "" {
+				_ = sess.write(input)
+			}
 		case "resize":
 			_ = sess.resize(msg.Cols, msg.Rows)
 		}

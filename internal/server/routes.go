@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flow/internal/flowdb"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -15,6 +16,13 @@ import (
 	"strings"
 	"time"
 )
+
+const maxTerminalAttachmentUploadBytes = 50 << 20
+
+type terminalAttachmentUploadResponse struct {
+	Files      []FileRef `json:"files"`
+	InsertText string    `json:"insert_text"`
+}
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
@@ -164,7 +172,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	live, _ := liveAgentSessions()
+	live, _ := s.cachedLiveAgentSessions()
 	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{IncludeArchived: false, Kind: ""})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -240,7 +248,8 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	views, err := BuildTaskViews(s.cfg.DB, s.cfg.FlowRoot, tasks)
+	live, _ := s.cachedLiveAgentSessions()
+	views, err := buildTaskViewsWithLive(s.cfg.DB, s.cfg.FlowRoot, tasks, live)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -263,10 +272,14 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		writeNotFoundOrError(w, err)
 		return
 	}
-	// /inbox accepts GET and POST. /lifecycle accepts GET. Everything
+	// /inbox and /attachments accept writes. /lifecycle accepts GET. Everything
 	// else is GET-only and falls under the legacy gate below.
 	if len(parts) == 2 && parts[1] == "inbox" {
 		s.handleTaskInbox(w, r, task)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "attachments" {
+		s.handleTaskAttachments(w, r, task)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "lifecycle" {
@@ -278,7 +291,7 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case len(parts) == 1:
-		live, _ := liveAgentSessions()
+		live, _ := s.cachedLiveAgentSessions()
 		view, err := BuildTaskView(s.cfg.DB, s.cfg.FlowRoot, task, live)
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
@@ -316,6 +329,152 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, workspaceTree(task.WorkDir))
 	default:
 		http.NotFound(w, r)
+	}
+}
+
+func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, task *flowdb.Task) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxTerminalAttachmentUploadBytes)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	headers := r.MultipartForm.File["files"]
+	if len(headers) == 0 {
+		headers = r.MultipartForm.File["file"]
+	}
+	if len(headers) == 0 {
+		writeError(w, errors.New("no files uploaded"), http.StatusBadRequest)
+		return
+	}
+	destDir := filepath.Join(s.cfg.FlowRoot, "tasks", task.Slug, "attachments")
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	now := time.Now()
+	files := make([]FileRef, 0, len(headers))
+	paths := make([]string, 0, len(headers))
+	for i, header := range headers {
+		src, err := header.Open()
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+		name := uploadedAttachmentFilename(header.Filename, header.Header.Get("Content-Type"), now, i)
+		path := uniqueAttachmentPath(destDir, name)
+		dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			_ = src.Close()
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		n, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		_ = src.Close()
+		if copyErr != nil {
+			_ = os.Remove(path)
+			writeError(w, copyErr, http.StatusInternalServerError)
+			return
+		}
+		if closeErr != nil {
+			_ = os.Remove(path)
+			writeError(w, closeErr, http.StatusInternalServerError)
+			return
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		files = append(files, FileRef{
+			Filename: filepath.Base(path),
+			Path:     path,
+			MTime:    now.Format(time.RFC3339),
+			Size:     n,
+		})
+		paths = append(paths, shellQuoteArg(path))
+	}
+	writeJSON(w, terminalAttachmentUploadResponse{
+		Files:      files,
+		InsertText: strings.Join(paths, " "),
+	})
+}
+
+func uploadedAttachmentFilename(name, contentType string, now time.Time, index int) string {
+	name = strings.TrimSpace(filepath.Base(name))
+	if name == "." || name == "" {
+		name = "attachment" + attachmentExtForContentType(contentType)
+	}
+	var b strings.Builder
+	lastDash := false
+	for _, r := range name {
+		allowed := (r >= 'a' && r <= 'z') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') ||
+			r == '_' || r == '-' || r == '.'
+		if allowed {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	clean := strings.Trim(b.String(), "-.")
+	if clean == "" {
+		clean = "attachment" + attachmentExtForContentType(contentType)
+	}
+	if len(clean) > 96 {
+		ext := filepath.Ext(clean)
+		base := strings.TrimSuffix(clean, ext)
+		if len(ext) > 16 {
+			ext = ""
+		}
+		if len(base) > 96-len(ext) {
+			base = base[:96-len(ext)]
+		}
+		clean = strings.Trim(base, "-.") + ext
+	}
+	prefix := now.Format("20060102-150405")
+	return fmt.Sprintf("%s-%02d-%s", prefix, index+1, clean)
+}
+
+func attachmentExtForContentType(contentType string) string {
+	contentType = strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	switch contentType {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	case "application/pdf":
+		return ".pdf"
+	case "text/plain":
+		return ".txt"
+	default:
+		return ""
+	}
+}
+
+func uniqueAttachmentPath(dir, name string) string {
+	path := filepath.Join(dir, name)
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return path
+	}
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	for i := 2; ; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s-%d%s", base, i, ext))
+		if _, err := os.Stat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate
+		}
 	}
 }
 
@@ -435,7 +594,8 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
-		views, err := BuildTaskViews(s.cfg.DB, s.cfg.FlowRoot, tasks)
+		live, _ := s.cachedLiveAgentSessions()
+		views, err := buildTaskViewsWithLive(s.cfg.DB, s.cfg.FlowRoot, tasks, live)
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return

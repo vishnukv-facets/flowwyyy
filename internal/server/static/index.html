@@ -2138,15 +2138,19 @@ const App = () => {
   const bridgeAgent = isSession ? bridgeAgents[sessionSlug] : null;
   const rawSessionTranscriptCount = (rawSessionAgent?.transcript || []).length;
   const bridgeTranscriptCount = (bridgeAgent?.transcript || []).length;
-  const nativeSessionSnapshot = rawSessionAgent?.terminal?.mode === 'native' || bridgeAgent?.terminal?.mode === 'native';
+  const mergedTerminalMode = (rawMode, bridgeMode) => {
+    if (bridgeMode === 'browser' || bridgeMode === 'shared') return bridgeMode;
+    if (rawMode === 'browser' || rawMode === 'shared') return rawMode;
+    if (rawMode === 'native' || bridgeMode === 'native') return 'native';
+    return bridgeMode || rawMode;
+  };
   const sessionAgent = rawSessionAgent && bridgeAgent
-    ? { ...rawSessionAgent, ...bridgeAgent, terminal: { ...(rawSessionAgent.terminal || {}), ...(bridgeAgent.terminal || {}), mode: nativeSessionSnapshot ? 'native' : (bridgeAgent.terminal?.mode || rawSessionAgent.terminal?.mode) } }
+    ? { ...rawSessionAgent, ...bridgeAgent, terminal: { ...(rawSessionAgent.terminal || {}), ...(bridgeAgent.terminal || {}), mode: mergedTerminalMode(rawSessionAgent.terminal?.mode, bridgeAgent.terminal?.mode) } }
     : rawSessionAgent || (!doneAgent ? bridgeAgent : null);
   const displayAgents = AGENTS.map(agent => {
     const bridge = bridgeAgents[agent.slug];
     if (!bridge) return agent;
-    const nativeSnapshot = agent?.terminal?.mode === 'native' || bridge?.terminal?.mode === 'native';
-    return { ...agent, ...bridge, terminal: { ...(agent.terminal || {}), ...(bridge.terminal || {}), mode: nativeSnapshot ? 'native' : (bridge.terminal?.mode || agent.terminal?.mode) } };
+    return { ...agent, ...bridge, terminal: { ...(agent.terminal || {}), ...(bridge.terminal || {}), mode: mergedTerminalMode(agent.terminal?.mode, bridge.terminal?.mode) } };
   });
   Object.values(bridgeAgents).forEach(agent => {
     if (agent && agent.slug && !displayAgents.some(existing => existing.slug === agent.slug)) displayAgents.push(agent);

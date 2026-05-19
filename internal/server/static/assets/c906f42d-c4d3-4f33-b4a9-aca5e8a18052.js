@@ -28,10 +28,29 @@ const anyProviderAvailable = () => {
   return !providers.length || providers.some(p => p.available);
 };
 const taskStartBlocker = (task = {}) => {
+  // Multi-parent: prefer the parents array; fall back to legacy single parent.
+  let parents = Array.isArray(task.parents) && task.parents.length
+    ? task.parents
+    : (task.parent ? [task.parent] : (task.parent_slug ? [{ slug: task.parent_slug, status: 'unknown' }] : []));
+  const pending = parents.filter(p => p && p.status !== 'done');
+  const allDone = parents.length > 0 && pending.length === 0;
+
   const waiting = String(task.waiting_on || '').trim();
-  if (waiting) return `Blocked: ${waiting}`;
-  const parent = task.parent || (task.parent_slug ? { slug: task.parent_slug, status: 'unknown' } : null);
-  if (parent && parent.status !== 'done') return `Depends on ${parent.slug}${parent.status ? ` (${parent.status})` : ''}`;
+  // Stale waiting_on note (intake-time description like "depends on <slug> …"):
+  // when ALL parents are done AND the note mentions at least one parent slug,
+  // treat it as resolved. Unrelated waiting_on notes still block.
+  const waitingLower = waiting.toLowerCase();
+  const waitingIsParentEcho = waiting && allDone && parents.some(p =>
+    p && p.slug && waitingLower.includes(String(p.slug).toLowerCase())
+  );
+  if (waiting && !waitingIsParentEcho) return `Blocked: ${waiting}`;
+  if (pending.length === 1) {
+    const p = pending[0];
+    return `Depends on ${p.slug}${p.status ? ` (${p.status})` : ''}`;
+  }
+  if (pending.length > 1) {
+    return `Blocked by ${pending.length} dependencies: ${pending.map(p => p.slug).join(', ')}`;
+  }
   return '';
 };
 const missionGreeting = () => {
@@ -1118,7 +1137,8 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
 
   const provider = current.provider || 'claude';
   const terminalMode = current.terminal?.mode || 'idle';
-  const nativeTranscriptMode = terminalMode === 'native';
+  const completedTask = current.task_status === 'done' || current.status === 'done';
+  const nativeTranscriptMode = terminalMode === 'native' && completedTask;
   const providerAvailable = isCapabilityAvailable('providers', provider);
   const providerReason = capabilityReason('providers', provider);
   const canRestartTerminal = providerAvailable && !nativeTranscriptMode && terminalStatus !== 'connecting' && !isTerminalLiveStatus(terminalStatus);
@@ -1450,6 +1470,40 @@ const ContextSummary = ({ agent }) => (
 
 const TERMINAL_SCROLLBACK_LINES = 200000;
 const TERMINAL_FIT_DELAYS_MS = [0, 40, 160, 420, 900];
+const TERMINAL_GENERATED_INPUT_RE = /\x1b\[(?:\?[0-9;]*|>[0-9;]*)c/g;
+
+const stripTerminalGeneratedInput = (data = '') => data.replace(TERMINAL_GENERATED_INPUT_RE, '');
+const terminalAttachmentExt = (type = '') => {
+  const clean = String(type).split(';')[0].trim().toLowerCase();
+  if (clean === 'image/png') return '.png';
+  if (clean === 'image/jpeg') return '.jpg';
+  if (clean === 'image/gif') return '.gif';
+  if (clean === 'image/webp') return '.webp';
+  if (clean === 'application/pdf') return '.pdf';
+  if (clean === 'text/plain') return '.txt';
+  return '';
+};
+
+const terminalClipboardFiles = (clipboardData) => {
+  const files = [];
+  if (!clipboardData) return files;
+  for (const file of Array.from(clipboardData.files || [])) {
+    if (file) files.push(file);
+  }
+  for (const item of Array.from(clipboardData.items || [])) {
+    if (!item || item.kind !== 'file') continue;
+    const file = item.getAsFile && item.getAsFile();
+    if (file && !files.some(existing => existing === file || (existing.name && existing.name === file.name && existing.size === file.size))) {
+      files.push(file);
+    }
+  }
+  return files;
+};
+
+const terminalUploadName = (file, index) => {
+  if (file && file.name) return file.name;
+  return `clipboard-${Date.now()}-${index + 1}${terminalAttachmentExt(file?.type)}`;
+};
 
 const TaskTerminal = ({ agent, onStatus }) => {
   const [termStatus, setTermStatus] = useState('connecting');
@@ -1639,8 +1693,9 @@ const TaskTerminal = ({ agent, onStatus }) => {
     ws.onerror = () => setTermStatus('connection error');
     const dataDisposable = term.onData((data) => {
       const active = wsRef.current;
-      if (active && active.readyState === WebSocket.OPEN) {
-        active.send(JSON.stringify({type: 'input', data}));
+      const input = stripTerminalGeneratedInput(data);
+      if (input && active && active.readyState === WebSocket.OPEN) {
+        active.send(JSON.stringify({type: 'input', data: input}));
       }
     });
     const resizeDisposable = term.onResize(({ cols, rows }) => {
@@ -1656,12 +1711,66 @@ const TaskTerminal = ({ agent, onStatus }) => {
     const focusTimer = setTimeout(() => term.focus(), 120);
     const focusHandler = () => term.focus();
     window.addEventListener('flow-terminal-focus', focusHandler);
+    const sendTerminalText = (text) => {
+      const input = stripTerminalGeneratedInput(text || '');
+      const active = wsRef.current;
+      if (input && active && active.readyState === WebSocket.OPEN) {
+        active.send(JSON.stringify({type: 'input', data: input}));
+      }
+    };
+    const uploadFiles = async (files, source) => {
+      const list = Array.from(files || []).filter(Boolean);
+      if (!list.length) return;
+      const priorStatus = termStatus;
+      setTermStatus(`uploading ${list.length} ${list.length === 1 ? 'file' : 'files'}…`);
+      try {
+        const form = new FormData();
+        list.forEach((file, index) => form.append('files', file, terminalUploadName(file, index)));
+        const resp = await fetch(`/api/tasks/${encodeURIComponent(agent.slug)}/attachments`, {
+          method: 'POST',
+          body: form,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(data.message || data.error || `upload failed (${resp.status})`);
+        if (data.insert_text) sendTerminalText(` ${data.insert_text}`);
+        setTermStatus(source === 'paste' ? 'pasted file path' : 'dropped file path');
+        setTimeout(() => setTermStatus(isTerminalLiveStatus(priorStatus) ? priorStatus : 'interactive'), 900);
+        term.focus();
+      } catch (err) {
+        setTermStatus(err.message || 'file upload failed');
+      }
+    };
+    const pasteHandler = (event) => {
+      const files = terminalClipboardFiles(event.clipboardData);
+      if (!files.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      uploadFiles(files, 'paste');
+    };
+    const dragOverHandler = (event) => {
+      if (!event.dataTransfer || !event.dataTransfer.types || !Array.from(event.dataTransfer.types).includes('Files')) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+    };
+    const dropHandler = (event) => {
+      const files = Array.from(event.dataTransfer?.files || []);
+      if (!files.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      uploadFiles(files, 'drop');
+    };
+    host.addEventListener('paste', pasteHandler, true);
+    host.addEventListener('dragover', dragOverHandler);
+    host.addEventListener('drop', dropHandler);
 
     return () => {
       clearTimeout(focusTimer);
       fitTimers.forEach(clearTimeout);
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
       window.removeEventListener('flow-terminal-focus', focusHandler);
+      host.removeEventListener('paste', pasteHandler, true);
+      host.removeEventListener('dragover', dragOverHandler);
+      host.removeEventListener('drop', dropHandler);
       observer.disconnect();
       window.removeEventListener('resize', resize);
       dataDisposable.dispose();
@@ -1687,13 +1796,16 @@ const TaskTerminal = ({ agent, onStatus }) => {
     : (termStatus === 'interactive' || termStatus.startsWith('connected'))
       ? 'running'
       : 'idle';
+  const terminalKindLabel = agent.terminal?.mode === 'shared'
+    ? 'shared terminal'
+    : (agent.provider === 'codex' ? 'codex terminal' : 'terminal');
 
   return (
     <div className={`pane terminal-pane ${fullscreen ? 'pane-fullscreen' : ''}`}>
       <div className="pane-head">
         <Icon name="terminal" size={11}/>
         <ProviderMark provider={agent.provider || 'claude'} size={12}/>
-        <span>{agent.provider === 'codex' ? 'codex terminal' : 'terminal'} · {agent.branch}</span>
+        <span>{terminalKindLabel} · {agent.branch}</span>
         <div className="right">
           <Dot status={statusKind}/>
           <span className="terminal-status mono">{termStatus}</span>

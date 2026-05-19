@@ -25,6 +25,7 @@ func New(cfg Config) *Server {
 	s.events = newEventHub()
 	s.reconcile = newLivenessReconciler(s)
 	s.transcripts = newTranscriptCache()
+	s.caches = newUICaches()
 	return s
 }
 

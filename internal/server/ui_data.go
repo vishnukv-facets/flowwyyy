@@ -136,6 +136,7 @@ type uiAgent struct {
 	Name            string         `json:"name"`
 	Project         *string        `json:"project"`
 	Parent          *TaskSummary   `json:"parent,omitempty"`
+	Parents         []TaskSummary  `json:"parents,omitempty"`
 	Children        []TaskSummary  `json:"children,omitempty"`
 	Branch          string         `json:"branch"`
 	Branches        []string       `json:"branches,omitempty"`
@@ -240,6 +241,7 @@ type uiBacklogTask struct {
 	Name      string        `json:"name"`
 	Project   string        `json:"project"`
 	Parent    *TaskSummary  `json:"parent,omitempty"`
+	Parents   []TaskSummary `json:"parents,omitempty"`
 	Children  []TaskSummary `json:"children,omitempty"`
 	Provider  string        `json:"provider"`
 	Priority  string        `json:"priority"`
@@ -339,12 +341,12 @@ func (s *Server) handleUIDataJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) buildUIData() (uiData, error) {
-	live, _ := liveAgentSessions()
+	live, _ := s.cachedLiveAgentSessions()
 	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: false})
 	if err != nil {
 		return uiData{}, err
 	}
-	taskViews, err := BuildTaskViews(s.cfg.DB, s.cfg.FlowRoot, tasks)
+	taskViews, err := buildTaskViewsWithLive(s.cfg.DB, s.cfg.FlowRoot, tasks, live)
 	if err != nil {
 		return uiData{}, err
 	}
@@ -765,11 +767,14 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		sessionID = *tv.SessionID
 	}
 	bridgeRunning := s.terminals != nil && s.terminals.running(tv.Slug)
+	sharedRunning := s.terminals != nil && s.terminals.sharedRunning(tv.Slug)
 	sessionLive := tv.SessionID != nil && live[strings.ToLower(*tv.SessionID)]
 	terminalMode := "idle"
 	switch {
 	case bridgeRunning:
 		terminalMode = "browser"
+	case sharedRunning:
+		terminalMode = "shared"
 	case sessionLive:
 		terminalMode = "native"
 	}
@@ -799,6 +804,9 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		case bridgeRunning:
 			status = "running"
 			runtimeSource = "browser_terminal"
+		case sharedRunning:
+			status = "running"
+			runtimeSource = "shared_terminal"
 		case sessionLive:
 			status = "running"
 			runtimeSource = "process"
@@ -848,11 +856,11 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	branches := []string{}
 	branch := "~/.flow"
 	if tv.Slug != overviewTaskSlug {
-		branch = gitBranch(workDir)
+		branch = s.cachedGitBranch(workDir)
 		if branch == "" {
 			branch = tv.Slug + "/main"
 		} else {
-			branches = gitBranches(workDir, branch)
+			branches = s.cachedGitBranches(workDir, branch)
 		}
 	}
 	lastActivityAt := laterTimestamp(latestTaskActivity(tv), insights.ActivityAt)
@@ -861,7 +869,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	if tv.SessionStarted != nil {
 		startedAt = *tv.SessionStarted
 	}
-	diff, files := gitDiff(workDir)
+	diff, files := s.cachedGitDiff(workDir)
 	summary := latestMarkdownSummary(tv.Updates)
 	if summary == "" {
 		summary = readMarkdownSummary(tv.BriefPath)
@@ -899,6 +907,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		Name:            tv.Name,
 		Project:         tv.ProjectSlug,
 		Parent:          tv.Parent,
+		Parents:         tv.Parents,
 		Children:        tv.Children,
 		Branch:          branch,
 		Branches:        branches,
@@ -1203,6 +1212,7 @@ func (s *Server) uiBacklog(tv TaskView) uiBacklogTask {
 		Name:      tv.Name,
 		Project:   project,
 		Parent:    tv.Parent,
+		Parents:   tv.Parents,
 		Children:  tv.Children,
 		Provider:  provider,
 		Priority:  tv.Priority,
@@ -1702,6 +1712,8 @@ func terminalModeMessage(provider, mode string) string {
 	switch mode {
 	case "browser":
 		return provider + " is attached to the browser terminal"
+	case "shared":
+		return provider + " is attached to a shared terminal"
 	case "native":
 		return provider + " is attached to a native terminal"
 	default:
@@ -1739,6 +1751,51 @@ func gitBranch(dir string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// cachedGitBranch wraps gitBranch with a per-server TTL cache so the hot
+// uiAgent loop doesn't fork `git rev-parse` once per task per SSE tick.
+func (s *Server) cachedGitBranch(dir string) string {
+	if s == nil || s.caches == nil || dir == "" {
+		return gitBranch(dir)
+	}
+	if v, ok := s.caches.gitBranch.get(dir); ok {
+		return v
+	}
+	v := gitBranch(dir)
+	s.caches.gitBranch.set(dir, v)
+	return v
+}
+
+// cachedGitBranches wraps gitBranches with a per-server TTL cache. Keyed by
+// dir+current so a branch switch (which changes `current`) immediately gets a
+// fresh list; same-branch repeats within the 5s window are free.
+func (s *Server) cachedGitBranches(dir, current string) []string {
+	if s == nil || s.caches == nil || dir == "" {
+		return gitBranches(dir, current)
+	}
+	key := dir + "\x00" + current
+	if v, ok := s.caches.gitBranches.get(key); ok {
+		return v
+	}
+	v := gitBranches(dir, current)
+	s.caches.gitBranches.set(key, v)
+	return v
+}
+
+// cachedGitDiff wraps gitDiff with a per-server TTL cache. gitDiff fans out
+// into 3-12 git invocations depending on the diff size, so caching across an
+// SSE tick is the highest-leverage win in this whole file.
+func (s *Server) cachedGitDiff(dir string) (uiDiff, []uiDiffFile) {
+	if s == nil || s.caches == nil || dir == "" {
+		return gitDiff(dir)
+	}
+	if v, ok := s.caches.gitDiff.get(dir); ok {
+		return v.diff, v.files
+	}
+	diff, files := gitDiff(dir)
+	s.caches.gitDiff.set(dir, gitDiffSnapshot{diff: diff, files: files})
+	return diff, files
 }
 
 func gitBranches(dir, current string) []string {

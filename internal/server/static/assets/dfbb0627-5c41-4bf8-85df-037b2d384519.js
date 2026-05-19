@@ -184,21 +184,36 @@ const BranchChip = ({ name }) => (
 
 const DependencyBadges = ({ task, compact = false }) => {
   if (!task) return null;
-  const parent = task.parent || (task.parent_slug ? { slug: task.parent_slug } : null);
+  // Prefer the multi-parent array; fall back to the legacy single parent /
+  // parent_slug for any payload that hasn't been re-fetched since the
+  // server upgrade.
+  let parents = Array.isArray(task.parents) && task.parents.length
+    ? task.parents.slice()
+    : (task.parent ? [task.parent] : (task.parent_slug ? [{ slug: task.parent_slug }] : []));
   const children = Array.isArray(task.children) ? task.children : [];
-  if (!parent && children.length === 0) return null;
-  const parentStatus = parent?.status || 'unknown';
-  const parentOpen = parent && parentStatus !== 'done';
+  if (parents.length === 0 && children.length === 0) return null;
   const childPreview = children.slice(0, compact ? 1 : 3).map(c => c.slug).join(', ');
   const hiddenChildren = Math.max(0, children.length - (compact ? 1 : 3));
+  const maxParents = compact ? 1 : 3;
+  const shownParents = parents.slice(0, maxParents);
+  const hiddenParents = Math.max(0, parents.length - maxParents);
   return (
     <div className={`dependency-strip ${compact ? 'compact' : ''}`}>
-      {parent && (
-        <span className={`dependency-chip parent ${parentOpen ? 'open' : 'done'}`} title={`${task.slug} depends on ${parent.slug}${parent.status ? ` (${parent.status})` : ''}`}>
-          <Icon name="corner-down-right" size={10}/>
-          <span>depends on</span>
-          <strong className="mono">{parent.slug}</strong>
-          {parent.status && <em>{parent.status}</em>}
+      {shownParents.map((p, i) => {
+        const status = p.status || 'unknown';
+        const isOpen = status !== 'done';
+        return (
+          <span key={p.slug || i} className={`dependency-chip parent ${isOpen ? 'open' : 'done'}`} title={`${task.slug} depends on ${p.slug}${p.status ? ` (${p.status})` : ''}`}>
+            <Icon name="corner-down-right" size={10}/>
+            <span>{i === 0 ? 'depends on' : 'and'}</span>
+            <strong className="mono">{p.slug}</strong>
+            {p.status && <em>{p.status}</em>}
+          </span>
+        );
+      })}
+      {hiddenParents > 0 && (
+        <span className="dependency-chip parent open" title={parents.slice(maxParents).map(p => `${p.slug}${p.status ? ` (${p.status})` : ''}`).join(', ')}>
+          <em>+{hiddenParents} more</em>
         </span>
       )}
       {children.length > 0 && (

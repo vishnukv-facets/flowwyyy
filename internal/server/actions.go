@@ -651,22 +651,39 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 	}
+	sharedName, hasBrowserShared := s.terminals.sharedSessionName(target)
+	createdShared := false
+	if s.terminals.running(target) && !hasBrowserShared {
+		return actionResponse{OK: false, Message: "browser terminal for " + target + " is already running without shared terminal multiplexing; stop it before opening a native shared terminal"}, http.StatusConflict
+	}
 	launch, err := s.prepareTerminalLaunch(target)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 	}
-	if err := s.spawnNativeTerminal(terminalKind, task, launch); err != nil {
+	if sharedName == "" {
+		sharedName, createdShared, err = s.ensureSharedTerminalSession(launch, 120, 32)
+		if err != nil {
+			if launch.Created {
+				s.rollbackPreparedTerminalLaunch(launch)
+			}
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+	}
+	command := "tmux attach-session -t " + shellQuoteArg(sharedName)
+	if err := s.spawnNativeTerminalCommand(terminalKind, nativeTerminalTitle(task), launch.WorkDir, command, s.nativeTerminalEnv()); err != nil {
+		if createdShared {
+			_ = sharedTerminalKillSession(sharedName)
+		}
 		if launch.Created {
 			s.rollbackPreparedTerminalLaunch(launch)
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
-	s.terminals.stop(target)
 	agent, _ := s.agentForTask(target)
 	if agent != nil {
 		agent.Status = "running"
-		agent.Terminal.Mode = "native"
-		agent.Terminal.Message = terminalModeMessage(firstNonEmpty(agent.Provider, "claude"), "native")
+		agent.Terminal.Mode = "shared"
+		agent.Terminal.Message = terminalModeMessage(firstNonEmpty(agent.Provider, "claude"), "shared")
 	}
 	return actionResponse{OK: true, Message: "opened " + target + " in " + terminalLabel(terminalKind), Agent: agent}, http.StatusOK
 }
@@ -683,26 +700,30 @@ func (s *Server) spawnNativeTerminal(kind string, task *flowdb.Task, launch term
 	command := agentShellCommand(launch.Provider, launch.Args)
 	env := s.nativeTerminalEnv()
 	title := nativeTerminalTitle(task)
+	return s.spawnNativeTerminalCommand(kind, title, launch.WorkDir, command, env)
+}
+
+func (s *Server) spawnNativeTerminalCommand(kind, title, workDir, command string, env map[string]string) error {
 	switch kind {
 	case "iterm":
-		return iterm.SpawnTab(title, launch.WorkDir, command, env)
+		return iterm.SpawnTab(title, workDir, command, env)
 	case "terminal":
-		return macterminal.SpawnTab(title, launch.WorkDir, command, env)
+		return macterminal.SpawnTab(title, workDir, command, env)
 	case "kitty":
-		return kitty.SpawnTab(title, launch.WorkDir, command, env)
+		return kitty.SpawnTab(title, workDir, command, env)
 	case "warp":
-		return warp.SpawnTab(title, launch.WorkDir, command, env)
+		return warp.SpawnTab(title, workDir, command, env)
 	case "alacritty":
-		return startShellTerminal("alacritty", "Alacritty", launch.WorkDir, command, env, "--working-directory", launch.WorkDir, "-e")
+		return startShellTerminal("alacritty", "Alacritty", workDir, command, env, "--working-directory", workDir, "-e")
 	case "ghostty":
-		return startShellTerminal("ghostty", "Ghostty", launch.WorkDir, command, env, "--working-directory="+launch.WorkDir, "-e")
+		return startShellTerminal("ghostty", "Ghostty", workDir, command, env, "--working-directory="+workDir, "-e")
 	case "wezterm":
-		args := append([]string{"start", "--cwd", launch.WorkDir, "--"}, shellCommandArgs(command, env)...)
+		args := append([]string{"start", "--cwd", workDir, "--"}, shellCommandArgs(command, env)...)
 		return nativeCommandStarter("wezterm", "", args...)
 	case "tmux":
-		return nativeCommandStarter("tmux", "", "new-window", "-n", title, "-c", launch.WorkDir, shellCommandLine(command, env))
+		return nativeCommandStarter("tmux", "", "new-window", "-n", title, "-c", workDir, shellCommandLine(command, env))
 	case "vscode":
-		return nativeCommandStarter("code", "", "-n", "--reuse-window", launch.WorkDir)
+		return nativeCommandStarter("code", "", "-n", "--reuse-window", workDir)
 	default:
 		return fmt.Errorf("unsupported terminal %q", kind)
 	}
@@ -737,6 +758,9 @@ func (s *Server) switchBranch(req actionRequest) (actionResponse, int) {
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusConflict
 	}
+	// The branch and diff just changed; clear the per-workdir cache so the
+	// agent snapshot we're about to return reflects the new HEAD.
+	s.caches.invalidateWorkdir(task.WorkDir)
 	agent, _ := s.agentForTask(target)
 	return actionResponse{OK: true, Message: "switched " + target + " to " + branch, Output: out, Agent: agent}, http.StatusOK
 }
@@ -926,7 +950,7 @@ func (s *Server) agentForTask(slug string) (*uiAgent, error) {
 	if err != nil {
 		return nil, err
 	}
-	live, _ := liveAgentSessions()
+	live, _ := s.cachedLiveAgentSessions()
 	view, err := BuildTaskView(s.cfg.DB, s.cfg.FlowRoot, task, live)
 	if err != nil {
 		return nil, err
