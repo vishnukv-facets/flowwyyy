@@ -136,6 +136,54 @@ func TestUIDataJSONEndpointUsesFlowRecords(t *testing.T) {
 	}
 }
 
+func TestUIDataIncludesMonitorEventOutcomes(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	event, _, err := flowdb.UpsertMonitorEvent(db, flowdb.MonitorEventInput{
+		Source:   "github",
+		Kind:     "review_requested",
+		SourceID: "repo:flow:7",
+		Title:    "Review PR 7",
+		Body:     "Please review this pull request.",
+		URL:      "https://github.com/acme/flow/pull/7",
+		Severity: "high",
+		Seq:      7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.CreateNotificationForEvent(db, *event, "approval"); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.RecordMonitorEventAction(db, event.ID, "draft", "build-ui", "manual approval required"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var data uiData
+	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Monitor.Events) != 1 {
+		t.Fatalf("monitor events = %+v", data.Monitor.Events)
+	}
+	if got := data.Monitor.Events[0].Outcome; got == nil || got.Action != "draft" || got.TaskSlug != "build-ui" || got.Note != "manual approval required" {
+		t.Fatalf("event outcome = %+v, want draft/build-ui/manual approval required", got)
+	}
+	if len(data.Monitor.Notifications) != 1 {
+		t.Fatalf("monitor notifications = %+v", data.Monitor.Notifications)
+	}
+	if got := data.Monitor.Notifications[0].Outcome; got == nil || got.Action != "draft" || got.TaskSlug != "build-ui" {
+		t.Fatalf("notification outcome = %+v, want draft/build-ui", got)
+	}
+}
+
 func TestUIDataIncludesTaskDependencies(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -785,6 +833,85 @@ func TestMonitorAutoAgentCreatesReadOnlyPromptWithUntrustedContext(t *testing.T)
 	}
 }
 
+func TestSetRuleModeUpdatesRoutingAndReadOnlyFromUI(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	readOnly := false
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:       "set-rule-mode",
+		Source:     "github",
+		RuleKind:   "ci_failed",
+		Mode:       "auto_agent",
+		Project:    "flow",
+		WorkDir:    root,
+		Provider:   "codex",
+		Prompt:     "Inspect and summarize only.",
+		ReadOnly:   &readOnly,
+		RuleUpdate: true,
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	rule, err := flowdb.AutomationRuleFor(db, "github", "ci_failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rule.ReadOnly {
+		t.Fatalf("read_only = true, want false")
+	}
+	if rule.Provider.String != "codex" || rule.ProjectSlug.String != "flow" || rule.WorkDir.String != root || rule.PromptTemplate.String != "Inspect and summarize only." {
+		t.Fatalf("rule routing = %+v", rule)
+	}
+}
+
+func TestMonitorIgnoreEventRecordsOutcomeAndDismissesNotification(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	event, _, err := flowdb.UpsertMonitorEvent(db, flowdb.MonitorEventInput{
+		Source:   "slack",
+		Kind:     "mention",
+		SourceID: "C1:123",
+		Title:    "Mention in thread",
+		Body:     "Can you look at this?",
+		Severity: "medium",
+		Seq:      1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.CreateNotificationForEvent(db, *event, "approval"); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	resp, status := srv.runAction(actionRequest{Kind: "monitor-ignore-event", EventID: event.ID})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	action, err := flowdb.GetMonitorEventAction(db, event.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if action.Action != "ignore" || action.Note.String != "ignored from inbox" {
+		t.Fatalf("action = %+v, want ignore with inbox note", action)
+	}
+	event, err = flowdb.GetMonitorEvent(db, event.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if event.Status != "ignored" {
+		t.Fatalf("event status = %q, want ignored", event.Status)
+	}
+	notifications, err := flowdb.ListMonitorNotifications(db, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 0 {
+		t.Fatalf("notifications = %+v, want dismissed notification hidden", notifications)
+	}
+}
+
 func TestMonitorAutoAgentSpawnsOnlyRoutedReadOnlyWork(t *testing.T) {
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
@@ -1156,8 +1283,11 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(body, "provider: target.provider") {
 		t.Fatal("serverAction payload must forward provider so UI-created Codex tasks do not default to Claude")
 	}
-	if !strings.Contains(body, "Choose agent provider") || !strings.Contains(body, "_providerChosen") {
-		t.Fatal("backlog spawn must ask for Claude vs Codex before opening a session")
+	if !strings.Contains(body, "Start backlog task") || !strings.Contains(body, "_providerChosen") {
+		t.Fatal("backlog spawn must open the modal asking for provider and permission mode before opening a session")
+	}
+	if !strings.Contains(body, "Permission mode") || !strings.Contains(body, "permission_mode, _providerChosen: true") {
+		t.Fatal("backlog spawn modal must let the user pick permission mode (default/auto/bypass) and forward it to the spawn action")
 	}
 	if !strings.Contains(body, "taskStartBlocker(target)") {
 		t.Fatal("spawn action must refuse blocked/dependent backlog tasks before provider choice")

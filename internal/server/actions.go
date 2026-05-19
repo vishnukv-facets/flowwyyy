@@ -46,6 +46,8 @@ type actionRequest struct {
 	Provider        string   `json:"provider"`
 	PermissionMode  string   `json:"permission_mode"`
 	NotificationIDs []string `json:"notification_ids"`
+	ReadOnly        *bool    `json:"read_only"`
+	RuleUpdate      bool     `json:"rule_update"`
 }
 
 type actionResponse struct {
@@ -165,6 +167,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.markNotificationsRead(req)
 	case "notification-start-agent":
 		return s.startAgentForNotification(req)
+	case "monitor-ignore-event":
+		return s.ignoreMonitorEvent(req)
 	case "set-rule-mode":
 		return s.setRuleMode(req)
 	case "overview-chat":
@@ -1070,10 +1074,14 @@ func (s *Server) setRuleMode(req actionRequest) (actionResponse, int) {
 	if source == "" || kind == "" || mode == "" {
 		return actionResponse{OK: false, Message: "source, rule_kind, and mode are required"}, http.StatusBadRequest
 	}
-	if strings.TrimSpace(req.Project) != "" || strings.TrimSpace(req.WorkDir) != "" ||
+	if req.RuleUpdate || req.ReadOnly != nil || strings.TrimSpace(req.Project) != "" || strings.TrimSpace(req.WorkDir) != "" ||
 		strings.TrimSpace(req.Provider) != "" || strings.TrimSpace(req.Prompt) != "" {
+		readOnly := true
+		if req.ReadOnly != nil {
+			readOnly = *req.ReadOnly
+		}
 		err := flowdb.UpdateAutomationRuleRouting(
-			s.cfg.DB, source, kind, mode, req.Prompt, req.Project, req.WorkDir, req.Provider, true,
+			s.cfg.DB, source, kind, mode, req.Prompt, req.Project, req.WorkDir, req.Provider, readOnly,
 		)
 		if err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
@@ -1084,6 +1092,28 @@ func (s *Server) setRuleMode(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
 	return actionResponse{OK: true, Message: "rule updated: " + source + "." + kind + "=" + mode}, http.StatusOK
+}
+
+func (s *Server) ignoreMonitorEvent(req actionRequest) (actionResponse, int) {
+	eventID := strings.TrimSpace(firstNonEmpty(req.EventID, req.Target))
+	if eventID == "" {
+		return actionResponse{OK: false, Message: "event_id is required"}, http.StatusBadRequest
+	}
+	event, err := flowdb.GetMonitorEvent(s.cfg.DB, eventID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "event not found: " + eventID}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	if err := flowdb.RecordMonitorEventAction(s.cfg.DB, event.ID, "ignore", "", "ignored from inbox"); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	if err := flowdb.UpdateMonitorEventStatus(s.cfg.DB, event.ID, "ignored"); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	_ = flowdb.UpdateNotificationStatus(s.cfg.DB, "notif-"+event.ID, "dismissed")
+	return actionResponse{OK: true, Message: "ignored " + event.Title}, http.StatusOK
 }
 
 func (s *Server) startAgentForNotification(req actionRequest) (actionResponse, int) {

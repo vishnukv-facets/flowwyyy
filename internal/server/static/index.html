@@ -845,8 +845,75 @@ button.readable-file-head:focus-visible { outline: 1px solid var(--primary); out
 .rules-table { display: flex; flex-direction: column; }
 .rule-row { display: grid; grid-template-columns: 74px minmax(0, 1fr) 170px; gap: 8px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 11.5px; }
 .rule-row select { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 3px; padding: 4px 6px; font: 11.5px var(--mono); }
+.inbox-page { display: flex; flex-direction: column; gap: 14px; max-width: 1520px; }
+.inbox-hero { display: flex; align-items: flex-start; gap: 16px; padding: 4px 0 2px; }
+.inbox-hero h1 { margin: 0; color: var(--text); font-size: 28px; line-height: 1.12; letter-spacing: 0; }
+.inbox-hero p { margin: 7px 0 0; max-width: 820px; color: var(--text-dim); font-size: 13px; }
+.inbox-hero .btn { margin-left: auto; }
+.inbox-safety { display: flex; align-items: flex-start; gap: 9px; padding: 10px 12px; border: 1px solid rgba(245,166,35,0.32); border-radius: 5px; background: rgba(245,166,35,0.07); color: var(--text-mid); font-size: 12.5px; line-height: 1.45; }
+.inbox-safety svg { color: var(--waiting); flex: 0 0 auto; margin-top: 2px; }
+.inbox-layout { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 12px; align-items: start; }
+.inbox-main, .inbox-side { min-width: 0; }
+.inbox-side { display: flex; flex-direction: column; gap: 12px; }
+.inbox-toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 10px; }
+.inbox-toolbar .tab-strip { flex-wrap: wrap; }
+.inbox-toolbar .tab-strip button { display: inline-flex; align-items: center; gap: 6px; }
+.inbox-toolbar .tab-strip button span { color: var(--text-faint); font-size: 10px; }
+.inbox-search { margin-left: auto; display: grid; grid-template-columns: 16px minmax(140px, 240px); align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface); color: var(--text-faint); }
+.inbox-search input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 12px; }
+.inbox-search input::placeholder { color: var(--text-faint); }
+.inbox-list { display: flex; flex-direction: column; gap: 8px; }
+.inbox-item { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: stretch; padding: 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.inbox-item.needs-review { border-color: rgba(245,166,35,0.36); background: linear-gradient(90deg, rgba(245,166,35,0.055), rgba(20,20,23,0.96) 34%); }
+.inbox-item.spawn { border-left: 2px solid var(--running); }
+.inbox-item.draft { border-left: 2px solid var(--primary-hi); }
+.inbox-item.ping { border-left: 2px solid var(--waiting); }
+.inbox-item.ignore { opacity: 0.72; }
+.inbox-item-rail { display: flex; align-items: flex-start; justify-content: center; padding-top: 2px; }
+.inbox-outcome { width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-2); color: var(--text-dim); }
+.inbox-outcome.spawn { color: var(--running); background: var(--running-dim); border-color: rgba(46,182,114,0.35); }
+.inbox-outcome.draft { color: var(--primary-hi); background: rgba(100,93,246,0.12); border-color: rgba(139,135,248,0.38); }
+.inbox-outcome.ping { color: var(--waiting); background: var(--waiting-dim); border-color: rgba(245,166,35,0.35); }
+.inbox-outcome.ignore { color: var(--text-faint); }
+.inbox-item-main { min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.inbox-item-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.inbox-source, .inbox-kind { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; }
+.inbox-kind { color: var(--text-mid); background: var(--surface-2); }
+.inbox-time { margin-left: auto; color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+.inbox-item h3 { margin: 0; color: var(--text); font-size: 14px; line-height: 1.3; letter-spacing: 0; }
+.inbox-untrusted { border: 1px dashed rgba(245,166,35,0.34); border-radius: 4px; background: rgba(0,0,0,0.16); overflow: hidden; }
+.inbox-untrusted-head { display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--waiting); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px dashed rgba(245,166,35,0.26); }
+.inbox-untrusted pre { margin: 0; padding: 8px; max-height: 118px; overflow: auto; color: var(--text-mid); white-space: pre-wrap; overflow-wrap: anywhere; font: 11.5px/1.5 var(--mono); }
+.inbox-route-line, .inbox-rule-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-dim); font-size: 10.5px; }
+.inbox-route-line span, .inbox-rule-line span { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-rule-line { color: var(--text-faint); }
+.inbox-actions { display: flex; align-items: flex-start; justify-content: flex-end; gap: 6px; flex-wrap: wrap; min-width: 168px; }
+.inbox-stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.inbox-stat-grid div { border: 1px solid var(--border); border-radius: 5px; background: var(--surface); padding: 12px; min-width: 0; }
+.inbox-stat-grid span { display: block; color: var(--text); font-size: 22px; line-height: 1; }
+.inbox-stat-grid p { margin: 6px 0 0; color: var(--text-dim); font-size: 11px; }
+.inbox-rule-panel { overflow: visible; }
+.inbox-rule-list { display: flex; flex-direction: column; gap: 7px; padding: 8px; }
+.rule-card { border: 1px solid var(--border); border-radius: 5px; background: var(--surface); overflow: hidden; }
+.rule-card[open] { border-color: var(--border-strong); }
+.rule-card summary { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; align-items: center; padding: 9px 10px; cursor: pointer; list-style: none; }
+.rule-card summary::-webkit-details-marker { display: none; }
+.rule-card summary > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 11px; }
+.rule-mode, .rule-readonly { padding: 2px 6px; border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); background: var(--surface-2); font-size: 9.5px; }
+.rule-readonly.on { color: var(--running); border-color: rgba(46,182,114,0.32); background: var(--running-dim); }
+.rule-readonly.off { color: var(--waiting); border-color: rgba(245,166,35,0.32); background: var(--waiting-dim); }
+.rule-edit-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; padding: 10px; border-top: 1px solid var(--border); }
+.rule-edit-grid label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.rule-edit-grid label > span { font: 10px var(--mono); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em; }
+.rule-edit-wide { grid-column: 1 / -1; }
+.rule-check { grid-column: 1 / -1; flex-direction: row !important; align-items: center; color: var(--text-dim); font-size: 11.5px; }
+.rule-check input { accent-color: var(--primary); }
 @media (max-width: 980px) {
-  .overview-grid, .monitor-layout, .monitor-strip { grid-template-columns: 1fr; }
+  .overview-grid, .monitor-layout, .monitor-strip, .inbox-layout { grid-template-columns: 1fr; }
+  .inbox-toolbar { align-items: flex-start; flex-direction: column; }
+  .inbox-search { margin-left: 0; width: 100%; grid-template-columns: 16px minmax(0, 1fr); }
+  .inbox-item { grid-template-columns: 28px minmax(0, 1fr); }
+  .inbox-actions { grid-column: 2; justify-content: flex-start; min-width: 0; }
 }
 
 /* ── Tables ────────────────────────────────────────────── */
@@ -1334,7 +1401,7 @@ button.readable-file-head:focus-visible { outline: 1px solid var(--primary); out
 <script type="text/babel">
 const { useState, useEffect, useMemo, useRef, useContext, Fragment } = React;
 const { ClockProvider, ClockCtx, AGENTS, DEAD_AGENT, DONE_AGENTS = [], BACKLOG, DONE_TASKS = [], PROJECTS_MC, PLAYBOOKS_MC, WORKDIRS, KB_FILES, ACTIVITY_HEATMAP, TRASH = { tasks: [], projects: [], playbooks: [], total: 0 }, Icon, Dot, FlowLogo, FlowMark } = window.MC;
-const { MissionControl, MonitorView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail, TrashView, KBView, WorkdirsView, CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal } = window.MC_SCREENS;
+const { MissionControl, MonitorView, InboxView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail, TrashView, KBView, WorkdirsView, CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal } = window.MC_SCREENS;
 
 const NAV = [
   { group: 'core', items: [
@@ -1349,6 +1416,7 @@ const NAV = [
     { id: 'kb', label: 'KB', icon: 'book-open', kbd: 'g k' },
   ]},
   { group: 'review', items: [
+    { id: 'inbox', label: 'Inbox', icon: 'inbox', kbd: 'g i' },
     { id: 'monitor', label: 'Monitor', icon: 'bell-ring', kbd: 'g n' },
     { id: 'trash', label: 'Trash', icon: 'trash-2', kbd: 'g x' },
   ]},
@@ -1362,6 +1430,7 @@ const TITLES = {
   playbooks: ['Playbooks'],
   workdirs: ['Workdirs'],
   kb: ['Knowledge base'],
+  inbox: ['Inbox'],
   monitor: ['Monitor'],
   trash: ['Trash'],
 };
@@ -1491,7 +1560,7 @@ const NotificationsBell = ({ waitingCount, liveCount, goto, action, agents = [] 
       else goto(`session/${n.slug}`);
       return;
     }
-    goto('monitor');
+    goto('inbox');
   };
 
   const colorFor = (kind) => kind === 'approval' || kind === 'high' ? 'var(--waiting)' : kind === 'success' || kind === 'done' || kind === 'low' ? 'var(--running)' : kind === 'warning' || kind === 'medium' || kind === 'pr' ? 'var(--primary-hi)' : 'var(--text-mid)';
@@ -1542,7 +1611,7 @@ const NotificationsBell = ({ waitingCount, liveCount, goto, action, agents = [] 
           <div className="notif-foot">
             <button className="btn sm" onClick={() => { action('notification-read-all', { notification_ids: unreadNotifs.map(n => n.id) }); }} disabled={!unreadNotifs.length} style={{flex: 1, justifyContent: 'center'}}>Mark all read</button>
             <button className="btn sm" onClick={() => { action('notification-dismiss-all', { notification_ids: dismissableNotifs.map(n => n.id) }); setOpen(false); }} disabled={!dismissableNotifs.length} style={{flex: 1, justifyContent: 'center'}}>Dismiss all</button>
-            <button className="btn sm" onClick={() => { setOpen(false); goto('monitor'); }} style={{flex: 1, justifyContent: 'center'}}>Open monitor</button>
+            <button className="btn sm" onClick={() => { setOpen(false); goto('inbox'); }} style={{flex: 1, justifyContent: 'center'}}>Open inbox</button>
           </div>
         </div>
       )}
@@ -1631,38 +1700,92 @@ const ProviderChoiceModal = ({ target, providers, onPick, onClose }) => {
   ];
   const options = (providers && providers.length ? providers : fallbackProviders)
     .filter(p => p && (p.id === 'claude' || p.id === 'codex'));
+  const availOptions = options.filter(p => p.available);
+  const initialProvider = (() => {
+    if (target?.provider && availOptions.some(p => p.id === target.provider)) return target.provider;
+    const claudeOpt = availOptions.find(p => p.id === 'claude');
+    if (claudeOpt) return 'claude';
+    return availOptions[0]?.id || 'claude';
+  })();
+  const [provider, setProvider] = useState(initialProvider);
+  const initialMode = (target?.permission_mode === 'auto' || target?.permission_mode === 'bypass') ? target.permission_mode : 'default';
+  const [permissionMode, setPermissionMode] = useState(initialMode);
+
+  const PERMISSION_MODES = [
+    { id: 'default', label: 'Default',    icon: 'shield',     sub: 'Sandboxed · prompts for risky operations' },
+    { id: 'auto',    label: 'Auto',       icon: 'fast-forward', sub: 'No approval prompts · Codex keeps sandboxing' },
+    { id: 'bypass',  label: 'Bypass',     icon: 'shield-off', sub: 'Skip approvals and sandboxing (powerful + risky)' },
+  ];
+
   const name = target?.name || target?.slug || 'this backlog task';
+  const providerAvailable = availOptions.some(p => p.id === provider);
+
   return (
     <div className="modal-scrim centered" onClick={onClose}>
-      <div className="modal" style={{width: 420}} onClick={(e) => e.stopPropagation()}>
+      <div className="modal" style={{width: 480}} onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <Icon name="play" size={14}/>
-          <span>Choose agent provider</span>
+          <span>Start backlog task</span>
           <button className="modal-close" onClick={onClose}><Icon name="x" size={12}/></button>
         </div>
-        <div className="modal-body" style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+        <div className="modal-body" style={{display: 'flex', flexDirection: 'column', gap: 14}}>
           <div style={{color: 'var(--text)', fontSize: 13}}>{name}</div>
-          <div style={{display: 'grid', gap: 8}}>
-            {options.map(p => (
-              <button
-                key={p.id}
-                className={`btn ${p.available ? '' : 'disabled'}`}
-                disabled={!p.available}
-                title={p.available ? '' : (p.reason || `${p.id} unavailable`)}
-                onClick={() => p.available && onPick(p.id)}
-                style={{justifyContent: 'flex-start', padding: '10px 12px'}}
-              >
-                <ProviderMark provider={p.id} size={16}/>
-                <span>{p.label || p.id}</span>
-                <span className="mono" style={{marginLeft: 'auto', fontSize: 10.5, color: p.available ? 'var(--text-faint)' : 'var(--error)'}}>
-                  {p.available ? 'available' : (p.reason || 'unavailable')}
-                </span>
-              </button>
-            ))}
+
+          <div>
+            <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6}}>Agent</div>
+            <div style={{display: 'grid', gap: 6}}>
+              {options.map(p => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className={`btn ${provider === p.id && p.available ? 'primary' : ''} ${p.available ? '' : 'disabled'}`}
+                  disabled={!p.available}
+                  title={p.available ? '' : (p.reason || `${p.id} unavailable`)}
+                  onClick={() => p.available && setProvider(p.id)}
+                  style={{justifyContent: 'flex-start', padding: '9px 11px'}}
+                >
+                  <ProviderMark provider={p.id} size={14}/>
+                  <span>{p.label || p.id}</span>
+                  <span className="mono" style={{marginLeft: 'auto', fontSize: 10.5, color: p.available ? 'var(--text-faint)' : 'var(--error)'}}>
+                    {p.available ? 'available' : (p.reason || 'unavailable')}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mono" style={{fontSize: 10.5, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 6}}>Permission mode</div>
+            <div style={{display: 'grid', gap: 6}}>
+              {PERMISSION_MODES.map(m => (
+                <button
+                  key={m.id}
+                  type="button"
+                  className={`btn ${permissionMode === m.id ? 'primary' : ''}`}
+                  onClick={() => setPermissionMode(m.id)}
+                  style={{flexDirection: 'column', alignItems: 'stretch', gap: 2, padding: '8px 11px', whiteSpace: 'normal'}}
+                >
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8, width: '100%'}}>
+                    <Icon name={m.icon} size={12}/>
+                    <span>{m.label}</span>
+                    {m.id === 'bypass' && <span className="mono" style={{marginLeft: 'auto', fontSize: 10, color: 'var(--waiting)', letterSpacing: '0.06em'}}>RISKY</span>}
+                  </div>
+                  <div className="mono" style={{fontSize: 10.5, color: permissionMode === m.id ? 'rgba(255,255,255,0.8)' : 'var(--text-faint)', textTransform: 'none', letterSpacing: 0, lineHeight: 1.4}}>{m.sub}</div>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <div className="modal-foot">
           <button className="btn sm" onClick={onClose}>Cancel</button>
+          <button
+            className="btn sm primary"
+            disabled={!providerAvailable}
+            title={providerAvailable ? '' : `${provider} unavailable`}
+            onClick={() => providerAvailable && onPick(provider, permissionMode)}
+          >
+            <Icon name="play" size={11}/>Start
+          </button>
         </div>
       </div>
     </div>
@@ -1791,8 +1914,10 @@ const App = () => {
       entity_kind: target.kind,
       provider: target.provider,
       permission_mode: target.permission_mode,
-      notification_ids: target.notification_ids,
-    };
+	      notification_ids: target.notification_ids,
+	      read_only: target.read_only,
+	      rule_update: target.rule_update,
+	    };
     const resp = await fetch('/api/actions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1927,10 +2052,10 @@ const App = () => {
     if (kind === 'spawn-prompt') { setPalette(false); setCreateOpen(true); return; }
     if (kind === 'create-flow') { openBridge('create-flow', target); return; }
     if (kind === 'overview-chat') { openBridge('overview-chat', target); return; }
-    if (kind === 'monitor-sync' || kind === 'notification-dismiss' || kind === 'notification-dismiss-all' || kind === 'notification-read' || kind === 'notification-read-all' || kind === 'set-rule-mode') {
-      serverAction(kind, target).then(refreshUIData).catch(err => setToast(err.message));
-      return;
-    }
+	    if (kind === 'monitor-sync' || kind === 'monitor-ignore-event' || kind === 'notification-dismiss' || kind === 'notification-dismiss-all' || kind === 'notification-read' || kind === 'notification-read-all' || kind === 'set-rule-mode') {
+	      serverAction(kind, target).then(refreshUIData).catch(err => setToast(err.message));
+	      return;
+	    }
     if (kind === 'notification-start-agent') {
       setToast('starting agent from notification…');
       serverAction(kind, target)
@@ -1997,6 +2122,7 @@ const App = () => {
         if (e.key === 'b') { goto('playbooks'); }
         if (e.key === 'k') { goto('kb'); }
         if (e.key === 'w') { goto('workdirs'); }
+        if (e.key === 'i') { goto('inbox'); }
         if (e.key === 'n') { goto('monitor'); }
         if (e.key === 'x') { goto('trash'); }
       }
@@ -2073,16 +2199,17 @@ const App = () => {
     return () => { cancelled = true; clearInterval(timer); };
   }, [isSession, sessionSlug]);
 
-  const navCounts = {
+	  const navCounts = {
     mc: AGENTS.length,
     sessions: AGENTS.length,
     tasks: AGENTS.length + BACKLOG.length,
     projects: PROJECTS_MC.length,
     playbooks: PLAYBOOKS_MC.length,
-    workdirs: WORKDIRS.length,
-    kb: KB_FILES.length,
-    monitor: (window.MC.MONITOR && window.MC.MONITOR.unread) || 0,
-    trash: (TRASH && TRASH.total) || 0,
+	    workdirs: WORKDIRS.length,
+	    kb: KB_FILES.length,
+	    inbox: (window.MC.MONITOR && ((window.MC.MONITOR.approvals || 0) + ((window.MC.MONITOR.events || []).filter(e => e.outcome && e.outcome.action === 'ping').length))) || 0,
+	    monitor: (window.MC.MONITOR && window.MC.MONITOR.unread) || 0,
+	    trash: (TRASH && TRASH.total) || 0,
   };
 
   const crumbs = isSession
@@ -2157,6 +2284,7 @@ const App = () => {
         {isPlaybook && <PlaybookDetail slug={playbookSlug} goto={goto} action={action}/>}
         {route === 'workdirs' && <WorkdirsView/>}
         {route === 'kb' && <KBView/>}
+        {route === 'inbox' && <InboxView action={action} goto={goto}/>}
         {route === 'monitor' && <MonitorView action={action}/>}
         {route === 'trash' && <TrashView action={action}/>}
       </main>
@@ -2166,7 +2294,7 @@ const App = () => {
       {qr && <QRModal onClose={() => setQR(false)}/>}
       {help && <ShortcutsOverlay onClose={() => setHelp(false)}/>}
       {createOpen && <CreateFlowModal onClose={closeCreateModal} projects={PROJECTS_MC.map(p => p.slug)} action={action} preselect={createPreselect}/>}
-      {providerPick && <ProviderChoiceModal target={providerPick} providers={capabilityList('providers')} onClose={() => setProviderPick(null)} onPick={(provider) => { const target = providerPick; setProviderPick(null); action('spawn', { ...target, provider, _providerChosen: true }); }}/>}
+      {providerPick && <ProviderChoiceModal target={providerPick} providers={capabilityList('providers')} onClose={() => setProviderPick(null)} onPick={(provider, permission_mode) => { const target = providerPick; setProviderPick(null); action('spawn', { ...target, provider, permission_mode, _providerChosen: true }); }}/>}
       {confirm && <ConfirmModal {...confirm} onClose={() => setConfirm(null)}/>}
       {toast && (
         <div style={{position: 'fixed', bottom: 20, left: '50%', transform: 'translateX(-50%)', background: 'var(--surface)', border: '1px solid var(--border-strong)', padding: '8px 14px', borderRadius: 4, fontFamily: 'var(--mono)', fontSize: 12, color: 'var(--text)', zIndex: 200, boxShadow: '0 8px 24px rgba(0,0,0,0.4)'}}>

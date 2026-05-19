@@ -76,7 +76,7 @@ const MissionControl = ({ focus, setFocus, action, sort, setSort, goto }) => {
           <p>{counts.running || 0} running · {counts.waiting || 0} waiting on you · {unread} unread notifications</p>
           <div className="hero-actions">
             <button className="btn sm primary" onClick={() => action('spawn-prompt')}><Icon name="plus" size={11}/>New task</button>
-            <button className="btn sm" onClick={() => goto && goto('monitor')}><Icon name="bell-ring" size={11}/>Notifications</button>
+            <button className="btn sm" onClick={() => goto && goto('inbox')}><Icon name="inbox" size={11}/>Inbox</button>
           </div>
         </div>
         <div className="hero-stats">
@@ -248,6 +248,263 @@ const NotificationGroup = ({ group, action }) => {
           </div>
         </div>
       ))}
+    </div>
+  );
+};
+
+const monitorRuleFor = (monitor, source, kind) => (monitor.rules || []).find(r => r.source === source && r.kind === kind) || null;
+const monitorOutcomeMeta = (action) => ({
+  spawn: { label: 'spawned', icon: 'radio', cls: 'spawn' },
+  draft: { label: 'drafted', icon: 'file-text', cls: 'draft' },
+  ping: { label: 'needs attention', icon: 'alert-circle', cls: 'ping' },
+  ignore: { label: 'ignored', icon: 'circle-off', cls: 'ignore' },
+}[action || ''] || { label: 'unrouted', icon: 'circle', cls: 'none' });
+const monitorItemTime = (item) => item.last_seen_at || item.created_at || item.first_seen_at || '';
+const monitorItemNeedsReview = (item) => {
+  const action = item.outcome?.action || '';
+  const note = String(item.outcome?.note || '').toLowerCase();
+  return item.level === 'approval' || action === 'ping' || note.includes('approval') || note.includes('secret') || note.includes('write') || note.includes('reply') || note.includes('push') || note.includes('merge');
+};
+const buildInboxItems = (monitor) => {
+  const notifByEvent = new Map();
+  const eventIDs = new Set((monitor.events || []).map(e => e.id));
+  (monitor.notifications || []).forEach(n => {
+    if (n.event_id && !notifByEvent.has(n.event_id)) notifByEvent.set(n.event_id, n);
+  });
+  const eventItems = (monitor.events || []).map(e => {
+    const n = notifByEvent.get(e.id) || {};
+    const rule = monitorRuleFor(monitor, e.source, e.kind);
+    return {
+      id: e.id,
+      event_id: e.id,
+      notification_id: n.id,
+      notification_status: n.status,
+      source: e.source || n.source || 'flow',
+      kind: e.kind || n.kind || 'event',
+      title: e.title || n.title || 'Incoming item',
+      body: e.body || n.body || '',
+      url: e.url || n.url || '',
+      severity: e.severity || n.level || 'info',
+      level: n.level || e.severity || 'info',
+      status: e.status || n.status || 'new',
+      first_seen_at: e.first_seen_at || n.created_at || '',
+      last_seen_at: e.last_seen_at || n.created_at || '',
+      mode: e.mode || n.mode || rule?.mode || '',
+      outcome: e.outcome || n.outcome || null,
+      rule,
+      durable: true,
+    };
+  });
+  const extraNotifications = (monitor.notifications || [])
+    .filter(n => !n.event_id || !eventIDs.has(n.event_id))
+    .map(n => ({
+      id: n.id,
+      event_id: n.event_id,
+      notification_id: n.id,
+      notification_status: n.status,
+      source: n.source || 'agent',
+      kind: n.kind || 'attention',
+      title: n.title || 'Incoming item',
+      body: n.body || '',
+      url: n.url || '',
+      severity: n.level || 'info',
+      level: n.level || 'info',
+      status: n.status || 'unread',
+      created_at: n.created_at || '',
+      mode: n.mode || '',
+      outcome: n.outcome || null,
+      rule: monitorRuleFor(monitor, n.source, n.kind),
+      durable: false,
+    }));
+  return [...eventItems, ...extraNotifications].sort((a, b) => String(monitorItemTime(b)).localeCompare(String(monitorItemTime(a))));
+};
+
+const InboxItemRow = ({ item, action, goto }) => {
+  const outcome = monitorOutcomeMeta(item.outcome?.action);
+  const rule = item.rule;
+  const taskSlug = item.outcome?.task_slug;
+  const needsReview = monitorItemNeedsReview(item);
+  return (
+    <article className={`inbox-item ${outcome.cls} ${needsReview ? 'needs-review' : ''}`}>
+      <div className="inbox-item-rail">
+        <span className={`inbox-outcome ${outcome.cls}`} title={outcome.label}><Icon name={outcome.icon} size={14}/></span>
+      </div>
+      <div className="inbox-item-main">
+        <div className="inbox-item-top">
+          <span className="inbox-source mono">{item.source}</span>
+          <span className="inbox-kind mono">{item.kind}</span>
+          <span className={`pill ${item.level === 'approval' ? 'waiting' : item.severity === 'high' ? 'dead' : item.severity === 'low' ? 'done' : 'idle'}`}>{item.level || item.severity || 'info'}</span>
+          <span className="inbox-time mono">{monitorItemTime(item) || 'now'}</span>
+        </div>
+        <h3>{item.title}</h3>
+        {item.body && (
+          <div className="inbox-untrusted">
+            <div className="inbox-untrusted-head mono"><Icon name="shield-alert" size={11}/>Untrusted source text</div>
+            <pre>{item.body}</pre>
+          </div>
+        )}
+        <div className="inbox-route-line mono">
+          <span><Icon name="route" size={11}/>outcome: {outcome.label}</span>
+          {item.outcome?.note && <span title={item.outcome.note}>note: {item.outcome.note}</span>}
+          {taskSlug && <span>task: {taskSlug}</span>}
+        </div>
+        <div className="inbox-rule-line mono">
+          {rule ? (
+            <>
+              <span>rule {rule.source}.{rule.kind}</span>
+              <span>{rule.mode}</span>
+              <span>{rule.provider || 'claude'}</span>
+              <span>{rule.read_only ? 'read-only' : 'approval required'}</span>
+              {(rule.project_slug || rule.work_dir) && <span>{rule.project_slug || rule.work_dir}</span>}
+            </>
+          ) : <span>rule none matched</span>}
+        </div>
+      </div>
+      <div className="inbox-actions">
+        {item.url && <a className="btn sm" href={item.url} target="_blank" rel="noreferrer"><Icon name="external-link" size={11}/>Open</a>}
+        {taskSlug
+          ? <button className="btn sm primary" onClick={() => goto(`session/${taskSlug}`)}><Icon name="arrow-right" size={11}/>Open task</button>
+          : item.event_id && item.source !== 'agent' && <button className="btn sm primary" onClick={() => action('notification-start-agent', { event_id: item.event_id })}><Icon name="shield-check" size={11}/>Approve inspect</button>}
+        {item.notification_id && item.notification_status === 'unread' && <button className="btn sm" onClick={() => action('notification-read', { slug: item.notification_id })}>Mark read</button>}
+        {item.event_id && item.source !== 'agent'
+          ? <button className="btn sm" onClick={() => action('monitor-ignore-event', { event_id: item.event_id })}><Icon name="archive" size={11}/>Ignore</button>
+          : item.notification_id && <button className="btn sm" onClick={() => action('notification-dismiss', { slug: item.notification_id })}>Dismiss</button>}
+      </div>
+    </article>
+  );
+};
+
+const RuleEditor = ({ rule, action }) => {
+  const [draft, setDraft] = useState(() => ({
+    mode: rule.mode || 'notify',
+    provider: rule.provider || '',
+    project_slug: rule.project_slug || '',
+    work_dir: rule.work_dir || '',
+    prompt_template: rule.prompt_template || '',
+    read_only: rule.read_only !== false,
+  }));
+  useEffect(() => {
+    setDraft({
+      mode: rule.mode || 'notify',
+      provider: rule.provider || '',
+      project_slug: rule.project_slug || '',
+      work_dir: rule.work_dir || '',
+      prompt_template: rule.prompt_template || '',
+      read_only: rule.read_only !== false,
+    });
+  }, [rule.id, rule.mode, rule.provider, rule.project_slug, rule.work_dir, rule.prompt_template, rule.read_only]);
+  const modes = ['off','log','notify','approval','auto_task','auto_agent','auto_agent_draft_only','summarize'];
+  const save = () => action('set-rule-mode', {
+    source: rule.source,
+    rule_kind: rule.kind,
+    mode: draft.mode,
+    provider: draft.provider,
+    project: draft.project_slug,
+    work_dir: draft.work_dir,
+    prompt: draft.prompt_template,
+    read_only: draft.read_only,
+    rule_update: true,
+  });
+  return (
+    <details className="rule-card">
+      <summary>
+        <span className="mono">{rule.source}.{rule.kind}</span>
+        <span className={`rule-mode mono ${draft.mode}`}>{draft.mode}</span>
+        <span className={`rule-readonly mono ${draft.read_only ? 'on' : 'off'}`}>{draft.read_only ? 'read-only' : 'gated'}</span>
+      </summary>
+      <div className="rule-edit-grid">
+        <label><span>Mode</span><select className="form-input mono" value={draft.mode} onChange={e => setDraft(d => ({ ...d, mode: e.target.value }))}>{modes.map(m => <option key={m} value={m}>{m}</option>)}</select></label>
+        <label><span>Provider</span><select className="form-input mono" value={draft.provider} onChange={e => setDraft(d => ({ ...d, provider: e.target.value }))}><option value="">claude default</option><option value="claude">claude</option><option value="codex">codex</option></select></label>
+        <label><span>Project</span><input className="form-input mono" value={draft.project_slug} onChange={e => setDraft(d => ({ ...d, project_slug: e.target.value }))} placeholder="project slug"/></label>
+        <label><span>Workdir</span><input className="form-input mono" value={draft.work_dir} onChange={e => setDraft(d => ({ ...d, work_dir: e.target.value }))} placeholder="/path/to/repo"/></label>
+        <label className="rule-edit-wide"><span>Prompt template</span><textarea className="form-input mono" rows="3" value={draft.prompt_template} onChange={e => setDraft(d => ({ ...d, prompt_template: e.target.value }))} placeholder="Trusted instruction for inspect/report-only work."/></label>
+        <label className="rule-check"><input type="checkbox" checked={draft.read_only} onChange={e => setDraft(d => ({ ...d, read_only: e.target.checked }))}/><span>Only auto-open read-only inspect/report work</span></label>
+        <button className="btn sm primary" onClick={save}><Icon name="save" size={11}/>Save rule</button>
+      </div>
+    </details>
+  );
+};
+
+const InboxRulePanel = ({ monitor, action }) => (
+  <section className="overview-card inbox-rule-panel">
+    <div className="overview-card-head"><h2>Rule routing</h2><span className="count mono">{(monitor.rules || []).length}</span></div>
+    <div className="inbox-rule-list">
+      {(monitor.rules || []).map(rule => <RuleEditor key={rule.id} rule={rule} action={action}/>)}
+    </div>
+  </section>
+);
+
+const InboxView = ({ action, goto }) => {
+  const monitor = monitorState();
+  const items = buildInboxItems(monitor);
+  const [filter, setFilter] = useState('needs');
+  const [q, setQ] = useState('');
+  const stats = {
+    unread: items.filter(i => i.notification_status === 'unread' || i.status === 'new' || i.status === 'notified').length,
+    needs: items.filter(monitorItemNeedsReview).length,
+    drafted: items.filter(i => i.outcome?.action === 'draft').length,
+    spawned: items.filter(i => i.outcome?.action === 'spawn').length,
+    pinged: items.filter(i => i.outcome?.action === 'ping').length,
+    ignored: items.filter(i => i.outcome?.action === 'ignore' || i.status === 'ignored').length,
+  };
+  const filters = [
+    ['needs', 'Needs approval', stats.needs],
+    ['unread', 'Unread', stats.unread],
+    ['draft', 'Drafted', stats.drafted],
+    ['spawn', 'Spawned', stats.spawned],
+    ['ping', 'Pinged', stats.pinged],
+    ['ignore', 'Ignored', stats.ignored],
+    ['all', 'All history', items.length],
+  ];
+  const query = q.trim().toLowerCase();
+  const filtered = items.filter(item => {
+    if (filter === 'needs' && !monitorItemNeedsReview(item)) return false;
+    if (filter === 'unread' && !(item.notification_status === 'unread' || item.status === 'new' || item.status === 'notified')) return false;
+    if (['draft','spawn','ping','ignore'].includes(filter) && item.outcome?.action !== filter) return false;
+    if (!query) return true;
+    return [item.source, item.kind, item.title, item.body, item.status, item.mode, item.outcome?.action, item.outcome?.note, item.outcome?.task_slug].filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
+  return (
+    <div className="inbox-page">
+      <div className="inbox-hero">
+        <div>
+          <div className="overview-kicker mono">Inbox</div>
+          <h1>Review incoming work</h1>
+          <p>Personal messages, mentions, PR reviews, CI failures, alerts, and routed monitor items stay here as history.</p>
+        </div>
+        <button className="btn sm primary" onClick={() => action('monitor-sync', {})}><Icon name="refresh-cw" size={11}/>Sync now</button>
+      </div>
+      <div className="inbox-safety">
+        <Icon name="shield-alert" size={14}/>
+        <span>Approving an agent here only allows inspect/report work. Replies, edits, commits, pushes, PR actions, infra/API writes, and secret disclosure still require explicit approval.</span>
+      </div>
+      <div className="inbox-layout">
+        <section className="inbox-main">
+          <div className="inbox-toolbar">
+            <div className="tab-strip">
+              {filters.map(([id, label, count]) => (
+                <button key={id} className={filter===id?'active':''} onClick={() => setFilter(id)}>{label}<span className="mono">{count}</span></button>
+              ))}
+            </div>
+            <div className="inbox-search">
+              <Icon name="search" size={12}/>
+              <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter inbox history"/>
+            </div>
+          </div>
+          <div className="inbox-list">
+            {filtered.length ? filtered.map(item => <InboxItemRow key={`${item.id}-${item.notification_id || ''}`} item={item} action={action} goto={goto}/>) : <BrandEmpty title="Inbox is clear" body="Incoming work and attention items will remain here after they are routed."/>}
+          </div>
+        </section>
+        <aside className="inbox-side">
+          <div className="inbox-stat-grid">
+            <div><span className="mono">{stats.needs}</span><p>needs approval</p></div>
+            <div><span className="mono">{stats.drafted}</span><p>drafted</p></div>
+            <div><span className="mono">{stats.spawned}</span><p>spawned</p></div>
+            <div><span className="mono">{stats.ignored}</span><p>ignored</p></div>
+          </div>
+          <InboxRulePanel monitor={monitor} action={action}/>
+        </aside>
+      </div>
     </div>
   );
 };
@@ -2534,6 +2791,8 @@ const CommandPalette = ({ onClose, goto, action }) => {
       { group: 'Navigation', icon: 'play', label: 'Playbooks', meta: 'g b', onSel: () => goto('playbooks') },
       { group: 'Navigation', icon: 'folder', label: 'Workdirs', meta: 'g w', onSel: () => goto('workdirs') },
       { group: 'Navigation', icon: 'book-open', label: 'KB', meta: 'g k', onSel: () => goto('kb') },
+      { group: 'Navigation', icon: 'inbox', label: 'Inbox', meta: 'g i', onSel: () => goto('inbox') },
+      { group: 'Navigation', icon: 'bell-ring', label: 'Monitor', meta: 'g n', onSel: () => goto('monitor') },
       { group: 'Navigation', icon: 'trash-2', label: 'Trash', meta: 'g x', onSel: () => goto('trash') },
     ].map((item, idx) => ({ ...item, _allIdx: idx, search: normalize(searchText([item.label, item.title, item.subtitle, item.meta, item.search, item.group])) }));
     const query = normalize(q.trim());
@@ -2739,6 +2998,8 @@ const ShortcutsOverlay = ({ onClose }) => (
           [<><span className="kbd">g</span> <span className="kbd">b</span></>, 'Playbooks'],
           [<><span className="kbd">g</span> <span className="kbd">w</span></>, 'Workdirs'],
           [<><span className="kbd">g</span> <span className="kbd">k</span></>, 'KB'],
+          [<><span className="kbd">g</span> <span className="kbd">i</span></>, 'Inbox'],
+          [<><span className="kbd">g</span> <span className="kbd">n</span></>, 'Monitor'],
           [<><span className="kbd">g</span> <span className="kbd">x</span></>, 'Trash'],
           ['Actions', null],
           [<><span className="kbd">Cmd</span><span className="kbd">k</span></>, 'Project and task switcher'],
@@ -2764,7 +3025,7 @@ const ShortcutsOverlay = ({ onClose }) => (
 );
 
 window.MC_SCREENS = {
-  MissionControl, MonitorView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
+  MissionControl, MonitorView, InboxView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
   TrashView, KBView, WorkdirsView,
   CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal,
 };

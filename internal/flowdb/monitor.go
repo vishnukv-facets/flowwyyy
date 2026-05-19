@@ -481,6 +481,47 @@ func GetMonitorEventAction(db *sql.DB, eventID string) (*MonitorEventAction, err
 	return &action, nil
 }
 
+func MonitorEventActionMap(db *sql.DB, eventIDs []string) (map[string]MonitorEventAction, error) {
+	out := map[string]MonitorEventAction{}
+	seen := map[string]bool{}
+	clean := make([]string, 0, len(eventIDs))
+	for _, eventID := range eventIDs {
+		eventID = strings.TrimSpace(eventID)
+		if eventID == "" || seen[eventID] {
+			continue
+		}
+		seen[eventID] = true
+		clean = append(clean, eventID)
+	}
+	if len(clean) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(clean))
+	args := make([]any, len(clean))
+	for i, eventID := range clean {
+		placeholders[i] = "?"
+		args[i] = eventID
+	}
+	rows, err := db.Query(
+		`SELECT event_id, action, task_slug, note, created_at
+		 FROM monitor_event_actions
+		 WHERE event_id IN (`+strings.Join(placeholders, ",")+`)`,
+		args...,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("monitor event action map: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var action MonitorEventAction
+		if err := rows.Scan(&action.EventID, &action.Action, &action.TaskSlug, &action.Note, &action.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[action.EventID] = action
+	}
+	return out, rows.Err()
+}
+
 func RecordMonitorEventAction(db *sql.DB, eventID, action, taskSlug, note string) error {
 	eventID = strings.TrimSpace(eventID)
 	action = normalizeMonitorPart(action)

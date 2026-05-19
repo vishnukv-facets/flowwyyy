@@ -55,32 +55,41 @@ type uiMonitor struct {
 }
 
 type uiMonitorNotification struct {
-	ID        string `json:"id"`
-	EventID   string `json:"event_id"`
-	Title     string `json:"title"`
-	Body      string `json:"body,omitempty"`
-	Level     string `json:"level"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
-	Source    string `json:"source,omitempty"`
-	Kind      string `json:"kind,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Mode      string `json:"mode,omitempty"`
+	ID        string            `json:"id"`
+	EventID   string            `json:"event_id"`
+	Title     string            `json:"title"`
+	Body      string            `json:"body,omitempty"`
+	Level     string            `json:"level"`
+	Status    string            `json:"status"`
+	CreatedAt string            `json:"created_at"`
+	Source    string            `json:"source,omitempty"`
+	Kind      string            `json:"kind,omitempty"`
+	URL       string            `json:"url,omitempty"`
+	Mode      string            `json:"mode,omitempty"`
+	Outcome   *uiMonitorOutcome `json:"outcome,omitempty"`
 }
 
 type uiMonitorEvent struct {
-	ID          string `json:"id"`
-	Source      string `json:"source"`
-	Kind        string `json:"kind"`
-	SourceID    string `json:"source_id"`
-	Title       string `json:"title"`
-	Body        string `json:"body,omitempty"`
-	URL         string `json:"url,omitempty"`
-	Severity    string `json:"severity"`
-	Status      string `json:"status"`
-	FirstSeenAt string `json:"first_seen_at"`
-	LastSeenAt  string `json:"last_seen_at"`
-	Mode        string `json:"mode,omitempty"`
+	ID          string            `json:"id"`
+	Source      string            `json:"source"`
+	Kind        string            `json:"kind"`
+	SourceID    string            `json:"source_id"`
+	Title       string            `json:"title"`
+	Body        string            `json:"body,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Severity    string            `json:"severity"`
+	Status      string            `json:"status"`
+	FirstSeenAt string            `json:"first_seen_at"`
+	LastSeenAt  string            `json:"last_seen_at"`
+	Mode        string            `json:"mode,omitempty"`
+	Outcome     *uiMonitorOutcome `json:"outcome,omitempty"`
+}
+
+type uiMonitorOutcome struct {
+	Action    string `json:"action"`
+	TaskSlug  string `json:"task_slug,omitempty"`
+	Note      string `json:"note,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
 }
 
 type uiAutomationRule struct {
@@ -485,6 +494,14 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 	rules, _ := flowdb.ListAutomationRules(s.cfg.DB)
 	events, _ := flowdb.ListMonitorEvents(s.cfg.DB, 50)
 	notifications, _ := flowdb.ListMonitorNotifications(s.cfg.DB, 50)
+	actionEventIDs := make([]string, 0, len(events)+len(notifications))
+	for _, event := range events {
+		actionEventIDs = append(actionEventIDs, event.ID)
+	}
+	for _, notification := range notifications {
+		actionEventIDs = append(actionEventIDs, notification.EventID)
+	}
+	actionByEventID, _ := flowdb.MonitorEventActionMap(s.cfg.DB, actionEventIDs)
 	ruleModes := map[string]string{}
 	uiRules := make([]uiAutomationRule, 0, len(rules))
 	for _, rule := range rules {
@@ -516,6 +533,7 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 			lastSync = event.LastSeenAt
 		}
 		mode := ruleModes[event.Source+"."+event.Kind]
+		action, hasAction := actionByEventID[event.ID]
 		uiEvents = append(uiEvents, uiMonitorEvent{
 			ID:          event.ID,
 			Source:      event.Source,
@@ -529,6 +547,7 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 			FirstSeenAt: event.FirstSeenAt,
 			LastSeenAt:  event.LastSeenAt,
 			Mode:        mode,
+			Outcome:     uiMonitorOutcomeFor(action, hasAction),
 		})
 	}
 	agentNotifications := agentAttentionNotifications(agents)
@@ -582,6 +601,7 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 			Kind:      event.Kind,
 			URL:       nullStringValue(event.URL),
 			Mode:      ruleModes[event.Source+"."+event.Kind],
+			Outcome:   uiMonitorOutcomeFor(actionByEventID[notification.EventID], actionByEventID[notification.EventID].Action != ""),
 		})
 	}
 	return uiMonitor{
@@ -597,6 +617,21 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 		Approvals: approvals,
 		LastSync:  lastSync,
 	}
+}
+
+func uiMonitorOutcomeFor(action flowdb.MonitorEventAction, ok bool) *uiMonitorOutcome {
+	if !ok || strings.TrimSpace(action.Action) == "" {
+		return nil
+	}
+	out := &uiMonitorOutcome{
+		Action:    action.Action,
+		Note:      nullStringValue(action.Note),
+		CreatedAt: action.CreatedAt,
+	}
+	if action.TaskSlug.Valid {
+		out.TaskSlug = action.TaskSlug.String
+	}
+	return out
 }
 
 func agentAttentionNotifications(agents []uiAgent) []uiMonitorNotification {
