@@ -140,9 +140,22 @@ CREATE TABLE IF NOT EXISTS automation_rules (
     source      TEXT NOT NULL,
     kind        TEXT NOT NULL,
     mode        TEXT NOT NULL CHECK (mode IN ('off','log','notify','approval','auto_task','auto_agent','auto_agent_draft_only','summarize')),
+    prompt_template TEXT,
+    project_slug    TEXT REFERENCES projects(slug),
+    work_dir        TEXT,
+    provider        TEXT CHECK (provider IS NULL OR provider IN ('claude','codex')),
+    read_only       INTEGER NOT NULL DEFAULT 1 CHECK (read_only IN (0,1)),
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE(source, kind)
+);
+
+CREATE TABLE IF NOT EXISTS monitor_event_actions (
+    event_id    TEXT PRIMARY KEY REFERENCES monitor_events(id) ON DELETE CASCADE,
+    action      TEXT NOT NULL CHECK (action IN ('spawn','draft','ping','ignore')),
+    task_slug   TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    note        TEXT,
+    created_at  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS task_pr_links (
@@ -170,6 +183,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_sta
 CREATE INDEX IF NOT EXISTS idx_automation_rules_source_kind ON automation_rules(source, kind);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_state ON task_pr_links(state);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_repo_number ON task_pr_links(repo, pr_number);
+CREATE INDEX IF NOT EXISTS idx_monitor_event_actions_action ON monitor_event_actions(action);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
@@ -359,6 +373,16 @@ type AgentRuntimeState struct {
 	UpdatedAt string
 	LastSeq   int64
 	RawJSON   sql.NullString
+}
+
+// MonitorEventAction records the single action flow took for a monitor event.
+// One row per event is the dedup guard for auto-spawn/draft/ping routing.
+type MonitorEventAction struct {
+	EventID   string
+	Action    string
+	TaskSlug  sql.NullString
+	Note      sql.NullString
+	CreatedAt string
 }
 
 // TaskFilter holds optional filters for ListTasks.
@@ -587,6 +611,27 @@ func runMigrations(db *sql.DB) error {
 		if !has {
 			if _, err := db.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN last_seq INTEGER NOT NULL DEFAULT 0`, table)); err != nil {
 				return fmt.Errorf("add %s.last_seq: %w", table, err)
+			}
+		}
+	}
+
+	for _, col := range []struct {
+		name string
+		ddl  string
+	}{
+		{"prompt_template", `ALTER TABLE automation_rules ADD COLUMN prompt_template TEXT`},
+		{"project_slug", `ALTER TABLE automation_rules ADD COLUMN project_slug TEXT REFERENCES projects(slug)`},
+		{"work_dir", `ALTER TABLE automation_rules ADD COLUMN work_dir TEXT`},
+		{"provider", `ALTER TABLE automation_rules ADD COLUMN provider TEXT`},
+		{"read_only", `ALTER TABLE automation_rules ADD COLUMN read_only INTEGER NOT NULL DEFAULT 1`},
+	} {
+		has, err = columnExists(db, "automation_rules", col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return fmt.Errorf("add automation_rules.%s: %w", col.name, err)
 			}
 		}
 	}

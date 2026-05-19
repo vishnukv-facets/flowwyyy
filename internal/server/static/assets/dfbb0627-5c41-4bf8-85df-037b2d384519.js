@@ -593,30 +593,103 @@ const ToolCard = ({ entry, index, open, setOpen, kind }) => {
   const payload = kind === 'call' ? entry.input : (entry.preview || entry.summary || '');
   const summary = firstTextLine(kind === 'call' ? entry.input : (entry.summary || entry.preview)) || (kind === 'call' ? 'tool call' : 'tool output');
   const name = entry.tool || (kind === 'call' ? 'tool' : 'result');
+
+  if (kind === 'result') {
+    return (
+      <div className={`tool-card result${isOpen ? ' open' : ''}${entry._new ? ' slide-in' : ''}`}>
+        <span className="tool-elbow mono" aria-hidden="true">└─</span>
+        <div className="tool-result-card">
+          <button type="button" className="tool-result-head" onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))} aria-expanded={isOpen}>
+            <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={11}/>
+            <span className="tool-result-name mono">{name}</span>
+            <span className="tool-result-summary mono">{summary}</span>
+            {payload && <span className="tool-result-lines mono">{lineCount(payload)} lines</span>}
+          </button>
+          {isOpen && payload && <pre className="tool-result-body mono">{payload}</pre>}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={`tool-card ${kind} ${isOpen ? 'open' : ''} ${entry._new ? 'slide-in' : ''}`}>
-      <button type="button" className="tool-card-head" onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))}>
-        <span className="tool-card-icon"><Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={12}/></span>
-        <span className="tool-card-kind mono">{kind === 'call' ? 'call' : 'output'}</span>
-        <span className="tool-card-name mono">{name}</span>
-        <span className="tool-card-summary mono">{summary}</span>
-        {payload && <span className="tool-card-lines mono">{lineCount(payload)} lines</span>}
+    <div className={`tool-card call${isOpen ? ' open' : ''}${entry._new ? ' slide-in' : ''}`}>
+      <button type="button" className="tool-call-head" onClick={() => setOpen(o => ({ ...o, [key]: !o[key] }))} aria-expanded={isOpen}>
+        <Icon name={isOpen ? 'chevron-down' : 'chevron-right'} size={11}/>
+        <Icon name="wrench" size={11}/>
+        <span className="tool-call-name mono">{name}</span>
+        <span className="tool-call-summary mono">{summary}</span>
+        {payload && <span className="tool-call-lines mono">{lineCount(payload)} lines</span>}
       </button>
-      {isOpen && payload && <pre className="tool-card-body mono">{payload}</pre>}
+      {isOpen && payload && <pre className="tool-call-body mono">{payload}</pre>}
     </div>
+  );
+};
+
+const ChatCopyBtn = ({ text }) => {
+  const [copied, setCopied] = useState(false);
+  const onClick = () => {
+    if (!navigator.clipboard) return;
+    navigator.clipboard.writeText(String(text || '')).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => {});
+  };
+  return (
+    <button type="button" className="chat-copy-btn" onClick={onClick} title={copied ? 'Copied' : 'Copy response'} aria-label={copied ? 'Copied' : 'Copy response'}>
+      <Icon name={copied ? 'check' : 'copy'} size={11}/>
+    </button>
   );
 };
 
 const ChatMessage = ({ entry, provider }) => {
   const isUser = entry.type === 'user';
   const isThinking = entry.type === 'thinking';
+  const text = entry.text || '';
   const label = isUser ? 'you' : isThinking ? 'thinking' : (provider === 'codex' ? 'codex' : 'claude');
+
+  if (isUser && /^\s*\[Request interrupted.*\]\s*$/i.test(text)) {
+    return (
+      <div className="chat-interrupted">
+        <span className="chat-interrupted-line" aria-hidden="true"/>
+        <span className="mono">request interrupted</span>
+        <span className="chat-interrupted-line" aria-hidden="true"/>
+      </div>
+    );
+  }
+
+  if (isUser) {
+    return (
+      <article className={`chat-message user${entry._new ? ' slide-in' : ''}`}>
+        <div className="chat-user-bubble">
+          <div className="chat-user-body"><MarkdownBlock text={text}/></div>
+          <Icon name="check-check" size={12} className="chat-user-tick"/>
+        </div>
+      </article>
+    );
+  }
+
+  if (isThinking) {
+    return (
+      <article className={`chat-message thinking${entry._new ? ' slide-in' : ''}`}>
+        <div className="chat-bot">
+          <div className="chat-bot-head">
+            <Icon name="brain" size={12}/>
+            <span className="chat-bot-name mono">thinking</span>
+          </div>
+          <div className="chat-bot-body thinking"><MarkdownBlock text={text}/></div>
+        </div>
+      </article>
+    );
+  }
+
   return (
-    <article className={`chat-message ${entry.type} ${entry._new ? 'slide-in' : ''}`}>
-      <div className="chat-avatar mono">{isUser ? 'Y' : isThinking ? '…' : (provider === 'codex' ? 'C' : 'A')}</div>
-      <div className="chat-copy">
-        <div className="chat-role mono">{label}</div>
-        <div className="chat-bubble"><MarkdownBlock text={entry.text}/></div>
+    <article className={`chat-message assistant${entry._new ? ' slide-in' : ''}`}>
+      <div className="chat-bot">
+        <div className="chat-bot-head">
+          <span className="chat-bot-name mono">{label}</span>
+        </div>
+        <div className="chat-bot-body"><MarkdownBlock text={text}/></div>
+        <ChatCopyBtn text={text}/>
       </div>
     </article>
   );

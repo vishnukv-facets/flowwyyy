@@ -73,28 +73,7 @@ func (s *Server) appendInbox(w http.ResponseWriter, r *http.Request, task *flowd
 	}
 
 	path := inboxPath(s.cfg.FlowRoot, task.Slug)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		writeError(w, err, http.StatusInternalServerError)
-		return
-	}
-	stamp := time.Now().UTC().Format("2006-01-02 15:04:05Z")
-	entry := fmt.Sprintf("## %s — from: %s\n\n%s\n\n", stamp, body.Sender, body.Message)
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		writeError(w, err, http.StatusInternalServerError)
-		return
-	}
-	defer f.Close()
-	if st, err := f.Stat(); err == nil && st.Size() == 0 {
-		header := "# Inbox\n\nMessages from parent tasks and the user. The bound agent\n" +
-			"reads new entries at the start of every session and acts on them.\n\n"
-		if _, err := f.WriteString(header); err != nil {
-			writeError(w, err, http.StatusInternalServerError)
-			return
-		}
-	}
-	if _, err := f.WriteString(entry); err != nil {
+	if err := appendInboxEntry(path, body.Sender, body.Message); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -111,6 +90,30 @@ func (s *Server) appendInbox(w http.ResponseWriter, r *http.Request, task *flowd
 	s.publishInboxChanged(task.Slug, body.Sender, body.Message)
 
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+func appendInboxEntry(path, sender, message string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	stamp := time.Now().UTC().Format("2006-01-02 15:04:05Z")
+	entry := fmt.Sprintf("## %s — from: %s\n\n%s\n\n", stamp, sender, message)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err == nil && st.Size() == 0 {
+		header := "# Inbox\n\nMessages from parent tasks and the user. The bound agent\n" +
+			"reads new entries at the start of every session and acts on them.\n\n"
+		if _, err := f.WriteString(header); err != nil {
+			return err
+		}
+	}
+	if _, err := f.WriteString(entry); err != nil {
+		return err
+	}
+	return nil
 }
 
 // handleInboxNotify is the side-band endpoint `flow tell` POSTs to so

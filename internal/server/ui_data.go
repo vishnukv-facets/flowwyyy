@@ -84,10 +84,15 @@ type uiMonitorEvent struct {
 }
 
 type uiAutomationRule struct {
-	ID     string `json:"id"`
-	Source string `json:"source"`
-	Kind   string `json:"kind"`
-	Mode   string `json:"mode"`
+	ID             string `json:"id"`
+	Source         string `json:"source"`
+	Kind           string `json:"kind"`
+	Mode           string `json:"mode"`
+	PromptTemplate string `json:"prompt_template,omitempty"`
+	ProjectSlug    string `json:"project_slug,omitempty"`
+	WorkDir        string `json:"work_dir,omitempty"`
+	Provider       string `json:"provider,omitempty"`
+	ReadOnly       bool   `json:"read_only"`
 }
 
 type uiMonitorSource struct {
@@ -152,6 +157,9 @@ type uiAgent struct {
 	RecentTools     []uiRecentTool `json:"recent_tools,omitempty"`
 	PRLinks         []uiPRLink     `json:"pr_links,omitempty"`
 	DiffFiles       []uiDiffFile   `json:"diff_files,omitempty"`
+	BriefPath       string         `json:"brief_path,omitempty"`
+	Updates         []FileRef      `json:"updates,omitempty"`
+	AuxFiles        []FileRef      `json:"aux_files,omitempty"`
 	Terminal        uiTerminal     `json:"terminal"`
 }
 
@@ -481,7 +489,17 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 	uiRules := make([]uiAutomationRule, 0, len(rules))
 	for _, rule := range rules {
 		ruleModes[rule.Source+"."+rule.Kind] = rule.Mode
-		uiRules = append(uiRules, uiAutomationRule{ID: rule.ID, Source: rule.Source, Kind: rule.Kind, Mode: rule.Mode})
+		uiRules = append(uiRules, uiAutomationRule{
+			ID:             rule.ID,
+			Source:         rule.Source,
+			Kind:           rule.Kind,
+			Mode:           rule.Mode,
+			PromptTemplate: nullStringValue(rule.PromptTemplate),
+			ProjectSlug:    nullStringValue(rule.ProjectSlug),
+			WorkDir:        nullStringValue(rule.WorkDir),
+			Provider:       nullStringValue(rule.Provider),
+			ReadOnly:       rule.ReadOnly,
+		})
 	}
 	eventByID := map[string]flowdb.MonitorEvent{}
 	hookAttentionURLs := map[string]bool{}
@@ -875,6 +893,9 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		Brief:           readMarkdownSummary(tv.BriefPath),
 		RecentTools:     recentTools(transcript),
 		PRLinks:         s.uiPRLinks(tv.Slug),
+		BriefPath:       tv.BriefPath,
+		Updates:         tv.Updates,
+		AuxFiles:        tv.AuxFiles,
 		Terminal:        terminalSample(withTaskWorkDir(tv, workDir), provider, transcript, terminalMode),
 	}
 	if tv.WaitingOn != nil {

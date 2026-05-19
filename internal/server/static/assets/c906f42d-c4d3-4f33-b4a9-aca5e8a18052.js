@@ -844,7 +844,7 @@ const NativeTranscriptPanel = ({ agent }) => (
   </div>
 );
 
-const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff = () => {} }) => {
+const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff = () => {}, artifactsOpen = false, toggleArtifacts = () => {} }) => {
   const [liveAgent, setLiveAgent] = useState(agent);
   const [terminalStatus, setTerminalStatus] = useState('connecting');
   const [terminalRestartKey, setTerminalRestartKey] = useState(0);
@@ -910,6 +910,11 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
             Git diff
             {(current.diff?.files || 0) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{current.diff.files}</span>}
           </button>
+          <button className={`btn sm ${artifactsOpen ? 'primary' : ''}`} onClick={toggleArtifacts} title={artifactsOpen ? 'Hide artifacts panel' : 'Show task artifacts (brief, updates, sidecar files)'}>
+            <Icon name="file-text" size={11}/>
+            Artifacts
+            {artifactCountFor(current) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{artifactCountFor(current)}</span>}
+          </button>
           <button className="btn sm" onClick={() => goto('mc')}><Icon name="arrow-left" size={11}/>Detach</button>
           <button className="btn sm" onClick={restartTerminal} disabled={!canRestartTerminal} title={restartTitle}><Icon name="refresh-cw" size={11}/>Restart</button>
           <TerminalDropdown action={action} agent={current}/>
@@ -926,7 +931,7 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
         </div>
       )}
       <DependencyBadges task={current}/>
-      <div className={`bridge-layout${gitDiffOpen ? '' : ' single'}`}>
+      <div className={`bridge-layout${(gitDiffOpen || artifactsOpen) ? '' : ' single'}`}>
         {providerAvailable ? (
           nativeTranscriptMode
             ? <NativeTranscriptPanel agent={current}/>
@@ -948,11 +953,18 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
             </div>
           </div>
         )}
-        {gitDiffOpen && (
+        {(gitDiffOpen || artifactsOpen) && (
           <div className="bridge-side">
-            <CollapsiblePanel icon="git-compare" title="Git diff" count={`${current.diff?.files || 0} files · +${current.diff?.add || 0} / -${current.diff?.rem || 0}`} defaultOpen>
-              <DiffSidecar agent={current}/>
-            </CollapsiblePanel>
+            {gitDiffOpen && (
+              <CollapsiblePanel icon="git-compare" title="Git diff" count={`${current.diff?.files || 0} files · +${current.diff?.add || 0} / -${current.diff?.rem || 0}`} defaultOpen>
+                <DiffSidecar agent={current}/>
+              </CollapsiblePanel>
+            )}
+            {artifactsOpen && (
+              <CollapsiblePanel icon="file-text" title="Artifacts" count={`${artifactCountFor(current)} files`} defaultOpen>
+                <ArtifactsSidecar agent={current}/>
+              </CollapsiblePanel>
+            )}
           </div>
         )}
       </div>
@@ -960,7 +972,7 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
   );
 };
 
-const CompletedSessionView = ({ agent, goto, gitDiffOpen = false, toggleGitDiff = () => {} }) => (
+const CompletedSessionView = ({ agent, goto, gitDiffOpen = false, toggleGitDiff = () => {}, artifactsOpen = false, toggleArtifacts = () => {} }) => (
   <div>
     <div className="action-bar">
       <Icon name="check-circle" size={14} style={{color: 'var(--running)'}}/>
@@ -983,12 +995,17 @@ const CompletedSessionView = ({ agent, goto, gitDiffOpen = false, toggleGitDiff 
           Git diff
           {(agent.diff?.files || 0) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{agent.diff.files}</span>}
         </button>
+        <button className={`btn sm ${artifactsOpen ? 'primary' : ''}`} onClick={toggleArtifacts} title={artifactsOpen ? 'Hide artifacts panel' : 'Show task artifacts (brief, updates, sidecar files)'}>
+          <Icon name="file-text" size={11}/>
+          Artifacts
+          {artifactCountFor(agent) > 0 && <span className="mono" style={{marginLeft: 4, opacity: 0.75}}>{artifactCountFor(agent)}</span>}
+        </button>
         <button className="btn sm primary" onClick={() => goto('sessions')}><Icon name="arrow-left" size={11}/>Sessions</button>
         <button className="btn sm" onClick={() => goto('tasks')}><Icon name="list" size={11}/>Tasks</button>
       </div>
     </div>
     <DependencyBadges task={agent}/>
-    <div className={`completed-layout${gitDiffOpen ? '' : ' single'}`}>
+    <div className={`completed-layout${(gitDiffOpen || artifactsOpen) ? '' : ' single'}`}>
       <div className="pane">
         <div className="pane-head">
           <Icon name="message-square-text" size={11}/>
@@ -999,14 +1016,21 @@ const CompletedSessionView = ({ agent, goto, gitDiffOpen = false, toggleGitDiff 
           <TranscriptView entries={agent.transcript || []} live={false} provider={agent.provider}/>
         </div>
       </div>
-      {gitDiffOpen && (
+      {(gitDiffOpen || artifactsOpen) && (
         <div className="bridge-side">
           <CollapsiblePanel icon="layers" title="Metadata" count={agent.provider || 'agent'} defaultOpen>
             <ContextSummary agent={agent}/>
           </CollapsiblePanel>
-          <CollapsiblePanel icon="git-compare" title="Git diff" count={`${agent.diff?.files || 0} files · +${agent.diff?.add || 0} / -${agent.diff?.rem || 0}`} defaultOpen>
-            <DiffSidecar agent={agent}/>
-          </CollapsiblePanel>
+          {gitDiffOpen && (
+            <CollapsiblePanel icon="git-compare" title="Git diff" count={`${agent.diff?.files || 0} files · +${agent.diff?.add || 0} / -${agent.diff?.rem || 0}`} defaultOpen>
+              <DiffSidecar agent={agent}/>
+            </CollapsiblePanel>
+          )}
+          {artifactsOpen && (
+            <CollapsiblePanel icon="file-text" title="Artifacts" count={`${artifactCountFor(agent)} files`} defaultOpen>
+              <ArtifactsSidecar agent={agent}/>
+            </CollapsiblePanel>
+          )}
         </div>
       )}
     </div>
@@ -1086,6 +1110,57 @@ const DiffSidecar = ({ agent }) => {
         );
       })}
     </div>
+  );
+};
+
+const artifactCountFor = (agent) => {
+  if (!agent) return 0;
+  const updates = (agent.updates || []).length;
+  const aux = (agent.aux_files || []).length;
+  const brief = agent.brief_path ? 1 : 0;
+  return updates + aux + brief;
+};
+
+const ArtifactsSidecar = ({ agent }) => {
+  const slug = agent.slug;
+  const files = [];
+  if (agent.brief_path) {
+    files.push({ filename: 'brief.md', mtime: '', route: 'brief', kind: 'brief' });
+  }
+  for (const u of (agent.updates || [])) {
+    files.push({ ...u, route: 'updates', kind: 'update' });
+  }
+  for (const a of (agent.aux_files || [])) {
+    files.push({ ...a, route: 'aux', kind: 'aux' });
+  }
+  const fetchArtifact = (file) => {
+    const url = file.route === 'brief'
+      ? `/api/tasks/${encodeURIComponent(slug)}/brief`
+      : `/api/tasks/${encodeURIComponent(slug)}/${file.route}/${encodeURIComponent(file.filename)}`;
+    return fetch(url).then(r => r.ok ? r.text() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))));
+  };
+  const minutesSinceISO = (iso) => {
+    if (!iso) return null;
+    const ts = Date.parse(iso);
+    if (!Number.isFinite(ts)) return null;
+    return Math.max(0, (Date.now() - ts) / 60000);
+  };
+  if (!files.length) {
+    return (
+      <div className="bridge-empty">
+        <Icon name="file-text" size={16}/>
+        <span>No artifacts found for this task.</span>
+      </div>
+    );
+  }
+  return (
+    <ReadableFiles
+      files={files}
+      empty="No artifacts yet"
+      fetchFile={fetchArtifact}
+      minutesSinceISO={minutesSinceISO}
+      sourceKey={slug}
+    />
   );
 };
 
@@ -1737,6 +1812,15 @@ const EntityTabs = ({ tabs, active, onChange }) => (
 
 const ReadableFiles = ({ files, empty, fetchFile, minutesSinceISO, sourceKey = '' }) => {
   const [items, setItems] = useState([]);
+  const [closedFiles, setClosedFiles] = useState(() => new Set());
+  const toggleFile = (name) => {
+    setClosedFiles(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
   useEffect(() => {
     let active = true;
     setItems((files || []).map(f => ({ ...f, loading: true, error: '', content: '' })));
@@ -1750,20 +1834,31 @@ const ReadableFiles = ({ files, empty, fetchFile, minutesSinceISO, sourceKey = '
   if (!files || files.length === 0) return <BrandEmpty compact title={empty} body="Markdown files will appear here when they are added."/>;
   return (
     <div className="readable-files">
-      {items.map(file => (
-        <article key={file.filename} className="readable-file">
-          <div className="readable-file-head">
-            <Icon name="file-text" size={13}/>
-            <span className="mono">{file.filename}</span>
-            <span className="mono dim">{file.mtime ? `${formatAge(minutesSinceISO(file.mtime))} ago` : ''}</span>
-          </div>
-          {file.loading ? <SkeletonRows rows={3}/> : file.error ? (
-            <div className="mono" style={{fontSize: 11, color: 'var(--dead)'}}>{file.error}</div>
-          ) : (
-            <MarkdownView source={file.content} empty="No content found."/>
-          )}
-        </article>
-      ))}
+      {items.map(file => {
+        const open = !closedFiles.has(file.filename);
+        return (
+          <article key={file.filename} className={`readable-file ${open ? 'open' : 'closed'}`}>
+            <button
+              type="button"
+              className="readable-file-head"
+              onClick={() => toggleFile(file.filename)}
+              aria-expanded={open}
+              aria-label={`${open ? 'Collapse' : 'Expand'} ${file.filename}`}
+              title={`${open ? 'Collapse' : 'Expand'} ${file.filename}`}
+            >
+              <Icon name={open ? 'chevron-down' : 'chevron-right'} size={12}/>
+              <Icon name="file-text" size={13}/>
+              <span className="mono">{file.filename}</span>
+              <span className="mono dim">{file.mtime ? `${formatAge(minutesSinceISO(file.mtime))} ago` : ''}</span>
+            </button>
+            {open && (file.loading ? <SkeletonRows rows={3}/> : file.error ? (
+              <div className="mono" style={{fontSize: 11, color: 'var(--dead)'}}>{file.error}</div>
+            ) : (
+              <MarkdownView source={file.content} empty="No content found."/>
+            ))}
+          </article>
+        );
+      })}
     </div>
   );
 };

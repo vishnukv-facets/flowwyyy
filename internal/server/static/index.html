@@ -789,7 +789,11 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 .entity-task-row .name, .run-history-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .readable-files { display: grid; gap: 12px; }
 .readable-file { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 16px; }
-.readable-file-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; color: var(--text-mid); }
+.readable-file.closed { padding: 0; overflow: hidden; }
+button.readable-file-head { width: 100%; display: flex; align-items: center; gap: 9px; margin-bottom: 12px; padding: 0; background: transparent; border: 0; color: var(--text-mid); font: inherit; text-align: left; cursor: pointer; }
+button.readable-file-head:hover { color: var(--text); }
+button.readable-file-head:focus-visible { outline: 1px solid var(--primary); outline-offset: 2px; border-radius: 3px; }
+.readable-file.closed button.readable-file-head { margin-bottom: 0; padding: 12px 16px; }
 .readable-file-head .dim { margin-left: auto; color: var(--text-faint); }
 @media (max-width: 1100px) {
   .entity-layout { grid-template-columns: 1fr; }
@@ -948,54 +952,80 @@ select.form-input { appearance: none; background-image: linear-gradient(45deg, t
 @keyframes blink { 50% { opacity: 0; } }
 
 /* Transcript */
-.transcript { padding: 14px 18px 20px; display: flex; flex-direction: column; gap: 14px; font-size: 13px; background: radial-gradient(circle at 50% 0, rgba(100,93,246,0.055), transparent 280px), var(--surface); }
+.transcript { padding: 22px 24px 28px; display: flex; flex-direction: column; gap: 18px; font-size: 13.5px; background: radial-gradient(circle at 50% 0, rgba(100,93,246,0.05), transparent 320px), var(--surface); }
 .chat-transcript { overflow-y: auto; scroll-behavior: smooth; }
 .transcript-empty { min-height: 180px; display: grid; place-items: center; color: var(--text-faint); }
-.chat-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; max-width: 920px; }
-.chat-message.user { grid-template-columns: minmax(0, 1fr) 28px; margin-left: auto; width: min(86%, 860px); }
-.chat-message.user .chat-avatar { grid-column: 2; grid-row: 1; color: var(--accent); border-color: rgba(119,235,219,0.26); background: rgba(119,235,219,0.08); }
-.chat-message.user .chat-copy { grid-column: 1; grid-row: 1; align-items: flex-end; }
-.chat-message.user .chat-role { color: var(--accent); }
-.chat-message.user .chat-bubble { background: rgba(119,235,219,0.095); border-color: rgba(119,235,219,0.24); border-right-color: rgba(119,235,219,0.48); }
-.chat-message.assistant .chat-role { color: var(--primary-hi); }
-.chat-message.thinking { opacity: 0.72; }
-.chat-message.thinking .chat-role { color: var(--stale); }
-.chat-message.thinking .chat-bubble { font-style: italic; }
-.chat-avatar { width: 26px; height: 26px; display: grid; place-items: center; border: 1px solid rgba(139,135,248,0.24); border-radius: 7px; background: rgba(100,93,246,0.12); color: var(--primary-hi); font-size: 11px; line-height: 1; }
-.chat-copy { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.chat-role { font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); }
-.chat-bubble { padding: 10px 12px; border: 1px solid var(--border); border-radius: 7px; background: rgba(20,20,23,0.86); color: var(--text); line-height: 1.58; overflow-wrap: anywhere; }
-.md-body { display: flex; flex-direction: column; gap: 9px; }
-.md-body p { margin: 0; text-wrap: pretty; }
-.md-heading { margin-top: 2px; color: var(--text); font-weight: 600; line-height: 1.3; }
-.md-heading.level-1 { font-size: 16px; }
+
+/* Centered row container — agent-factory uses max-w-4xl (56rem ≈ 896px) */
+.chat-message { width: 100%; max-width: 920px; margin: 0 auto; }
+.chat-message.user { display: flex; justify-content: flex-end; }
+.chat-message.assistant, .chat-message.thinking { display: block; }
+
+/* User: right-aligned rounded bubble with subtle white-ish bg + delivered tick */
+.chat-user-bubble { display: inline-flex; align-items: flex-end; gap: 8px; max-width: min(80%, 640px); padding: 9px 14px 9px 16px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05); color: var(--text); line-height: 1.55; overflow-wrap: anywhere; }
+.chat-user-body { flex: 1; min-width: 0; }
+.chat-user-tick { color: var(--running); flex-shrink: 0; align-self: flex-end; margin-bottom: 2px; }
+
+/* Bot / assistant: left-aligned, no bubble — typography carries the weight */
+.chat-bot { position: relative; padding-right: 32px; }
+.chat-bot-head { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; color: var(--text-mid); }
+.chat-bot-name { font-size: 11.5px; font-weight: 500; color: var(--text-mid); letter-spacing: 0; text-transform: lowercase; }
+.chat-bot-body { color: var(--text); line-height: 1.65; overflow-wrap: anywhere; }
+.chat-bot-body.thinking { font-style: italic; color: var(--text-dim); }
+.chat-message.thinking { opacity: 0.82; }
+.chat-message.thinking .chat-bot-head { color: var(--stale); }
+
+/* Hover-revealed copy button on bot messages */
+.chat-copy-btn { position: absolute; top: -2px; right: 0; padding: 5px 6px; background: transparent; border: 1px solid transparent; border-radius: 5px; color: var(--text-faint); cursor: pointer; opacity: 0; transition: opacity 0.15s ease, color 0.15s ease, background 0.15s ease, border-color 0.15s ease; }
+.chat-message.assistant:hover .chat-copy-btn, .chat-copy-btn:focus-visible { opacity: 1; }
+.chat-copy-btn:hover { color: var(--text); background: var(--surface-2); border-color: var(--border); }
+
+/* Centered "request interrupted" notice */
+.chat-interrupted { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 4px auto; color: var(--text-faint); font-size: 11px; max-width: 920px; }
+.chat-interrupted-line { display: block; width: 24px; height: 1px; background: var(--border); }
+
+/* Markdown body styling — re-anchored on the new chat layout */
+.md-body { display: flex; flex-direction: column; gap: 10px; }
+.md-body p { margin: 0; text-wrap: pretty; line-height: 1.65; }
+.md-heading { margin-top: 4px; color: var(--text); font-weight: 600; line-height: 1.3; }
+.md-heading.level-1 { font-size: 17px; }
 .md-heading.level-2, .md-heading.level-3, .md-heading.level-4 { font-size: 14px; }
-.md-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.md-list { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
 .md-body blockquote { margin: 0; padding: 7px 10px; border-left: 2px solid var(--primary); background: rgba(100,93,246,0.08); color: var(--text-mid); }
-.md-code { margin: 0; padding: 10px 11px; border: 1px solid var(--border); border-radius: 5px; background: #07070a; color: var(--text-mid); white-space: pre-wrap; overflow-x: auto; font-size: 11.5px; line-height: 1.55; }
+.md-code { margin: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: #07070a; color: var(--text-mid); white-space: pre-wrap; overflow-x: auto; font-size: 11.5px; line-height: 1.55; }
 .md-inline-code { padding: 1px 5px; border: 1px solid var(--border); border-radius: 4px; background: rgba(255,255,255,0.045); color: var(--accent); font-family: var(--mono); font-size: 0.92em; }
 .md-link { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(119,235,219,0.35); }
 .md-link:hover { color: var(--text); border-bottom-color: var(--accent); }
-.tool-card { max-width: 920px; margin-left: 38px; border: 1px solid var(--border); border-radius: 6px; background: rgba(17,17,21,0.92); overflow: hidden; }
-.tool-card.result { border-color: rgba(119,235,219,0.12); }
-.tool-card-head { width: 100%; min-height: 34px; display: grid; grid-template-columns: 18px 52px minmax(82px, auto) minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: transparent; color: var(--text-mid); text-align: left; cursor: pointer; }
-.tool-card-head:hover { background: var(--surface-2); color: var(--text); }
-.tool-card-head:focus-visible { outline: 1px solid var(--primary); outline-offset: -2px; }
-.tool-card-icon { display: inline-flex; color: var(--text-faint); }
-.tool-card-kind { color: var(--primary-hi); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
-.tool-card.result .tool-card-kind { color: var(--accent); }
-.tool-card-name { color: var(--text); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tool-card-summary { color: var(--text-dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.tool-card-lines { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
-.tool-card-body { margin: 0; padding: 10px 12px 12px; border-top: 1px solid var(--border); background: #07070a; color: var(--text-mid); white-space: pre-wrap; overflow-x: auto; font-size: 11.5px; line-height: 1.55; }
+
+/* Tool call — accent left-edge bar */
+.tool-card.call { width: 100%; max-width: 920px; margin: 0 auto; background: rgba(20,20,23,0.55); border: 1px solid var(--border); border-left: 2px solid var(--primary); border-radius: 0 6px 6px 0; overflow: hidden; }
+.tool-call-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; background: transparent; color: var(--text-mid); text-align: left; cursor: pointer; }
+.tool-call-head:hover { background: var(--surface-2); color: var(--text); }
+.tool-call-head:focus-visible { outline: 1px solid var(--primary); outline-offset: -2px; }
+.tool-call-name { color: var(--text); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-call-summary { color: var(--text-dim); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tool-call-lines { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+.tool-call-body { margin: 0; padding: 10px 12px 12px; border-top: 1px solid var(--border); background: #07070a; color: var(--text-mid); white-space: pre-wrap; overflow-x: auto; font-size: 11.5px; line-height: 1.55; }
+
+/* Tool result — indented with └─ elbow connector, subtle tinted bg */
+.tool-card.result { display: flex; align-items: flex-start; gap: 10px; width: 100%; max-width: 920px; margin: 0 auto; padding-left: 26px; }
+.tool-elbow { flex: 0 0 auto; color: rgba(94,234,212,0.55); font-size: 13px; line-height: 1.3; margin-top: 6px; user-select: none; }
+.tool-result-card { flex: 1; min-width: 0; background: rgba(20,20,23,0.55); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.tool-result-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 0; background: transparent; color: var(--text-mid); text-align: left; cursor: pointer; }
+.tool-result-head:hover { background: var(--surface-2); color: var(--text); }
+.tool-result-head:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
+.tool-result-name { color: var(--text); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-result-summary { color: var(--text-dim); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tool-result-lines { color: var(--text-faint); font-size: 10.5px; white-space: nowrap; }
+.tool-result-body { margin: 0; padding: 8px 10px 10px; border-top: 1px solid var(--border); background: #07070a; color: var(--text-mid); white-space: pre-wrap; overflow-x: auto; font-size: 11.5px; line-height: 1.55; }
+
 @media (max-width: 760px) {
-  .transcript { padding: 12px; }
-  .chat-message, .chat-message.user { width: 100%; max-width: 100%; grid-template-columns: 24px minmax(0, 1fr); margin-left: 0; }
-  .chat-message.user .chat-avatar { grid-column: 1; }
-  .chat-message.user .chat-copy { grid-column: 2; align-items: stretch; }
-  .tool-card { margin-left: 34px; }
-  .tool-card-head { grid-template-columns: 18px minmax(0, 1fr) auto; }
-  .tool-card-kind, .tool-card-lines { display: none; }
+  .transcript { padding: 14px; gap: 14px; }
+  .chat-user-bubble { max-width: 100%; }
+  .chat-bot { padding-right: 0; }
+  .chat-copy-btn { position: static; opacity: 1; margin-top: 6px; }
+  .tool-card.result { padding-left: 14px; }
+  .tool-call-lines, .tool-result-lines { display: none; }
 }
 
 .slide-in { animation: slidein 350ms ease-out; }
@@ -1661,6 +1691,14 @@ const App = () => {
 	    try { localStorage.setItem('flow.gitDiffOpen', gitDiffOpen ? '1' : '0'); } catch (_) {}
 	  }, [gitDiffOpen]);
 
+	  const [artifactsOpen, setArtifactsOpen] = useState(() => {
+	    try { return localStorage.getItem('flow.artifactsOpen') === '1'; } catch (_) { return false; }
+	  });
+
+	  useEffect(() => {
+	    try { localStorage.setItem('flow.artifactsOpen', artifactsOpen ? '1' : '0'); } catch (_) {}
+	  }, [artifactsOpen]);
+
 	  useEffect(() => {
 	    const splash = document.getElementById('boot-splash');
 	    if (!splash) return;
@@ -2109,8 +2147,8 @@ const App = () => {
       <main className="main">
         {route === 'mc' && <MissionControl focus={focus} setFocus={setFocus} action={action} sort={sort} setSort={setSort} goto={goto}/>}
         {route === 'sessions' && <SessionsGrid setFocus={setFocus} action={action} goto={goto}/>}
-        {isSession && sessionAgent && <SessionDetail key={`session-${sessionAgent.slug}`} agent={sessionAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)}/>}
-        {isSession && !sessionAgent && completedAgent && <CompletedSessionView key={`done-${completedAgent.slug}`} agent={completedAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)}/>}
+        {isSession && sessionAgent && <SessionDetail key={`session-${sessionAgent.slug}`} agent={sessionAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)} artifactsOpen={artifactsOpen} toggleArtifacts={() => setArtifactsOpen(v => !v)}/>}
+        {isSession && !sessionAgent && completedAgent && <CompletedSessionView key={`done-${completedAgent.slug}`} agent={completedAgent} goto={goto} action={action} gitDiffOpen={gitDiffOpen} toggleGitDiff={() => setGitDiffOpen(v => !v)} artifactsOpen={artifactsOpen} toggleArtifacts={() => setArtifactsOpen(v => !v)}/>}
         {isSession && !sessionAgent && !completedAgent && <SessionFallback slug={sessionSlug} goto={goto} action={action}/>}
         {route === 'tasks' && <TasksList setFocus={setFocus} action={action} goto={goto}/>}
         {route === 'projects' && <ProjectsList goto={goto} action={action}/>}

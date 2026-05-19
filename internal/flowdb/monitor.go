@@ -36,12 +36,17 @@ type MonitorNotification struct {
 }
 
 type AutomationRule struct {
-	ID        string
-	Source    string
-	Kind      string
-	Mode      string
-	CreatedAt string
-	UpdatedAt string
+	ID             string
+	Source         string
+	Kind           string
+	Mode           string
+	PromptTemplate sql.NullString
+	ProjectSlug    sql.NullString
+	WorkDir        sql.NullString
+	Provider       sql.NullString
+	ReadOnly       bool
+	CreatedAt      string
+	UpdatedAt      string
 }
 
 type MonitorEventInput struct {
@@ -84,9 +89,9 @@ func EnsureDefaultAutomationRules(db *sql.DB) error {
 	for _, rule := range defaultAutomationRules {
 		id := AutomationRuleID(rule.Source, rule.Kind)
 		if _, err := db.Exec(
-			`INSERT OR IGNORE INTO automation_rules (id, source, kind, mode, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			id, rule.Source, rule.Kind, rule.Mode, now, now,
+			`INSERT OR IGNORE INTO automation_rules (id, source, kind, mode, read_only, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id, rule.Source, rule.Kind, rule.Mode, boolInt(true), now, now,
 		); err != nil {
 			return fmt.Errorf("insert default automation rule %s/%s: %w", rule.Source, rule.Kind, err)
 		}
@@ -359,7 +364,7 @@ func ListAutomationRules(db *sql.DB) ([]AutomationRule, error) {
 		return nil, err
 	}
 	rows, err := db.Query(
-		`SELECT id, source, kind, mode, created_at, updated_at
+		`SELECT id, source, kind, mode, prompt_template, project_slug, work_dir, provider, read_only, created_at, updated_at
 		 FROM automation_rules
 		 ORDER BY source, kind`,
 	)
@@ -379,18 +384,36 @@ func ListAutomationRules(db *sql.DB) ([]AutomationRule, error) {
 }
 
 func AutomationModeFor(db *sql.DB, source, kind string) (string, error) {
-	if err := EnsureDefaultAutomationRules(db); err != nil {
+	rule, err := AutomationRuleFor(db, source, kind)
+	if err != nil {
 		return "", err
 	}
-	var mode string
-	err := db.QueryRow(
-		`SELECT mode FROM automation_rules WHERE source = ? AND kind = ?`,
-		normalizeMonitorPart(source), normalizeMonitorPart(kind),
-	).Scan(&mode)
-	if err == sql.ErrNoRows {
-		return "notify", nil
+	return rule.Mode, nil
+}
+
+func AutomationRuleFor(db *sql.DB, source, kind string) (*AutomationRule, error) {
+	if err := EnsureDefaultAutomationRules(db); err != nil {
+		return nil, err
 	}
-	return mode, err
+	row := db.QueryRow(
+		`SELECT id, source, kind, mode, prompt_template, project_slug, work_dir, provider, read_only, created_at, updated_at
+		 FROM automation_rules WHERE source = ? AND kind = ?`,
+		normalizeMonitorPart(source), normalizeMonitorPart(kind),
+	)
+	rule, err := scanAutomationRule(row)
+	if err == sql.ErrNoRows {
+		now := NowISO()
+		return &AutomationRule{
+			ID:        AutomationRuleID(source, kind),
+			Source:    normalizeMonitorPart(source),
+			Kind:      normalizeMonitorPart(kind),
+			Mode:      "notify",
+			ReadOnly:  true,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}, nil
+	}
+	return rule, err
 }
 
 func SetAutomationRuleMode(db *sql.DB, source, kind, mode string) error {
@@ -404,10 +427,82 @@ func SetAutomationRuleMode(db *sql.DB, source, kind, mode string) error {
 	}
 	now := NowISO()
 	_, err := db.Exec(
-		`INSERT INTO automation_rules (id, source, kind, mode, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?)
+		`INSERT INTO automation_rules (id, source, kind, mode, read_only, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(source, kind) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at`,
-		AutomationRuleID(source, kind), source, kind, mode, now, now,
+		AutomationRuleID(source, kind), source, kind, mode, boolInt(true), now, now,
+	)
+	return err
+}
+
+func UpdateAutomationRuleRouting(db *sql.DB, source, kind, mode, promptTemplate, projectSlug, workDir, provider string, readOnly bool) error {
+	source = normalizeMonitorPart(source)
+	kind = normalizeMonitorPart(kind)
+	mode = normalizeMonitorPart(mode)
+	provider = normalizeMonitorPart(provider)
+	switch mode {
+	case "off", "log", "notify", "approval", "auto_task", "auto_agent", "auto_agent_draft_only", "summarize":
+	default:
+		return fmt.Errorf("invalid automation mode %q", mode)
+	}
+	if provider != "" && provider != "claude" && provider != "codex" {
+		return fmt.Errorf("invalid automation provider %q", provider)
+	}
+	now := NowISO()
+	_, err := db.Exec(
+		`INSERT INTO automation_rules (
+			id, source, kind, mode, prompt_template, project_slug, work_dir, provider, read_only, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(source, kind) DO UPDATE SET
+			mode = excluded.mode,
+			prompt_template = excluded.prompt_template,
+			project_slug = excluded.project_slug,
+			work_dir = excluded.work_dir,
+			provider = excluded.provider,
+			read_only = excluded.read_only,
+			updated_at = excluded.updated_at`,
+		AutomationRuleID(source, kind), source, kind, mode, NullString(promptTemplate), NullString(projectSlug),
+		NullString(workDir), NullString(provider), boolInt(readOnly), now, now,
+	)
+	return err
+}
+
+func GetMonitorEventAction(db *sql.DB, eventID string) (*MonitorEventAction, error) {
+	row := db.QueryRow(
+		`SELECT event_id, action, task_slug, note, created_at
+		 FROM monitor_event_actions
+		 WHERE event_id = ?`,
+		strings.TrimSpace(eventID),
+	)
+	var action MonitorEventAction
+	if err := row.Scan(&action.EventID, &action.Action, &action.TaskSlug, &action.Note, &action.CreatedAt); err != nil {
+		return nil, err
+	}
+	return &action, nil
+}
+
+func RecordMonitorEventAction(db *sql.DB, eventID, action, taskSlug, note string) error {
+	eventID = strings.TrimSpace(eventID)
+	action = normalizeMonitorPart(action)
+	if eventID == "" {
+		return fmt.Errorf("event_id is required")
+	}
+	switch action {
+	case "spawn", "draft", "ping", "ignore":
+	default:
+		return fmt.Errorf("invalid monitor event action %q", action)
+	}
+	_, err := db.Exec(
+		`INSERT INTO monitor_event_actions (event_id, action, task_slug, note, created_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(event_id) DO UPDATE SET
+			action = CASE
+				WHEN monitor_event_actions.task_slug IS NULL AND excluded.task_slug IS NOT NULL THEN excluded.action
+				ELSE monitor_event_actions.action
+			END,
+			task_slug = COALESCE(monitor_event_actions.task_slug, excluded.task_slug),
+			note = COALESCE(excluded.note, monitor_event_actions.note)`,
+		eventID, action, NullString(taskSlug), NullString(note), NowISO(),
 	)
 	return err
 }
@@ -430,9 +525,11 @@ func scanMonitorNotification(row interface{ Scan(dest ...any) error }) (*Monitor
 
 func scanAutomationRule(row interface{ Scan(dest ...any) error }) (*AutomationRule, error) {
 	var r AutomationRule
-	if err := row.Scan(&r.ID, &r.Source, &r.Kind, &r.Mode, &r.CreatedAt, &r.UpdatedAt); err != nil {
+	var readOnly int
+	if err := row.Scan(&r.ID, &r.Source, &r.Kind, &r.Mode, &r.PromptTemplate, &r.ProjectSlug, &r.WorkDir, &r.Provider, &readOnly, &r.CreatedAt, &r.UpdatedAt); err != nil {
 		return nil, err
 	}
+	r.ReadOnly = readOnly != 0
 	return &r, nil
 }
 
@@ -445,4 +542,11 @@ func normalizeMonitorPart(s string) string {
 func NullString(s string) sql.NullString {
 	s = strings.TrimSpace(s)
 	return sql.NullString{String: s, Valid: s != ""}
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
 }
