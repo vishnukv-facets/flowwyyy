@@ -1,11 +1,8 @@
 package app
 
 import (
-	"context"
-	"database/sql"
 	"flow/internal/agents"
 	"flow/internal/flowdb"
-	"flow/internal/monitor"
 	"fmt"
 	"io"
 	"os"
@@ -54,13 +51,7 @@ func cmdDone(args []string) int {
 	}
 	query := args[0]
 	fs := flagSet("done")
-	noPR := fs.Bool("no-pr", false, "skip the post-done PR push and gh pr create attempt")
-	mergePR := fs.Bool("merge", false, "after opening or finding the task PR, merge it with gh pr merge --merge --delete-branch")
 	if err := fs.Parse(args[1:]); err != nil {
-		return 2
-	}
-	if *noPR && *mergePR {
-		fmt.Fprintln(os.Stderr, "error: --merge cannot be combined with --no-pr")
 		return 2
 	}
 
@@ -143,27 +134,6 @@ func cmdDone(args []string) int {
 		fmt.Printf("Saved git snapshot %s\n", gitSnapshotPath)
 	}
 
-	if !*noPR {
-		prURL := ""
-		if prURL, err := raiseDonePRForTask(db, task); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: PR creation failed: %v\n", err)
-		} else if prURL != "" {
-			fmt.Printf("Opened PR %s\n", prURL)
-		}
-		if *mergePR {
-			if prURL == "" {
-				prURL = openPRURLForTask(db, task.Slug)
-			}
-			if prURL == "" {
-				fmt.Fprintln(os.Stderr, "warning: merge requested but no open PR URL was available")
-			} else if err := mergeDonePRForTask(db, task, prURL); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: PR merge failed: %v\n", err)
-			} else {
-				fmt.Printf("Merged PR %s\n", prURL)
-			}
-		}
-	}
-
 	if task.SessionID.Valid && task.SessionID.String != "" {
 		fmt.Print("updating kbs, project updates...")
 		projectSlug := ""
@@ -177,66 +147,7 @@ func cmdDone(args []string) int {
 			fmt.Println(" done")
 		}
 	}
-	// Slack write-back is intentionally outside the SessionID gate above
-	// AND outside the sweep success branch: a task may have been bound to
-	// a Slack origin even if its session_id was never attached (e.g.
-	// `flow update task --status done` on a draft), and the originating
-	// thread deserves the closure notice even if the LLM sweep crashed.
-	// Failures here are warning-only — the status flip is the contract.
-	if err := postSlackDoneNotice(db, task); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: slack done notice failed: %v\n", err)
-	}
 	return 0
-}
-
-// slackDoneNoticeRunner is the package-level seam tests swap to capture the
-// outgoing PostMessage without spinning up an httptest server. Production
-// path builds a writer from env (FLOW_SLACK_TOKEN, FLOW_SLACK_API_BASE_URL,
-// FLOW_SLACK_WRITES_ENABLED) and calls PostMessage; tests can substitute a
-// recorder to assert on (channel, threadTS, text).
-var slackDoneNoticeRunner = func(ctx context.Context, channel, threadTS, text string) error {
-	writer := monitor.NewSlackWriter()
-	return writer.PostMessage(ctx, channel, threadTS, text)
-}
-
-// postSlackDoneNotice posts a one-line closure into the originating Slack
-// thread when a task came from a Slack monitor event. No-op when the task
-// has no Slack origin or when writes are disabled — both states return nil
-// so the caller doesn't need to special-case "not applicable".
-//
-// Message shape (templated, per user's design pick):
-//
-//	Task "<task name>" done. Closing notes captured in flow: <FLOW_BASE_URL>/tasks/<slug>
-//
-// Predictable and synchronous — no dependency on the post-sweep project
-// update file or its timing.
-func postSlackDoneNotice(db *sql.DB, task *flowdb.Task) error {
-	if task == nil {
-		return nil
-	}
-	origin, ok, err := monitor.SlackOriginFor(db, task.Slug)
-	if err != nil {
-		return fmt.Errorf("resolve slack origin: %w", err)
-	}
-	if !ok {
-		return nil
-	}
-	channel, threadTS := origin.PostTarget()
-	text := slackDoneNoticeText(task.Name, task.Slug, monitor.FlowBaseURL())
-	return slackDoneNoticeRunner(context.Background(), channel, threadTS, text)
-}
-
-// slackDoneNoticeText renders the closure message. Pulled out as a pure
-// function so tests can assert both URL-present and URL-absent shapes
-// without seeding env. When baseURL is empty (no flow serve running and
-// no FLOW_BASE_URL set), the message still says the task is done but
-// omits the link — better than rendering an obviously-broken URL.
-func slackDoneNoticeText(taskName, slug, baseURL string) string {
-	if baseURL == "" {
-		return fmt.Sprintf("Task %q done. Closing notes captured in flow (task slug: %s).", taskName, slug)
-	}
-	return fmt.Sprintf("Task %q done. Closing notes captured in flow: %s/tasks/%s",
-		taskName, baseURL, slug)
 }
 
 // buildCloseoutSweepPrompt composes the headless prompt that drives

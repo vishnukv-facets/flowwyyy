@@ -8,14 +8,12 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/kitty"
-	flowmonitor "flow/internal/monitor"
 	"flow/internal/spawner"
 	macterminal "flow/internal/terminal"
 	"flow/internal/warp"
 	"flow/internal/workdirreg"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,29 +26,21 @@ import (
 )
 
 type actionRequest struct {
-	Kind            string   `json:"kind"`
-	Target          string   `json:"target"`
-	Slug            string   `json:"slug"`
-	Name            string   `json:"name"`
-	Path            string   `json:"path"`
-	Description     string   `json:"description"`
-	Project         string   `json:"project"`
-	WorkDir         string   `json:"work_dir"`
-	Priority        string   `json:"priority"`
-	Prompt          string   `json:"prompt"`
-	SessionID       string   `json:"session_id"`
-	Branch          string   `json:"branch"`
-	EventID         string   `json:"event_id"`
-	Mode            string   `json:"mode"`
-	Source          string   `json:"source"`
-	RuleKind        string   `json:"rule_kind"`
-	PRURL           string   `json:"pr_url"`
-	EntityKind      string   `json:"entity_kind"`
-	Provider        string   `json:"provider"`
-	PermissionMode  string   `json:"permission_mode"`
-	NotificationIDs []string `json:"notification_ids"`
-	ReadOnly        *bool    `json:"read_only"`
-	RuleUpdate      bool     `json:"rule_update"`
+	Kind           string `json:"kind"`
+	Target         string `json:"target"`
+	Slug           string `json:"slug"`
+	Name           string `json:"name"`
+	Path           string `json:"path"`
+	Description    string `json:"description"`
+	Project        string `json:"project"`
+	WorkDir        string `json:"work_dir"`
+	Priority       string `json:"priority"`
+	Prompt         string `json:"prompt"`
+	SessionID      string `json:"session_id"`
+	Branch         string `json:"branch"`
+	EntityKind     string `json:"entity_kind"`
+	Provider       string `json:"provider"`
+	PermissionMode string `json:"permission_mode"`
 }
 
 type actionResponse struct {
@@ -66,15 +56,11 @@ var (
 	safeSlugRe    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 	safeSessionRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	safeBranchRe  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/\-]*$`)
-	githubPRURLRe = regexp.MustCompile(`^https://github\.com/([^/\s]+/[^/\s]+)/pull/([0-9]+)(?:[/?#].*)?$`)
 )
 
 const (
-	overviewTaskSlug       = "flow-overview"
-	overviewTaskName       = "Flow overview command center"
-	attentionInboxTaskSlug = "flow-attention"
-	attentionInboxTaskName = "Flow attention inbox"
-	monitorAutoOpenLimit   = 1
+	overviewTaskSlug = "flow-overview"
+	overviewTaskName = "Flow overview command center"
 )
 
 var nativeCommandStarter = startNativeCommand
@@ -167,20 +153,6 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.forkTask(req)
 	case "edit-playbook":
 		return s.editPlaybook(target)
-	case "monitor-sync":
-		return s.monitorSync()
-	case "notification-dismiss", "notification-read":
-		return s.updateNotification(req)
-	case "notification-dismiss-all":
-		return s.dismissNotifications(req)
-	case "notification-read-all":
-		return s.markNotificationsRead(req)
-	case "notification-start-agent":
-		return s.startAgentForNotification(req)
-	case "monitor-ignore-event":
-		return s.ignoreMonitorEvent(req)
-	case "set-rule-mode":
-		return s.setRuleMode(req)
 	case "overview-chat":
 		return s.overviewChat(req)
 	default:
