@@ -3,14 +3,13 @@ package monitor
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"flow/internal/flowdb"
+
+	"github.com/slack-go/slack/slackevents"
 )
 
 func openMonitorTestDB(t *testing.T) *sql.DB {
@@ -121,73 +120,161 @@ func TestGitHubNotificationsUseWebURLs(t *testing.T) {
 	}
 }
 
-func TestPollSlackWebAPIStoresDMAndMention(t *testing.T) {
+func TestPollAllDoesNotPollSlack(t *testing.T) {
 	db := openMonitorTestDB(t)
-	t.Setenv("FLOW_SLACK_TOKEN", "xoxp-test")
-	t.Setenv("FLOW_SLACK_POLL_CMD", "")
-	t.Setenv("FLOW_SLACK_LOOKBACK", "24h")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/api/auth.test":
-			writeSlackTestJSON(t, w, map[string]any{"ok": true, "user_id": "U123", "team_id": "T123"})
-		case "/api/users.conversations":
-			writeSlackTestJSON(t, w, map[string]any{"ok": true, "channels": []map[string]any{
-				{"id": "D1", "is_im": true, "user": "U234"},
-				{"id": "C1", "name": "eng", "is_channel": true},
-			}})
-		case "/api/conversations.history":
-			switch r.URL.Query().Get("channel") {
-			case "D1":
-				writeSlackTestJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
-					{"type": "message", "user": "U234", "text": "Can you review this?", "ts": "1710000000.000001"},
-				}})
-			case "C1":
-				writeSlackTestJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{
-					{"type": "message", "user": "U345", "text": "Heads up <@U123>", "ts": "1710000001.000001"},
-					{"type": "message", "user": "U345", "text": "general chatter", "ts": "1710000002.000001"},
-				}})
-			default:
-				writeSlackTestJSON(t, w, map[string]any{"ok": true, "messages": []map[string]any{}})
-			}
-		case "/api/chat.getPermalink":
-			writeSlackTestJSON(t, w, map[string]any{"ok": true, "permalink": "https://slack.example/archives/" + r.URL.Query().Get("channel") + "/p1"})
-		default:
-			t.Fatalf("unexpected slack API path: %s", r.URL.Path)
-		}
-	}))
-	t.Cleanup(srv.Close)
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
 
-	summaries, err := (Poller{DB: db, SlackAPIBaseURL: srv.URL + "/api"}).Poll(context.Background(), "slack")
+	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "slack" {
+			t.Fatalf("Poll(all) must not invoke Slack polling: %s %v", name, args)
+		}
+		if name == "gh" {
+			return []byte(`[]`), nil
+		}
+		t.Fatalf("unexpected command: %s %v", name, args)
+		return nil, nil
+	}
+	summaries, err := (Poller{DB: db, Runner: runner}).Poll(context.Background(), "all")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(summaries) != 1 || summaries[0].Events != 2 || summaries[0].New != 2 || len(summaries[0].Errors) != 0 {
+	if len(summaries) != 1 || summaries[0].Source != "github" {
+		t.Fatalf("summaries = %+v, want only github", summaries)
+	}
+}
+
+func TestPollSlackReportsSocketModeOnly(t *testing.T) {
+	db := openMonitorTestDB(t)
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+
+	runner := func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		t.Fatalf("Poll(slack) must not invoke command polling: %s %v", name, args)
+		return nil, nil
+	}
+	summaries, err := (Poller{DB: db, Runner: runner}).Poll(context.Background(), "slack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summaries) != 1 || summaries[0].Source != "slack" || summaries[0].Events != 0 || len(summaries[0].Errors) != 0 {
 		t.Fatalf("summary = %+v", summaries)
 	}
-	events, err := flowdb.ListMonitorEvents(db, 10)
+	if got := strings.Join(summaries[0].Diagnostics, " "); !strings.Contains(got, "Socket Mode") {
+		t.Fatalf("diagnostics = %q, want Socket Mode guidance", got)
+	}
+}
+
+func TestSlackEventsAPIInputsConvertDMAndMention(t *testing.T) {
+	dm := SlackEventsAPIEventInputs(slackevents.EventsAPIEvent{
+		TeamID: "T123",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: string(slackevents.Message),
+			Data: &slackevents.MessageEvent{
+				Type:        "message",
+				Channel:     "D123",
+				ChannelType: slackevents.ChannelTypeIM,
+				User:        "U234",
+				Text:        "can you review this?",
+				TimeStamp:   "1710000000.000001",
+			},
+		},
+	})
+	if len(dm) != 1 || dm[0].Kind != "dm" || dm[0].SourceID != "D123:1710000000.000001" {
+		t.Fatalf("dm inputs = %+v", dm)
+	}
+
+	mention := SlackEventsAPIEventInputs(slackevents.EventsAPIEvent{
+		TeamID: "T123",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: string(slackevents.AppMention),
+			Data: &slackevents.AppMentionEvent{
+				Type:      string(slackevents.AppMention),
+				Channel:   "C123",
+				User:      "U234",
+				Text:      "<@U999> heads up",
+				TimeStamp: "1710000001.000001",
+			},
+		},
+	})
+	if len(mention) != 1 || mention[0].Kind != "mention" || mention[0].SourceID != "C123:1710000001.000001" {
+		t.Fatalf("mention inputs = %+v", mention)
+	}
+}
+
+func TestSlackEventsAPIInputsKeepPersonalMentionWithoutChannelAllowlist(t *testing.T) {
+	t.Setenv("FLOW_SLACK_CHANNELS", "")
+	t.Setenv("FLOW_SLACK_MENTION_USER_ID", "U999")
+
+	inputs := SlackEventsAPIEventInputs(slackevents.EventsAPIEvent{
+		TeamID: "T123",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: string(slackevents.Message),
+			Data: &slackevents.MessageEvent{
+				Type:        "message",
+				Channel:     "C123",
+				ChannelType: slackevents.ChannelTypeChannel,
+				User:        "U234",
+				Text:        "<@U999> can you check this?",
+				TimeStamp:   "1710000002.000001",
+			},
+		},
+	})
+	if len(inputs) != 1 || inputs[0].Kind != "personal_mention" || inputs[0].SourceID != "C123:1710000002.000001" {
+		t.Fatalf("personal mention inputs = %+v", inputs)
+	}
+
+	ignored := SlackEventsAPIEventInputs(slackevents.EventsAPIEvent{
+		TeamID: "T123",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: string(slackevents.Message),
+			Data: &slackevents.MessageEvent{
+				Type:        "message",
+				Channel:     "C123",
+				ChannelType: slackevents.ChannelTypeChannel,
+				User:        "U234",
+				Text:        "plain channel chatter",
+				TimeStamp:   "1710000003.000001",
+			},
+		},
+	})
+	if len(ignored) != 0 {
+		t.Fatalf("non-mention channel message inputs = %+v, want ignored", ignored)
+	}
+}
+
+func TestStoreSlackEventsUsesInsertNewPolicyAndRules(t *testing.T) {
+	db := openMonitorTestDB(t)
+	input := flowdb.MonitorEventInput{
+		Source:   "slack",
+		Kind:     "dm",
+		SourceID: "D123:1710000000.000001",
+		Title:    "Slack dm in D123",
+		Body:     "can you review this?",
+		Severity: "medium",
+	}
+	poller := Poller{DB: db}
+	kept, newCount, err := poller.StoreSlackEvents([]flowdb.MonitorEventInput{input})
 	if err != nil {
 		t.Fatal(err)
 	}
-	kinds := map[string]bool{}
-	for _, event := range events {
-		kinds[event.Kind] = true
+	if kept != 1 || newCount != 1 {
+		t.Fatalf("first store kept=%d new=%d", kept, newCount)
 	}
-	if !kinds["dm"] || !kinds["mention"] || kinds["channel_message"] {
-		t.Fatalf("events = %+v", events)
+	kept, newCount, err = poller.StoreSlackEvents([]flowdb.MonitorEventInput{input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept != 1 || newCount != 0 {
+		t.Fatalf("second store kept=%d new=%d, want dedup without new rule firing", kept, newCount)
 	}
 	notifications, err := flowdb.ListMonitorNotifications(db, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(notifications) != 2 || notifications[0].Level != "approval" || notifications[1].Level != "approval" {
+	if len(notifications) != 1 || notifications[0].Level != "approval" {
 		t.Fatalf("notifications = %+v", notifications)
-	}
-}
-
-func writeSlackTestJSON(t *testing.T, w http.ResponseWriter, v any) {
-	t.Helper()
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		t.Fatal(err)
 	}
 }

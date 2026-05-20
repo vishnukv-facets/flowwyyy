@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"unicode"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 const (
@@ -125,6 +127,14 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 		}); err != nil {
 			return agentHookIngestResponse{}, err
 		}
+		// Best-effort private Slack notice in the originating thread when an agent
+		// transitions into "waiting" on a Slack-origin task. The 60s
+		// debounce on agentSlackDebounce dedups rapid flapping (e.g. a
+		// permission_request cluster). Failures here never abort hook
+		// ingest — agent state is the contract; the Slack notice is gravy.
+		if runtimeStatus == "waiting" && resp.Task != "" {
+			s.maybePostAgentWaitingNotice(provider, sessionID, resp.Task)
+		}
 	}
 
 	if agentHookClearsAttention(eventName, payload) && sessionID != "" && !isSubagentEvent(kind, subagentID) {
@@ -161,6 +171,115 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 	s.publishHookEvent(resp, payload)
 	return resp, nil
 }
+
+// agentWaitingDebounceWindow caps how often we DM the user about an agent
+// transitioning into "waiting". Empirically tuned: short enough that a
+// genuinely stuck agent pings within a minute; long enough that normal
+// permission-prompt clusters (which can fire 3-4 hook events in <10s) get
+// folded into a single DM. Override via FLOW_SLACK_AGENT_DEBOUNCE if you
+// want a different cadence.
+const defaultAgentWaitingDebounceWindow = 60 * time.Second
+
+func agentWaitingDebounceWindow() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("FLOW_SLACK_AGENT_DEBOUNCE")); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			return d
+		}
+	}
+	return defaultAgentWaitingDebounceWindow
+}
+
+// slackAgentNoticeRunner is the package-level seam tests swap to capture
+// outgoing ephemeral Slack notices. Production builds a writer from env and
+// posts a message visible only to the flow operator; tests substitute a
+// recorder.
+var slackAgentNoticeRunner = func(ctx context.Context, channel, userID, threadTS, text string) error {
+	writer := monitor.NewSlackWriter()
+	return writer.PostEphemeral(ctx, channel, userID, threadTS, text)
+}
+
+// maybePostAgentWaitingNotice fires a Slack ephemeral message in the
+// originating thread when an agent transitions to status=waiting on a
+// Slack-origin task.
+// Debounced per (provider, session_id) so a flapping session doesn't spam.
+// Returns true when a notice was actually posted (useful for tests).
+//
+// The Slack origin check uses the task slug, not the session id, because
+// a single task may have multiple agent sessions across its lifetime
+// (resume after a session_id rotation, etc.) and they should all attribute
+// back to the same Slack thread.
+func (s *Server) maybePostAgentWaitingNotice(provider, sessionID, taskSlug string) bool {
+	if taskSlug == "" || sessionID == "" {
+		return false
+	}
+	key := provider + ":" + sessionID
+	now := agentSlackNow()
+	s.agentSlackDebounce.mu.Lock()
+	if s.agentSlackDebounce.lastAt == nil {
+		s.agentSlackDebounce.lastAt = map[string]time.Time{}
+	}
+	if last, ok := s.agentSlackDebounce.lastAt[key]; ok && now.Sub(last) < agentWaitingDebounceWindow() {
+		s.agentSlackDebounce.mu.Unlock()
+		return false
+	}
+	s.agentSlackDebounce.lastAt[key] = now
+	s.agentSlackDebounce.mu.Unlock()
+
+	origin, ok, err := monitor.SlackOriginFor(s.cfg.DB, taskSlug)
+	if err != nil || !ok {
+		return false
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, taskSlug)
+	if err != nil || task == nil {
+		return false
+	}
+	channel, threadTS := origin.PostTarget()
+	userID := s.slackPrivateNoticeUserID(origin)
+	if userID == "" {
+		s.agentSlackDebounce.mu.Lock()
+		delete(s.agentSlackDebounce.lastAt, key)
+		s.agentSlackDebounce.mu.Unlock()
+		return false
+	}
+	baseURL := monitor.FlowBaseURL()
+	var text string
+	if baseURL != "" {
+		text = fmt.Sprintf("Task %q is waiting on your input — %s/tasks/%s",
+			task.Name, baseURL, taskSlug)
+	} else {
+		// FLOW_BASE_URL unset and no running flow serve registered. The
+		// notice still has value (the user knows the agent stalled) but
+		// can't carry a clickable deep link. Skip the URL gracefully.
+		text = fmt.Sprintf("Task %q is waiting on your input (flow task slug: %s)",
+			task.Name, taskSlug)
+	}
+	if err := slackAgentNoticeRunner(context.Background(), channel, userID, threadTS, text); err != nil {
+		// Rollback the debounce stamp so a real failure doesn't suppress
+		// the next genuine "waiting" event. The Slack writer's own
+		// disabled-no-op path returns nil, so this branch fires only on
+		// real HTTP failures.
+		s.agentSlackDebounce.mu.Lock()
+		delete(s.agentSlackDebounce.lastAt, key)
+		s.agentSlackDebounce.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+func (s *Server) slackPrivateNoticeUserID(origin monitor.SlackOrigin) string {
+	if s != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if ids := s.slackMentionUserIDs(ctx); len(ids) > 0 {
+			return strings.TrimSpace(ids[0])
+		}
+	}
+	return strings.TrimSpace(origin.UserID)
+}
+
+// agentSlackNow is the time source for debounce tracking, indirected so
+// tests can pin it without touching the real clock.
+var agentSlackNow = func() time.Time { return time.Now() }
 
 // isSubagentEvent returns true for events emitted by a Claude subagent (a
 // nested agent_id is set) — these must not flip the parent's session

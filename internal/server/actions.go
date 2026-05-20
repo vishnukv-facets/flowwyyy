@@ -1012,7 +1012,15 @@ func (s *Server) editPlaybook(target string) (actionResponse, int) {
 func (s *Server) monitorSync() (actionResponse, int) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	summaries, err := (flowmonitor.Poller{DB: s.cfg.DB}).Poll(ctx, "all")
+	// Same callbacks as the background poller so a manual "Sync now"
+	// click broadcasts the full set of monitor_sync + inbox_item events
+	// the auto-poller does. Otherwise manual syncs would skip the live
+	// WS path entirely (the UI would only see new items via re-fetch).
+	summaries, err := (flowmonitor.Poller{
+		DB:           s.cfg.DB,
+		OnSyncChange: s.publishMonitorSync,
+		OnNewEvent:   s.publishInboxItem,
+	}).Poll(ctx, "all")
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -1161,6 +1169,7 @@ func (s *Server) startAgentForNotification(req actionRequest) (actionResponse, i
 		}
 		_ = flowdb.UpdateMonitorEventStatus(s.cfg.DB, event.ID, "started")
 		_ = flowdb.UpdateNotificationStatus(s.cfg.DB, "notif-"+event.ID, "actioned")
+		s.postSlackWorkingAck(*event, action.TaskSlug.String)
 		agent, _ := s.agentForTask(action.TaskSlug.String)
 		return actionResponse{OK: true, Message: "opened agent for " + event.Title, Agent: agent, Bridge: true}, http.StatusOK
 	}
@@ -1294,6 +1303,11 @@ func (s *Server) createAgentTaskForMonitorEvent(event flowdb.MonitorEvent, rule 
 	}
 	_ = flowdb.UpdateMonitorEventStatus(s.cfg.DB, event.ID, "started")
 	_ = flowdb.UpdateNotificationStatus(s.cfg.DB, "notif-"+event.ID, "actioned")
+	if action == "draft" {
+		s.postSlackDraftAck(event, slug)
+	} else if action == "spawn" {
+		s.postSlackWorkingAck(event, slug)
+	}
 	if startTerminal && s.terminals != nil {
 		_, _ = s.terminals.attach(slug, 120, 32)
 	}
@@ -1520,6 +1534,7 @@ func monitorTaskSlug(event flowdb.MonitorEvent) string {
 	if len(base) > 46 {
 		base = base[:46]
 	}
+	base = strings.Trim(base, "-.")
 	if base == "" || !safeSlugRe.MatchString(base) {
 		return "monitor-event"
 	}

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"flow/internal/agenthooks"
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"flow/internal/server"
 	"flow/internal/workdirreg"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 )
 
 func cmdUI(args []string) int {
@@ -48,6 +50,13 @@ func cmdUIServe(args []string) int {
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	port := fs.Int("port", 8787, "TCP port to bind")
 	bg := fs.Bool("bg", false, "run the UI server in the background")
+	// Sentinel -1 = "flag not explicitly set, let the poller resolve from
+	// FLOW_MONITOR_POLL_INTERVAL env then default 60s". 0 = "operator
+	// disabled the poller". Anything > 0 = explicit cadence. Go's flag
+	// package can't distinguish "default 0" from "user passed 0", so we
+	// use the negative sentinel.
+	monitorInterval := fs.Duration("monitor-interval", -1,
+		"background poll cadence for monitor sources; 0 disables; default 60s or $FLOW_MONITOR_POLL_INTERVAL")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -61,10 +70,10 @@ func cmdUIServe(args []string) int {
 	if *bg {
 		return startUIBackground(*host, *port)
 	}
-	return serveUI(*host, *port)
+	return serveUI(*host, *port, *monitorInterval)
 }
 
-func serveUI(host string, port int) int {
+func serveUI(host string, port int, monitorInterval time.Duration) int {
 	root, err := flowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -105,11 +114,12 @@ func serveUI(host string, port int) int {
 		fmt.Fprintf(os.Stderr, "installed local agent hooks in %d existing workdir(s)\n", changed)
 	}
 	srv := server.New(server.Config{
-		DB:          db,
-		FlowRoot:    root,
-		Version:     Version,
-		CommandPath: commandPath,
-		HookURL:     hookURL,
+		DB:                  db,
+		FlowRoot:            root,
+		Version:             Version,
+		CommandPath:         commandPath,
+		HookURL:             hookURL,
+		MonitorPollInterval: monitorInterval,
 	})
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	fmt.Fprintf(os.Stderr, "flow ui listening on http://%s\n", addr)
@@ -119,6 +129,24 @@ func serveUI(host string, port int) int {
 	if host == "0.0.0.0" {
 		fmt.Fprintln(os.Stderr, "warning: bound to 0.0.0.0; anyone on this network can read and operate your flow data")
 	}
+	// Advertise the bound URL so sibling flow CLI processes (flow done,
+	// flow update task --waiting) can build deep links to this server in
+	// Slack notices. 0.0.0.0 isn't useful in a clickable URL — substitute
+	// localhost so users on the same machine get a working link; remote
+	// callers should set FLOW_BASE_URL anyway.
+	advertiseHost := host
+	if advertiseHost == "0.0.0.0" || advertiseHost == "::" {
+		advertiseHost = "127.0.0.1"
+	}
+	advertisedURL := "http://" + net.JoinHostPort(advertiseHost, strconv.Itoa(port))
+	if path, err := monitor.WriteServerURLFile(advertisedURL); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: publish server URL to %s: %v\n", path, err)
+	}
+	defer func() {
+		if err := monitor.RemoveServerURLFile(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: remove server URL file: %v\n", err)
+		}
+	}()
 	return srv.ListenAndServe(addr)
 }
 

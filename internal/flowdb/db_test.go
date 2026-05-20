@@ -168,6 +168,105 @@ func TestTaskCRUD(t *testing.T) {
 	}
 }
 
+func TestRenameTaskCascadesTaskSlugReferences(t *testing.T) {
+	db := openTempDB(t)
+	insertTask(t, db, "old-task", "Old Task", "backlog", "medium", t.TempDir(), nil)
+	insertTask(t, db, "parent-task", "Parent Task", "backlog", "medium", t.TempDir(), nil)
+	insertTask(t, db, "child-task", "Child Task", "backlog", "medium", t.TempDir(), nil)
+	now := NowISO()
+	if _, err := db.Exec(`UPDATE tasks SET parent_slug = 'old-task' WHERE slug = 'child-task'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_dependencies (child_slug, parent_slug, created_at) VALUES ('old-task', 'parent-task', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_dependencies (child_slug, parent_slug, created_at) VALUES ('child-task', 'old-task', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO task_tags (task_slug, tag, created_at) VALUES ('old-task', 'slack', ?)`, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertTaskPRLink(db, "old-task", "acme/repo", 42, "https://github.com/acme/repo/pull/42"); err != nil {
+		t.Fatal(err)
+	}
+	event, _, err := InsertMonitorEventIfNew(db, MonitorEventInput{
+		Source:   "slack",
+		Kind:     "mention",
+		SourceID: "C1:1710000001.000001",
+		Title:    "Slack mention",
+		Severity: "medium",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordMonitorEventAction(db, event.ID, "spawn", "old-task", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RecordExternalMessage(db, ExternalMessageInput{
+		Source:         "slack",
+		EventID:        string(event.ID),
+		ConversationID: "C1",
+		MessageTS:      "1710000001.000001",
+		Direction:      "inbound",
+		Text:           "hi",
+		TaskSlug:       "old-task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecordExternalAction(db, ExternalActionInput{
+		Source:     "slack",
+		EventID:    string(event.ID),
+		ActionType: "working_ack",
+		Status:     "sent",
+		TaskSlug:   "old-task",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpsertAgentRuntimeState(db, AgentRuntimeStateInput{
+		Provider:  "claude",
+		SessionID: "session-1",
+		TaskSlug:  "old-task",
+		Status:    "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RenameTask(db, "old-task", "new-task"); err != nil {
+		t.Fatalf("RenameTask: %v", err)
+	}
+	if _, err := GetTask(db, "new-task"); err != nil {
+		t.Fatalf("new task missing: %v", err)
+	}
+	if _, err := GetTask(db, "old-task"); err != sql.ErrNoRows {
+		t.Fatalf("old task lookup err = %v, want sql.ErrNoRows", err)
+	}
+	assertCount := func(query string, want int) {
+		t.Helper()
+		var got int
+		if err := db.QueryRow(query).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s count = %d, want %d", query, got, want)
+		}
+	}
+	assertCount(`SELECT COUNT(*) FROM tasks WHERE slug = 'child-task' AND parent_slug = 'new-task'`, 1)
+	assertCount(`SELECT COUNT(*) FROM task_dependencies WHERE child_slug = 'new-task' AND parent_slug = 'parent-task'`, 1)
+	assertCount(`SELECT COUNT(*) FROM task_dependencies WHERE child_slug = 'child-task' AND parent_slug = 'new-task'`, 1)
+	assertCount(`SELECT COUNT(*) FROM task_tags WHERE task_slug = 'new-task' AND tag = 'slack'`, 1)
+	assertCount(`SELECT COUNT(*) FROM task_pr_links WHERE task_slug = 'new-task' AND repo = 'acme/repo' AND pr_number = 42`, 1)
+	assertCount(`SELECT COUNT(*) FROM monitor_event_actions WHERE task_slug = 'new-task'`, 1)
+	assertCount(`SELECT COUNT(*) FROM external_messages WHERE task_slug = 'new-task'`, 1)
+	assertCount(`SELECT COUNT(*) FROM external_message_actions WHERE task_slug = 'new-task'`, 1)
+	state, err := AgentRuntimeStateBySessionID(db, "claude", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.TaskSlug.Valid || state.TaskSlug.String != "new-task" {
+		t.Fatalf("agent runtime task_slug = %+v, want new-task", state.TaskSlug)
+	}
+}
+
 func TestCodexInProgressCanHavePendingSessionID(t *testing.T) {
 	db := openTempDB(t)
 	now := NowISO()

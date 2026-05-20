@@ -7,6 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mattn/go-isatty v0.0.20
+	github.com/slack-go/slack v0.23.1
 	modernc.org/sqlite v1.48.2
 )
 

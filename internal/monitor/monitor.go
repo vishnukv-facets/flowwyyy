@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,20 +22,38 @@ type Poller struct {
 	DB              *sql.DB
 	Runner          CommandRunner
 	SlackAPIBaseURL string
+	// OnSyncChange is invoked after each sync-state transition (start
+	// AND end of a per-source poll). Optional — when nil, transitions
+	// are still persisted to monitor_sync_state but no live notification
+	// fires. The server's monitorPoller wires this to the eventHub so
+	// /ws/events?types=monitor_sync subscribers (the Inbox UI) see the
+	// "syncing now…" → "synced X ago" flip in real time. The CLI poller
+	// leaves it nil since there's no eventHub in a one-shot CLI process.
+	OnSyncChange func(state *flowdb.MonitorSyncState)
+
+	// OnNewEvent fires for each event that lands in monitor_events as a
+	// genuinely-new row (isNew=true from the storage policy). Re-polls
+	// of an existing (source, source_id) pair never invoke this. Used to
+	// push inbox_item WS events for live UI updates and (via the client)
+	// macOS desktop notifications. outcome and note are populated when
+	// applyRule produced them; both empty when the event is logged
+	// without routing (rule mode = "log").
+	OnNewEvent func(event flowdb.MonitorEvent, outcome string, note string)
 }
 
 type PollSummary struct {
-	Source   string   `json:"source"`
-	Events   int      `json:"events"`
-	New      int      `json:"new"`
-	Errors   []string `json:"errors,omitempty"`
-	LastSync string   `json:"last_sync"`
+	Source      string   `json:"source"`
+	Events      int      `json:"events"`
+	New         int      `json:"new"`
+	Errors      []string `json:"errors,omitempty"`
+	Diagnostics []string `json:"diagnostics,omitempty"`
+	LastSync    string   `json:"last_sync"`
 }
 
 func (p Poller) Poll(ctx context.Context, source string) ([]PollSummary, error) {
 	source = strings.ToLower(strings.TrimSpace(source))
 	if source == "" || source == "all" {
-		sources := []string{"github", "slack"}
+		sources := []string{"github"}
 		out := make([]PollSummary, 0, len(sources))
 		for _, src := range sources {
 			sum, err := p.pollOne(ctx, src)
@@ -65,14 +81,49 @@ func (p Poller) pollOne(ctx context.Context, source string) (PollSummary, error)
 	if err := flowdb.EnsureDefaultAutomationRules(p.DB); err != nil {
 		return PollSummary{}, err
 	}
+	// Record-start: lets the Inbox UI show "syncing now" while the poll
+	// is in flight. Best-effort — a failed start record (e.g. DB locked)
+	// shouldn't block the poll itself; we log and continue.
+	if state, err := flowdb.RecordMonitorSyncStart(p.DB, source); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: monitor sync start (%s): %v\n", source, err)
+	} else if p.OnSyncChange != nil {
+		p.OnSyncChange(state)
+	}
+	var summary PollSummary
+	var pollErr error
 	switch source {
 	case "github", "gh":
-		return p.pollGitHub(ctx)
+		summary, pollErr = p.pollGitHub(ctx)
 	case "slack":
-		return p.pollSlack(ctx)
+		summary = PollSummary{
+			Source:      "slack",
+			LastSync:    flowdb.NowISO(),
+			Diagnostics: []string{"slack polling disabled; Slack ingest runs through Socket Mode"},
+		}
 	default:
+		// Unknown source: clear the in-flight flag so the UI doesn't
+		// permanently show "syncing" for a typo.
+		_, _ = flowdb.RecordMonitorSyncEnd(p.DB, source, "error", fmt.Sprintf("unsupported monitor source %q", source))
 		return PollSummary{Source: source}, fmt.Errorf("unsupported monitor source %q", source)
 	}
+	// Record-end: write the outcome regardless of error path. Status is
+	// "error" when either the poll function returned an error OR the
+	// summary's Errors slice is non-empty.
+	status := "ok"
+	errMsg := ""
+	if pollErr != nil {
+		status = "error"
+		errMsg = pollErr.Error()
+	} else if len(summary.Errors) > 0 {
+		status = "error"
+		errMsg = summary.Errors[0]
+	}
+	if state, err := flowdb.RecordMonitorSyncEnd(p.DB, source, status, errMsg); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: monitor sync end (%s): %v\n", source, err)
+	} else if p.OnSyncChange != nil {
+		p.OnSyncChange(state)
+	}
+	return summary, pollErr
 }
 
 func (p Poller) pollGitHub(ctx context.Context) (PollSummary, error) {
@@ -127,232 +178,42 @@ func (p Poller) pollGitHub(ctx context.Context) (PollSummary, error) {
 	return sum, nil
 }
 
-func (p Poller) pollSlack(ctx context.Context) (PollSummary, error) {
-	sum := PollSummary{Source: "slack", LastSync: flowdb.NowISO()}
-	if custom := strings.TrimSpace(os.Getenv("FLOW_SLACK_POLL_CMD")); custom != "" {
-		out, err := p.run(ctx, "sh", "-lc", custom)
-		if err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-			return sum, nil
-		}
-		events, err := slackEvents(out)
-		if err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-			return sum, nil
-		}
-		sum.Events, sum.New, err = p.storeEvents(events)
-		if err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-		}
-		return sum, nil
-	}
-	if token := slackToken(); token != "" {
-		events, err := p.slackAPIEvents(ctx, token)
-		if err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-			return sum, nil
-		}
-		sum.Events, sum.New, err = p.storeEvents(events)
-		if err != nil {
-			sum.Errors = append(sum.Errors, err.Error())
-		}
-		return sum, nil
-	}
-	out, err := p.run(ctx, "slack", "notifications", "list", "--json")
-	if err != nil {
-		sum.Errors = append(sum.Errors, "slack polling needs FLOW_SLACK_TOKEN/SLACK_USER_TOKEN/SLACK_BOT_TOKEN or FLOW_SLACK_POLL_CMD; installed slack CLI has no inbox API: "+err.Error())
-		return sum, nil
-	}
-	events, err := slackEvents(out)
-	if err != nil {
-		sum.Errors = append(sum.Errors, err.Error())
-		return sum, nil
-	}
-	sum.Events, sum.New, err = p.storeEvents(events)
-	if err != nil {
-		sum.Errors = append(sum.Errors, err.Error())
-	}
-	return sum, nil
-}
+// storePolicy selects how a source's events should land in monitor_events.
+// "upsert" (default) updates existing rows on (source, source_id) conflict —
+// correct for sources whose event state evolves (GitHub PR / CI). "insert_new"
+// freezes existing rows and only inserts unseen ones — correct for archival
+// sources where re-polling overlapping windows must not rewrite history
+// (Slack messages).
+type storePolicy int
 
-func (p Poller) slackAPIEvents(ctx context.Context, token string) ([]flowdb.MonitorEventInput, error) {
-	var auth slackAuthResponse
-	if err := p.slackAPICall(ctx, token, "auth.test", nil, &auth); err != nil {
-		return nil, fmt.Errorf("slack auth.test: %w", err)
-	}
-	if auth.UserID == "" {
-		return nil, errors.New("slack auth.test returned no user_id")
-	}
-	conversations, err := p.slackConversations(ctx, token)
-	if err != nil {
-		return nil, err
-	}
-	oldest := slackOldest()
-	includeChannelMessages := envBool("FLOW_SLACK_INCLUDE_CHANNEL_MESSAGES")
-	allowlist := slackChannelAllowlist()
-	out := []flowdb.MonitorEventInput{}
-	for _, conv := range conversations {
-		if conv.ID == "" || conv.IsArchived {
-			continue
-		}
-		configured := allowlist[conv.ID] || (conv.Name != "" && allowlist[strings.ToLower(conv.Name)])
-		if len(allowlist) > 0 && !configured && !conv.IsIM && !conv.IsMPIM {
-			continue
-		}
-		messages, err := p.slackHistory(ctx, token, conv.ID, oldest)
-		if err != nil {
-			return out, err
-		}
-		for _, msg := range messages {
-			if msg.Type != "" && msg.Type != "message" {
-				continue
-			}
-			if msg.Subtype != "" && msg.Subtype != "bot_message" {
-				continue
-			}
-			text := strings.TrimSpace(msg.Text)
-			if text == "" || msg.TS == "" {
-				continue
-			}
-			mention := strings.Contains(text, "<@"+auth.UserID+">")
-			kind := "channel_message"
-			if conv.IsIM || conv.IsMPIM {
-				kind = "dm"
-			} else if mention {
-				kind = "mention"
-			} else if !includeChannelMessages && !configured {
-				continue
-			}
-			permalink := ""
-			if link, err := p.slackPermalink(ctx, token, conv.ID, msg.TS); err == nil {
-				permalink = link
-			}
-			raw, _ := json.Marshal(map[string]any{"conversation": conv, "message": msg})
-			out = append(out, flowdb.MonitorEventInput{
-				Source:   "slack",
-				Kind:     kind,
-				SourceID: conv.ID + ":" + msg.TS,
-				Title:    "Slack " + strings.ReplaceAll(kind, "_", " ") + " in " + conv.Label(),
-				Body:     text,
-				URL:      permalink,
-				Severity: "medium",
-				RawJSON:  string(raw),
-			})
-		}
-	}
-	return out, nil
-}
-
-func (p Poller) slackConversations(ctx context.Context, token string) ([]slackConversation, error) {
-	maxConversations := envInt("FLOW_SLACK_MAX_CONVERSATIONS", 60)
-	if maxConversations <= 0 {
-		maxConversations = 60
-	}
-	var out []slackConversation
-	cursor := ""
-	for len(out) < maxConversations {
-		params := url.Values{
-			"exclude_archived": {"true"},
-			"limit":            {"200"},
-			"types":            {"im,mpim,private_channel,public_channel"},
-		}
-		if cursor != "" {
-			params.Set("cursor", cursor)
-		}
-		var resp slackConversationsResponse
-		if err := p.slackAPICall(ctx, token, "users.conversations", params, &resp); err != nil {
-			return out, fmt.Errorf("slack users.conversations: %w", err)
-		}
-		out = append(out, resp.Channels...)
-		cursor = resp.ResponseMetadata.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-	if len(out) > maxConversations {
-		out = out[:maxConversations]
-	}
-	return out, nil
-}
-
-func (p Poller) slackHistory(ctx context.Context, token, channelID, oldest string) ([]slackMessage, error) {
-	params := url.Values{"channel": {channelID}, "limit": {"25"}}
-	if oldest != "" {
-		params.Set("oldest", oldest)
-	}
-	var resp slackHistoryResponse
-	if err := p.slackAPICall(ctx, token, "conversations.history", params, &resp); err != nil {
-		return nil, fmt.Errorf("slack conversations.history %s: %w", channelID, err)
-	}
-	return resp.Messages, nil
-}
-
-func (p Poller) slackPermalink(ctx context.Context, token, channelID, ts string) (string, error) {
-	params := url.Values{"channel": {channelID}, "message_ts": {ts}}
-	var resp slackPermalinkResponse
-	if err := p.slackAPICall(ctx, token, "chat.getPermalink", params, &resp); err != nil {
-		return "", err
-	}
-	return resp.Permalink, nil
-}
-
-func (p Poller) slackAPICall(ctx context.Context, token, method string, params url.Values, target any) error {
-	base := strings.TrimRight(firstNonEmpty(p.SlackAPIBaseURL, os.Getenv("FLOW_SLACK_API_BASE_URL"), "https://slack.com/api"), "/")
-	u, err := url.Parse(base + "/" + method)
-	if err != nil {
-		return err
-	}
-	q := u.Query()
-	for key, values := range params {
-		for _, value := range values {
-			q.Add(key, value)
-		}
-	}
-	u.RawQuery = q.Encode()
-	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return fmt.Errorf("%s rate limited; retry after %s seconds", method, resp.Header.Get("Retry-After"))
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s HTTP %d: %s", method, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var probe struct {
-		OK    bool   `json:"ok"`
-		Error string `json:"error"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return err
-	}
-	if !probe.OK {
-		if probe.Error == "" {
-			probe.Error = "ok=false"
-		}
-		return errors.New(probe.Error)
-	}
-	return json.Unmarshal(body, target)
-}
+const (
+	storePolicyUpsert storePolicy = iota
+	storePolicyInsertNew
+)
 
 func (p Poller) storeEvents(events []flowdb.MonitorEventInput) (int, int, error) {
+	return p.storeEventsWithPolicy(events, storePolicyUpsert)
+}
+
+func (p Poller) StoreSlackEvents(events []flowdb.MonitorEventInput) (int, int, error) {
+	return p.storeEventsWithPolicy(events, storePolicyInsertNew)
+}
+
+func (p Poller) storeEventsWithPolicy(events []flowdb.MonitorEventInput, policy storePolicy) (int, int, error) {
 	kept := 0
 	newCount := 0
 	for _, event := range events {
-		ev, isNew, err := flowdb.UpsertMonitorEvent(p.DB, event)
+		var (
+			ev    *flowdb.MonitorEvent
+			isNew bool
+			err   error
+		)
+		switch policy {
+		case storePolicyInsertNew:
+			ev, isNew, err = flowdb.InsertMonitorEventIfNew(p.DB, event)
+		default:
+			ev, isNew, err = flowdb.UpsertMonitorEvent(p.DB, event)
+		}
 		if err != nil {
 			return kept, newCount, err
 		}
@@ -363,8 +224,24 @@ func (p Poller) storeEvents(events []flowdb.MonitorEventInput) (int, int, error)
 		if isNew {
 			newCount++
 		}
+		// Rule application is gated on isNew under insert-new policy so a
+		// re-poll of an already-stored Slack message doesn't re-fire the
+		// notification/route logic. Under upsert policy we apply on every
+		// pass (existing behavior) since the row's state may have changed.
+		if policy == storePolicyInsertNew && !isNew {
+			continue
+		}
 		if err := p.applyRule(*ev); err != nil {
 			return kept, newCount, err
+		}
+		// Fire OnNewEvent for genuinely-new arrivals only. Re-polls and
+		// upsert-only updates do NOT fire — the UI's inbox_item handler
+		// should treat each callback as "new row, append + maybe notify".
+		// Outcome / note are not threaded through applyRule yet; pass
+		// empty strings for now and let the client-side classifier
+		// fall back to the event severity / kind for needs-review.
+		if isNew && p.OnNewEvent != nil {
+			p.OnNewEvent(*ev, "", "")
 		}
 	}
 	return kept, newCount, nil
@@ -518,107 +395,6 @@ func githubNotifications(data []byte) ([]flowdb.MonitorEventInput, error) {
 	return out, nil
 }
 
-type slackEnvelope struct {
-	OK               bool `json:"ok"`
-	ResponseMetadata struct {
-		NextCursor string `json:"next_cursor"`
-	} `json:"response_metadata"`
-}
-
-type slackAuthResponse struct {
-	slackEnvelope
-	UserID string `json:"user_id"`
-	TeamID string `json:"team_id"`
-	URL    string `json:"url"`
-}
-
-type slackConversationsResponse struct {
-	slackEnvelope
-	Channels []slackConversation `json:"channels"`
-}
-
-type slackHistoryResponse struct {
-	slackEnvelope
-	Messages []slackMessage `json:"messages"`
-}
-
-type slackPermalinkResponse struct {
-	slackEnvelope
-	Permalink string `json:"permalink"`
-}
-
-type slackConversation struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	User       string `json:"user"`
-	IsIM       bool   `json:"is_im"`
-	IsMPIM     bool   `json:"is_mpim"`
-	IsChannel  bool   `json:"is_channel"`
-	IsGroup    bool   `json:"is_group"`
-	IsArchived bool   `json:"is_archived"`
-}
-
-func (c slackConversation) Label() string {
-	if c.Name != "" {
-		return "#" + c.Name
-	}
-	if c.User != "" {
-		return c.User
-	}
-	return c.ID
-}
-
-type slackMessage struct {
-	Type     string `json:"type"`
-	Subtype  string `json:"subtype"`
-	User     string `json:"user"`
-	Username string `json:"username"`
-	BotID    string `json:"bot_id"`
-	Text     string `json:"text"`
-	TS       string `json:"ts"`
-	ThreadTS string `json:"thread_ts"`
-}
-
-func slackEvents(data []byte) ([]flowdb.MonitorEventInput, error) {
-	var rows []map[string]any
-	if err := json.Unmarshal(data, &rows); err != nil {
-		return nil, fmt.Errorf("parse slack json: %w", err)
-	}
-	out := []flowdb.MonitorEventInput{}
-	for _, row := range rows {
-		raw, _ := json.Marshal(row)
-		id := firstString(row, "source_id", "id", "ts", "timestamp")
-		text := firstString(row, "text", "body", "message", "title")
-		channel := firstString(row, "channel", "channel_name", "conversation")
-		url := firstString(row, "url", "permalink")
-		kind := firstString(row, "kind", "type")
-		if kind == "" {
-			kind = "mention"
-		}
-		if id == "" {
-			id = channel + ":" + text
-		}
-		if text == "" {
-			continue
-		}
-		title := "Slack " + strings.ReplaceAll(kind, "_", " ")
-		if channel != "" {
-			title += " in " + channel
-		}
-		out = append(out, flowdb.MonitorEventInput{
-			Source:   "slack",
-			Kind:     kind,
-			SourceID: id,
-			Title:    title,
-			Body:     text,
-			URL:      url,
-			Severity: firstNonEmpty(firstString(row, "severity"), "medium"),
-			RawJSON:  string(raw),
-		})
-	}
-	return out, nil
-}
-
 func repoName(v any) string {
 	if m, ok := v.(map[string]any); ok {
 		return firstNonEmpty(stringField(m, "nameWithOwner"), stringField(m, "full_name"), stringField(m, "name"))
@@ -707,22 +483,11 @@ func severityForKind(kind string) string {
 
 func slackToken() string {
 	return firstNonEmpty(
-		os.Getenv("FLOW_SLACK_TOKEN"),
-		os.Getenv("SLACK_USER_TOKEN"),
-		os.Getenv("SLACK_BOT_TOKEN"),
-		os.Getenv("SLACK_TOKEN"),
+		os.Getenv("FLOW_SLACK_WRITE_TOKEN"),
+		os.Getenv("SLACK_WRITE_TOKEN"),
+		SlackBotToken(),
+		SlackUserToken(),
 	)
-}
-
-func slackOldest() string {
-	lookback := 2 * time.Hour
-	if raw := strings.TrimSpace(os.Getenv("FLOW_SLACK_LOOKBACK")); raw != "" {
-		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
-			lookback = parsed
-		}
-	}
-	ts := float64(time.Now().Add(-lookback).UnixNano()) / float64(time.Second)
-	return strconv.FormatFloat(ts, 'f', 6, 64)
 }
 
 func slackChannelAllowlist() map[string]bool {
@@ -745,6 +510,21 @@ func envBool(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func envBoolDefault(name string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	switch strings.ToLower(raw) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return fallback
 	}
 }
 

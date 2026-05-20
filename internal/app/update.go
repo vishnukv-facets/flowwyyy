@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -362,6 +364,15 @@ func cmdUpdateTask(args []string) int {
 			return 1
 		}
 		fmt.Printf("waiting_on → %s\n", *waiting)
+		// Post a threaded notice into the originating Slack thread (if any)
+		// so the human who pinged flow sees the new blocker without
+		// switching to the UI. Best-effort: failures are warnings only;
+		// the field update itself is the contract. Clearing waiting_on
+		// deliberately doesn't post — quiet recovery is friendlier than
+		// announcing "actually I'm not stuck anymore" in-thread.
+		if err := postSlackWaitingNotice(db, task, *waiting); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: slack waiting notice failed: %v\n", err)
+		}
 	}
 	if *clearWaiting {
 		if _, err := db.Exec(
@@ -743,4 +754,60 @@ func parseDueDate(s string, now time.Time) (time.Time, error) {
 	}
 
 	return time.Time{}, fmt.Errorf("unrecognized date %q (want YYYY-MM-DD, today, tomorrow, monday..sunday, Nd)", s)
+}
+
+// slackWaitingNoticeRunner is the package-level seam tests swap to capture
+// the outgoing PostMessage without spinning up an httptest server. Mirrors
+// slackDoneNoticeRunner in done.go.
+var slackWaitingNoticeRunner = func(ctx context.Context, channel, threadTS, text string) error {
+	writer := monitor.NewSlackWriter()
+	return writer.PostMessage(ctx, channel, threadTS, text)
+}
+
+// postSlackWaitingNotice posts a one-line threaded notice into the
+// originating Slack conversation when waiting_on is set on a Slack-origin
+// task. No-op when the task has no Slack origin or when writes are
+// disabled — both states return nil so the caller doesn't need to
+// special-case "not applicable".
+//
+// Venue choice: ALL Slack-origin tasks post to the originating thread,
+// regardless of whether the origin was a DM or a public-channel mention.
+// SlackOrigin.PostTarget() promotes the original ts to thread_ts for
+// top-level messages, so this is safe under the writer's safety guard.
+// v2 may add a separate "always-DM the user" path once flow tracks the
+// user's Slack user_id.
+//
+// Message shape (templated, per user's design pick):
+//
+//	Task "<name>" is waiting on: <waiting_on text> — <FLOW_BASE_URL>/tasks/<slug>
+func postSlackWaitingNotice(db *sql.DB, task *flowdb.Task, waitingText string) error {
+	if task == nil {
+		return nil
+	}
+	waitingText = strings.TrimSpace(waitingText)
+	if waitingText == "" {
+		return nil
+	}
+	origin, ok, err := monitor.SlackOriginFor(db, task.Slug)
+	if err != nil {
+		return fmt.Errorf("resolve slack origin: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+	channel, threadTS := origin.PostTarget()
+	text := slackWaitingNoticeText(task.Name, task.Slug, waitingText, monitor.FlowBaseURL())
+	return slackWaitingNoticeRunner(context.Background(), channel, threadTS, text)
+}
+
+// slackWaitingNoticeText renders the waiting_on message. Pulled out as a
+// pure function so tests can assert both URL-present and URL-absent shapes.
+// Empty baseURL → fall back to "task slug: <slug>" so the message is still
+// usable when no flow serve is running and FLOW_BASE_URL isn't set.
+func slackWaitingNoticeText(taskName, slug, waitingText, baseURL string) string {
+	if baseURL == "" {
+		return fmt.Sprintf("Task %q is waiting on: %s (flow task slug: %s)", taskName, waitingText, slug)
+	}
+	return fmt.Sprintf("Task %q is waiting on: %s — %s/tasks/%s",
+		taskName, waitingText, baseURL, slug)
 }

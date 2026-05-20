@@ -18,6 +18,7 @@ import (
 
 	"flow/internal/agents"
 	"flow/internal/flowdb"
+	flowmonitor "flow/internal/monitor"
 )
 
 type uiData struct {
@@ -496,6 +497,24 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 	rules, _ := flowdb.ListAutomationRules(s.cfg.DB)
 	events, _ := flowdb.ListMonitorEvents(s.cfg.DB, 50)
 	notifications, _ := flowdb.ListMonitorNotifications(s.cfg.DB, 50)
+	eventIDs := map[string]bool{}
+	for _, event := range events {
+		eventIDs[event.ID] = true
+	}
+	for _, notification := range notifications {
+		if strings.TrimSpace(notification.EventID) == "" || eventIDs[notification.EventID] {
+			continue
+		}
+		event, err := flowdb.GetMonitorEvent(s.cfg.DB, notification.EventID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			continue
+		}
+		events = append(events, *event)
+		eventIDs[event.ID] = true
+	}
 	actionEventIDs := make([]string, 0, len(events)+len(notifications))
 	for _, event := range events {
 		actionEventIDs = append(actionEventIDs, event.ID)
@@ -613,7 +632,7 @@ func (s *Server) uiMonitor(agents []uiAgent) uiMonitor {
 		Sources: []uiMonitorSource{
 			{ID: "agents", Label: "Claude/Codex sessions", Status: "live", LastSync: "realtime", Message: "watching active agent sessions"},
 			{ID: "github", Label: "gh CLI", Status: "configured", LastSync: lastSeenForSource(events, "github")},
-			{ID: "slack", Label: "Slack API", Status: slackMonitorStatus(), LastSync: lastSeenForSource(events, "slack"), Message: slackMonitorMessage()},
+			{ID: "slack", Label: "Slack events", Status: slackMonitorStatus(), LastSync: lastSeenForSource(events, "slack"), Message: slackMonitorMessage()},
 		},
 		Unread:    unread,
 		Approvals: approvals,
@@ -716,30 +735,23 @@ func agentSessionLabel(provider, id string) string {
 }
 
 func slackMonitorStatus() string {
-	if strings.TrimSpace(os.Getenv("FLOW_SLACK_POLL_CMD")) != "" {
-		return "custom command"
+	if flowmonitor.SlackSocketModeEnabled() && flowmonitor.SlackAppToken() != "" && flowmonitor.SlackBotToken() != "" {
+		return "socket mode"
 	}
-	if slackMonitorTokenConfigured() {
-		return "token configured"
+	if flowmonitor.SlackSocketModeEnabled() {
+		return "needs socket tokens"
 	}
-	return "needs token"
+	return "disabled"
 }
 
 func slackMonitorMessage() string {
-	if strings.TrimSpace(os.Getenv("FLOW_SLACK_POLL_CMD")) != "" {
-		return "using FLOW_SLACK_POLL_CMD custom JSON command"
+	if flowmonitor.SlackSocketModeEnabled() && flowmonitor.SlackAppToken() != "" && flowmonitor.SlackBotToken() != "" {
+		return "listening with Slack Socket Mode; no conversations.history polling"
 	}
-	if slackMonitorTokenConfigured() {
-		return "polling Slack Web API with configured token"
+	if flowmonitor.SlackSocketModeEnabled() {
+		return "set SLACK_APP_TOKEN and SLACK_BOT_TOKEN for Slack Socket Mode"
 	}
-	return "set FLOW_SLACK_TOKEN or SLACK_USER_TOKEN; installed Slack CLI has no inbox command"
-}
-
-func slackMonitorTokenConfigured() bool {
-	return strings.TrimSpace(os.Getenv("FLOW_SLACK_TOKEN")) != "" ||
-		strings.TrimSpace(os.Getenv("SLACK_USER_TOKEN")) != "" ||
-		strings.TrimSpace(os.Getenv("SLACK_BOT_TOKEN")) != "" ||
-		strings.TrimSpace(os.Getenv("SLACK_TOKEN")) != ""
+	return "set FLOW_SLACK_SOCKET_MODE=1, SLACK_APP_TOKEN, and SLACK_BOT_TOKEN to enable Slack events"
 }
 
 func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {

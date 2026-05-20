@@ -158,6 +158,69 @@ CREATE TABLE IF NOT EXISTS monitor_event_actions (
     created_at  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS external_messages (
+    id               TEXT PRIMARY KEY,
+    source           TEXT NOT NULL,
+    event_id         TEXT REFERENCES monitor_events(id) ON DELETE SET NULL,
+    conversation_id  TEXT NOT NULL,
+    channel_id       TEXT,
+    thread_ts        TEXT,
+    message_ts       TEXT NOT NULL,
+    direction        TEXT NOT NULL CHECK (direction IN ('inbound','outbound')),
+    sender_id        TEXT,
+    sender_name      TEXT,
+    text             TEXT NOT NULL,
+    normalized_text  TEXT,
+    intent           TEXT,
+    confidence_basis TEXT,
+    task_slug        TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    raw_json         TEXT,
+    created_at       TEXT NOT NULL,
+    UNIQUE(source, conversation_id, message_ts, direction)
+);
+
+CREATE TABLE IF NOT EXISTS external_message_actions (
+    id            TEXT PRIMARY KEY,
+    source        TEXT NOT NULL,
+    event_id      TEXT NOT NULL REFERENCES monitor_events(id) ON DELETE CASCADE,
+    message_id    TEXT REFERENCES external_messages(id) ON DELETE SET NULL,
+    action_type   TEXT NOT NULL CHECK (action_type IN ('reaction_add','status_reply','clarifying_question','final_answer','draft_ack','working_ack','task_draft','post_failed','skipped')),
+    status        TEXT NOT NULL CHECK (status IN ('pending','sent','failed','skipped')),
+    task_slug     TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    payload_json  TEXT,
+    response_json TEXT,
+    error         TEXT,
+    auto_approved INTEGER NOT NULL DEFAULT 0 CHECK (auto_approved IN (0,1)),
+    created_at    TEXT NOT NULL,
+    UNIQUE(source, event_id, action_type)
+);
+
+-- monitor_sync_state tracks the most recent ingest attempt per source so the
+-- Inbox UI can show "Slack synced 23s ago" / "GitHub syncing now" without
+-- polling the API. One row per source (github, slack, etc.); written by the
+-- monitor poller or event listeners. last_status is "ok" or "error"; last_error
+-- carries the first error message when status='error', NULL on ok.
+-- is_syncing is a momentary lock: set when ingest starts, cleared at end.
+CREATE TABLE IF NOT EXISTS monitor_sync_state (
+    source        TEXT PRIMARY KEY,
+    last_sync_at  TEXT,
+    last_status   TEXT NOT NULL DEFAULT 'unknown' CHECK (last_status IN ('unknown','ok','error')),
+    last_error    TEXT,
+    is_syncing    INTEGER NOT NULL DEFAULT 0 CHECK (is_syncing IN (0,1)),
+    updated_at    TEXT NOT NULL
+);
+
+-- monitor_fetch_state is a lightweight cursor table for ingesters that need
+-- to rotate across many upstream objects without refetching all of them on
+-- every tick.
+CREATE TABLE IF NOT EXISTS monitor_fetch_state (
+    source          TEXT NOT NULL,
+    target_id       TEXT NOT NULL,
+    last_fetched_at TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    PRIMARY KEY (source, target_id)
+);
+
 CREATE TABLE IF NOT EXISTS task_pr_links (
     task_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE,
     repo        TEXT NOT NULL,
@@ -182,6 +245,44 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     CHECK (child_slug <> parent_slug)
 );
 
+CREATE TABLE IF NOT EXISTS search_docs (
+    id            INTEGER PRIMARY KEY,
+    doc_key       TEXT NOT NULL UNIQUE,
+    scope         TEXT NOT NULL CHECK (scope IN ('brief','update','transcript')),
+    entity_type   TEXT NOT NULL CHECK (entity_type IN ('task','project','playbook')),
+    entity_slug   TEXT NOT NULL,
+    title         TEXT NOT NULL,
+    source_path   TEXT NOT NULL,
+    source_mtime  TEXT NOT NULL,
+    content       TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS search_docs_fts USING fts5(
+    title,
+    content,
+    content='search_docs',
+    content_rowid='id',
+    tokenize='unicode61'
+);
+
+CREATE TRIGGER IF NOT EXISTS search_docs_ai AFTER INSERT ON search_docs BEGIN
+    INSERT INTO search_docs_fts(rowid, title, content)
+    VALUES (new.id, new.title, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_docs_ad AFTER DELETE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    VALUES ('delete', old.id, old.title, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS search_docs_au AFTER UPDATE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    VALUES ('delete', old.id, old.title, old.content);
+    INSERT INTO search_docs_fts(rowid, title, content)
+    VALUES (new.id, new.title, new.content);
+END;
+
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
@@ -190,14 +291,21 @@ CREATE INDEX IF NOT EXISTS idx_monitor_events_seen ON monitor_events(last_seen_a
 CREATE INDEX IF NOT EXISTS idx_monitor_events_status ON monitor_events(status);
 CREATE INDEX IF NOT EXISTS idx_monitor_notifications_status ON monitor_notifications(status);
 CREATE INDEX IF NOT EXISTS idx_monitor_notification_states_status ON monitor_notification_states(status);
+CREATE INDEX IF NOT EXISTS idx_monitor_fetch_state_source_last ON monitor_fetch_state(source, last_fetched_at);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_automation_rules_source_kind ON automation_rules(source, kind);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_state ON task_pr_links(state);
 CREATE INDEX IF NOT EXISTS idx_task_pr_links_repo_number ON task_pr_links(repo, pr_number);
 CREATE INDEX IF NOT EXISTS idx_monitor_event_actions_action ON monitor_event_actions(action);
+CREATE INDEX IF NOT EXISTS idx_external_messages_event ON external_messages(event_id);
+CREATE INDEX IF NOT EXISTS idx_external_messages_conversation ON external_messages(source, conversation_id, thread_ts, message_ts);
+CREATE INDEX IF NOT EXISTS idx_external_message_actions_event ON external_message_actions(event_id);
+CREATE INDEX IF NOT EXISTS idx_external_message_actions_type ON external_message_actions(action_type);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
+CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
+CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
@@ -1840,9 +1948,7 @@ func RenameProject(db *sql.DB, oldSlug, newSlug string) error {
 }
 
 // RenameTask changes a task's slug and cascades the change to every
-// table that references tasks(slug): tasks.parent_slug (self-ref),
-// task_tags.task_slug, task_pr_links.task_slug, and
-// agent_runtime_states.task_slug. No-op if old == new.
+// table that references tasks(slug). No-op if old == new.
 func RenameTask(db *sql.DB, oldSlug, newSlug string) error {
 	if oldSlug == newSlug {
 		return nil
@@ -1876,11 +1982,26 @@ func RenameTask(db *sql.DB, oldSlug, newSlug string) error {
 	if _, err := tx.Exec(`UPDATE tasks SET parent_slug=? WHERE parent_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade tasks.parent_slug: %w", err)
 	}
+	if _, err := tx.Exec(`UPDATE task_dependencies SET child_slug=? WHERE child_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade task_dependencies.child_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE task_dependencies SET parent_slug=? WHERE parent_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade task_dependencies.parent_slug: %w", err)
+	}
 	if _, err := tx.Exec(`UPDATE task_tags SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade task_tags.task_slug: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE task_pr_links SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade task_pr_links.task_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE monitor_event_actions SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade monitor_event_actions.task_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE external_messages SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade external_messages.task_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE external_message_actions SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade external_message_actions.task_slug: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE agent_runtime_states SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade agent_runtime_states.task_slug: %w", err)

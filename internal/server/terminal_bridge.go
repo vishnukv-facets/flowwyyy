@@ -263,7 +263,18 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 			return nil, err
 		}
 		sharedName = name
-		cmd = exec.Command("tmux", "attach-session", "-t", name)
+		// `-f` is server-startup only — only the first tmux invocation
+		// that actually starts the tmux server reads the config; later
+		// invocations against the same server ignore it. Passing it on
+		// attach is a defensive belt-and-braces in case attach races
+		// ahead of new-session in some path. ensureTmuxConfig errors
+		// are non-fatal: tmux without our config still works, just
+		// without the mouse-scroll default.
+		attachArgs := []string{"attach-session", "-t", name}
+		if cfgPath, cfgErr := ensureTmuxConfig(h.server.cfg.FlowRoot); cfgErr == nil && cfgPath != "" {
+			attachArgs = append([]string{"-f", cfgPath}, attachArgs...)
+		}
+		cmd = exec.Command("tmux", attachArgs...)
 	} else {
 		bin := provider
 		if provider == agents.ProviderClaude {
@@ -505,7 +516,17 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 	}
 	command := agentShellCommand(provider, launch.Args)
 	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider)
-	args := []string{
+	// Prepend `-f <flowRoot>/tmux.conf` so the tmux server we're about
+	// to start picks up flow's defaults (mouse scroll + larger
+	// scrollback). The user's ~/.tmux.conf is sourced from inside our
+	// config so personal preferences still win. ensureTmuxConfig writes
+	// the file on first call per process; errors degrade gracefully —
+	// the session still starts, just without the mouse-scroll default.
+	args := []string{}
+	if cfgPath, cfgErr := ensureTmuxConfig(s.cfg.FlowRoot); cfgErr == nil && cfgPath != "" {
+		args = append(args, "-f", cfgPath)
+	}
+	args = append(args,
 		"new-session",
 		"-d",
 		"-s", name,
@@ -513,7 +534,7 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		"-x", strconv.Itoa(cols),
 		"-y", strconv.Itoa(rows),
 		shellCommandLine(command, env),
-	}
+	)
 	out, err := sharedTerminalCommand(args...)
 	if err != nil {
 		if sharedTerminalHasSession(name) {

@@ -10,6 +10,7 @@ import (
 	"flow/internal/monitor"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -42,11 +43,9 @@ Usage:
   flow monitor list [--json]
   flow monitor rules [--set source.kind=mode]
 
-Poll GitHub through gh and Slack through the Slack Web API when
-FLOW_SLACK_TOKEN, SLACK_USER_TOKEN, SLACK_BOT_TOKEN, or SLACK_TOKEN is set.
-FLOW_SLACK_POLL_CMD can override Slack polling with a custom JSON command.
-Slack token polling reads auth.test, users.conversations,
-conversations.history, and chat.getPermalink.
+Poll GitHub through gh. Slack ingest does not poll; flow ui serve
+uses Slack Socket Mode when FLOW_SLACK_SOCKET_MODE=1, SLACK_APP_TOKEN,
+and SLACK_BOT_TOKEN are configured.
 Events are stored in flow.db and feed the UI notification/autonomy layer.`)
 }
 
@@ -85,6 +84,9 @@ func cmdMonitorPoll(args []string) int {
 				} else {
 					fmt.Printf("%s: %d events (%d new)\n", s.Source, s.Events, s.New)
 				}
+				if len(s.Diagnostics) > 0 && (len(s.Errors) > 0 || monitorDebugEnabled() || s.Source == "slack") {
+					fmt.Printf("%s diagnostics: %s\n", s.Source, strings.Join(s.Diagnostics, "; "))
+				}
 			}
 		}
 		return summaries
@@ -99,6 +101,16 @@ func cmdMonitorPoll(args []string) int {
 		run()
 	}
 	return 0
+}
+
+func monitorDebugEnabled() bool {
+	for _, key := range []string{"FLOW_MONITOR_DEBUG", "FLOW_SLACK_DEBUG"} {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
 }
 
 func cmdMonitorList(args []string) int {

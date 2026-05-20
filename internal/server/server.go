@@ -24,6 +24,8 @@ func New(cfg Config) *Server {
 	s.terminals = newTerminalHub(s)
 	s.events = newEventHub()
 	s.reconcile = newLivenessReconciler(s)
+	s.monitor = newMonitorPoller(s, cfg.MonitorPollInterval)
+	s.slackSocket = newSlackSocketListener(s)
 	s.transcripts = newTranscriptCache()
 	s.caches = newUICaches()
 	return s
@@ -48,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/playbooks/", s.handlePlaybookRoute)
 	mux.HandleFunc("/api/workdirs", s.handleWorkdirs)
 	mux.HandleFunc("/api/tags", s.handleTags)
+	mux.HandleFunc("/api/monitor/sync-state", s.handleMonitorSyncState)
 	mux.HandleFunc("/api/kb", s.handleKB)
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
 	mux.HandleFunc("/api/search", s.handleSearch)
@@ -70,6 +73,19 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.reconcile != nil {
 		s.reconcile.start()
 		defer s.reconcile.stop()
+	}
+	// Start Slack Socket Mode ingest when configured. Slack no longer uses
+	// periodic conversations.history polling.
+	if s.slackSocket != nil {
+		s.slackSocket.start()
+		defer s.slackSocket.stop()
+	}
+	// Start the monitor poller so GitHub ingest runs without requiring
+	// `flow monitor poll` or a Sync click. interval=0 disables
+	// it (operator opt-out via `--monitor-interval 0` or env).
+	if s.monitor != nil {
+		s.monitor.start()
+		defer s.monitor.stop()
 	}
 	// One-shot async backfill of tasks.session_path for pre-existing
 	// Codex sessions captured before the column was added. Skipped if

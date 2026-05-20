@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -395,6 +396,14 @@ func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, t
 			Size:     n,
 		})
 		paths = append(paths, shellQuoteArg(path))
+	}
+	// Claude Code recognizes `@<path>` as a file reference; Codex auto-detects
+	// bare paths. Without this prefix, drag-and-drop in Claude Code sessions
+	// drops the path into the prompt as plain text instead of attaching.
+	if task.SessionProvider == "claude" {
+		for i, p := range paths {
+			paths[i] = "@" + p
+		}
 	}
 	writeJSON(w, terminalAttachmentUploadResponse{
 		Files:      files,
@@ -805,6 +814,52 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, tags)
 }
 
+// handleMonitorSyncState returns the per-source ingest status the Inbox UI
+// renders ("Slack listening", "GitHub syncing now"). Always returns rows
+// for every known source — even if the source has never emitted state
+// (last_sync_at NULL, last_status='unknown') — so the UI can render all the
+// source badges from a single response without joining on a config list
+// elsewhere.
+func (s *Server) handleMonitorSyncState(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	stored, err := flowdb.ListMonitorSyncStates(s.cfg.DB)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	// Index stored rows for quick lookup, then synthesize empty rows for
+	// any known source the DB hasn't seen yet. Keeps the response shape
+	// stable across fresh installs vs heavily-used ones.
+	bySource := make(map[string]flowdb.MonitorSyncState, len(stored))
+	for _, s := range stored {
+		bySource[s.Source] = s
+	}
+	out := make([]MonitorSyncStateView, 0, len(knownMonitorSources))
+	for _, src := range knownMonitorSources {
+		view := MonitorSyncStateView{Source: src, LastStatus: "unknown"}
+		if row, ok := bySource[src]; ok {
+			if row.LastSyncAt.Valid {
+				view.LastSyncAt = row.LastSyncAt.String
+			}
+			view.LastStatus = row.LastStatus
+			if row.LastError.Valid {
+				view.LastError = row.LastError.String
+			}
+			view.IsSyncing = row.IsSyncing
+			view.UpdatedAt = row.UpdatedAt
+		}
+		out = append(out, view)
+	}
+	writeJSON(w, MonitorSyncStateResponse{States: out})
+}
+
+// knownMonitorSources is the canonical source list the API guarantees a
+// row for. Keep alphabetical to match flowdb.ListMonitorSyncStates's
+// ORDER BY — the UI relies on stable rendering order.
+var knownMonitorSources = []string{"github", "slack"}
+
 func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
@@ -856,11 +911,74 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
-	resp.Tasks = s.searchTasks(q)
-	resp.Projects = s.searchProjects(q)
-	resp.Playbooks = s.searchPlaybooks(q)
-	resp.Updates = s.searchUpdates(q)
+	scopes, err := flowdb.ParseSearchScopes(r.URL.Query().Get("in"))
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	limit := 20
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n <= 0 {
+			writeError(w, fmt.Errorf("invalid limit %q", raw), http.StatusBadRequest)
+			return
+		}
+		limit = n
+	}
+	includeTranscripts := flowdb.SearchScopesInclude(scopes, flowdb.SearchScopeTranscript)
+	if err := flowdb.SyncSearchDocs(s.cfg.DB, s.cfg.FlowRoot, includeTranscripts); err != nil {
+		writeError(w, fmt.Errorf("index search docs: %w", err), http.StatusInternalServerError)
+		return
+	}
+	results, err := flowdb.SearchDocs(s.cfg.DB, q, scopes, limit)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	for _, result := range results {
+		mapped := ftsSearchResult(result)
+		switch result.Scope {
+		case string(flowdb.SearchScopeUpdate):
+			resp.Updates = append(resp.Updates, mapped)
+		case string(flowdb.SearchScopeTranscript):
+			resp.Transcripts = append(resp.Transcripts, mapped)
+		default:
+			switch result.EntityType {
+			case "task":
+				resp.Tasks = append(resp.Tasks, mapped)
+			case "project":
+				resp.Projects = append(resp.Projects, mapped)
+			case "playbook":
+				resp.Playbooks = append(resp.Playbooks, mapped)
+			}
+		}
+	}
 	writeJSON(w, resp)
+}
+
+func ftsSearchResult(result flowdb.SearchResult) SearchResult {
+	return SearchResult{
+		Type:       result.Type,
+		Scope:      result.Scope,
+		Slug:       result.Slug,
+		Name:       result.Name,
+		URL:        searchResultURL(result.EntityType, result.Slug),
+		Snippet:    result.Snippet,
+		SourcePath: result.SourcePath,
+	}
+}
+
+func searchResultURL(entityType, slug string) string {
+	switch entityType {
+	case "task":
+		return "/session/" + url.PathEscape(slug)
+	case "project":
+		return "/project/" + url.PathEscape(slug)
+	case "playbook":
+		return "/playbook/" + url.PathEscape(slug)
+	default:
+		return "/"
+	}
 }
 
 func (s *Server) handleWebSocketPlaceholder(w http.ResponseWriter, r *http.Request) {

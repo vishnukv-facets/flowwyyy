@@ -271,6 +271,18 @@ const NotificationGroup = ({ group, action }) => {
   );
 };
 
+// Inbox scope: only external work signals that can be triaged into an agent
+// spawn live here. Agent-hook events (Claude/Codex runtime telemetry —
+// permission prompts, stop/start, idle) are observability data for the
+// session UI, not work to triage; surfacing them in the inbox conflates
+// "what does the platform need from me?" with "what's my agent doing right
+// now?" If you add a new external source (linear, pagerduty, ...) and it
+// should appear in the inbox, list it here. Anything not in this allowlist
+// stays in monitor_events / monitor_notifications but is invisible to the
+// inbox view-model.
+const INBOX_SOURCES = new Set(['slack', 'github']);
+const isInboxSource = (source) => INBOX_SOURCES.has(String(source || '').toLowerCase());
+
 const monitorRuleFor = (monitor, source, kind) => (monitor.rules || []).find(r => r.source === source && r.kind === kind) || null;
 const monitorOutcomeMeta = (action) => ({
   spawn: { label: 'spawned', icon: 'radio', cls: 'spawn' },
@@ -286,11 +298,17 @@ const monitorItemNeedsReview = (item) => {
 };
 const buildInboxItems = (monitor) => {
   const notifByEvent = new Map();
-  const eventIDs = new Set((monitor.events || []).map(e => e.id));
+  // Pre-filter events to inbox sources so the eventIDs set and the
+  // subsequent extraNotifications filter both operate on the same scoped
+  // universe. Without this pre-filter, an agent_hook event with an
+  // attached notification would slip in via the "orphan notification"
+  // branch even though we'd already excluded its event.
+  const inboxEvents = (monitor.events || []).filter(e => isInboxSource(e.source));
+  const eventIDs = new Set(inboxEvents.map(e => e.id));
   (monitor.notifications || []).forEach(n => {
     if (n.event_id && !notifByEvent.has(n.event_id)) notifByEvent.set(n.event_id, n);
   });
-  const eventItems = (monitor.events || []).map(e => {
+  const eventItems = inboxEvents.map(e => {
     const n = notifByEvent.get(e.id) || {};
     const rule = monitorRuleFor(monitor, e.source, e.kind);
     return {
@@ -314,7 +332,12 @@ const buildInboxItems = (monitor) => {
       durable: true,
     };
   });
+  // Orphan notifications (no event_id, or event_id we filtered out) also
+  // get the source scope. This is what keeps agent_hook attention pings
+  // out of the inbox even when they're attached as a notification rather
+  // than an event row.
   const extraNotifications = (monitor.notifications || [])
+    .filter(n => isInboxSource(n.source))
     .filter(n => !n.event_id || !eventIDs.has(n.event_id))
     .map(n => ({
       id: n.id,
@@ -343,17 +366,25 @@ const InboxItemRow = ({ item, action, goto }) => {
   const rule = item.rule;
   const taskSlug = item.outcome?.task_slug;
   const needsReview = monitorItemNeedsReview(item);
+  // Cleaner header reads "Slack DM · 2m ago" instead of three separate
+  // mono badges. The kind is conventionally lowercase in the DB
+  // (`dm` / `mention` / `pr_review_requested`); we lift it to title case
+  // for display while preserving the raw value for filter/search.
+  const kindDisplay = String(item.kind || 'event').replace(/_/g, ' ');
+  const timeAgo = formatSyncAgo(monitorItemTime(item));
   return (
     <article className={`inbox-item ${outcome.cls} ${needsReview ? 'needs-review' : ''}`}>
       <div className="inbox-item-rail">
-        <span className={`inbox-outcome ${outcome.cls}`} title={outcome.label}><Icon name={outcome.icon} size={14}/></span>
+        <span className={`inbox-outcome ${outcome.cls}`} title={outcome.label}>
+          <Icon name={outcome.icon} size={14}/>
+        </span>
       </div>
       <div className="inbox-item-main">
         <div className="inbox-item-top">
-          <span className="inbox-source mono">{item.source}</span>
-          <span className="inbox-kind mono">{item.kind}</span>
-          <span className={`pill ${item.level === 'approval' ? 'waiting' : item.severity === 'high' ? 'dead' : item.severity === 'low' ? 'done' : 'idle'}`}>{item.level || item.severity || 'info'}</span>
-          <span className="inbox-time mono">{monitorItemTime(item) || 'now'}</span>
+          <span className="inbox-source mono"><Icon name={sourceIcon(item.source)} size={11}/>{sourceLabel(item.source)}</span>
+          <span className="inbox-kind mono">{kindDisplay}</span>
+          <span className="inbox-time mono">{timeAgo}</span>
+          {needsReview && <span className="pill waiting">needs approval</span>}
         </div>
         <h3>{item.title}</h3>
         {item.body && (
@@ -363,29 +394,32 @@ const InboxItemRow = ({ item, action, goto }) => {
           </div>
         )}
         <div className="inbox-route-line mono">
-          <span><Icon name="route" size={11}/>outcome: {outcome.label}</span>
+          <span><Icon name="route" size={11}/>{outcome.label}</span>
+          {taskSlug && <span><Icon name="hash" size={11}/>{taskSlug}</span>}
           {item.outcome?.note && <span title={item.outcome.note}>note: {item.outcome.note}</span>}
-          {taskSlug && <span>task: {taskSlug}</span>}
         </div>
-        <div className="inbox-rule-line mono">
-          {rule ? (
-            <>
-              <span>rule {rule.source}.{rule.kind}</span>
-              <span>{rule.mode}</span>
-              <span>{rule.provider || 'claude'}</span>
-              <span>{rule.read_only ? 'read-only' : 'approval required'}</span>
-              {(rule.project_slug || rule.work_dir) && <span>{rule.project_slug || rule.work_dir}</span>}
-            </>
-          ) : <span>rule none matched</span>}
-        </div>
+        <details className="inbox-rule-details">
+          <summary className="mono">routing rule</summary>
+          <div className="inbox-rule-line mono">
+            {rule ? (
+              <>
+                <span>{rule.source}.{rule.kind}</span>
+                <span>{rule.mode}</span>
+                <span>{rule.provider || 'claude'}</span>
+                <span>{rule.read_only ? 'read-only' : 'approval required'}</span>
+                {(rule.project_slug || rule.work_dir) && <span>{rule.project_slug || rule.work_dir}</span>}
+              </>
+            ) : <span>no rule matched — defaults apply</span>}
+          </div>
+        </details>
       </div>
       <div className="inbox-actions">
-        {item.url && <a className="btn sm" href={item.url} target="_blank" rel="noreferrer"><Icon name="external-link" size={11}/>Open</a>}
+        {item.url && <a className="btn sm" href={item.url} target="_blank" rel="noreferrer"><Icon name="external-link" size={11}/>Open in {sourceLabel(item.source)}</a>}
         {taskSlug
           ? <button className="btn sm primary" onClick={() => goto(`session/${taskSlug}`)}><Icon name="arrow-right" size={11}/>Open task</button>
-          : item.event_id && item.source !== 'agent' && <button className="btn sm primary" onClick={() => action('notification-start-agent', { event_id: item.event_id })}><Icon name="shield-check" size={11}/>Approve inspect</button>}
+          : item.event_id && <button className="btn sm primary" onClick={() => action('notification-start-agent', { event_id: item.event_id })}><Icon name="shield-check" size={11}/>Approve inspect</button>}
         {item.notification_id && item.notification_status === 'unread' && <button className="btn sm" onClick={() => action('notification-read', { slug: item.notification_id })}>Mark read</button>}
-        {item.event_id && item.source !== 'agent'
+        {item.event_id
           ? <button className="btn sm" onClick={() => action('monitor-ignore-event', { event_id: item.event_id })}><Icon name="archive" size={11}/>Ignore</button>
           : item.notification_id && <button className="btn sm" onClick={() => action('notification-dismiss', { slug: item.notification_id })}>Dismiss</button>}
       </div>
@@ -453,133 +487,391 @@ const InboxRulePanel = ({ monitor, action }) => (
   </section>
 );
 
-const InboxView = ({ action, goto }) => {
-  const monitor = monitorState();
-  const items = buildInboxItems(monitor);
-  const [filter, setFilter] = useState('needs');
-  const [q, setQ] = useState('');
-  const stats = {
-    unread: items.filter(i => i.notification_status === 'unread' || i.status === 'new' || i.status === 'notified').length,
-    needs: items.filter(monitorItemNeedsReview).length,
-    drafted: items.filter(i => i.outcome?.action === 'draft').length,
-    spawned: items.filter(i => i.outcome?.action === 'spawn').length,
-    pinged: items.filter(i => i.outcome?.action === 'ping').length,
-    ignored: items.filter(i => i.outcome?.action === 'ignore' || i.status === 'ignored').length,
+// SOURCE_META keeps the per-source presentation (label + icon) in one place
+// so SyncStatusStrip, the filter chips, and InboxItemRow all agree on how
+// a source name renders. Add an entry when a new INBOX_SOURCES member ships.
+const SOURCE_META = {
+  slack:  { label: 'Slack',  icon: 'message-square' },
+  github: { label: 'GitHub', icon: 'git-pull-request' },
+};
+const sourceLabel = (source) => SOURCE_META[String(source || '').toLowerCase()]?.label || source;
+const sourceIcon = (source) => SOURCE_META[String(source || '').toLowerCase()]?.icon || 'bell';
+const isSlackLegacyPollingError = (s) => {
+  if (String(s?.source || '').toLowerCase() !== 'slack') return false;
+  const err = String(s?.last_error || '').toLowerCase();
+  return err.includes('conversations.history') ||
+    err.includes('users.conversations') ||
+    err.includes('search.messages') ||
+    err.includes('slack polling');
+};
+
+// fireDesktopNotification fans a single inbox_item event through the Web
+// Notifications API, which on macOS routes to the system Notification
+// Center automatically (and obeys Do Not Disturb / Focus filters). Three
+// guardrails:
+//
+//   1. The permission must be `granted`. We never spam the user with a
+//      permission prompt — that's a separate user-gesture-triggered call
+//      in EnableDesktopNotificationsButton below.
+//   2. needs_review must be true. Without this gate every Slack DM would
+//      pop, which is exactly the spam pattern flow tries to avoid.
+//   3. Tab visibility is NOT a gate — Slack itself notifies you when its
+//      tab is in the foreground; we mirror that behavior. If you want
+//      silence-when-focused, mute via the OS Focus / DND.
+//
+// The notification's tag dedups across rapid arrivals of the same event:
+// if the same event_id fires twice in 200ms, Chrome / Safari collapse them.
+const fireDesktopNotification = (item) => {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  if (!item || !item.needs_review) return;
+  const title = `flow: ${sourceLabel(item.source)} — needs your attention`;
+  const body = item.title ? `${item.title}${item.body ? '\n' + item.body.slice(0, 140) : ''}` : (item.body || 'New item in your inbox');
+  try {
+    const n = new Notification(title, {
+      body,
+      tag: `flow-inbox-${item.event_id || item.id}`,
+      icon: '/assets/flow-mark.svg',
+      requireInteraction: false,
+    });
+    n.onclick = () => {
+      try { window.focus(); } catch {}
+      try { window.location.href = '/inbox'; } catch {}
+      n.close();
+    };
+  } catch (e) {
+    // Some browsers (Firefox in private mode, Safari with restrictions)
+    // throw on construction. Swallow — the inbox row still updates,
+    // we just lose the OS-level ping.
+  }
+};
+
+// EnableDesktopNotificationsButton surfaces the permission gate. Browser
+// vendors require requestPermission() to be called from a user-gesture
+// event handler (not from useEffect on mount) — that's why this lives as
+// its own button. Renders three states:
+//
+//   - 'unsupported'  → no API in this browser; render nothing
+//   - 'default'      → user hasn't decided yet; offer the prompt
+//   - 'granted'      → notifications are on; show a quiet confirmation
+//   - 'denied'       → user said no; show a hint that they need to change
+//                      it in browser settings (we can't re-prompt)
+const EnableDesktopNotificationsButton = () => {
+  const supported = typeof window !== 'undefined' && 'Notification' in window;
+  const [perm, setPerm] = useState(supported ? Notification.permission : 'unsupported');
+  if (!supported) return null;
+  const request = () => {
+    Notification.requestPermission().then(result => setPerm(result));
   };
-  const filters = [
-    ['needs', 'Needs approval', stats.needs],
-    ['unread', 'Unread', stats.unread],
-    ['draft', 'Drafted', stats.drafted],
-    ['spawn', 'Spawned', stats.spawned],
-    ['ping', 'Pinged', stats.pinged],
-    ['ignore', 'Ignored', stats.ignored],
-    ['all', 'All history', items.length],
-  ];
-  const query = q.trim().toLowerCase();
-  const filtered = items.filter(item => {
-    if (filter === 'needs' && !monitorItemNeedsReview(item)) return false;
-    if (filter === 'unread' && !(item.notification_status === 'unread' || item.status === 'new' || item.status === 'notified')) return false;
-    if (['draft','spawn','ping','ignore'].includes(filter) && item.outcome?.action !== filter) return false;
-    if (!query) return true;
-    return [item.source, item.kind, item.title, item.body, item.status, item.mode, item.outcome?.action, item.outcome?.note, item.outcome?.task_slug].filter(Boolean).join(' ').toLowerCase().includes(query);
-  });
+  if (perm === 'granted') {
+    return (
+      <span className="inbox-notif-state granted mono" title="macOS desktop notifications enabled for needs-review items">
+        <Icon name="bell" size={11}/>notifications on
+      </span>
+    );
+  }
+  if (perm === 'denied') {
+    return (
+      <span className="inbox-notif-state denied mono" title="Re-enable in your browser's site settings to receive desktop notifications">
+        <Icon name="bell-off" size={11}/>notifications blocked
+      </span>
+    );
+  }
   return (
-    <div className="inbox-page">
-      <div className="inbox-hero">
-        <div>
-          <div className="overview-kicker mono">Inbox</div>
-          <h1>Review incoming work</h1>
-          <p>Personal messages, mentions, PR reviews, CI failures, alerts, and routed monitor items stay here as history.</p>
-        </div>
-        <button className="btn sm primary" onClick={() => action('monitor-sync', {})}><Icon name="refresh-cw" size={11}/>Sync now</button>
-      </div>
-      <div className="inbox-safety">
-        <Icon name="shield-alert" size={14}/>
-        <span>Approving an agent here only allows inspect/report work. Replies, edits, commits, pushes, PR actions, infra/API writes, and secret disclosure still require explicit approval.</span>
-      </div>
-      <div className="inbox-layout">
-        <section className="inbox-main">
-          <div className="inbox-toolbar">
-            <div className="tab-strip">
-              {filters.map(([id, label, count]) => (
-                <button key={id} className={filter===id?'active':''} onClick={() => setFilter(id)}>{label}<span className="mono">{count}</span></button>
-              ))}
-            </div>
-            <div className="inbox-search">
-              <Icon name="search" size={12}/>
-              <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter inbox history"/>
-            </div>
-          </div>
-          <div className="inbox-list">
-            {filtered.length ? filtered.map(item => <InboxItemRow key={`${item.id}-${item.notification_id || ''}`} item={item} action={action} goto={goto}/>) : <BrandEmpty title="Inbox is clear" body="Incoming work and attention items will remain here after they are routed."/>}
-          </div>
-        </section>
-        <aside className="inbox-side">
-          <div className="inbox-stat-grid">
-            <div><span className="mono">{stats.needs}</span><p>needs approval</p></div>
-            <div><span className="mono">{stats.drafted}</span><p>drafted</p></div>
-            <div><span className="mono">{stats.spawned}</span><p>spawned</p></div>
-            <div><span className="mono">{stats.ignored}</span><p>ignored</p></div>
-          </div>
-          <InboxRulePanel monitor={monitor} action={action}/>
-        </aside>
-      </div>
-    </div>
+    <button className="btn sm" onClick={request} title="Get macOS desktop notifications for items that need your attention">
+      <Icon name="bell" size={11}/>Enable desktop notifications
+    </button>
   );
 };
 
-const MonitorView = ({ action }) => {
-  const monitor = monitorState();
-  const modes = ['off','log','notify','approval','auto_task','auto_agent','auto_agent_draft_only','summarize'];
-  const groups = groupedNotifications(monitor.notifications || []);
-  return (
-    <div>
-      <div className="section-head">
-        <h2>Monitor</h2>
-        <span className="count mono">{monitor.unread || 0} unread · {monitor.approvals || 0} approvals</span>
-        <div className="right"><button className="btn sm primary" onClick={() => action('monitor-sync', {})}><Icon name="refresh-cw" size={11}/>Sync now</button></div>
-      </div>
+// formatSyncAgo renders an RFC3339 timestamp as "23s ago" / "5m ago".
+// Returns "never" on empty input — chosen over an em-dash because users
+// reading "synced never" understand it instantly, whereas "synced —"
+// reads as a parse failure. The buckets cap at days so a fresh install
+// that's been sitting for weeks doesn't sprout absurd minute counts.
+const formatSyncAgo = (isoTime) => {
+  if (!isoTime) return 'never';
+  const t = new Date(isoTime).getTime();
+  if (isNaN(t)) return 'never';
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 5)     return 'just now';
+  if (sec < 60)    return `${sec}s ago`;
+  if (sec < 3600)  return `${Math.floor(sec/60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec/3600)}h ago`;
+  return `${Math.floor(sec/86400)}d ago`;
+};
 
-      <div className="monitor-strip">
-        {(monitor.sources || []).map(src => (
-          <div key={src.id} className="monitor-source">
-            <Dot status={src.last_sync ? 'running' : 'idle'}/>
-            <div>
-              <div className="mono">{src.label}</div>
-              <p>{src.last_sync ? `last sync ${src.last_sync}` : src.message || src.status}</p>
+// SyncStatusStrip layers two signals so the UI is correct AND live:
+//
+//   1. WebSocket subscription on /ws/events?types=monitor_sync — primary
+//      signal. The server publishes a `monitor_sync` envelope
+//      (eventMonitorSync) on every per-source transition. GitHub still
+//      polls; Slack transitions are Socket Mode event deliveries.
+//
+//   2. /api/monitor/sync-state on a 30s backstop loop — catches state
+//      drift if the WS connection dropped mid-event, AND seeds the
+//      initial render before the first WS event lands.
+//
+//   3. A 1s "now" tick that re-renders the "Xs ago" label so it counts
+//      up smoothly even without new server-side events.
+//
+// merge semantics: WS events merge by source (latest wins per source);
+// API responses replace the whole array. Either way the rendered list
+// is the union of known sources.
+const SyncStatusStrip = ({ action }) => {
+  const [statesBySource, setStatesBySource] = useState({});
+  const [, setNow] = useState(0); // intentional re-render trigger for time labels
+  useEffect(() => {
+    let cancelled = false;
+    const seedFromAPI = () => {
+      fetch('/api/monitor/sync-state')
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(data => {
+          if (cancelled) return;
+          const next = {};
+          (data.states || []).forEach(s => { next[s.source] = s; });
+          setStatesBySource(next);
+        })
+        .catch(() => { /* network blip — backstop will try again */ });
+    };
+    seedFromAPI();
+    const poll = setInterval(seedFromAPI, 30000);
+    const tick = setInterval(() => setNow(n => n + 1), 1000);
+
+    // Live updates: open a filtered WS subscription so we only receive
+    // the two event types the inbox cares about. The events_hub fans out
+    // per type filter server-side, so we don't pay for events we don't
+    // render.
+    //   monitor_sync → "syncing now…" / "synced X ago" badges
+    //   inbox_item   → a fresh slack/github event landed; trigger a
+    //                  re-fetch of /api/ui-data AND maybe a desktop
+    //                  notification when needs_review is true.
+    const wsURL = (() => {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return `${proto}//${window.location.host}/ws/events?types=monitor_sync,inbox_item`;
+    })();
+    let ws;
+    let reconnectTimer;
+    const connect = () => {
+      try {
+        ws = new WebSocket(wsURL);
+      } catch (e) {
+        // Some browsers throw synchronously on invalid URLs; fall back to
+        // polling-only via the 30s loop above. Schedule a reconnect in 5s
+        // in case it was transient.
+        reconnectTimer = setTimeout(connect, 5000);
+        return;
+      }
+      ws.onmessage = (evt) => {
+        if (cancelled) return;
+        let env;
+        try { env = JSON.parse(evt.data); } catch { return; }
+        if (env.type === 'monitor_sync' && env.monitor_sync) {
+          const s = env.monitor_sync;
+          setStatesBySource(prev => ({
+            ...prev,
+            [s.source]: {
+              source: s.source,
+              is_syncing: !!s.is_syncing,
+              last_status: s.last_status || 'unknown',
+              last_sync_at: s.last_sync_at || prev[s.source]?.last_sync_at || '',
+              last_error: s.last_error || '',
+            },
+          }));
+          return;
+        }
+        if (env.type === 'inbox_item' && env.inbox_item) {
+          // Two effects per fresh arrival:
+          //   1. macOS desktop notification (gated on permission +
+          //      needs_review inside fireDesktopNotification).
+          //   2. Tell the app shell to re-fetch /api/ui-data so the
+          //      inbox list picks up the new row without waiting for a
+          //      page reload. Dispatched as a CustomEvent so we don't
+          //      have to thread a callback through every component layer.
+          fireDesktopNotification(env.inbox_item);
+          try {
+            window.dispatchEvent(new CustomEvent('flow:ui-data:refresh', {
+              detail: { reason: 'inbox_item', event_id: env.inbox_item.event_id }
+            }));
+          } catch {}
+          return;
+        }
+      };
+      ws.onclose = () => {
+        if (cancelled) return;
+        // 5s reconnect attempt mirrors typical browser-driven WS retries.
+        // The 30s API poll still ticks during this window so the UI
+        // doesn't go totally stale.
+        reconnectTimer = setTimeout(connect, 5000);
+      };
+      ws.onerror = () => { /* let onclose handle the reconnect */ };
+    };
+    connect();
+
+    return () => {
+      cancelled = true;
+      clearInterval(poll);
+      clearInterval(tick);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (ws) try { ws.close(); } catch {}
+    };
+  }, []);
+  const states = Object.values(statesBySource).sort((a, b) =>
+    String(a.source).localeCompare(String(b.source))
+  );
+  const statusClass = (s) => {
+    if (isSlackLegacyPollingError(s)) return 'ok';
+    return s.last_status || 'unknown';
+  };
+  const renderStatus = (s) => {
+    const source = String(s.source || '').toLowerCase();
+    if (source === 'slack') {
+      if (isSlackLegacyPollingError(s)) return <><span className="inbox-sync-dot ok"/>listening for events</>;
+      if (s.is_syncing) return <><span className="inbox-sync-dot syncing"/>receiving event...</>;
+      if (s.last_status === 'error') {
+        return <><span className="inbox-sync-dot error"/>socket error: {s.last_error || 'see server log'}</>;
+      }
+      if (s.last_status === 'ok' && s.last_sync_at) {
+        return <><span className="inbox-sync-dot ok"/>listening - updated {formatSyncAgo(s.last_sync_at)}</>;
+      }
+      return <><span className="inbox-sync-dot ok"/>listening for events</>;
+    }
+    if (s.is_syncing) return <><span className="inbox-sync-dot syncing"/>syncing now...</>;
+    if (s.last_status === 'error') return <><span className="inbox-sync-dot error"/>error: {s.last_error || 'see server log'}</>;
+    if (s.last_status === 'ok') return <><span className="inbox-sync-dot ok"/>synced {formatSyncAgo(s.last_sync_at)}</>;
+    return <><span className="inbox-sync-dot unknown"/>not synced yet</>;
+  };
+  return (
+    <div className="inbox-sync-strip">
+      <div className="inbox-sync-sources">
+        {states.length === 0 && <div className="inbox-sync-empty mono">Loading sync state…</div>}
+        {states.map(s => (
+          <div key={s.source} className={`inbox-sync-source status-${statusClass(s)} ${s.is_syncing ? 'is-syncing' : ''}`}>
+            <Icon name={sourceIcon(s.source)} size={14}/>
+            <div className="inbox-sync-meta">
+              <div className="inbox-sync-name mono">{sourceLabel(s.source)}</div>
+              <div className="inbox-sync-sub mono">{renderStatus(s)}</div>
             </div>
           </div>
         ))}
       </div>
-
-      <div className="monitor-layout">
-        <section className="overview-card">
-          <div className="overview-card-head"><h2>Notifications</h2><span className="count mono">{(monitor.notifications || []).length}</span></div>
-          <div className="overview-card-body">
-            {groups.length ? groups.map(group => (
-              <NotificationGroup key={group.key} group={group} action={action}/>
-            )) : <EmptyLine text="No notifications yet. Agent attention and monitor events will appear here."/>}
-          </div>
-        </section>
-
-        <section className="overview-card">
-          <div className="overview-card-head"><h2>Autonomy settings</h2><span className="count mono">{(monitor.rules || []).length} rules</span></div>
-          <div className="rules-table">
-            {(monitor.rules || []).map(r => (
-              <div key={r.id} className="rule-row">
-                <span className="mono">{r.source}</span>
-                <span className="mono">{r.kind}</span>
-                <select value={r.mode} onChange={e => action('set-rule-mode', { source: r.source, rule_kind: r.kind, mode: e.target.value })}>
-                  {modes.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              </div>
-            ))}
-          </div>
-        </section>
+      <div className="inbox-sync-actions">
+        <EnableDesktopNotificationsButton/>
+        <button className="btn sm primary" onClick={() => action('monitor-sync', {})}>
+          <Icon name="refresh-cw" size={11}/>Check GitHub
+        </button>
       </div>
     </div>
   );
 };
+
+// InboxSettingsDrawer is the gear-icon affordance. Wraps InboxRulePanel
+// in a click-outside-to-close overlay. Keeping the rule editor as a
+// separate component (vs inlining) preserves the prior contract so any
+// existing CSS that targets `.inbox-rule-panel` keeps working.
+const InboxSettingsDrawer = ({ monitor, action, onClose }) => (
+  <div className="inbox-settings-overlay" onClick={onClose}>
+    <div className="inbox-settings-drawer" onClick={e => e.stopPropagation()}>
+      <div className="inbox-settings-head">
+        <h2>Routing rules</h2>
+        <button className="btn sm" onClick={onClose} aria-label="Close"><Icon name="x" size={12}/></button>
+      </div>
+      <p className="inbox-settings-help">
+        Each rule decides what happens to an incoming Slack or GitHub signal:
+        log it silently, queue for your approval, or auto-spawn an inspect-only agent.
+        Write-shaped automation must be opted in here per (source, kind) — no auto-spawn defaults.
+      </p>
+      <InboxRulePanel monitor={monitor} action={action}/>
+    </div>
+  </div>
+);
+
+const InboxView = ({ action, goto }) => {
+  const monitor = monitorState();
+  const items = buildInboxItems(monitor);
+  const [filter, setFilter] = useState('all');
+  const [q, setQ] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Counts drive the chip badges. Computed once per render — items is
+  // already pre-filtered to INBOX_SOURCES so we don't need to re-filter
+  // here, just bucket by per-source label.
+  const counts = {
+    all:    items.length,
+    slack:  items.filter(i => String(i.source).toLowerCase() === 'slack').length,
+    github: items.filter(i => String(i.source).toLowerCase() === 'github').length,
+    needs:  items.filter(monitorItemNeedsReview).length,
+  };
+  const filters = [
+    ['all',    'All',             counts.all],
+    ['slack',  'Slack',           counts.slack],
+    ['github', 'GitHub',          counts.github],
+    ['needs',  'Needs approval',  counts.needs],
+  ];
+
+  const query = q.trim().toLowerCase();
+  const filtered = items.filter(item => {
+    const src = String(item.source).toLowerCase();
+    if (filter === 'slack'  && src !== 'slack')  return false;
+    if (filter === 'github' && src !== 'github') return false;
+    if (filter === 'needs'  && !monitorItemNeedsReview(item)) return false;
+    if (!query) return true;
+    return [item.source, item.kind, item.title, item.body, item.status, item.mode, item.outcome?.action, item.outcome?.note, item.outcome?.task_slug]
+      .filter(Boolean).join(' ').toLowerCase().includes(query);
+  });
+
+  return (
+    <div className="inbox-page">
+      <div className="inbox-header">
+        <div>
+          <div className="overview-kicker mono">Inbox</div>
+          <h1>Incoming work</h1>
+          <p>Slack events and GitHub checks routed for triage. Approve to spawn an inspect/report agent, or let rules auto-spawn what you've allowlisted.</p>
+        </div>
+        <button className="btn sm" onClick={() => setShowSettings(true)} title="Routing rules">
+          <Icon name="settings" size={12}/>Routing rules
+        </button>
+      </div>
+
+      <SyncStatusStrip action={action}/>
+
+      <div className="inbox-safety">
+        <Icon name="shield-alert" size={14}/>
+        <span>Approving an agent here only allows inspect/report work. Replies, edits, commits, pushes, PR actions, infra/API writes, and secret disclosure still require explicit approval.</span>
+      </div>
+
+      <div className="inbox-toolbar">
+        <div className="tab-strip">
+          {filters.map(([id, label, count]) => (
+            <button key={id} className={filter===id ? 'active' : ''} onClick={() => setFilter(id)}>
+              {label}<span className="mono">{count}</span>
+            </button>
+          ))}
+        </div>
+        <div className="inbox-search">
+          <Icon name="search" size={12}/>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter inbox..."/>
+        </div>
+      </div>
+
+      <div className="inbox-list">
+        {filtered.length
+          ? filtered.map(item => <InboxItemRow key={`${item.id}-${item.notification_id || ''}`} item={item} action={action} goto={goto}/>)
+          : <BrandEmpty title="No incoming work" body="Slack DMs/mentions arrive through Socket Mode. GitHub PR reviews / CI alerts appear after checks run."/>
+        }
+      </div>
+
+      {showSettings && <InboxSettingsDrawer monitor={monitor} action={action} onClose={() => setShowSettings(false)}/>}
+    </div>
+  );
+};
+
+// Monitor view removed in the Inbox-merger redesign. The Notifications /
+// Autonomy-settings panels are folded into Inbox: the items list shows
+// scoped (slack+github) signals, the sync strip shows per-source state,
+// and the rules table lives behind a settings affordance in the inbox
+// toolbar. monitorState() and groupedNotifications() are still exported
+// for the Inbox helpers (group meta inference, rule lookups).
 
 // ───────── Sessions grid ────────────────────────────────────────────────
 const SessionsGrid = ({ setFocus, action, goto }) => {
@@ -1590,12 +1882,17 @@ const TaskTerminal = ({ agent, onStatus }) => {
     term.open(host);
     term.focus();
     let wheelRemainder = 0;
+    const terminalAppOwnsMouseWheel = () => {
+      const mouseMode = term.modes?.mouseTrackingMode || 'none';
+      return term.buffer?.active?.type === 'alternate' && mouseMode !== 'none';
+    };
     const wheelLineHeight = () => {
       const cell = term._core?._renderService?.dimensions?.css?.cell;
       return cell?.height || Math.max(12, Math.round((term.options.fontSize || 13) * (term.options.lineHeight || 1.18))) || 16;
     };
     term.attachCustomWheelEventHandler((event) => {
       if (event.ctrlKey) return true;
+      if (terminalAppOwnsMouseWheel()) return true;
       const scale = event.deltaMode === 1
         ? 1
         : event.deltaMode === 2
@@ -2803,6 +3100,7 @@ const WorkdirsView = () => (
 const CommandPalette = ({ onClose, goto, action }) => {
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
+  const [ftsState, setFtsState] = useState({ query: '', loading: false, results: [], error: '' });
   const normalize = (v) => String(v || '').toLowerCase();
   const searchText = (parts) => parts.flatMap(v => Array.isArray(v) ? v : [v]).filter(Boolean).join(' ');
   const taskStatusIcon = (status) => ({
@@ -2859,8 +3157,58 @@ const CommandPalette = ({ onClose, goto, action }) => {
     onSel: () => goto(`session/${t.slug}`),
   }));
   const taskItems = [...activeTaskItems, ...backlogTaskItems, ...doneTaskItems];
+  useEffect(() => {
+    const raw = q.trim();
+    if (raw.length < 2) {
+      setFtsState({ query: raw, loading: false, results: [], error: '' });
+      return;
+    }
+    let cancelled = false;
+    setFtsState(prev => ({ ...prev, query: raw, loading: true, error: '' }));
+    const timer = setTimeout(() => {
+      fetch(`/api/search?q=${encodeURIComponent(raw)}&limit=8`)
+        .then(r => r.ok ? r.json() : Promise.reject(new Error(`search ${r.status}`)))
+        .then(data => {
+          if (cancelled) return;
+          const buckets = [
+            ...(data.tasks || []),
+            ...(data.projects || []),
+            ...(data.playbooks || []),
+            ...(data.updates || []),
+            ...(data.transcripts || []),
+          ];
+          setFtsState({ query: raw, loading: false, results: buckets, error: '' });
+        })
+        .catch(err => {
+          if (cancelled) return;
+          setFtsState({ query: raw, loading: false, results: [], error: err.message || 'search failed' });
+        });
+    }, 160);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [q]);
+  const ftsItems = useMemo(() => {
+    if (q.trim().length < 2) return [];
+    if (ftsState.loading) {
+      return [{ group: 'Full-text search', kind: 'search', icon: 'search', label: 'Searching briefs and updates...', title: ftsState.query, meta: 'fts5', search: ftsState.query, onSel: () => {} }];
+    }
+    if (ftsState.error) {
+      return [{ group: 'Full-text search', kind: 'search', icon: 'alert-triangle', label: 'Search unavailable', title: ftsState.error, meta: 'error', search: ftsState.query, onSel: () => {} }];
+    }
+    return (ftsState.results || []).map(r => ({
+      group: 'Full-text search',
+      kind: r.scope || 'search',
+      icon: r.scope === 'update' ? 'file-text' : r.scope === 'transcript' ? 'messages-square' : r.type === 'project_brief' ? 'folder-tree' : r.type === 'playbook_brief' ? 'play' : 'search',
+      label: r.slug,
+      title: r.name,
+      subtitle: r.snippet,
+      meta: r.scope || r.type,
+      search: searchText([r.slug, r.name, r.snippet, r.scope, r.type]),
+      onSel: () => goto(String(r.url || '').replace(/^\/+/, '') || 'mc'),
+    }));
+  }, [q, ftsState.query, ftsState.loading, ftsState.error, ftsState.results]);
   const items = useMemo(() => {
     const all = [
+      ...ftsItems,
       ...taskItems,
       ...PROJECTS_MC.map(p => ({
         group: 'Projects',
@@ -2904,18 +3252,22 @@ const CommandPalette = ({ onClose, goto, action }) => {
       { group: 'Navigation', icon: 'folder', label: 'Workdirs', meta: 'g w', onSel: () => goto('workdirs') },
       { group: 'Navigation', icon: 'book-open', label: 'KB', meta: 'g k', onSel: () => goto('kb') },
       { group: 'Navigation', icon: 'inbox', label: 'Inbox', meta: 'g i', onSel: () => goto('inbox') },
-      { group: 'Navigation', icon: 'bell-ring', label: 'Monitor', meta: 'g n', onSel: () => goto('monitor') },
       { group: 'Navigation', icon: 'trash-2', label: 'Trash', meta: 'g x', onSel: () => goto('trash') },
     ].map((item, idx) => ({ ...item, _allIdx: idx, search: normalize(searchText([item.label, item.title, item.subtitle, item.meta, item.search, item.group])) }));
     const query = normalize(q.trim());
     if (!query) return all;
     return all.filter(i => i.search.includes(query));
-  }, [q, AGENTS.length, BACKLOG.length, DONE_TASKS.length, PROJECTS_MC.length, PLAYBOOKS_MC.length]);
+  }, [q, ftsItems, AGENTS.length, BACKLOG.length, DONE_TASKS.length, PROJECTS_MC.length, PLAYBOOKS_MC.length]);
   const grouped = useMemo(() => {
     const g = {};
     items.forEach((it, i) => { (g[it.group] = g[it.group] || []).push({ ...it, _idx: i }); });
     return g;
   }, [items]);
+  const groupOrder = ['Full-text search', 'Active tasks', 'Backlog tasks', 'Done tasks', 'Projects', 'Playbooks', 'Actions', 'Navigation'];
+  const orderedGroups = groupOrder
+    .filter(g => grouped[g] && grouped[g].length > 0)
+    .concat(Object.keys(grouped).filter(g => !groupOrder.includes(g)))
+    .map(g => [g, grouped[g]]);
   const totals = {
     running: AGENTS.filter(a => a.status === 'running').length,
     waiting: AGENTS.filter(a => a.status === 'waiting').length,
@@ -2952,10 +3304,10 @@ const CommandPalette = ({ onClose, goto, action }) => {
         </div>
         <div className="palette-input-wrap">
           <Icon name="search" size={14}/>
-          <input autoFocus className="palette-input" placeholder="Search slug, name, project, status, tag, or command" value={q} onChange={(e) => { setQ(e.target.value); setActive(0); }}/>
+          <input autoFocus className="palette-input" placeholder="Search briefs, updates, slugs, tags, or commands" value={q} onChange={(e) => { setQ(e.target.value); setActive(0); }}/>
         </div>
         <div className="palette-list" role="listbox" aria-label="Switcher results">
-          {Object.entries(grouped).map(([g, list]) => (
+          {orderedGroups.map(([g, list]) => (
             <Fragment key={g}>
               <div className="palette-group"><span>{g}</span><span className="count mono">{list.length}</span></div>
               {list.map(it => (
@@ -3111,7 +3463,6 @@ const ShortcutsOverlay = ({ onClose }) => (
           [<><span className="kbd">g</span> <span className="kbd">w</span></>, 'Workdirs'],
           [<><span className="kbd">g</span> <span className="kbd">k</span></>, 'KB'],
           [<><span className="kbd">g</span> <span className="kbd">i</span></>, 'Inbox'],
-          [<><span className="kbd">g</span> <span className="kbd">n</span></>, 'Monitor'],
           [<><span className="kbd">g</span> <span className="kbd">x</span></>, 'Trash'],
           ['Actions', null],
           [<><span className="kbd">Cmd</span><span className="kbd">k</span></>, 'Project and task switcher'],
@@ -3137,7 +3488,7 @@ const ShortcutsOverlay = ({ onClose }) => (
 );
 
 window.MC_SCREENS = {
-  MissionControl, MonitorView, InboxView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
+  MissionControl, InboxView, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
   TrashView, KBView, WorkdirsView,
   CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal,
 };

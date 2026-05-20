@@ -87,6 +87,67 @@ func TestSearchReadsUpdateBodies(t *testing.T) {
 	}
 }
 
+func TestSearchReadsBriefBodies(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=real-task-brief", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var res SearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Tasks) != 1 || res.Tasks[0].Slug != "build-ui" || res.Tasks[0].Scope != "brief" {
+		t.Fatalf("task brief results = %#v", res.Tasks)
+	}
+}
+
+func TestSearchTranscriptsRequireOptInScope(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	transcriptPath := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user","message":{"content":"server-transcript-marker"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET session_path = ? WHERE slug = 'build-ui'`, transcriptPath); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/search?q=server-transcript-marker", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("default status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var res SearchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Transcripts) != 0 {
+		t.Fatalf("default search included transcripts: %#v", res.Transcripts)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/search?q=server-transcript-marker&in=transcripts", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("transcript status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	res = SearchResponse{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Transcripts) != 1 || res.Transcripts[0].Slug != "build-ui" {
+		t.Fatalf("transcript results = %#v", res.Transcripts)
+	}
+}
+
 func TestUIDataUsesFlowRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -183,6 +244,69 @@ func TestUIDataIncludesMonitorEventOutcomes(t *testing.T) {
 	}
 	if got := data.Monitor.Notifications[0].Outcome; got == nil || got.Action != "draft" || got.TaskSlug != "build-ui" {
 		t.Fatalf("notification outcome = %+v, want draft/build-ui", got)
+	}
+}
+
+func TestUIDataHydratesNotificationBackingEvents(t *testing.T) {
+	root, db := testRootDB(t)
+	slackEvent, _, err := flowdb.InsertMonitorEventIfNew(db, flowdb.MonitorEventInput{
+		Source:   "slack",
+		Kind:     "mention",
+		SourceID: "C123:1779214106.188939",
+		Title:    "Slack mention in C123",
+		Body:     "<@U0B4SLS0DFY> hi",
+		Severity: "medium",
+		Seq:      1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.CreateNotificationForEvent(db, *slackEvent, "approval"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 60; i++ {
+		if _, _, err := flowdb.UpsertMonitorEvent(db, flowdb.MonitorEventInput{
+			Source:   "agent_hook",
+			Kind:     "stop",
+			SourceID: fmt.Sprintf("claude:session-%02d:stop", i),
+			Title:    fmt.Sprintf("agent stopped %02d", i),
+			Severity: "low",
+			Seq:      int64(1000 + i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var data uiData
+	if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+		t.Fatal(err)
+	}
+	var gotEvent *uiMonitorEvent
+	for i := range data.Monitor.Events {
+		if data.Monitor.Events[i].ID == slackEvent.ID {
+			gotEvent = &data.Monitor.Events[i]
+			break
+		}
+	}
+	if gotEvent == nil || gotEvent.Source != "slack" || gotEvent.Kind != "mention" {
+		t.Fatalf("slack event = %+v, want hydrated slack mention", gotEvent)
+	}
+	var gotNotification *uiMonitorNotification
+	for i := range data.Monitor.Notifications {
+		if data.Monitor.Notifications[i].EventID == slackEvent.ID {
+			gotNotification = &data.Monitor.Notifications[i]
+			break
+		}
+	}
+	if gotNotification == nil || gotNotification.Source != "slack" || gotNotification.Kind != "mention" {
+		t.Fatalf("slack notification = %+v, want source/kind from backing event", gotNotification)
 	}
 }
 
@@ -1008,6 +1132,20 @@ func TestMonitorAutoAgentDraftsWhenRoutingIsAmbiguousOrCapReached(t *testing.T) 
 	}
 }
 
+func TestMonitorTaskSlugTrimsAfterSlackTimestampTruncation(t *testing.T) {
+	slug := monitorTaskSlug(flowdb.MonitorEvent{
+		Source:   "slack",
+		Kind:     "personal_mention",
+		SourceID: "C0A678J5T55:1779219091.123456",
+	})
+	if slug != "slack-personal-mention-c0a678j5t55-1779219091" {
+		t.Fatalf("slug = %q, want trailing dot trimmed", slug)
+	}
+	if strings.HasSuffix(slug, ".") || strings.HasSuffix(slug, "-") {
+		t.Fatalf("slug has trailing punctuation: %q", slug)
+	}
+}
+
 func TestMonitorAutoAgentCapsAutoOpenFanout(t *testing.T) {
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
@@ -1358,6 +1496,10 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	}
 	if !strings.Contains(string(screens), "const taskStartBlocker") || !strings.Contains(string(screens), "disabled={!anyProviderAvailable() || !!blockReason}") {
 		t.Fatal("task screens should disable spawn controls for blocked/dependent tasks")
+	}
+	if !strings.Contains(string(screens), "fetch(`/api/search?q=${encodeURIComponent(raw)}&limit=8`)") ||
+		!strings.Contains(string(screens), "Full-text search") {
+		t.Fatal("command palette should surface FTS-backed brief/update search results")
 	}
 }
 
@@ -1950,12 +2092,55 @@ func TestTaskAttachmentUploadStoresFileAndReturnsInsertText(t *testing.T) {
 	if !strings.Contains(resp.InsertText, shellQuoteArg(file.Path)) {
 		t.Fatalf("insert_text = %q, want quoted path %q", resp.InsertText, file.Path)
 	}
+	if !strings.HasPrefix(resp.InsertText, "@") {
+		t.Fatalf("insert_text = %q, want '@'-prefixed Claude file reference", resp.InsertText)
+	}
 	saved, err := os.ReadFile(file.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(saved) != "png bytes" {
 		t.Fatalf("saved body = %q", saved)
+	}
+}
+
+func TestTaskAttachmentUploadCodexUsesBarePaths(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex' WHERE slug = 'build-ui'`); err != nil {
+		t.Fatal(err)
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("files", "diagram.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("png bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/tasks/build-ui/attachments", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp terminalAttachmentUploadResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if strings.HasPrefix(resp.InsertText, "@") {
+		t.Fatalf("insert_text = %q, Codex sessions must receive bare paths (no '@' prefix)", resp.InsertText)
+	}
+	if len(resp.Files) != 1 || !strings.Contains(resp.InsertText, shellQuoteArg(resp.Files[0].Path)) {
+		t.Fatalf("insert_text = %q, want it to contain the bare absolute path", resp.InsertText)
 	}
 }
 

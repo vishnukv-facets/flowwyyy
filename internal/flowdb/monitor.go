@@ -72,14 +72,32 @@ type AgentRuntimeStateInput struct {
 	RawJSON   string
 }
 
+// defaultAutomationRules are seeded once on first DB use and on every poll
+// (via EnsureDefaultAutomationRules; INSERT OR IGNORE means existing rules
+// are never clobbered, so user edits survive). The shape matters:
+//
+//   - Slack DM/mention default to `approval` so the user is pinged the
+//     first time someone DMs or @-mentions them — these are the
+//     highest-attention signals.
+//   - Slack channel_message defaults to `log` (raw persistence with no
+//     notification) rather than `notify` because an allowlisted channel
+//     can be high-volume (e.g. #customer-support, #incidents). Users
+//     who want pings for a channel toggle the rule explicitly via the
+//     rules UI. Allowlist + log keeps the events queryable without
+//     swamping the inbox.
+//   - Nothing Slack-related defaults to `auto_agent` or
+//     `auto_agent_draft_only` — consistent with notif-autospawn's
+//     stance that write-shaped automation must be deliberately opted
+//     into per-rule, never inherited from a default.
 var defaultAutomationRules = []AutomationRule{
 	{Source: "github", Kind: "review_requested", Mode: "approval"},
 	{Source: "github", Kind: "ci_failed", Mode: "auto_agent"},
 	{Source: "github", Kind: "assigned_issue", Mode: "notify"},
 	{Source: "github", Kind: "notification", Mode: "notify"},
 	{Source: "slack", Kind: "mention", Mode: "approval"},
+	{Source: "slack", Kind: "personal_mention", Mode: "approval"},
 	{Source: "slack", Kind: "dm", Mode: "approval"},
-	{Source: "slack", Kind: "channel_message", Mode: "notify"},
+	{Source: "slack", Kind: "channel_message", Mode: "log"},
 	{Source: "calendar", Kind: "meeting_ended", Mode: "notify"},
 	{Source: "avoma", Kind: "transcript_ready", Mode: "summarize"},
 }
@@ -106,6 +124,55 @@ func AutomationRuleID(source, kind string) string {
 func MonitorEventID(source, sourceID string) string {
 	sum := sha1.Sum([]byte(source + ":" + sourceID))
 	return normalizeMonitorPart(source) + "-" + hex.EncodeToString(sum[:])[:16]
+}
+
+// InsertMonitorEventIfNew inserts a row when (source, source_id) is unseen
+// and returns it with isNew=true. If a row already exists, returns the
+// existing row with isNew=false and DOES NOT modify it — body, title,
+// kind, severity, last_seen_at all stay frozen at first-seen values.
+//
+// Use this for archival sources where re-fetching the same content during
+// a poll-window overlap must not retroactively rewrite the local record
+// (Slack messages, calendar invites, etc.). Contrast with
+// UpsertMonitorEvent below, used for sources whose event state evolves
+// over the event's lifetime (GitHub PR / CI status, etc.).
+//
+// "Existing row" here means the (source, source_id) tuple, not the
+// generated event ID — that's a SHA1 of (source + ":" + source_id) and
+// would be identical anyway, but the UNIQUE constraint is on the tuple,
+// so we let SQLite's ON CONFLICT DO NOTHING be the source of truth.
+func InsertMonitorEventIfNew(db *sql.DB, input MonitorEventInput) (*MonitorEvent, bool, error) {
+	source := normalizeMonitorPart(input.Source)
+	kind := normalizeMonitorPart(input.Kind)
+	sourceID := strings.TrimSpace(input.SourceID)
+	title := strings.TrimSpace(input.Title)
+	if source == "" || kind == "" || sourceID == "" || title == "" {
+		return nil, false, fmt.Errorf("monitor event requires source, kind, source_id, and title")
+	}
+	severity := normalizeMonitorPart(input.Severity)
+	if severity != "low" && severity != "medium" && severity != "high" {
+		severity = "medium"
+	}
+	now := NowISO()
+	id := MonitorEventID(source, sourceID)
+	res, err := db.Exec(
+		`INSERT INTO monitor_events (
+			id, source, kind, source_id, title, body, url, severity, status,
+			first_seen_at, last_seen_at, last_seq, raw_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'new', ?, ?, ?, ?)
+		ON CONFLICT(source, source_id) DO NOTHING`,
+		id, source, kind, sourceID, title, NullString(input.Body), NullString(input.URL),
+		severity, now, now, input.Seq, NullString(input.RawJSON),
+	)
+	if err != nil {
+		return nil, false, fmt.Errorf("insert monitor event: %w", err)
+	}
+	affected, _ := res.RowsAffected()
+	event, err := GetMonitorEvent(db, id)
+	if err != nil {
+		return nil, false, err
+	}
+	return event, affected > 0, nil
 }
 
 func UpsertMonitorEvent(db *sql.DB, input MonitorEventInput) (*MonitorEvent, bool, error) {
@@ -214,6 +281,22 @@ func ListMonitorNotifications(db *sql.DB, limit int) ([]MonitorNotification, err
 		out = append(out, *n)
 	}
 	return out, rows.Err()
+}
+
+func GetMonitorNotificationForEvent(db *sql.DB, eventID string) (*MonitorNotification, error) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return nil, sql.ErrNoRows
+	}
+	row := db.QueryRow(
+		`SELECT id, event_id, title, body, level, status, created_at
+		 FROM monitor_notifications
+		 WHERE event_id = ? AND status != 'dismissed'
+		 ORDER BY CASE status WHEN 'unread' THEN 0 WHEN 'read' THEN 1 ELSE 2 END, created_at DESC
+		 LIMIT 1`,
+		eventID,
+	)
+	return scanMonitorNotification(row)
 }
 
 func CreateNotificationForEvent(db *sql.DB, event MonitorEvent, level string) error {
@@ -520,6 +603,183 @@ func MonitorEventActionMap(db *sql.DB, eventIDs []string) (map[string]MonitorEve
 		out[action.EventID] = action
 	}
 	return out, rows.Err()
+}
+
+// MonitorSyncState mirrors a row of monitor_sync_state. Pointers vs
+// sql.NullString: tests showed callers needed a literal "no row exists yet"
+// state distinct from "row exists with NULL fields"; the table row is
+// upserted on first poll so we use NullString uniformly here and let
+// callers / JSON encoders translate to absent / null in their layer.
+type MonitorSyncState struct {
+	Source     string
+	LastSyncAt sql.NullString
+	LastStatus string
+	LastError  sql.NullString
+	IsSyncing  bool
+	UpdatedAt  string
+}
+
+type MonitorFetchState struct {
+	Source        string
+	TargetID      string
+	LastFetchedAt string
+	UpdatedAt     string
+}
+
+// RecordMonitorSyncStart marks the source as actively syncing. Idempotent
+// — calling it twice in a row just bumps updated_at. Returns the row's
+// new state so callers can include it in a broadcast event without an
+// extra query.
+//
+// We do NOT clear last_error / last_status here. Those reflect the
+// previous *completed* sync; the UI keeps showing the previous outcome
+// while the next poll is in flight, which is friendlier than blanking
+// the badge to "unknown" every minute.
+func RecordMonitorSyncStart(db *sql.DB, source string) (*MonitorSyncState, error) {
+	source = normalizeMonitorPart(source)
+	if source == "" {
+		return nil, fmt.Errorf("monitor sync start: source is required")
+	}
+	now := NowISO()
+	_, err := db.Exec(
+		`INSERT INTO monitor_sync_state (source, last_status, is_syncing, updated_at)
+		 VALUES (?, 'unknown', 1, ?)
+		 ON CONFLICT(source) DO UPDATE SET
+			is_syncing = 1,
+			updated_at = excluded.updated_at`,
+		source, now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("record monitor sync start: %w", err)
+	}
+	return GetMonitorSyncState(db, source)
+}
+
+// RecordMonitorSyncEnd clears is_syncing and persists the outcome. status
+// must be "ok" or "error"; errMsg is the first error string for the
+// summary (NULL/empty when status is ok). last_sync_at is set to "now"
+// regardless of status — even a failed poll is a "we tried at this time"
+// signal worth showing.
+func RecordMonitorSyncEnd(db *sql.DB, source, status, errMsg string) (*MonitorSyncState, error) {
+	source = normalizeMonitorPart(source)
+	if source == "" {
+		return nil, fmt.Errorf("monitor sync end: source is required")
+	}
+	status = normalizeMonitorPart(status)
+	switch status {
+	case "ok", "error":
+	default:
+		return nil, fmt.Errorf("invalid monitor sync status %q", status)
+	}
+	now := NowISO()
+	_, err := db.Exec(
+		`INSERT INTO monitor_sync_state (source, last_sync_at, last_status, last_error, is_syncing, updated_at)
+		 VALUES (?, ?, ?, ?, 0, ?)
+		 ON CONFLICT(source) DO UPDATE SET
+			last_sync_at = excluded.last_sync_at,
+			last_status  = excluded.last_status,
+			last_error   = excluded.last_error,
+			is_syncing   = 0,
+			updated_at   = excluded.updated_at`,
+		source, now, status, NullString(errMsg), now,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("record monitor sync end: %w", err)
+	}
+	return GetMonitorSyncState(db, source)
+}
+
+// GetMonitorSyncState returns the row for a single source, or
+// (nil, sql.ErrNoRows) when the source has never been polled.
+func GetMonitorSyncState(db *sql.DB, source string) (*MonitorSyncState, error) {
+	source = normalizeMonitorPart(source)
+	row := db.QueryRow(
+		`SELECT source, last_sync_at, last_status, last_error, is_syncing, updated_at
+		 FROM monitor_sync_state WHERE source = ?`,
+		source,
+	)
+	return scanMonitorSyncState(row)
+}
+
+// ListMonitorSyncStates returns one row per source the poller has ever
+// touched, ordered alphabetically for stable UI rendering. The set is
+// bounded by the source enum, so no LIMIT clause.
+func ListMonitorSyncStates(db *sql.DB) ([]MonitorSyncState, error) {
+	rows, err := db.Query(
+		`SELECT source, last_sync_at, last_status, last_error, is_syncing, updated_at
+		 FROM monitor_sync_state ORDER BY source`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list monitor sync states: %w", err)
+	}
+	defer rows.Close()
+	var out []MonitorSyncState
+	for rows.Next() {
+		s, err := scanMonitorSyncState(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *s)
+	}
+	return out, rows.Err()
+}
+
+func ListMonitorFetchStates(db *sql.DB, source string) ([]MonitorFetchState, error) {
+	source = normalizeMonitorPart(source)
+	if source == "" {
+		return nil, fmt.Errorf("monitor fetch state source required")
+	}
+	rows, err := db.Query(
+		`SELECT source, target_id, last_fetched_at, updated_at
+		 FROM monitor_fetch_state
+		 WHERE source = ?
+		 ORDER BY last_fetched_at ASC`,
+		source,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list monitor fetch states: %w", err)
+	}
+	defer rows.Close()
+	var out []MonitorFetchState
+	for rows.Next() {
+		var s MonitorFetchState
+		if err := rows.Scan(&s.Source, &s.TargetID, &s.LastFetchedAt, &s.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func RecordMonitorFetch(db *sql.DB, source, targetID string) error {
+	source = normalizeMonitorPart(source)
+	targetID = strings.TrimSpace(targetID)
+	if source == "" || targetID == "" {
+		return fmt.Errorf("monitor fetch state requires source and target_id")
+	}
+	now := NowISO()
+	_, err := db.Exec(
+		`INSERT INTO monitor_fetch_state (source, target_id, last_fetched_at, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(source, target_id) DO UPDATE SET
+			last_fetched_at = excluded.last_fetched_at,
+			updated_at = excluded.updated_at`,
+		source, targetID, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("record monitor fetch state: %w", err)
+	}
+	return nil
+}
+
+func scanMonitorSyncState(row interface{ Scan(dest ...any) error }) (*MonitorSyncState, error) {
+	var s MonitorSyncState
+	var isSyncing int
+	if err := row.Scan(&s.Source, &s.LastSyncAt, &s.LastStatus, &s.LastError, &isSyncing, &s.UpdatedAt); err != nil {
+		return nil, err
+	}
+	s.IsSyncing = isSyncing != 0
+	return &s, nil
 }
 
 func RecordMonitorEventAction(db *sql.DB, eventID, action, taskSlug, note string) error {

@@ -1,6 +1,10 @@
 package server
 
-import "database/sql"
+import (
+	"database/sql"
+	"sync"
+	"time"
+)
 
 type Config struct {
 	DB          *sql.DB
@@ -8,6 +12,18 @@ type Config struct {
 	Version     string
 	CommandPath string
 	HookURL     string
+	// MonitorPollInterval controls the background poller's cadence.
+	//
+	//	< 0  → not set on the CLI; newMonitorPoller falls back to
+	//	       FLOW_MONITOR_POLL_INTERVAL env, then defaultMonitorInterval (60s)
+	//	== 0 → explicitly disable the background poller (operator opt-out)
+	//	 > 0 → poll at this cadence
+	//
+	// Pass via `flow ui serve --monitor-interval <dur>`. The "< 0" sentinel
+	// is how `flow ui serve` distinguishes "user didn't pass the flag" from
+	// "user passed --monitor-interval 0 to disable" — Go's flag package
+	// can't distinguish those for a Duration default of 0.
+	MonitorPollInterval time.Duration
 }
 
 type Server struct {
@@ -15,8 +31,18 @@ type Server struct {
 	terminals   *terminalHub
 	events      *eventHub
 	reconcile   *livenessReconciler
+	monitor     *monitorPoller
+	slackSocket *slackSocketListener
 	transcripts *transcriptCache
 	caches      *uiCaches
+	// agentSlackDebounce dedups "agent needs input" DMs so a flapping
+	// session (waiting → idle → waiting in seconds) doesn't spam the
+	// originating Slack thread. Keyed by "<provider>:<session_id>";
+	// values are the timestamp of the last DM. See agent_hooks.go.
+	agentSlackDebounce struct {
+		mu     sync.Mutex
+		lastAt map[string]time.Time
+	}
 }
 
 type HealthView struct {
@@ -108,6 +134,26 @@ type InboxEntry struct {
 	Timestamp string `json:"timestamp"`
 	Sender    string `json:"sender"`
 	Body      string `json:"body"`
+}
+
+// MonitorSyncStateView is one source's poll status as the Inbox UI sees
+// it. LastSyncAt is an RFC3339 string when the source has been polled at
+// least once, empty otherwise. LastError is empty when LastStatus is "ok"
+// or "unknown".
+type MonitorSyncStateView struct {
+	Source     string `json:"source"`
+	LastSyncAt string `json:"last_sync_at,omitempty"`
+	LastStatus string `json:"last_status"`
+	LastError  string `json:"last_error,omitempty"`
+	IsSyncing  bool   `json:"is_syncing"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
+}
+
+// MonitorSyncStateResponse wraps the list so future fields (e.g.
+// next_scheduled_poll_at, default_interval) can be added without
+// breaking the existing []shape contract.
+type MonitorSyncStateResponse struct {
+	States []MonitorSyncStateView `json:"states"`
 }
 
 // InboxView is the GET /api/tasks/<slug>/inbox response shape.
@@ -227,19 +273,22 @@ type OverviewView struct {
 }
 
 type SearchResponse struct {
-	Query     string         `json:"query"`
-	Tasks     []SearchResult `json:"tasks"`
-	Projects  []SearchResult `json:"projects"`
-	Playbooks []SearchResult `json:"playbooks"`
-	Updates   []SearchResult `json:"updates"`
+	Query       string         `json:"query"`
+	Tasks       []SearchResult `json:"tasks"`
+	Projects    []SearchResult `json:"projects"`
+	Playbooks   []SearchResult `json:"playbooks"`
+	Updates     []SearchResult `json:"updates"`
+	Transcripts []SearchResult `json:"transcripts"`
 }
 
 type SearchResult struct {
-	Type    string `json:"type"`
-	Slug    string `json:"slug"`
-	Name    string `json:"name"`
-	URL     string `json:"url"`
-	Snippet string `json:"snippet"`
+	Type       string `json:"type"`
+	Scope      string `json:"scope,omitempty"`
+	Slug       string `json:"slug"`
+	Name       string `json:"name"`
+	URL        string `json:"url"`
+	Snippet    string `json:"snippet"`
+	SourcePath string `json:"source_path,omitempty"`
 }
 
 type TranscriptResponse struct {
