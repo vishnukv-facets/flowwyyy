@@ -7,9 +7,14 @@
   <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License">
 </p>
 
-> A complete task manager for Claude Code — and the working memory
-> layer that turns every session from a brilliant new hire into the
-> engineer on your team.
+> A complete task manager for **Claude Code and Codex** — with
+> first-class **Slack** triggers, a browser-based **Mission Control**,
+> and a working memory layer that turns every session from a brilliant
+> new hire into the engineer on your team.
+
+This README captures the current state. flow ships new features
+weekly — what's documented below is the floor, not the ceiling. The
+[changelog](CHANGELOG.md) carries every release.
 
 ## See it in action
 
@@ -131,6 +136,141 @@ back to the knowledge base on `flow done` like any other task.
 Same compounding mechanic — your weekly review session two months from
 now will know everything every prior weekly review surfaced.
 
+## Mission Control — flow in the browser
+
+`flow ui serve` boots a local web app at `127.0.0.1:8787`. Same
+SQLite, same markdown briefs, same skill — just a richer surface for
+the things terminals don't do well: side-by-side task lists, inline
+brief editing, live agent status, and a browser-attached terminal that
+streams the Claude or Codex session over WebSocket.
+
+![Mission Control overview](docs/ui/01-mission-control.png)
+
+Mission Control is a peer to the CLI, not a replacement. It reads and
+writes the same `~/.flow/flow.db`, so the browser, your terminal
+sessions, and the bundled skill always see one consistent view.
+
+### Cmd+K everything
+
+A global palette with FTS5 over briefs, updates, memories, tasks, and
+commands. Type a few letters and jump. Press Enter and you're either
+on the task detail page or directly attached to its live terminal.
+
+![Cmd+K palette filtering to "kling"](docs/ui/cmdk.gif)
+
+### Task detail with inline editors
+
+Every task has a single page that shows status, priority, due date,
+tags, agent provider (Claude or Codex), permission mode (default /
+auto / bypass), session id, brief, and append-only updates. Priority
+and permission mode are segmented controls — one click to change.
+
+![Task detail with priority and permission editors](docs/ui/02-task-detail.png)
+
+### Projects, playbooks, and a tasks table
+
+Every entity has a list and a detail page. The tasks table filters
+on status and priority; project pages roll up task breakdowns;
+playbook pages show the frozen brief that each run snapshots from.
+
+<table>
+<tr>
+<td width="33%"><a href="docs/ui/06-tasks-list.png"><img src="docs/ui/06-tasks-list.png" alt="Tasks list with status and priority filters"></a><br><em>Tasks — filterable list</em></td>
+<td width="33%"><a href="docs/ui/07-project-detail.png"><img src="docs/ui/07-project-detail.png" alt="Project detail with task breakdown"></a><br><em>Project detail</em></td>
+<td width="33%"><a href="docs/ui/05-playbooks.png"><img src="docs/ui/05-playbooks.png" alt="Playbooks list"></a><br><em>Playbooks</em></td>
+</tr>
+</table>
+
+### Knowledge base browser
+
+Five markdown buckets — user, org, products, processes, business —
+rendered as a two-pane reader. Scoop appends to these during
+sessions; sweep adds more on `flow done`.
+
+![Knowledge base browser](docs/ui/08-kb.png)
+
+### Browser-attached terminal
+
+The biggest reason to leave the CLI: when an agent is mid-tool-call
+or waiting for input, the browser shows it. Click *Open session* on
+any task and an xterm.js terminal streams the live Claude or Codex
+session — same scrollback, same input. Reload the tab and the
+snapshot syncs back.
+
+### What it doesn't do
+
+No auth, no TLS, loopback only. Mission Control is a *local* tool —
+if you want it on a public network, put your own auth in front. The
+binary refuses to bind to non-loopback hosts without an explicit
+`--host` flag for exactly this reason.
+
+## Slack integration — react to triage
+
+flow listens to a Slack workspace over Socket Mode and turns *your*
+reactions into tasks. React to a thread with `:claude:` and a Claude
+session spins up bound to that thread; react with `:codex:` and you
+get a Codex session instead. Same task model, same KB, same UI —
+just with Slack as one more input channel.
+
+```
+                        Slack Socket Mode
+                              │
+                              ▼
+   ┌─────────────────────────────────────────────────┐
+   │  monitor.SlackListener   (parses reaction_added)│
+   └────────────────┬────────────────────────────────┘
+                    │  is reactor in FLOW_SLACK_SELF_USER_IDS?
+                    │  is emoji in trigger set?
+                    ▼
+   ┌─────────────────────────────────────────────────┐
+   │  DecideReaction   → (channel, thread_ts, emoji) │
+   └────────────────┬────────────────────────────────┘
+                    │
+                    ▼
+   ┌─────────────────────────────────────────────────┐
+   │  Dispatcher                                     │
+   │   • find task by slack-thread:<channel>:<ts>    │
+   │   • create one if absent                        │
+   │   • pick provider: :claude: → claude            │
+   │                    :codex:  → codex             │
+   │   • append to inbox · auto-open in Mission Ctrl │
+   └─────────────────────────────────────────────────┘
+```
+
+**Why reactions, not slash commands.** Slash commands let anyone in the
+channel trigger you. Reactions are explicit consent from *your*
+account, so a coworker's `:claude:` is harmless noise — only the IDs
+you list in `FLOW_SLACK_SELF_USER_IDS` count.
+
+**Per-emoji provider routing.** A `:claude:` reaction routes to a Claude
+session; a `:codex:` reaction routes to Codex. Both pre-existing custom
+emojis (e.g., `:flow-claude:`) and the literal `claude` / `codex`
+shortnames are supported. Set extras via `FLOW_SLACK_TRIGGER_EMOJI`
+(comma- or whitespace-separated, with or without colons).
+
+**One thread, one task, forever.** flow tags each task with
+`slack-thread:<channel>:<thread_ts>`. A second reaction on the same
+thread won't create a duplicate — it appends to the existing task's
+inbox. The task title is built from the message author's display
+name and the first line of the message; if Slack's `channels:read`
+scope is missing, flow falls back to the author name alone rather
+than erroring.
+
+**Configuration.**
+
+| Env var                       | Purpose                                                        |
+| ----------------------------- | -------------------------------------------------------------- |
+| `FLOW_SLACK_APP_TOKEN`        | App-level token (`xapp-…`) — required for Socket Mode          |
+| `SLACK_BOT_TOKEN`             | Bot/user token (`xoxb-…` / `xoxp-…`) for Web API calls         |
+| `FLOW_SLACK_SELF_USER_IDS`    | Comma-separated Slack user IDs whose reactions count as you    |
+| `FLOW_SLACK_TRIGGER_EMOJI`    | Trigger emoji shortnames (default: `claude`)                   |
+| `FLOW_SLACK_SOCKET_MODE`      | `0` to disable Socket Mode while leaving tokens configured     |
+| `FLOW_SLACK_OPEN_TARGET`      | `ui` (default, browser terminal) or `iterm` (legacy iTerm tab) |
+
+The listener starts automatically when `flow ui serve` runs with the
+above tokens set. Without tokens, the rest of flow works unchanged —
+Slack is opt-in.
+
 ## Install
 
 In any Claude Code session, paste this:
@@ -218,11 +358,14 @@ handles the rest.
   `--no-pr` opts out; push, PR, or merge failures warn and
   continue, never block the status flip.
 - **Mission Control, in your browser.** `flow ui serve` boots a
-  local web UI at `127.0.0.1:8787` that browses every task,
-  project, playbook, and run; edits briefs inline; streams live
-  status; embeds an xterm.js terminal bridge to attach to any
-  session from the browser; and offers a Cmd+K switcher. No
-  cloud, no auth — bound to loopback by default.
+  local web app at `127.0.0.1:8787` with task / project / playbook
+  views, inline brief editing, a Cmd+K palette, and a browser-attached
+  terminal that streams Claude or Codex sessions live. See the
+  [Mission Control section](#mission-control--flow-in-the-browser).
+- **Slack triggers.** React to a thread with `:claude:` or `:codex:`
+  and flow spins up a task bound to that thread — same KB, same UI,
+  Slack as one more input channel. See the
+  [Slack section](#slack-integration--react-to-triage).
 - **Full-text search over flow memory.** `flow search "<query>"`
   searches brief, update, Flow KB, Codex memory, and Claude memory
   markdown through SQLite FTS5. Add `--in transcripts` when you
@@ -336,31 +479,21 @@ This is the lane scheduled playbooks use to fire instructions at
 existing tasks without manual intervention. `flow run playbook
 <slug>` accepts the same flags for ad-hoc per-run instructions.
 
-### Mission Control web UI
+### Agent hooks — what the UI knows about your sessions
 
-`flow ui serve` runs a small Go HTTP server (default
-`127.0.0.1:8787`, override with `--host` / `--port`, background
-with `--bg`) that ships a single-page UI from
-`internal/server/static/`. It reads the same `~/.flow/flow.db` the
-CLI does, so the browser, your terminal sessions, and the skill
-all see one consistent view. The server exposes:
+The browser shows "agent idle / task in progress / waiting on you /
+needs attention" because each running Claude or Codex session is
+emitting lifecycle events through a repo-local
+[agent-hooks](internal/agenthooks/) shim. `flow ui serve` installs
+these into every known workdir automatically. Codex hooks are gated
+to flow-owned terminals (`FLOW_HOOK_OWNED=1`) so ordinary Codex
+sessions opened in the same repo never forward events into Mission
+Control.
 
-- A Mission Control landing page that aggregates active tasks
-  and recent runs.
-- Per-entity detail screens for tasks, projects, playbooks, and
-  playbook runs — with inline brief editing.
-- An xterm.js **terminal bridge** that attaches your browser to a
-  running agent session over WebSocket, including native terminal
-  snapshot sync so you don't lose scrollback when you reload.
-- Live status from a repo-local **agent-hooks** integration
-  (`internal/agenthooks/`): when a task's agent is mid-tool-call,
-  waiting for input, or idle, the UI shows it. Codex hooks are
-  gated to Flow-owned terminals (`FLOW_HOOK_OWNED=1`) so ordinary
-  Codex sessions opened in the same repo do not forward Flow events.
-- A global Cmd+K switcher across every entity.
-
-It's a *local* tool — no auth, no TLS, loopback by default. Don't
-expose it on a public network.
+`flow ui serve` also accepts `--host`, `--port`, and `--bg`. Default
+is `127.0.0.1:8787`. The Go HTTP server is a single binary — no node
+runtime, no build step, no package install. The static UI ships
+inside the binary.
 
 ## Your data — local, portable, yours
 
@@ -441,6 +574,28 @@ but other harnesses (Cursor, Aider, plain shell) and other
 terminals (Linux + tmux/wezterm, Windows Terminal) need
 contributors who run those stacks daily and care enough to wire
 them in. If that's you, [a PR is very welcome](CONTRIBUTING.md).
+
+## What's next on the roadmap
+
+flow ships weekly and the surface area keeps growing. A few things
+queued up that we use internally and want to land in the open
+release:
+
+- **First-class GitHub integration** — read issues into flow tasks,
+  link tasks to PRs without the `gh` shell-out, and react to
+  PR-review-comment events the way the Slack listener reacts to
+  emoji.
+- **More providers, more terminals.** Cursor, Aider, plain shell,
+  and Linux + tmux/wezterm are wired-but-not-blessed today.
+  Contributors who run those stacks daily can graduate them to
+  first-class — the session-spawn layer is intentionally small.
+- **Sharper Mission Control.** Browser-side editing of more entity
+  fields, richer agent-hook visualizations, and a built-in inbox
+  for the things flow nags you about.
+
+If any of these would unblock you, [open an
+issue](https://github.com/Facets-cloud/flow/issues) — interest moves
+things up the queue.
 
 ## Where flow came from
 
