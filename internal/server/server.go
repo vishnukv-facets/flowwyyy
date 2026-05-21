@@ -57,6 +57,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/hooks/agent", s.handleAgentHook)
 	mux.HandleFunc("/api/overview", s.handleOverview)
 	mux.HandleFunc("/api/fs/entries", s.handleFSEntries)
+	mux.HandleFunc("/api/fs/mkdir", s.handleFSMkdir)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
 	mux.HandleFunc("/api/projects", s.handleProjects)

@@ -988,6 +988,12 @@ const DirectoryPicker = ({ initial, onPick, onClose }) => {
   const [selected, setSelected] = useState(startPath);
   const [showHidden, setShowHidden] = useState(false);
   const [state, setState] = useState({ path: startPath, display_path: startPath, parent: null, breadcrumbs: [], entries: [], is_git: false, loading: true, error: '' });
+  const [reloadTick, setReloadTick] = useState(0);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createName, setCreateName] = useState('');
+  const [createError, setCreateError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const createInputRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -1004,7 +1010,37 @@ const DirectoryPicker = ({ initial, onPick, onClose }) => {
         setState(s => ({ ...s, loading: false, error: err.message || String(err), entries: [] }));
       });
     return () => { active = false; };
-  }, [cwd]);
+  }, [cwd, reloadTick]);
+
+  useEffect(() => {
+    if (createOpen && createInputRef.current) createInputRef.current.focus();
+  }, [createOpen]);
+
+  const submitCreate = () => {
+    const name = createName.trim();
+    if (!name || creating) return;
+    setCreating(true);
+    setCreateError('');
+    fetch('/api/fs/mkdir', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent: state.path || cwd, name }),
+    })
+      .then(r => r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t || `HTTP ${r.status}`))))
+      .then(entry => {
+        setCreating(false);
+        setCreateOpen(false);
+        setCreateName('');
+        // Stay in the parent folder and select the new dir; refresh listing
+        // so the new folder shows up in the list.
+        setSelected(entry.path);
+        setReloadTick(n => n + 1);
+      })
+      .catch(err => {
+        setCreating(false);
+        setCreateError(String(err.message || err));
+      });
+  };
 
   const entries = (state.entries || []).filter(e => showHidden || !e.hidden);
   const selectedEntry = (state.entries || []).find(e => e.path === selected);
@@ -1046,10 +1082,42 @@ const DirectoryPicker = ({ initial, onPick, onClose }) => {
               );
             })}
           </div>
+          <button
+            className="btn sm"
+            onClick={() => { setCreateOpen(v => !v); setCreateError(''); }}
+            title="Create a new directory inside the current folder"
+            disabled={state.loading || !!state.error}
+          >
+            <Icon name="folder-plus" size={11}/> New folder
+          </button>
           <button className={`dp-toggle mono ${showHidden ? 'on' : ''}`} onClick={() => setShowHidden(v => !v)} title="Show hidden files">
             <Icon name={showHidden ? 'eye' : 'eye-off'} size={11}/> .hidden
           </button>
         </div>
+        {createOpen && (
+          <div className="dp-create-row mono" style={{display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', borderBottom: '1px solid var(--border)'}}>
+            <Icon name="folder-plus" size={12}/>
+            <span className="dim" style={{fontSize: 11}}>{state.display_path || cwd}/</span>
+            <input
+              ref={createInputRef}
+              className="form-input mono"
+              style={{flex: 1, padding: '4px 8px', fontSize: 12}}
+              placeholder="new-folder-name"
+              value={createName}
+              onChange={e => { setCreateName(e.target.value); setCreateError(''); }}
+              onKeyDown={e => {
+                if (e.key === 'Enter') { e.preventDefault(); submitCreate(); }
+                if (e.key === 'Escape') { e.preventDefault(); setCreateOpen(false); setCreateName(''); setCreateError(''); }
+              }}
+              disabled={creating}
+            />
+            <button className="btn sm primary" onClick={submitCreate} disabled={creating || !createName.trim()}>
+              {creating ? '…' : 'Create'}
+            </button>
+            <button className="btn sm" onClick={() => { setCreateOpen(false); setCreateName(''); setCreateError(''); }} disabled={creating}>Cancel</button>
+            {createError && <span className="mono" style={{color: 'var(--dead)', fontSize: 11, marginLeft: 4}}>{createError}</span>}
+          </div>
+        )}
 
         <div className="dp-body">
           <div className="dp-sidebar">
@@ -1269,7 +1337,6 @@ const CreateProjectModal = ({ onClose, action }) => {
   const [slugEdited, setSlugEdited] = useState(false);
   const [slugInput, setSlugInput] = useState('');
   const [workdir, setWorkdir] = useState(WORKDIRS[0]?.path || '');
-  const [mkdir, setMkdir] = useState(false);
   const [priority, setPriority] = useState('medium');
   const [description, setDescription] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -1280,7 +1347,7 @@ const CreateProjectModal = ({ onClose, action }) => {
 
   const submit = () => {
     if (!canSubmit) return;
-    action('create-project', { slug, name: name.trim(), work_dir: workdir, priority, mkdir, description: description.trim() });
+    action('create-project', { slug, name: name.trim(), work_dir: workdir, priority, description: description.trim() });
     onClose();
   };
 
@@ -1291,7 +1358,7 @@ const CreateProjectModal = ({ onClose, action }) => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [name, slug, workdir, priority, mkdir, description]);
+  }, [name, slug, workdir, priority, description]);
 
   return (
     <div className="modal-scrim centered" onClick={onClose}>
@@ -1335,10 +1402,6 @@ const CreateProjectModal = ({ onClose, action }) => {
               <span className="path-picker-text mono">{workdir || 'Choose a directory…'}</span>
               <span className="path-picker-btn mono">Browse…</span>
             </div>
-            <label className="mono dim" style={{display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, marginTop: 6, cursor: 'pointer'}}>
-              <input type="checkbox" checked={mkdir} onChange={e => setMkdir(e.target.checked)}/>
-              Create the directory if it doesn't exist
-            </label>
           </label>
           {pickerOpen && <DirectoryPicker initial={workdir} onPick={(p) => { setWorkdir(p); setPickerOpen(false); }} onClose={() => setPickerOpen(false)}/>}
 

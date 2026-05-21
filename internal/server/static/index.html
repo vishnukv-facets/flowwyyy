@@ -1489,6 +1489,7 @@ button.readable-file-head:focus-visible { outline: 1px solid var(--primary); out
 <script type="text/babel">
 const { useState, useEffect, useMemo, useRef, useContext, Fragment } = React;
 const { ClockProvider, ClockCtx, AGENTS, DEAD_AGENT, DONE_AGENTS = [], BACKLOG, DONE_TASKS = [], PROJECTS_MC, PLAYBOOKS_MC, WORKDIRS, KB_FILES, AGENT_MEMORY_SOURCES = [], ACTIVITY_HEATMAP, TRASH = { tasks: [], projects: [], playbooks: [], total: 0 }, Icon, Dot, FlowLogo, FlowMark } = window.MC;
+const FLOWDB_DEFAULT = { path: '', display_path: '~/.flow/flow.db', bytes: 0, human_size: '—', exists: false };
 const { MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, TaskDetail, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail, TrashView, KBView, MemorySourcesView, WorkdirsView, CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal, CreateProjectModal } = window.MC_SCREENS;
 
 const NAV = [
@@ -1954,6 +1955,7 @@ const App = () => {
 	    window.MC.DONE_AGENTS = DONE_AGENTS;
 	    window.MC.CAPABILITIES = fresh.CAPABILITIES || window.MC.CAPABILITIES;
 	    window.MC.MONITOR = fresh.MONITOR || window.MC.MONITOR;
+	    window.MC.FLOWDB = fresh.FLOWDB || window.MC.FLOWDB;
 	    window.MC.DONE_TASKS = DONE_TASKS;
 	    window.MC.AGENT_MEMORY_SOURCES = AGENT_MEMORY_SOURCES;
 	    applyTrash(fresh.TRASH);
@@ -2462,7 +2464,23 @@ const App = () => {
         <div className="sidebar-foot">
           <button className="btn sm" onClick={() => setQR(true)} style={{justifyContent: 'flex-start'}}><Icon name="qr-code" size={12}/>Remote · phone</button>
           <button className="btn sm" onClick={() => setHelp(true)} style={{justifyContent: 'flex-start'}}><Icon name="keyboard" size={12}/>Shortcuts <span className="kbd" style={{marginLeft: 'auto'}}>?</span></button>
-          <div className="mono" style={{fontSize: 9.5, color: 'var(--text-faint)', textAlign: 'center', paddingTop: 4}}>~/.flow/flow.db</div>
+          {(() => {
+            const db = window.MC.FLOWDB || FLOWDB_DEFAULT;
+            const path = db.display_path || '~/.flow/flow.db';
+            const size = db.exists ? db.human_size : (db.human_size || '—');
+            const title = db.path ? `${db.path}\n${db.bytes || 0} bytes` : path;
+            return (
+              <div
+                className="mono"
+                style={{fontSize: 9.5, color: 'var(--text-faint)', textAlign: 'center', paddingTop: 4, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 6}}
+                title={title}
+              >
+                <span>{path}</span>
+                <span style={{opacity: 0.5}}>·</span>
+                <span>{size}</span>
+              </div>
+            );
+          })()}
         </div>
       </aside>
 

@@ -36,6 +36,17 @@ type uiData struct {
 	Trash            uiTrash          `json:"TRASH"`
 	SampleTranscript []uiTranscript   `json:"SAMPLE_TRANSCRIPT"`
 	SampleDiffFiles  []uiDiffFile     `json:"SAMPLE_DIFF_FILES"`
+	FlowDB           uiFlowDB         `json:"FLOWDB"`
+}
+
+// uiFlowDB carries on-disk stats for flow.db (plus a display-friendly
+// path) so the UI sidebar can show how much storage flow is using.
+type uiFlowDB struct {
+	Path        string `json:"path"`
+	DisplayPath string `json:"display_path"`
+	Bytes       int64  `json:"bytes"`
+	HumanSize   string `json:"human_size"`
+	Exists      bool   `json:"exists"`
 }
 
 type uiActivityDay struct {
@@ -383,7 +394,45 @@ func (s *Server) buildUIData() (uiData, error) {
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
 		SampleDiffFiles:  diffFiles,
+		FlowDB:           s.uiFlowDB(),
 	}, nil
+}
+
+// uiFlowDB reports the on-disk size of flow.db. Missing-file is not an
+// error: the sidebar just shows "—" until `flow init` runs.
+func (s *Server) uiFlowDB() uiFlowDB {
+	root := strings.TrimSpace(s.cfg.FlowRoot)
+	if root == "" {
+		return uiFlowDB{HumanSize: "—"}
+	}
+	path := filepath.Join(root, "flow.db")
+	out := uiFlowDB{Path: path, DisplayPath: displayUIPath(path), HumanSize: "—"}
+	info, err := os.Stat(path)
+	if err != nil {
+		return out
+	}
+	out.Exists = true
+	out.Bytes = info.Size()
+	out.HumanSize = humanByteSize(info.Size())
+	return out
+}
+
+func humanByteSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	val := float64(n) / float64(div)
+	suffix := "KMGTPE"[exp]
+	if val >= 100 {
+		return fmt.Sprintf("%.0f %ciB", val, suffix)
+	}
+	return fmt.Sprintf("%.1f %ciB", val, suffix)
 }
 
 func (s *Server) uiTrash() uiTrash {

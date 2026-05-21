@@ -92,6 +92,67 @@ func (s *Server) handleFSEntries(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+func (s *Server) handleFSMkdir(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	parent, err := expandUIPath(body.Parent)
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	if !info.IsDir() {
+		writeError(w, fmt.Errorf("parent is not a directory: %s", parent), http.StatusBadRequest)
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name == "" {
+		writeError(w, errors.New("directory name is required"), http.StatusBadRequest)
+		return
+	}
+	// Reject anything that escapes the parent: separators, traversals, or
+	// hidden quirks like ".." with NULs. A safe directory name is a single
+	// path segment.
+	if name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+		writeError(w, fmt.Errorf("invalid directory name: %q", body.Name), http.StatusBadRequest)
+		return
+	}
+	target := filepath.Join(parent, name)
+	if _, err := os.Stat(target); err == nil {
+		writeError(w, fmt.Errorf("already exists: %s", displayUIPath(target)), http.StatusConflict)
+		return
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, FSEntryView{
+		Name:        name,
+		Path:        target,
+		DisplayPath: displayUIPath(target),
+		IsDir:       true,
+		IsGit:       false,
+		Hidden:      strings.HasPrefix(name, "."),
+	})
+}
+
 func expandUIPath(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	home, err := os.UserHomeDir()
