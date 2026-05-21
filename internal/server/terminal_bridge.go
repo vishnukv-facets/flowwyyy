@@ -896,7 +896,10 @@ func claudePermissionArgs(mode string) []string {
 	case "bypass":
 		return []string{"--dangerously-skip-permissions"}
 	default:
-		return nil
+		// `default` is the moderate baseline: auto-accept file edits but
+		// still prompt for execution. `auto` and `bypass` cover the more
+		// permissive options.
+		return []string{"--permission-mode", "acceptEdits"}
 	}
 }
 

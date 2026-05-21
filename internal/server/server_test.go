@@ -615,11 +615,14 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	if !launch.Created || launch.Slug != "build-ui" || launch.SessionID == "" || launch.WorkDir != root {
 		t.Fatalf("launch = %+v", launch)
 	}
-	if len(launch.Args) != 3 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
+	if len(launch.Args) != 5 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
 		t.Fatalf("args = %#v", launch.Args)
 	}
-	if !strings.Contains(launch.Args[2], "flow task build-ui") {
-		t.Fatalf("bootstrap prompt = %q", launch.Args[2])
+	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "acceptEdits" {
+		t.Fatalf("default permission args = %#v", launch.Args)
+	}
+	if !strings.Contains(launch.Args[4], "flow task build-ui") {
+		t.Fatalf("bootstrap prompt = %q", launch.Args[4])
 	}
 	task, err := flowdb.GetTask(db, "build-ui")
 	if err != nil {
@@ -1579,8 +1582,11 @@ func TestOverviewTaskUsesFlowRootAndFreshPrompt(t *testing.T) {
 	if !launch.Created || launch.WorkDir != root {
 		t.Fatalf("overview launch = %+v", launch)
 	}
-	if len(launch.Args) != 3 || strings.TrimSpace(launch.Args[2]) != "What should I do today?" {
+	if len(launch.Args) != 5 || strings.TrimSpace(launch.Args[4]) != "What should I do today?" {
 		t.Fatalf("overview prompt args = %#v", launch.Args)
+	}
+	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "acceptEdits" {
+		t.Fatalf("default permission args = %#v", launch.Args)
 	}
 }
 
@@ -1618,8 +1624,11 @@ func TestPrepareTerminalLaunchResetsStaleOverviewSession(t *testing.T) {
 	if !launch.Created || launch.WorkDir != root || launch.SessionID == sessionID {
 		t.Fatalf("overview launch = %+v", launch)
 	}
-	if len(launch.Args) != 3 || strings.TrimSpace(launch.Args[2]) != "Check my inbox" {
+	if len(launch.Args) != 5 || strings.TrimSpace(launch.Args[4]) != "Check my inbox" {
 		t.Fatalf("overview prompt args = %#v", launch.Args)
+	}
+	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "acceptEdits" {
+		t.Fatalf("default permission args = %#v", launch.Args)
 	}
 	task, err := flowdb.GetTask(db, overviewTaskSlug)
 	if err != nil {
@@ -1649,8 +1658,11 @@ func TestPrepareTerminalLaunchResumesExistingSession(t *testing.T) {
 	if launch.Created || launch.SessionID != sessionID {
 		t.Fatalf("launch = %+v", launch)
 	}
-	if len(launch.Args) != 2 || launch.Args[0] != "--resume" || launch.Args[1] != sessionID {
+	if len(launch.Args) != 4 || launch.Args[0] != "--resume" || launch.Args[1] != sessionID {
 		t.Fatalf("args = %#v", launch.Args)
+	}
+	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "acceptEdits" {
+		t.Fatalf("default permission args on resume = %#v", launch.Args)
 	}
 	task, err := flowdb.GetTask(db, "build-ui")
 	if err != nil {
