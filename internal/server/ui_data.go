@@ -390,7 +390,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		Playbooks:        playbooks,
 		Projects:         projects,
 		ActivityHeatmap:  buildActivityHeatmap(taskViews, time.Now()),
-		Capabilities:     detectCapabilities(),
+		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
 		SampleDiffFiles:  diffFiles,

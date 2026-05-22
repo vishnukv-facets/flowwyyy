@@ -61,6 +61,35 @@ const missionGreeting = () => {
 };
 
 // ───────── Mission Control ──────────────────────────────────────────────
+// IntegrationChip surfaces the live status of an external integration
+// (GitHub via gh, Slack via the socketmode listener). The server fills
+// `status` with a short label ("connected" / "not configured" /
+// "connecting" / "not authenticated") that drives both the chip color
+// and the text shown next to the integration name. Brand marks are
+// loaded as <img> from /assets to match the ProviderMark pattern.
+const INTEGRATION_LOGOS = {
+  gh:    { src: '/assets/github-mark.svg', label: 'GitHub' },
+  slack: { src: '/assets/slack-mark.svg',  label: 'Slack' },
+};
+const IntegrationChip = ({ item }) => {
+  if (!item) return null;
+  const status = (item.status || (item.available ? 'connected' : 'unavailable')).toLowerCase();
+  const state = item.available
+    ? 'ok'
+    : (status === 'connecting' ? 'connecting' : 'off');
+  const reasonTitle = item.reason ? `${item.label}: ${item.reason}` : `${item.label}: ${status}`;
+  const logo = INTEGRATION_LOGOS[item.id];
+  return (
+    <span className={`integration-chip state-${state}`} title={reasonTitle}>
+      {logo
+        ? <img className="integration-logo" src={logo.src} alt="" aria-hidden="true" width={13} height={13}/>
+        : <Icon name="circle" size={11}/>}
+      <span className="integration-name">{item.label}</span>
+      <span className="integration-status">{item.status || (item.available ? 'connected' : 'not configured')}</span>
+    </span>
+  );
+};
+
 const MissionControl = ({ focus, setFocus, action, sort, setSort, goto }) => {
   const sorted = useMemo(() => {
     const list = [...AGENTS];
@@ -85,6 +114,7 @@ const MissionControl = ({ focus, setFocus, action, sort, setSort, goto }) => {
   }, [AGENTS.length, AGENTS.map(a => a.status).join('|')]);
   const monitor = monitorState();
   const unread = (monitor.notifications || []).filter(n => n.status === 'unread').length;
+  const integrations = capabilityList('integrations');
 
   return (
     <div>
@@ -97,6 +127,13 @@ const MissionControl = ({ focus, setFocus, action, sort, setSort, goto }) => {
             <button className="btn sm primary" onClick={() => action('spawn-prompt')}><Icon name="plus" size={11}/>New task</button>
             <button className="btn sm" onClick={() => goto && goto('inbox')}><Icon name="inbox" size={11}/>Inbox</button>
           </div>
+          {integrations.length > 0 && (
+            <div className="hero-integrations">
+              {integrations.map(item => (
+                <IntegrationChip key={item.id} item={item}/>
+              ))}
+            </div>
+          )}
         </div>
         <div className="hero-stats">
           <div className="stat running">

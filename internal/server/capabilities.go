@@ -1,12 +1,16 @@
 package server
 
 import (
+	"context"
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
+	"time"
 )
 
 type uiToolCapability struct {
@@ -15,11 +19,17 @@ type uiToolCapability struct {
 	Available bool   `json:"available"`
 	Reason    string `json:"reason,omitempty"`
 	Path      string `json:"path,omitempty"`
+	// Status is a short user-facing badge label ("connected", "not
+	// configured", "not authenticated", etc.) — more nuanced than the
+	// boolean Available. Populated for integrations; empty for tools and
+	// terminals where Available alone is enough.
+	Status string `json:"status,omitempty"`
 }
 
 type uiCapabilities struct {
-	Providers []uiToolCapability `json:"providers"`
-	Terminals []uiToolCapability `json:"terminals"`
+	Providers    []uiToolCapability `json:"providers"`
+	Terminals    []uiToolCapability `json:"terminals"`
+	Integrations []uiToolCapability `json:"integrations"`
 }
 
 func detectCapabilities() uiCapabilities {
@@ -139,4 +149,99 @@ func (s *Server) ensureTerminalAvailable(kind string) error {
 		capability.Reason = "not available"
 	}
 	return fmt.Errorf("%s is unavailable: %s", capability.Label, capability.Reason)
+}
+
+// uiCapabilities returns the full capability bundle the UI consumes:
+// static tool detection (providers + terminals) plus live integration
+// statuses (GitHub via gh; Slack via the socketmode listener) that need
+// server context. Centralised here so buildUIData stays declarative.
+func (s *Server) uiCapabilities() uiCapabilities {
+	caps := detectCapabilities()
+	caps.Integrations = s.detectIntegrationCapabilities()
+	return caps
+}
+
+// detectIntegrationCapabilities returns live status for the external
+// services flow integrates with. Each entry tells Mission Control
+// whether the integration is configured, whether it is currently
+// working, and a short user-facing status string for chip rendering.
+func (s *Server) detectIntegrationCapabilities() []uiToolCapability {
+	return []uiToolCapability{
+		detectGitHubIntegration(),
+		s.detectSlackIntegration(),
+	}
+}
+
+func (s *Server) detectSlackIntegration() uiToolCapability {
+	c := uiToolCapability{ID: "slack", Label: "Slack", Available: false}
+	if !monitor.SocketModeEnabled() {
+		c.Status = "not configured"
+		c.Reason = "set FLOW_SLACK_APP_TOKEN + SLACK_BOT_TOKEN (and FLOW_SLACK_SOCKET_MODE=1) to enable"
+		return c
+	}
+	if s == nil || s.slackListener == nil {
+		c.Status = "configured"
+		c.Reason = "tokens detected but listener not initialised (no DB?)"
+		return c
+	}
+	if !s.slackListener.Running() {
+		c.Status = "configured"
+		c.Reason = "listener not started"
+		return c
+	}
+	if !s.slackListener.Connected() {
+		c.Status = "connecting"
+		c.Reason = "tokens valid; awaiting Slack socket-mode handshake"
+		return c
+	}
+	c.Available = true
+	c.Status = "connected"
+	return c
+}
+
+var (
+	ghAuthMu     sync.Mutex
+	ghAuthCached uiToolCapability
+	ghAuthExpiry time.Time
+)
+
+// ghAuthCacheTTL controls how often `gh auth status` is re-run. The
+// shell-out sits on the UI refresh hot path; 15s is short enough that
+// the chip flips within one human attention span when the user logs in
+// or out, and long enough that a watch session doesn't fork hundreds of
+// gh processes per minute.
+const ghAuthCacheTTL = 15 * time.Second
+
+func detectGitHubIntegration() uiToolCapability {
+	ghAuthMu.Lock()
+	if time.Now().Before(ghAuthExpiry) {
+		c := ghAuthCached
+		ghAuthMu.Unlock()
+		return c
+	}
+	ghAuthMu.Unlock()
+
+	c := uiToolCapability{ID: "gh", Label: "GitHub", Available: false}
+	path, err := exec.LookPath("gh")
+	if err != nil {
+		c.Status = "not installed"
+		c.Reason = "gh CLI not found on PATH"
+	} else {
+		c.Path = path
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := exec.CommandContext(ctx, "gh", "auth", "status").Run(); err != nil {
+			c.Status = "not authenticated"
+			c.Reason = "run `gh auth login` to connect"
+		} else {
+			c.Available = true
+			c.Status = "connected"
+		}
+	}
+
+	ghAuthMu.Lock()
+	ghAuthCached = c
+	ghAuthExpiry = time.Now().Add(ghAuthCacheTTL)
+	ghAuthMu.Unlock()
+	return c
 }

@@ -33,15 +33,56 @@ import (
 type SlackListener struct {
 	dispatcher *Dispatcher
 
-	mu      sync.Mutex
-	running bool
-	cancel  context.CancelFunc
-	done    chan struct{}
+	mu        sync.Mutex
+	running   bool
+	connected bool
+	cancel    context.CancelFunc
+	done      chan struct{}
 
 	// Hooks for tests. Production paths use the real slack-go client.
 	connectFn func(ctx context.Context) (eventsCh <-chan socketmode.Event, ack func(req socketmode.Request), runErr <-chan error)
 	logFn     func(string, ...any)
 	changeFn  func(kind string)
+}
+
+// Connected reports whether the socketmode client currently holds a live
+// websocket to Slack. Distinct from Running(): Running reflects "we
+// started the goroutine"; Connected reflects "the handshake completed
+// and we are receiving events." Mission Control surfaces this so the
+// user can tell at a glance whether Slack signals will actually arrive.
+func (l *SlackListener) Connected() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.connected
+}
+
+// Running reports whether the listener goroutine is active (regardless
+// of whether the underlying socket is currently up — slack-go reconnects
+// internally, so Running can stay true while Connected briefly flips
+// false during a network blip).
+func (l *SlackListener) Running() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.running
+}
+
+func (l *SlackListener) setConnected(v bool) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	changed := l.connected != v
+	l.connected = v
+	l.mu.Unlock()
+	if changed {
+		l.notifyChange("slack-connection")
+	}
 }
 
 // NewSlackListener constructs a listener bound to the given dispatcher.
@@ -227,19 +268,23 @@ func (l *SlackListener) runReal(ctx context.Context) {
 func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmode.Client, evt socketmode.Event) {
 	switch evt.Type {
 	case socketmode.EventTypeConnecting:
+		l.setConnected(false)
 		l.logFn("connecting...")
 	case socketmode.EventTypeConnected:
+		l.setConnected(true)
 		l.logFn("connected")
 	case socketmode.EventTypeDisconnect:
 		// slack-go's payload-on-disconnect carries the close reason as a
 		// string in evt.Data when the server told us why; otherwise it
 		// reflects the local close cause (timeout, write error, etc.).
+		l.setConnected(false)
 		l.logFn("disconnected (reason: %v)", evt.Data)
 	case socketmode.EventTypeConnectionError:
 		// Auth-level failures land here: missing or invalid xapp- token,
 		// app not installed to the workspace, scope missing, admin
 		// approval pending. Slack closes the socket right after the
 		// handshake and slack-go reports the underlying error in evt.Data.
+		l.setConnected(false)
 		l.logFn("connection error: %v  (most common causes: app not installed to workspace, missing connections:write scope, xapp-/xoxp- from different apps, admin approval pending)", evt.Data)
 	case socketmode.EventTypeIncomingError:
 		l.logFn("incoming error: %v", evt.Data)
