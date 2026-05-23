@@ -7,21 +7,61 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
-// InboxEntry is the on-disk form of one Slack event appended to a task's
-// inbox.jsonl. The schema is deliberately small and stable — a spawned
-// Claude session reads these entries on bootstrap to understand "what
-// happened in the Slack thread since I was last here."
+// InboxEventMeta stores derived routing metadata for a normalized source
+// event. Older inbox.jsonl rows may omit it; readers treat an empty meta as
+// legacy data and can reclassify from Event when needed.
+type InboxEventMeta struct {
+	Source     string `json:"source,omitempty"`
+	Actionable bool   `json:"actionable,omitempty"`
+}
+
+// InboxEntry is the on-disk form of one source event appended to a task's
+// inbox.jsonl. The schema is deliberately small and stable: a live agent
+// session reads these entries to understand what happened in a monitored
+// source after the task was created.
 //
 // EnqueuedAt is RFC3339 wall-clock at append time, distinct from the
 // Slack event's TS (which uses Slack's own seconds.microseconds format
 // and is global only within a channel).
 type InboxEntry struct {
-	EnqueuedAt string       `json:"enqueued_at"`
-	Event      InboundEvent `json:"event"`
+	EnqueuedAt string         `json:"enqueued_at"`
+	Event      InboundEvent   `json:"event"`
+	Meta       InboxEventMeta `json:"meta,omitempty"`
+}
+
+// ClassifyInboxEvent derives the source and actionability used by the
+// same-session monitor. Source listeners still append all useful lifecycle
+// events; only actionable entries wake a live task terminal.
+func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
+	source := "unknown"
+	if ev.ChannelType == "github" || strings.HasPrefix(ev.Kind, "pr_") || strings.HasPrefix(ev.Kind, "issue_") {
+		source = "github"
+	} else if ev.ChannelType == "slack" || ev.Kind == "message" || ev.Kind == "app_mention" || ev.Kind == "reaction_added" {
+		source = "slack"
+	} else if ev.ChannelType != "" {
+		source = ev.ChannelType
+	}
+
+	actionable := false
+	switch source {
+	case "github":
+		switch ev.Kind {
+		case "pr_review_comment", "pr_review_changes_requested", "pr_head_updated":
+			actionable = true
+		}
+	case "slack":
+		switch ev.Kind {
+		case "message", "app_mention":
+			actionable = true
+		}
+	}
+
+	return InboxEventMeta{Source: source, Actionable: actionable}
 }
 
 // TaskDir returns the absolute path to a task's directory under
@@ -64,6 +104,17 @@ func CursorPath(slug string) string {
 	return filepath.Join(dir, "inbox.cursor")
 }
 
+// MonitorCursorPath returns the inbox.monitor.cursor path for the given task
+// slug. Unlike inbox.cursor, this stores a byte offset for the same-session
+// inbox monitor and must not be used by Slack catch-up code.
+func MonitorCursorPath(slug string) string {
+	dir := TaskDir(slug)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "inbox.monitor.cursor")
+}
+
 // AppendInboxEvent appends one event line to the task's inbox.jsonl,
 // creating the file if needed. Caller is expected to have created the
 // task directory (flow add task creates it). If the directory is missing
@@ -85,6 +136,7 @@ func AppendInboxEvent(slug string, ev InboundEvent) error {
 	entry := InboxEntry{
 		EnqueuedAt: time.Now().UTC().Format(time.RFC3339),
 		Event:      ev,
+		Meta:       ClassifyInboxEvent(ev),
 	}
 	line, err := json.Marshal(entry)
 	if err != nil {
@@ -137,6 +189,57 @@ func ReadInboxEntries(slug string) ([]InboxEntry, error) {
 		return out, err
 	}
 	return out, nil
+}
+
+// ReadInboxMonitorCursor returns the byte offset processed by the
+// same-session monitor, or 0 when no cursor file exists.
+func ReadInboxMonitorCursor(slug string) (int64, error) {
+	path := MonitorCursorPath(slug)
+	if path == "" {
+		return 0, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	raw := strings.TrimSpace(string(data))
+	if raw == "" {
+		return 0, nil
+	}
+	offset, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("monitor: parse inbox monitor cursor: %w", err)
+	}
+	if offset < 0 {
+		return 0, fmt.Errorf("monitor: negative inbox monitor cursor %d", offset)
+	}
+	return offset, nil
+}
+
+// WriteInboxMonitorCursor atomically stores the byte offset processed by the
+// same-session monitor.
+func WriteInboxMonitorCursor(slug string, offset int64) error {
+	if offset < 0 {
+		return fmt.Errorf("monitor: negative inbox monitor cursor %d", offset)
+	}
+	path := MonitorCursorPath(slug)
+	if path == "" {
+		return errors.New("monitor: cannot resolve inbox monitor cursor path")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("monitor: mkdir task dir: %w", err)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatInt(offset, 10)+"\n"), 0o644); err != nil {
+		return fmt.Errorf("monitor: write inbox monitor cursor.tmp: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("monitor: rename inbox monitor cursor: %w", err)
+	}
+	return nil
 }
 
 // ReadInboxCursor returns the latest Slack ts processed for the task's

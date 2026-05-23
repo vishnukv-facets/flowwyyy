@@ -27,20 +27,21 @@ import (
 // downstream "partition by thread" code can hash on ThreadTS uniformly
 // without checking for empty.
 type InboundEvent struct {
-	Kind        string // "message" | "app_mention" | "reaction_added"
-	Channel     string
-	ChannelType string // "channel" | "im" | "mpim" | "group" | ""
-	TS          string
-	ThreadTS    string
-	UserID      string
-	Text        string
-	Reaction    string
-	ItemChannel string
-	ItemTS      string
-	ItemAuthor  string
-	TeamID      string
-	APIAppID    string
-	RawJSON     string
+	Kind        string `json:"kind"` // "message" | "app_mention" | "reaction_added"
+	Channel     string `json:"channel,omitempty"`
+	ChannelType string `json:"channel_type,omitempty"` // "channel" | "im" | "mpim" | "group" | "github" | ""
+	TS          string `json:"ts,omitempty"`
+	ThreadTS    string `json:"thread_ts,omitempty"`
+	UserID      string `json:"user_id,omitempty"`
+	Text        string `json:"text,omitempty"`
+	URL         string `json:"url,omitempty"`
+	Reaction    string `json:"reaction,omitempty"`
+	ItemChannel string `json:"item_channel,omitempty"`
+	ItemTS      string `json:"item_ts,omitempty"`
+	ItemAuthor  string `json:"item_author,omitempty"`
+	TeamID      string `json:"team_id,omitempty"`
+	APIAppID    string `json:"api_app_id,omitempty"`
+	RawJSON     string `json:"raw_json,omitempty"`
 }
 
 // ParseEventsAPIEvent normalizes a Slack EventsAPIEvent into zero or more

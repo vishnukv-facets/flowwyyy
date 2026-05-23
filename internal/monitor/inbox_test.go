@@ -96,6 +96,7 @@ func TestAppendInboxEvent_RoundtripPreservesFields(t *testing.T) {
 		ItemAuthor:  "U_other",
 		TeamID:      "T1",
 		APIAppID:    "A1",
+		URL:         "https://github.com/acme/app/pull/12#discussion_r1",
 		RawJSON:     `{"some":"raw"}`,
 	}
 	if err := AppendInboxEvent(slug, ev); err != nil {
@@ -114,6 +115,61 @@ func TestAppendInboxEvent_RoundtripPreservesFields(t *testing.T) {
 	}
 	if got.RawJSON != `{"some":"raw"}` {
 		t.Errorf("RawJSON lost: %q", got.RawJSON)
+	}
+	if got.URL != "https://github.com/acme/app/pull/12#discussion_r1" {
+		t.Errorf("URL lost: %q", got.URL)
+	}
+}
+
+func TestAppendInboxEvent_AddsClassifiedMeta(t *testing.T) {
+	slug := inboxTestSlug(t)
+	ev := InboundEvent{
+		Kind:        "pr_review_comment",
+		ChannelType: "github",
+		Text:        "please rename this helper",
+		URL:         "https://github.com/acme/app/pull/12#discussion_r1",
+	}
+	if err := AppendInboxEvent(slug, ev); err != nil {
+		t.Fatalf("AppendInboxEvent() error = %v", err)
+	}
+
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("ReadInboxEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entry count = %d, want 1", len(entries))
+	}
+	if entries[0].Meta.Source != "github" {
+		t.Fatalf("source = %q, want github", entries[0].Meta.Source)
+	}
+	if !entries[0].Meta.Actionable {
+		t.Fatalf("actionable = false, want true")
+	}
+	if entries[0].Event.URL != ev.URL {
+		t.Fatalf("url = %q, want %q", entries[0].Event.URL, ev.URL)
+	}
+}
+
+func TestReadInboxEntries_AcceptsLegacyRowsWithoutMeta(t *testing.T) {
+	slug := inboxTestSlug(t)
+	if err := os.MkdirAll(TaskDir(slug), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	legacy := `{"enqueued_at":"2026-05-23T10:00:00Z","event":{"kind":"message","channel_type":"slack","text":"ping"}}` + "\n"
+	if err := os.WriteFile(InboxPath(slug), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("ReadInboxEntries() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entry count = %d, want 1", len(entries))
+	}
+	if entries[0].Meta.Source != "" {
+		t.Fatalf("legacy source = %q, want empty", entries[0].Meta.Source)
 	}
 }
 
@@ -178,6 +234,31 @@ func TestInboxCursor_Roundtrip(t *testing.T) {
 	got, _ = ReadInboxCursor(slug)
 	if got != "9999.9999" {
 		t.Errorf("overwritten cursor = %q", got)
+	}
+}
+
+func TestInboxMonitorCursor_IsSeparateFromSlackCursor(t *testing.T) {
+	slug := inboxTestSlug(t)
+	if err := WriteInboxCursor(slug, "1716460000.000100"); err != nil {
+		t.Fatalf("WriteInboxCursor() error = %v", err)
+	}
+	if err := WriteInboxMonitorCursor(slug, 64); err != nil {
+		t.Fatalf("WriteInboxMonitorCursor() error = %v", err)
+	}
+
+	slackCursor, err := ReadInboxCursor(slug)
+	if err != nil {
+		t.Fatalf("ReadInboxCursor() error = %v", err)
+	}
+	monitorCursor, err := ReadInboxMonitorCursor(slug)
+	if err != nil {
+		t.Fatalf("ReadInboxMonitorCursor() error = %v", err)
+	}
+	if slackCursor != "1716460000.000100" {
+		t.Fatalf("slack cursor = %q", slackCursor)
+	}
+	if monitorCursor != 64 {
+		t.Fatalf("monitor cursor = %d, want 64", monitorCursor)
 	}
 }
 
