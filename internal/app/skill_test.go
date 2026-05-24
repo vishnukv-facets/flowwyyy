@@ -668,9 +668,29 @@ func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
 		"Slack, GitHub, or future source",
 		"Codex",
 		"gh-pr:",
+		"Claude Code may offer native background-session commands",
+		"Codex tasks use that same terminal wake path",
+		"do not assume a Codex-native `/bg`, scheduler, or app-server/remote-control integration",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("skill missing same-session inbox monitor content %q", want)
+		}
+	}
+}
+
+func TestReadmeDocumentsSameSessionProviderCapability(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"Claude Code's native background sessions are separate from Flow's monitor",
+		"Codex currently exposes experimental app-server/remote-control building blocks",
+		"task-local inbox monitor + Flow-owned terminal wake",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("README missing same-session provider capability content %q", want)
 		}
 	}
 }

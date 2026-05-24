@@ -60,6 +60,146 @@ const missionGreeting = () => {
   return 'Good evening';
 };
 
+// ───────── TagFilter ────────────────────────────────────────────────────
+// Compact multi-select tag picker. Replaces the wall-of-chips pattern with
+// a single button that opens a searchable dropdown of checkboxes. Selected
+// tags are shown inline as removable chips so users can scan their filter
+// without opening the menu.
+const TagFilter = ({ tags, selected, onToggle, onClear }) => {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  if (!tags || tags.length === 0) return null;
+  const q = query.trim().toLowerCase();
+  const filtered = q ? tags.filter(t => t.toLowerCase().includes(q)) : tags;
+  const selectedList = Array.from(selected);
+
+  return (
+    <div className="tag-filter" ref={ref} style={{position: 'relative', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap'}}>
+      <button
+        type="button"
+        className={`btn sm ${selected.size > 0 ? 'primary' : ''}`}
+        onClick={() => setOpen(o => !o)}
+        title={selected.size > 0 ? `${selected.size} tag${selected.size === 1 ? '' : 's'} selected` : 'Filter by tag'}
+      >
+        <Icon name="hash" size={10}/>
+        tags{selected.size > 0 ? ` · ${selected.size}` : ''}
+        <Icon name={open ? 'chevron-up' : 'chevron-down'} size={10}/>
+      </button>
+      {selectedList.slice(0, 4).map(tg => (
+        <span key={tg} className="tag-chip" style={{display: 'inline-flex', alignItems: 'center', gap: 4}}>
+          {tg}
+          <button
+            type="button"
+            onClick={() => onToggle(tg)}
+            style={{background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, display: 'inline-flex'}}
+            aria-label={`Remove ${tg}`}
+            title={`Remove ${tg}`}
+          ><Icon name="x" size={9}/></button>
+        </span>
+      ))}
+      {selectedList.length > 4 && (
+        <span className="mono" style={{fontSize: 11, color: 'var(--text-dim)'}}>+{selectedList.length - 4}</span>
+      )}
+      {selected.size > 0 && (
+        <button type="button" className="btn sm" onClick={onClear} title="Clear all tag filters">
+          <Icon name="x" size={10}/>clear
+        </button>
+      )}
+      {open && (
+        <div
+          className="tag-filter-pop"
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 6px)',
+            left: 0,
+            zIndex: 50,
+            background: 'var(--surface)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 6,
+            padding: 8,
+            minWidth: 260,
+            maxWidth: 340,
+            boxShadow: '0 12px 28px rgba(0,0,0,0.5)',
+          }}
+        >
+          <input
+            className="form-input mono"
+            placeholder="filter tags…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            style={{width: '100%', padding: '5px 8px', fontSize: 12, marginBottom: 6}}
+            autoFocus
+          />
+          <div style={{maxHeight: 260, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1}}>
+            {filtered.length === 0 && (
+              <div className="mono" style={{fontSize: 11, color: 'var(--text-dim)', padding: '6px 4px'}}>No tags match.</div>
+            )}
+            {filtered.map(tg => {
+              const on = selected.has(tg);
+              return (
+                <label
+                  key={tg}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    padding: '4px 6px',
+                    cursor: 'pointer',
+                    borderRadius: 4,
+                    fontFamily: 'var(--mono)',
+                    fontSize: 11,
+                    background: on ? 'var(--surface-2)' : 'transparent',
+                  }}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onToggle(tg)}
+                >
+                  <span style={{
+                    width: 12,
+                    height: 12,
+                    border: '1px solid var(--border-strong)',
+                    background: on ? 'var(--accent)' : 'transparent',
+                    borderRadius: 2,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: 'var(--bg)',
+                    flexShrink: 0,
+                  }}>
+                    {on && <Icon name="check" size={8}/>}
+                  </span>
+                  <span style={{overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>{tg}</span>
+                </label>
+              );
+            })}
+          </div>
+          {selected.size > 0 && (
+            <div style={{borderTop: '1px solid var(--border)', marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
+              <span className="mono" style={{fontSize: 10, color: 'var(--text-dim)'}}>{selected.size} selected</span>
+              <button type="button" className="btn sm" onClick={onClear}>Clear all</button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ───────── Mission Control ──────────────────────────────────────────────
 // IntegrationChip surfaces the live status of an external integration
 // (GitHub via gh, Slack via the socketmode listener). The server fills
@@ -823,39 +963,237 @@ const InboxSettingsDrawer = ({ monitor, action, onClose }) => (
   </div>
 );
 
+const INBOX_COLLAPSED_KEY = 'flow.inbox.collapsed.v1';
+const INBOX_PAGE_SIZES = [25, 50, 100];
+
+const loadInboxCollapsed = () => {
+  try {
+    const raw = window.localStorage && window.localStorage.getItem(INBOX_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch (_) { return new Set(); }
+};
+const saveInboxCollapsed = (set) => {
+  try {
+    if (!window.localStorage) return;
+    window.localStorage.setItem(INBOX_COLLAPSED_KEY, JSON.stringify(Array.from(set)));
+  } catch (_) { /* ignore */ }
+};
+
+// inbox.md headers are written as "YYYY-MM-DD HH:MM:SSZ" (space, not 'T').
+// Date.parse handles both shapes in modern engines but we normalize to ISO
+// 8601 first so older Safari/iOS keeps working.
+const parseInboxTimestamp = (ts) => {
+  if (!ts) return NaN;
+  // "2026-05-23 12:34:56Z" → "2026-05-23T12:34:56Z"
+  const iso = ts.replace(' ', 'T');
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : NaN;
+};
+
+// Bucket an item's timestamp into a coarse "when" label. Same idea as
+// Gmail's date strip — lets users scan "what came in today" without
+// reading every timestamp.
+const inboxDateBucket = (ts, now) => {
+  const t = parseInboxTimestamp(ts);
+  if (!Number.isFinite(t)) return 'older';
+  const ref = now || new Date();
+  const todayStart = new Date(ref); todayStart.setHours(0, 0, 0, 0);
+  const yesterdayStart = new Date(todayStart); yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 7);
+  const d = new Date(t);
+  if (d >= todayStart) return 'today';
+  if (d >= yesterdayStart) return 'yesterday';
+  if (d >= weekStart) return 'this-week';
+  return 'older';
+};
+
+const INBOX_BUCKETS = [
+  { id: 'today',     label: 'Today',     icon: 'inbox' },
+  { id: 'yesterday', label: 'Yesterday', icon: 'inbox' },
+  { id: 'this-week', label: 'This week', icon: 'calendar' },
+  { id: 'older',     label: 'Older',     icon: 'archive' },
+];
+
+const formatInboxTimeAgo = (ts) => {
+  const t = parseInboxTimestamp(ts);
+  if (!Number.isFinite(t)) return ts || '—';
+  const sec = Math.max(0, (Date.now() - t) / 1000);
+  if (sec < 60) return `${Math.floor(sec)}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+};
+
+// Single inbox row. Linked to the task it belongs to (clicking opens the
+// task detail). Unread items get a subtle accent rail.
+const InboxFeedRow = ({ entry, goto }) => {
+  const open = () => goto && goto(`task/${entry.task_slug}`);
+  return (
+    <article
+      className="inbox-item"
+      onClick={open}
+      style={{
+        cursor: 'pointer',
+        borderLeft: entry.unread ? '3px solid var(--accent)' : '3px solid transparent',
+      }}
+    >
+      <div className="inbox-item-rail">
+        <span className="inbox-outcome" title={entry.unread ? 'Unread' : 'Read'}>
+          <Icon name={entry.unread ? 'inbox' : 'check'} size={14}/>
+        </span>
+      </div>
+      <div className="inbox-item-main">
+        <div className="inbox-item-top">
+          <span className="inbox-source mono"><Icon name="hash" size={11}/>{entry.task_slug}</span>
+          {entry.project_slug && <span className="inbox-kind mono">{entry.project_slug}</span>}
+          <span className="inbox-kind mono">from: {entry.sender || 'unknown'}</span>
+          <span className="inbox-time mono" title={entry.timestamp}>{formatInboxTimeAgo(entry.timestamp)}</span>
+          {entry.unread && <span className="pill waiting">unread</span>}
+        </div>
+        <h3 style={{margin: '4px 0 4px'}}>{entry.task_name}</h3>
+        {entry.body_snippet && (
+          <div className="mono" style={{fontSize: 12, color: 'var(--text-dim)', whiteSpace: 'pre-wrap', lineHeight: 1.45}}>
+            {entry.body_snippet}
+          </div>
+        )}
+      </div>
+      <div className="inbox-actions">
+        <button className="btn sm primary" onClick={(e) => { e.stopPropagation(); open(); }}>
+          <Icon name="arrow-right" size={11}/>Open task
+        </button>
+      </div>
+    </article>
+  );
+};
+
 const InboxView = ({ action, goto }) => {
-  const monitor = monitorState();
-  const items = buildInboxItems(monitor);
-  const [filter, setFilter] = useState('all');
-  const [q, setQ] = useState('');
-  const [showSettings, setShowSettings] = useState(false);
+  const [feed, setFeed] = useState({ entries: [], unread_count: 0, task_count: 0, generated_at: '' });
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
+  const [reloadTick, setReloadTick] = useState(0);
 
-  // Counts drive the chip badges. Computed once per render — items is
-  // already pre-filtered to INBOX_SOURCES so we don't need to re-filter
-  // here, just bucket by per-source label.
-  const counts = {
-    all:    items.length,
-    slack:  items.filter(i => String(i.source).toLowerCase() === 'slack').length,
-    github: items.filter(i => String(i.source).toLowerCase() === 'github').length,
-    needs:  items.filter(monitorItemNeedsReview).length,
-  };
-  const filters = [
-    ['all',    'All',             counts.all],
-    ['slack',  'Slack',           counts.slack],
-    ['github', 'GitHub',          counts.github],
-    ['needs',  'Needs approval',  counts.needs],
-  ];
+  // Fetch + refresh on /api/inbox. /api/events SSE doesn't yet emit inbox
+  // mutations, so we re-pull on a 15s backstop. Cheap (one file stat per
+  // task), and the user can hit "refresh" for an immediate pull.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const resp = await fetch('/api/inbox', { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (cancelled) return;
+        setFeed({
+          entries: Array.isArray(data.entries) ? data.entries : [],
+          unread_count: data.unread_count || 0,
+          task_count: data.task_count || 0,
+          generated_at: data.generated_at || '',
+        });
+        setLoadError('');
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError(err && err.message ? err.message : 'failed to load inbox');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const timer = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [reloadTick]);
 
-  const query = q.trim().toLowerCase();
-  const filtered = items.filter(item => {
-    const src = String(item.source).toLowerCase();
-    if (filter === 'slack'  && src !== 'slack')  return false;
-    if (filter === 'github' && src !== 'github') return false;
-    if (filter === 'needs'  && !monitorItemNeedsReview(item)) return false;
-    if (!query) return true;
-    return [item.source, item.kind, item.title, item.body, item.status, item.mode, item.outcome?.action, item.outcome?.note, item.outcome?.task_slug]
-      .filter(Boolean).join(' ').toLowerCase().includes(query);
+  const items = feed.entries;
+
+  // Derived option lists power the senders / projects / tasks filters.
+  const allSenders = useMemo(() => {
+    const s = new Set();
+    items.forEach(i => { if (i.sender) s.add(i.sender); });
+    return Array.from(s).sort();
+  }, [items]);
+  const allProjects = useMemo(() => {
+    const s = new Set();
+    items.forEach(i => { if (i.project_slug) s.add(i.project_slug); });
+    return Array.from(s).sort();
+  }, [items]);
+  const allTasks = useMemo(() => {
+    const map = new Map();
+    items.forEach(i => { if (i.task_slug) map.set(i.task_slug, i.task_name || i.task_slug); });
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [items]);
+
+  const [senderSel, setSenderSel] = useState(new Set());
+  const [projectSel, setProjectSel] = useState('all');
+  const [taskSel, setTaskSel] = useState('all');
+  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [recent, setRecent] = useState('all');
+  const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState('desc');
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(1);
+  const [collapsed, setCollapsed] = useState(loadInboxCollapsed);
+
+  useEffect(() => { setPage(1); }, [senderSel, projectSel, taskSel, unreadOnly, recent, search, sortDir, pageSize]);
+
+  const toggleSender = (s) => setSenderSel(prev => {
+    const n = new Set(prev); n.has(s) ? n.delete(s) : n.add(s); return n;
   });
+  const toggleCollapsed = (key) => setCollapsed(prev => {
+    const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); saveInboxCollapsed(n); return n;
+  });
+  const expandAllBuckets = () => setCollapsed(() => { saveInboxCollapsed(new Set()); return new Set(); });
+  const collapseAllBuckets = () => {
+    const all = new Set(INBOX_BUCKETS.map(b => b.id));
+    setCollapsed(() => { saveInboxCollapsed(all); return all; });
+  };
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const recentMin = recent === '24h' ? 24*60 : recent === '7d' ? 7*24*60 : recent === '30d' ? 30*24*60 : null;
+    const now = Date.now();
+    const out = items.filter(item => {
+      if (unreadOnly && !item.unread) return false;
+      if (senderSel.size > 0 && !senderSel.has(item.sender)) return false;
+      if (projectSel !== 'all') {
+        if (projectSel === '__floating') { if (item.project_slug) return false; }
+        else if (item.project_slug !== projectSel) return false;
+      }
+      if (taskSel !== 'all' && item.task_slug !== taskSel) return false;
+      if (recentMin != null) {
+        const t = parseInboxTimestamp(item.timestamp);
+        if (!Number.isFinite(t)) return false;
+        if ((now - t) / 60000 > recentMin) return false;
+      }
+      if (q) {
+        const hay = [item.task_slug, item.task_name, item.project_slug, item.sender, item.body, item.body_snippet, item.status]
+          .filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    out.sort((a, b) => {
+      const av = parseInboxTimestamp(a.timestamp);
+      const bv = parseInboxTimestamp(b.timestamp);
+      const aa = Number.isFinite(av) ? av : 0;
+      const bb = Number.isFinite(bv) ? bv : 0;
+      return sortDir === 'desc' ? bb - aa : aa - bb;
+    });
+    return out;
+  }, [items, senderSel, projectSel, taskSel, unreadOnly, recent, search, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * pageSize;
+  const pageEnd = Math.min(pageStart + pageSize, filtered.length);
+  const visible = filtered.slice(pageStart, pageEnd);
+
+  const buckets = useMemo(() => {
+    const now = new Date();
+    const g = { today: [], yesterday: [], 'this-week': [], older: [] };
+    visible.forEach(it => { g[inboxDateBucket(it.timestamp, now)].push(it); });
+    return g;
+  }, [visible]);
 
   return (
     <div className="inbox-page">
@@ -863,42 +1201,176 @@ const InboxView = ({ action, goto }) => {
         <div>
           <div className="overview-kicker mono">Inbox</div>
           <h1>Incoming work</h1>
-          <p>Slack events and GitHub checks routed for triage. Approve to spawn an inspect/report agent, or let rules auto-spawn what you've allowlisted.</p>
+          <p>Slack DMs, GitHub PR reviews, and other external events routed into each task&apos;s <code>inbox.jsonl</code>. Click a row to open the task.</p>
         </div>
-        <button className="btn sm" onClick={() => setShowSettings(true)} title="Routing rules">
-          <Icon name="settings" size={12}/>Routing rules
-        </button>
+        <div style={{display: 'flex', gap: 6}}>
+          <button className="btn sm" onClick={() => setReloadTick(t => t + 1)} title="Refresh inbox feed">
+            <Icon name="refresh-cw" size={12}/>refresh
+          </button>
+        </div>
       </div>
 
-      <SyncStatusStrip action={action}/>
+      {loadError && (
+        <div className="inbox-safety" style={{borderColor: 'rgba(255, 90, 90, 0.4)', background: 'rgba(255, 90, 90, 0.06)'}}>
+          <Icon name="shield-alert" size={14}/>
+          <span>Failed to load inbox: <span className="mono">{loadError}</span>. Retrying every 15s.</span>
+        </div>
+      )}
 
-      <div className="inbox-safety">
-        <Icon name="shield-alert" size={14}/>
-        <span>Approving an agent here only allows inspect/report work. Replies, edits, commits, pushes, PR actions, infra/API writes, and secret disclosure still require explicit approval.</span>
-      </div>
-
-      <div className="inbox-toolbar">
-        <div className="tab-strip">
-          {filters.map(([id, label, count]) => (
-            <button key={id} className={filter===id ? 'active' : ''} onClick={() => setFilter(id)}>
-              {label}<span className="mono">{count}</span>
-            </button>
+      <div className="action-bar">
+        <div className="filter-group">
+          <span className="filter-label">unread</span>
+          <button
+            className={`btn sm ${unreadOnly ? 'primary' : ''}`}
+            onClick={() => setUnreadOnly(v => !v)}
+            title="Show only unread inbox entries"
+          >
+            <Icon name="inbox" size={10}/>unread only
+            <span className="mono" style={{marginLeft: 4, opacity: 0.7}}>{feed.unread_count}</span>
+          </button>
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">project</span>
+          <select
+            className="form-input mono"
+            style={{padding: '4px 6px', fontSize: 11, minWidth: 140}}
+            value={projectSel}
+            onChange={e => setProjectSel(e.target.value)}
+          >
+            <option value="all">all projects</option>
+            <option value="__floating">(floating)</option>
+            {allProjects.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">task</span>
+          <select
+            className="form-input mono"
+            style={{padding: '4px 6px', fontSize: 11, minWidth: 180}}
+            value={taskSel}
+            onChange={e => setTaskSel(e.target.value)}
+          >
+            <option value="all">all tasks</option>
+            {allTasks.map(([slug, name]) => (
+              <option key={slug} value={slug}>{slug}{name && name !== slug ? ` — ${name.length > 40 ? name.slice(0, 40) + '…' : name}` : ''}</option>
+            ))}
+          </select>
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">received</span>
+          {[
+            { id: 'all', label: 'all' },
+            { id: '24h', label: '24h' },
+            { id: '7d',  label: '7d' },
+            { id: '30d', label: '30d' },
+          ].map(opt => (
+            <button
+              key={opt.id}
+              className={`btn sm ${recent === opt.id ? 'primary' : ''}`}
+              onClick={() => setRecent(opt.id)}
+              title={opt.id === 'all' ? 'No age filter' : `Items received in the last ${opt.label}`}
+            >{opt.label}</button>
           ))}
         </div>
-        <div className="inbox-search">
-          <Icon name="search" size={12}/>
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Filter inbox..."/>
+        {allSenders.length > 0 && (
+          <div className="filter-group">
+            <TagFilter
+              tags={allSenders}
+              selected={senderSel}
+              onToggle={toggleSender}
+              onClear={() => setSenderSel(new Set())}
+            />
+          </div>
+        )}
+        <div className="filter-group">
+          <span className="filter-label">sort</span>
+          <button
+            className="btn sm"
+            onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}
+            title={sortDir === 'desc' ? 'Newest first — click to flip' : 'Oldest first — click to flip'}
+          >
+            <Icon name={sortDir === 'desc' ? 'chevron-down' : 'chevron-up'} size={10}/>
+            {sortDir === 'desc' ? 'newest' : 'oldest'}
+          </button>
+        </div>
+        <div className="filter-group" style={{borderRight: 'none'}}>
+          <button className="btn sm" onClick={expandAllBuckets} title="Expand all date groups"><Icon name="chevron-down" size={10}/>expand all</button>
+          <button className="btn sm" onClick={collapseAllBuckets} title="Collapse all date groups"><Icon name="chevron-right" size={10}/>collapse all</button>
+        </div>
+        <input
+          className="form-input mono"
+          style={{padding: '4px 8px', fontSize: 11, minWidth: 200}}
+          placeholder="search task, sender, body…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <div className="mono right-meta">
+          {filtered.length} of {items.length}
+          {feed.task_count > 0 && <span style={{marginLeft: 8}}>· {feed.task_count} task{feed.task_count === 1 ? '' : 's'}</span>}
         </div>
       </div>
 
-      <div className="inbox-list">
-        {filtered.length
-          ? filtered.map(item => <InboxItemRow key={`${item.id}-${item.notification_id || ''}`} item={item} action={action} goto={goto}/>)
-          : <BrandEmpty title="No incoming work" body="Slack DMs/mentions arrive through Socket Mode. GitHub PR reviews / CI alerts appear after checks run."/>
-        }
+      <div className="inbox-list" style={{display: 'flex', flexDirection: 'column', gap: 14}}>
+        {loading && items.length === 0 ? (
+          <div className="mono" style={{padding: 24, textAlign: 'center', color: 'var(--text-dim)'}}>Loading inbox…</div>
+        ) : filtered.length === 0 ? (
+          <BrandEmpty
+            title={items.length === 0 ? 'No inbox entries yet' : 'No entries match'}
+            body={items.length === 0
+              ? 'Slack DMs and GitHub PR events are appended to each task’s inbox.jsonl as they arrive. Nothing has landed yet.'
+              : 'Adjust the filters above to see more entries.'}
+          />
+        ) : (
+          INBOX_BUCKETS.map(b => {
+            const bucketItems = buckets[b.id];
+            if (!bucketItems.length) return null;
+            const isCollapsed = collapsed.has(b.id);
+            return (
+              <div key={b.id} className="session-group" style={{margin: 0}}>
+                <div className="group-head" style={{cursor: 'pointer'}} onClick={() => toggleCollapsed(b.id)}>
+                  <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={12}/>
+                  <Icon name={b.icon} size={12}/>
+                  <span className="group-title">{b.label}</span>
+                  <span className="group-count mono">{bucketItems.length}</span>
+                </div>
+                {!isCollapsed && (
+                  <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
+                    {bucketItems.map((item, idx) => (
+                      <InboxFeedRow key={`${item.task_slug}-${item.timestamp}-${idx}`} entry={item} goto={goto}/>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
       </div>
 
-      {showSettings && <InboxSettingsDrawer monitor={monitor} action={action} onClose={() => setShowSettings(false)}/>}
+      {filtered.length > 0 && (
+        <div className="action-bar" style={{marginTop: 8}}>
+          <div className="filter-group">
+            <span className="filter-label">per page</span>
+            {INBOX_PAGE_SIZES.map(sz => (
+              <button
+                key={sz}
+                className={`btn sm ${pageSize === sz ? 'primary' : ''}`}
+                onClick={() => setPageSize(sz)}
+              >{sz}</button>
+            ))}
+          </div>
+          <div className="filter-group" style={{borderRight: 'none'}}>
+            <button className="btn sm" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+              <Icon name="arrow-left" size={10}/>prev
+            </button>
+            <span className="mono" style={{fontSize: 11, color: 'var(--text-dim)', padding: '0 6px'}}>
+              {filtered.length === 0 ? '0–0' : `${pageStart + 1}–${pageEnd}`} / {filtered.length} · page {safePage} of {totalPages}
+            </span>
+            <button className="btn sm" disabled={safePage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>
+              next<Icon name="arrow-right" size={10}/>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -911,21 +1383,65 @@ const InboxView = ({ action, goto }) => {
 // for the Inbox helpers (group meta inference, rule lookups).
 
 // ───────── Sessions grid ────────────────────────────────────────────────
+const SESSIONS_COLLAPSED_KEY = 'flow.sessions.collapsed.v1';
+
+const loadCollapsedGroups = () => {
+  try {
+    const raw = window.localStorage && window.localStorage.getItem(SESSIONS_COLLAPSED_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw);
+    return new Set(Array.isArray(arr) ? arr : []);
+  } catch (_) { return new Set(); }
+};
+
+const saveCollapsedGroups = (set) => {
+  try {
+    if (!window.localStorage) return;
+    window.localStorage.setItem(SESSIONS_COLLAPSED_KEY, JSON.stringify(Array.from(set)));
+  } catch (_) { /* quota or disabled — ignore */ }
+};
+
 const SessionsGrid = ({ setFocus, action, goto }) => {
   const allSessions = AGENTS;
-  const projects = Array.from(new Set(PROJECTS_MC.map(p => p.slug).concat(allSessions.map(a => a.project).filter(Boolean))));
+  const projects = useMemo(
+    () => Array.from(new Set(PROJECTS_MC.map(p => p.slug).concat(allSessions.map(a => a.project).filter(Boolean)))),
+    [allSessions],
+  );
+  const allTags = useMemo(() => {
+    const set = new Set();
+    allSessions.forEach(a => (a.tags || []).forEach(tg => set.add(tg)));
+    return Array.from(set).sort();
+  }, [allSessions]);
+
   const [filter, setFilter] = useState({
     status: new Set(['running','waiting','idle','stale','dead']),
     provider: 'all',
     projects: new Set(projects.concat(['__adhoc'])),
+    tags: new Set(),
+    recent: 'all', // all | 24h | 7d | 30d
   });
   const [createOpen, setCreateOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(loadCollapsedGroups);
 
-  const list = allSessions.filter(a =>
-    filter.status.has(a.status)
-    && (filter.provider === 'all' || a.provider === filter.provider)
-    && (filter.projects.has(a.project || '__adhoc'))
-  );
+  const recentMinutes = filter.recent === '24h' ? 24*60
+    : filter.recent === '7d' ? 7*24*60
+    : filter.recent === '30d' ? 30*24*60
+    : null;
+
+  const list = allSessions.filter(a => {
+    if (!filter.status.has(a.status)) return false;
+    if (filter.provider !== 'all' && a.provider !== filter.provider) return false;
+    if (!filter.projects.has(a.project || '__adhoc')) return false;
+    if (filter.tags.size > 0) {
+      const tags = a.tags || [];
+      if (!tags.some(tg => filter.tags.has(tg))) return false;
+    }
+    if (recentMinutes != null) {
+      const age = typeof a.started_min === 'number' ? a.started_min : null;
+      if (age == null || age > recentMinutes) return false;
+    }
+    return true;
+  });
 
   // Group: adhoc first, then by project
   const adhoc = list.filter(a => !a.project);
@@ -939,6 +1455,34 @@ const SessionsGrid = ({ setFocus, action, goto }) => {
   const toggleProject = (p) => setFilter(f => {
     const n = new Set(f.projects); n.has(p) ? n.delete(p) : n.add(p); return { ...f, projects: n };
   });
+  const toggleTag = (tg) => setFilter(f => {
+    const n = new Set(f.tags); n.has(tg) ? n.delete(tg) : n.add(tg); return { ...f, tags: n };
+  });
+  const toggleCollapsed = (key) => setCollapsed(prev => {
+    const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); saveCollapsedGroups(n); return n;
+  });
+  const expandAll = () => setCollapsed(() => { saveCollapsedGroups(new Set()); return new Set(); });
+  const collapseAll = () => {
+    const all = new Set(['__adhoc', ...byProject.map(g => g.project)]);
+    setCollapsed(() => { saveCollapsedGroups(all); return all; });
+  };
+
+  const renderGroup = (key, items, head) => {
+    const isCollapsed = collapsed.has(key);
+    return (
+      <div key={key} id={`proj-${key}`} className="session-group">
+        <div className="group-head" style={{cursor: 'pointer'}} onClick={() => toggleCollapsed(key)}>
+          <Icon name={isCollapsed ? 'chevron-right' : 'chevron-down'} size={12}/>
+          {head}
+        </div>
+        {!isCollapsed && (
+          <div className="agent-grid big">
+            {items.map(a => <AgentTile key={a.slug} agent={a} onOpen={setFocus} onAction={action} big/>)}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -964,46 +1508,66 @@ const SessionsGrid = ({ setFocus, action, goto }) => {
           ))}
         </div>
         <div className="filter-group">
+          <span className="filter-label">created</span>
+          {[
+            { id: 'all', label: 'all' },
+            { id: '24h', label: '24h' },
+            { id: '7d', label: '7d' },
+            { id: '30d', label: '30d' },
+          ].map(opt => (
+            <button
+              key={opt.id}
+              className={`btn sm ${filter.recent === opt.id ? 'primary' : ''}`}
+              onClick={() => setFilter(f => ({...f, recent: opt.id}))}
+              title={opt.id === 'all' ? 'No age filter' : `Sessions created in the last ${opt.label}`}
+            >{opt.label}</button>
+          ))}
+        </div>
+        {allTags.length > 0 && (
+          <div className="filter-group">
+            <TagFilter
+              tags={allTags}
+              selected={filter.tags}
+              onToggle={toggleTag}
+              onClear={() => setFilter(f => ({...f, tags: new Set()}))}
+            />
+          </div>
+        )}
+        <div className="filter-group">
           <span className="filter-label">project</span>
           <button className={`btn sm ${filter.projects.has('__adhoc')?'primary':''}`} onClick={() => toggleProject('__adhoc')}>adhoc</button>
           {projects.map(p => (
             <button key={p} className={`btn sm ${filter.projects.has(p)?'primary':''}`} onClick={() => toggleProject(p)}>{p}</button>
           ))}
         </div>
+        <div className="filter-group" style={{borderRight: 'none'}}>
+          <button className="btn sm" onClick={expandAll} title="Expand all project groups"><Icon name="chevron-down" size={10}/>expand all</button>
+          <button className="btn sm" onClick={collapseAll} title="Collapse all project groups"><Icon name="chevron-right" size={10}/>collapse all</button>
+        </div>
         <div className="mono right-meta">{list.length} of {allSessions.length}</div>
         <button className="btn sm primary" onClick={() => setCreateOpen(true)}><Icon name="plus" size={11}/>Create flow</button>
       </div>
 
-      {adhoc.length > 0 && (
-        <div className="session-group">
-          <div className="group-head">
-            <Icon name="zap" size={12}/>
-            <span className="group-title">Adhoc</span>
-            <span className="group-count mono">{adhoc.length}</span>
-            <span className="group-sub">Sessions without a project</span>
-          </div>
-          <div className="agent-grid big">
-            {adhoc.map(a => <AgentTile key={a.slug} agent={a} onOpen={setFocus} onAction={action} big/>)}
-          </div>
-        </div>
-      )}
+      {adhoc.length > 0 && renderGroup('__adhoc', adhoc, (
+        <Fragment>
+          <Icon name="zap" size={12}/>
+          <span className="group-title">Adhoc</span>
+          <span className="group-count mono">{adhoc.length}</span>
+          <span className="group-sub">Sessions without a project</span>
+        </Fragment>
+      ))}
 
       {byProject.map(g => {
         const pmeta = PROJECTS_MC.find(p => p.slug === g.project);
-        return (
-          <div key={g.project} id={`proj-${g.project}`} className="session-group">
-            <div className="group-head">
-              <Icon name="folder" size={12}/>
-              <span className="group-title mono">{g.project}</span>
-              <span className="group-count mono">{g.items.length}</span>
-              {pmeta && <span className="group-sub">{pmeta.name}</span>}
-              <button className="btn sm" style={{marginLeft: 'auto'}} onClick={() => goto && goto('projects')}><Icon name="external-link" size={10}/>Open project</button>
-            </div>
-            <div className="agent-grid big">
-              {g.items.map(a => <AgentTile key={a.slug} agent={a} onOpen={setFocus} onAction={action} big/>)}
-            </div>
-          </div>
-        );
+        return renderGroup(g.project, g.items, (
+          <Fragment>
+            <Icon name="folder" size={12}/>
+            <span className="group-title mono">{g.project}</span>
+            <span className="group-count mono">{g.items.length}</span>
+            {pmeta && <span className="group-sub">{pmeta.name}</span>}
+            <button className="btn sm" style={{marginLeft: 'auto'}} onClick={(e) => { e.stopPropagation(); goto && goto('projects'); }}><Icon name="external-link" size={10}/>Open project</button>
+          </Fragment>
+        ));
       })}
 
       {list.length === 0 && (
@@ -2519,36 +3083,184 @@ const ContextDrawer = ({ agent }) => (
 );
 
 // ───────── Tasks list ───────────────────────────────────────────────────
+const TASKS_PAGE_SIZES = [25, 50, 100];
+
 const TasksList = ({ setFocus, action, goto }) => {
   const completed = ((window.MC && window.MC.DONE_TASKS) || DONE_TASKS || []);
-  const tasks = [
+  const tasks = useMemo(() => [
     ...AGENTS.map(a => ({ ...a, kind: 'task', hasAgent: true, status_outer: 'in-progress' })),
     ...BACKLOG.map(b => ({ ...b, kind: 'task', hasAgent: false, status_outer: 'backlog' })),
     ...(completed.length ? completed : (DEAD_AGENT ? [DEAD_AGENT] : [])).map(t => ({ ...t, kind: 'task', hasAgent: false, status_outer: 'done' })),
-  ];
-  const openTask = (t) => {
-    if (goto) goto(`task/${t.slug}`);
+  ], [completed]);
+
+  const allProjects = useMemo(() => {
+    const set = new Set();
+    tasks.forEach(t => { if (t.project) set.add(t.project); });
+    return Array.from(set).sort();
+  }, [tasks]);
+  const allTags = useMemo(() => {
+    const set = new Set();
+    tasks.forEach(t => (t.tags || []).forEach(tg => set.add(tg)));
+    return Array.from(set).sort();
+  }, [tasks]);
+
+  // Default: hide done tasks (mirrors server-side ExcludeDone default).
+  const [statusSel, setStatusSel] = useState(new Set(['backlog','in-progress']));
+  const [prioritySel, setPrioritySel] = useState(new Set(['high','medium','low']));
+  const [projectSel, setProjectSel] = useState('all');
+  const [tagSel, setTagSel] = useState(new Set());
+  const [agentSel, setAgentSel] = useState('all'); // all | with-agent | backlog-only
+  const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState('desc'); // age sort: desc = newest first
+  const [pageSize, setPageSize] = useState(50);
+  const [page, setPage] = useState(1);
+
+  const toggleSet = (set, setter) => (val) => setter(prev => {
+    const n = new Set(prev); n.has(val) ? n.delete(val) : n.add(val); return n;
+  });
+  const toggleStatus = toggleSet(statusSel, setStatusSel);
+  const togglePriority = toggleSet(prioritySel, setPrioritySel);
+  const toggleTag = toggleSet(tagSel, setTagSel);
+
+  // Reset to page 1 whenever filters change.
+  useEffect(() => { setPage(1); }, [statusSel, prioritySel, projectSel, tagSel, agentSel, search, sortDir, pageSize]);
+
+  const ageMinOf = (t) => {
+    if (typeof t.started_min === 'number') return t.started_min;
+    if (typeof t.age_min === 'number') return t.age_min;
+    return null;
   };
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const out = tasks.filter(t => {
+      if (!statusSel.has(t.status_outer)) return false;
+      if (!prioritySel.has(t.priority || 'medium')) return false;
+      if (projectSel !== 'all') {
+        if (projectSel === '__floating') { if (t.project && t.project !== '(floating)') return false; }
+        else if (t.project !== projectSel) return false;
+      }
+      if (tagSel.size > 0) {
+        const tags = t.tags || [];
+        if (!tags.some(tg => tagSel.has(tg))) return false;
+      }
+      if (agentSel === 'with-agent' && !t.hasAgent) return false;
+      if (agentSel === 'backlog-only' && t.status_outer !== 'backlog') return false;
+      if (q) {
+        const hay = `${t.slug || ''} ${t.name || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    out.sort((a, b) => {
+      const aa = ageMinOf(a);
+      const bb = ageMinOf(b);
+      // Treat null age as effectively oldest (for desc → bottom; for asc → bottom too).
+      const av = aa == null ? Number.MAX_SAFE_INTEGER : aa;
+      const bv = bb == null ? Number.MAX_SAFE_INTEGER : bb;
+      return sortDir === 'desc' ? av - bv : bv - av;
+    });
+    return out;
+  }, [tasks, statusSel, prioritySel, projectSel, tagSel, agentSel, search, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const pageStart = (safePage - 1) * pageSize;
+  const pageEnd = Math.min(pageStart + pageSize, filtered.length);
+  const visible = filtered.slice(pageStart, pageEnd);
+
+  const openTask = (t) => { if (goto) goto(`task/${t.slug}`); };
+  const ageHeaderArrow = sortDir === 'desc' ? '↓' : '↑';
+
   return (
     <div>
       <div className="action-bar">
-        <span style={{fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em'}}>Status</span>
-        {['backlog','in-progress','done'].map(s => <button key={s} className="btn sm">{s}</button>)}
-        <span style={{fontSize: 11, color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.08em', marginLeft: 12}}>Priority</span>
-        {['high','medium','low'].map(p => <button key={p} className="btn sm">{p}</button>)}
-        <span style={{marginLeft: 'auto', fontFamily:'var(--mono)', fontSize: 11, color: 'var(--text-dim)'}}>{tasks.length} tasks</span>
+        <div className="filter-group">
+          <span className="filter-label">status</span>
+          {['backlog','in-progress','done'].map(s => (
+            <button
+              key={s}
+              className={`pill ${s}`}
+              onClick={() => toggleStatus(s)}
+              style={{opacity: statusSel.has(s) ? 1 : 0.35, cursor: 'pointer', border: statusSel.has(s) ? null : '1px dashed var(--border)'}}
+            >{s}</button>
+          ))}
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">priority</span>
+          {['high','medium','low'].map(p => (
+            <button
+              key={p}
+              className={`btn sm ${prioritySel.has(p) ? 'primary' : ''}`}
+              onClick={() => togglePriority(p)}
+              style={{opacity: prioritySel.has(p) ? 1 : 0.55}}
+            >{p}</button>
+          ))}
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">project</span>
+          <select
+            className="form-input mono"
+            style={{padding: '4px 6px', fontSize: 11, minWidth: 140}}
+            value={projectSel}
+            onChange={e => setProjectSel(e.target.value)}
+          >
+            <option value="all">all projects</option>
+            <option value="__floating">(floating)</option>
+            {allProjects.filter(p => p !== '(floating)').map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
+        </div>
+        <div className="filter-group">
+          <span className="filter-label">scope</span>
+          {[
+            { id: 'all', label: 'all' },
+            { id: 'with-agent', label: 'live' },
+            { id: 'backlog-only', label: 'backlog' },
+          ].map(opt => (
+            <button
+              key={opt.id}
+              className={`btn sm ${agentSel === opt.id ? 'primary' : ''}`}
+              onClick={() => setAgentSel(opt.id)}
+            >{opt.label}</button>
+          ))}
+        </div>
+        {allTags.length > 0 && (
+          <div className="filter-group">
+            <TagFilter
+              tags={allTags}
+              selected={tagSel}
+              onToggle={toggleTag}
+              onClear={() => setTagSel(new Set())}
+            />
+          </div>
+        )}
+        <input
+          className="form-input mono"
+          style={{padding: '4px 8px', fontSize: 11, minWidth: 160}}
+          placeholder="search slug or name"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+        />
+        <div className="mono right-meta">{filtered.length} of {tasks.length}</div>
       </div>
       <table className="table">
         <thead>
           <tr>
             <th style={{width: 30}}></th>
             <th>Status</th><th>Priority</th><th>Slug</th><th>Name</th><th>Project</th>
-            <th>Dependencies</th><th>Branch</th><th>Age</th><th>Tags</th><th></th>
+            <th>Dependencies</th><th>Branch</th>
+            <th
+              style={{cursor: 'pointer', userSelect: 'none'}}
+              onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}
+              title={`Sort by age (${sortDir === 'desc' ? 'newest first' : 'oldest first'})`}
+            >Age <span style={{color: 'var(--accent)'}}>{ageHeaderArrow}</span></th>
+            <th>Tags</th><th></th>
           </tr>
         </thead>
         <tbody>
-          {tasks.map(t => {
+          {visible.map(t => {
             const blockReason = taskStartBlocker(t);
+            const age = ageMinOf(t);
             return (
             <tr key={t.slug} style={{cursor: 'pointer'}} onClick={() => openTask(t)}>
               <td>{t.hasAgent && <Dot status={t.status}/>}</td>
@@ -2559,7 +3271,7 @@ const TasksList = ({ setFocus, action, goto }) => {
               <td className="mono" style={{fontSize: 11, color: 'var(--text-dim)'}}>{t.project}</td>
               <td><DependencyBadges task={t} compact/></td>
               <td>{t.branch ? <BranchChip name={t.branch}/> : <span style={{color: 'var(--text-faint)'}}>—</span>}</td>
-              <td className="mono" style={{fontSize: 11, color: 'var(--text-dim)'}}>{t.started_min ? formatAge(t.started_min) : '—'}</td>
+              <td className="mono" style={{fontSize: 11, color: 'var(--text-dim)'}}>{age != null ? formatAge(age) : '—'}</td>
               <td>{(t.tags || []).slice(0,2).map(tg => <span key={tg} className="tag-chip" style={{marginRight: 4}}>{tg}</span>)}</td>
               <td>
                 <div className="row-attach">
@@ -2575,8 +3287,34 @@ const TasksList = ({ setFocus, action, goto }) => {
               </td>
             </tr>
           );})}
+          {visible.length === 0 && (
+            <tr><td colSpan={11} style={{padding: 24, textAlign: 'center', color: 'var(--text-dim)', fontFamily: 'var(--mono)', fontSize: 12}}>No tasks match the current filters.</td></tr>
+          )}
         </tbody>
       </table>
+      <div className="action-bar" style={{marginTop: 8}}>
+        <div className="filter-group">
+          <span className="filter-label">per page</span>
+          {TASKS_PAGE_SIZES.map(sz => (
+            <button
+              key={sz}
+              className={`btn sm ${pageSize === sz ? 'primary' : ''}`}
+              onClick={() => setPageSize(sz)}
+            >{sz}</button>
+          ))}
+        </div>
+        <div className="filter-group" style={{borderRight: 'none'}}>
+          <button className="btn sm" disabled={safePage <= 1} onClick={() => setPage(p => Math.max(1, p - 1))}>
+            <Icon name="arrow-left" size={10}/>prev
+          </button>
+          <span className="mono" style={{fontSize: 11, color: 'var(--text-dim)', padding: '0 6px'}}>
+            {filtered.length === 0 ? '0–0' : `${pageStart + 1}–${pageEnd}`} / {filtered.length} · page {safePage} of {totalPages}
+          </span>
+          <button className="btn sm" disabled={safePage >= totalPages} onClick={() => setPage(p => Math.min(totalPages, p + 1))}>
+            next<Icon name="arrow-right" size={10}/>
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -4184,6 +4922,6 @@ const ShortcutsOverlay = ({ onClose }) => (
 
 window.MC_SCREENS = {
   MissionControl, SessionsGrid, SessionDetail, CompletedSessionView, TasksList, TaskDetail, ProjectsList, ProjectDetail, PlaybooksList, PlaybookDetail,
-  TrashView, KBView, MemorySourcesView, WorkdirsView,
+  TrashView, KBView, MemorySourcesView, WorkdirsView, InboxView,
   CommandPalette, QRModal, ConfirmModal, ShortcutsOverlay, CreateFlowModal, CreateProjectModal,
 };

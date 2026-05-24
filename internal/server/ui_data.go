@@ -171,17 +171,20 @@ type uiTermLine struct {
 }
 
 type uiBacklogTask struct {
-	Slug      string        `json:"slug"`
-	Name      string        `json:"name"`
-	Project   string        `json:"project"`
-	Parent    *TaskSummary  `json:"parent,omitempty"`
-	Parents   []TaskSummary `json:"parents,omitempty"`
-	Children  []TaskSummary `json:"children,omitempty"`
-	Provider  string        `json:"provider"`
-	Priority  string        `json:"priority"`
-	Due       string        `json:"due,omitempty"`
-	Tags      []string      `json:"tags,omitempty"`
-	WaitingOn *string       `json:"waiting_on,omitempty"`
+	Slug       string        `json:"slug"`
+	Name       string        `json:"name"`
+	Project    string        `json:"project"`
+	Parent     *TaskSummary  `json:"parent,omitempty"`
+	Parents    []TaskSummary `json:"parents,omitempty"`
+	Children   []TaskSummary `json:"children,omitempty"`
+	Provider   string        `json:"provider"`
+	Priority   string        `json:"priority"`
+	Due        string        `json:"due,omitempty"`
+	Tags       []string      `json:"tags,omitempty"`
+	WaitingOn  *string       `json:"waiting_on,omitempty"`
+	// StartedMin is minutes since the task row was created. Lets the UI sort
+	// backlog tasks by age alongside live sessions (uiAgent.StartedMin).
+	StartedMin int `json:"started_min"`
 }
 
 type uiProject struct {
@@ -899,16 +902,17 @@ func (s *Server) uiBacklog(tv TaskView) uiBacklogTask {
 		provider = *tv.SessionProvider
 	}
 	out := uiBacklogTask{
-		Slug:      tv.Slug,
-		Name:      tv.Name,
-		Project:   project,
-		Parent:    tv.Parent,
-		Parents:   tv.Parents,
-		Children:  tv.Children,
-		Provider:  provider,
-		Priority:  tv.Priority,
-		Tags:      tv.Tags,
-		WaitingOn: tv.WaitingOn,
+		Slug:       tv.Slug,
+		Name:       tv.Name,
+		Project:    project,
+		Parent:     tv.Parent,
+		Parents:    tv.Parents,
+		Children:   tv.Children,
+		Provider:   provider,
+		Priority:   tv.Priority,
+		Tags:       tv.Tags,
+		WaitingOn:  tv.WaitingOn,
+		StartedMin: minutesSince(tv.CreatedAt),
 	}
 	if tv.DueInfo != nil {
 		out.Due = *tv.DueInfo
@@ -1169,7 +1173,13 @@ func laterTimestamp(a, b string) string {
 
 func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 	now = now.In(time.Local)
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).AddDate(0, 0, -83)
+	// Align the grid to a Sunday-start so the row labels (Mon/Wed/Fri)
+	// are correct regardless of what day "today" is. End on the current
+	// week's Saturday — future days in this week get count=0.
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	weekdayOffset := int(today.Weekday()) // Sun=0..Sat=6
+	thisWeekSunday := today.AddDate(0, 0, -weekdayOffset)
+	start := thisWeekSunday.AddDate(0, 0, -77) // 11 prior full weeks + this week = 12 weeks
 	days := make([]uiActivityDay, 84)
 	index := make(map[string]int, len(days))
 	seenTasks := make(map[string]map[string]bool)

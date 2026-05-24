@@ -207,6 +207,10 @@ session. The monitor is generic: Slack, GitHub, and future sources use
 the same append-to-inbox contract, and the agent continues the work in
 place instead of spawning a separate solver.
 
+Provider capability note: Claude Code's native background sessions are separate from Flow's monitor.
+Codex currently exposes experimental app-server/remote-control building blocks, not a guaranteed Claude-style background scheduler that Flow can depend on.
+Therefore Flow's supported path for both providers is the task-local inbox monitor + Flow-owned terminal wake; any native provider backend should be an opt-in integration behind this contract.
+
 ### What it doesn't do
 
 No auth, no TLS, loopback only. Mission Control is a *local* tool —

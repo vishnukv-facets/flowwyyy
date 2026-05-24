@@ -2201,6 +2201,12 @@ sending a short prompt into the existing Claude or Codex session. The
 monitor never performs the work itself and never starts a separate
 background solver for the task.
 
+Provider capability note: Flow does not rely on host-native background
+monitors. Claude Code may offer native background-session commands such
+as `claude agents`, `/bg`, or `--bg`, but Flow still routes
+Slack/GitHub/future-source events through `inbox.jsonl` and the
+Flow-owned terminal wake path. Codex tasks use that same terminal wake path; do not assume a Codex-native `/bg`, scheduler, or app-server/remote-control integration unless Flow adds a gated backend for it.
+
 When you are woken by this monitor:
 
 1. Read the newest `inbox.jsonl` entries for the current task.

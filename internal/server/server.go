@@ -64,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/fs/mkdir", s.handleFSMkdir)
 	mux.HandleFunc("/api/tasks", s.handleTasks)
 	mux.HandleFunc("/api/tasks/", s.handleTaskRoute)
+	mux.HandleFunc("/api/inbox", s.handleInbox)
 	mux.HandleFunc("/api/projects", s.handleProjects)
 	mux.HandleFunc("/api/projects/", s.handleProjectRoute)
 	mux.HandleFunc("/api/playbooks", s.handlePlaybooks)

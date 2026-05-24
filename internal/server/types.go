@@ -148,6 +148,30 @@ type InboxView struct {
 	Entries     []InboxEntry `json:"entries"`
 }
 
+// InboxFeedEntry is one inbox.md row enriched with the task it belongs to.
+// Used by the global /api/inbox aggregation. BodySnippet is a truncated
+// preview (full body still in Body so the UI can expand on demand).
+type InboxFeedEntry struct {
+	TaskSlug    string  `json:"task_slug"`
+	TaskName    string  `json:"task_name"`
+	ProjectSlug *string `json:"project_slug,omitempty"`
+	Status      string  `json:"status"`
+	Timestamp   string  `json:"timestamp"`
+	Sender      string  `json:"sender"`
+	Body        string  `json:"body"`
+	BodySnippet string  `json:"body_snippet"`
+	Unread      bool    `json:"unread"`
+}
+
+// InboxFeed is the GET /api/inbox response shape — a global aggregation of
+// every task's inbox.md entries, newest first.
+type InboxFeed struct {
+	Entries     []InboxFeedEntry `json:"entries"`
+	UnreadCount int              `json:"unread_count"`
+	TaskCount   int              `json:"task_count"`
+	GeneratedAt string           `json:"generated_at"`
+}
+
 // LifecycleEvent is one row of the per-session event timeline.
 type LifecycleEvent struct {
 	Time     string `json:"time"`

@@ -443,12 +443,31 @@ const ActivityHeatmap = ({ data = [] }) => {
     if (!count) return `No activity on ${label}`;
     return `${count} action${count === 1 ? '' : 's'} on ${label}${taskSuffix}`;
   };
+  // Resolve the browser's IANA zone (e.g. "Asia/Kolkata") plus a short
+  // abbreviation (e.g. "IST") so the header makes the bucketing explicit.
+  // Buckets are computed by the server in time.Local; surfacing the zone
+  // here makes "what day is this cell?" un-ambiguous.
+  const tzInfo = useMemo(() => {
+    let zone = '';
+    let abbr = '';
+    try {
+      zone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch (_) { /* ignored */ }
+    try {
+      const parts = new Intl.DateTimeFormat(undefined, { timeZoneName: 'short' }).formatToParts(new Date());
+      const tzPart = parts.find(p => p.type === 'timeZoneName');
+      if (tzPart) abbr = tzPart.value;
+    } catch (_) { /* ignored */ }
+    return { zone, abbr };
+  }, []);
+  const tzLabel = tzInfo.abbr ? `${tzInfo.abbr}${tzInfo.zone ? ` · ${tzInfo.zone}` : ''}` : (tzInfo.zone || 'local time');
 
   return (
     <div className="heatmap gh">
       <div className="heatmap-head">
         <Icon name="git-commit" size={11}/>
         <span>Agent activity · last 12 weeks</span>
+        <span className="mono dim" title={`Buckets are aligned to your local timezone (${tzInfo.zone || 'system local'})`}>· {tzLabel}</span>
         <span className="mono dim gh-action-count">{totalActions} actions</span>
       </div>
       <div className="gh-grid">
@@ -470,7 +489,6 @@ const ActivityHeatmap = ({ data = [] }) => {
                     <div
                       key={day.date}
                       className="gh-cell"
-                      title={`${count} action${count === 1 ? '' : 's'} · ${day.date}${tasks ? ` · ${tasks}` : ''}`}
                       data-tip={tip}
                       aria-label={tip}
                       tabIndex={0}
