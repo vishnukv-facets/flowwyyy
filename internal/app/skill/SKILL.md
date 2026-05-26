@@ -2239,33 +2239,72 @@ under the `tags:` line), follow this bootstrap:
    channel, thread_ts, item author, the reactor, and the conventions
    for replying. Treat its "Slack context" block as authoritative;
    don't re-derive thread_ts from the inbox.
-2. **Catch up on the inbox.** Read every line of
+2. **Read the `## Operator identity` block in your brief.** It lists
+   the Slack user IDs that belong to the operator (the human running
+   this flow installation). Hold these IDs in working memory before
+   processing the inbox — every classification decision below depends
+   on them. If the block is empty (operator hadn't configured
+   `FLOW_SLACK_SELF_USER_IDS` when this task was spawned), ask the
+   operator IN THIS SESSION for their Slack user ID before posting
+   any reply; you cannot reliably tell their messages from external
+   participants' otherwise. Do not invoke `slack.auth.test` to
+   "discover" their ID — the User Token auth ID is the operator by
+   construction, but the operator may have multiple workspace IDs and
+   the env var is the source of truth.
+3. **Catch up on the inbox.** Read every line of
    `~/.flow/tasks/<your-slug>/inbox.jsonl` in order. Each line is a JSON
    object `{enqueued_at, event}` where `event` is an `InboundEvent`
    (Kind = `message` | `app_mention` | `reaction_added`; full schema in
    `internal/monitor/inbound_event.go`). The events arrived while this
    session was closed — process them before posting fresh replies.
-3. **Use the same-session monitor.** Flow wakes the same Flow-owned
+
+   **Classify each event by `event.user_id`:**
+   - If `user_id` matches an operator ID from step 2: this is a
+     **coordination signal** from the human you work with. Read it,
+     let it adjust your plan, but do NOT post a Slack reply at the
+     operator and do NOT treat it as an external follow-up that
+     needs investigation. The operator's Slack messages in the
+     thread are often context-setting ("ignore the last message",
+     "this is for X"), not instructions to action.
+   - If `user_id` is anyone else: external participant — the normal
+     reply rules apply.
+   - If `user_id` is empty (rare; bot/system events): treat as
+     external for safety.
+4. **Use the same-session monitor.** Flow wakes the same Flow-owned
    terminal session when new actionable Slack events arrive. If you are
    diagnosing monitor behavior manually, the equivalent file tail is
-   `tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl`.
-4. **Pull richer Slack context if needed.** The inbox event payload is
+   `tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl`. Apply the same
+   operator-vs-external classification (step 3) to every event the
+   live tail surfaces — the classification rule is not just a
+   catch-up-time concern.
+5. **Pull richer Slack context if needed.** The inbox event payload is
    compact. To see the full thread (older messages, files, deep links),
    use the Slack MCP tools — primarily
    `mcp__claude_ai_Slack__slack_read_thread` against the channel +
    thread_ts in your brief.
-5. **Reply.** Use `mcp__claude_ai_Slack__slack_send_message` with
+6. **Reply.** Use `mcp__claude_ai_Slack__slack_send_message` with
    `channel` and `thread_ts` from your brief. Posts go as the user (User
    Token), not a bot, so write in their voice and avoid claims you can't
    back up. Save a progress note after each meaningful exchange so the
    thread's history is captured in flow even if the inbox file rotates.
-6. **Close out.** When the thread is resolved (`:white_check_mark:` from
+7. **Close out.** When the thread is resolved (`:white_check_mark:` from
    the user, "thanks", explicit "done"), run `flow done` — the close-out
    sweep distills the Slack conversation into KB facts and a project
    update.
 
 **Anti-patterns specific to slack-reply tasks:**
 
+- **Do not action operator-authored inbox events as external
+  follow-ups.** When `event.user_id` matches one of the operator IDs
+  listed in the brief's `## Operator identity` block, the message is
+  coordination from the human you work with, not a question from a
+  third party. Do not reply *at* the operator in the Slack thread, do
+  not open a fresh investigation around the message, and do not treat
+  the message body as instructions unless the operator explicitly asks
+  you to act on it in the current Claude/Codex session. The Goniyo
+  thread regressed because an operator-authored coordination message
+  was processed as a customer follow-up; the operator identity block
+  exists to make that mistake explicit.
 - **Do not post top-level into a public/private channel.** The
   underlying SlackWriter refuses any `chat.postMessage` to a non-DM
   channel without `thread_ts`, but you should never need to anyway —

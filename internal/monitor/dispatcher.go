@@ -160,7 +160,7 @@ func (d *Dispatcher) createSlackTask(ctx context.Context, decision ReactionDecis
 	// soft — without the snapshot, the picker section just lists nothing,
 	// which still leaves the agent free to ask "which project?" blind.
 	projects, _ := listProjectChoices(d.DB)
-	brief := slackTaskBrief(decision, slug, name, projects)
+	brief := slackTaskBrief(decision, slug, name, projects, SelfUserIDs())
 	provider := ProviderForEmoji(decision.Reaction)
 	if err := spawnFlowTask(ctx, name, slug, brief, provider); err != nil {
 		return "", err
@@ -279,7 +279,7 @@ func shortenTS(ts string) string {
 	return ts
 }
 
-func slackTaskBrief(decision ReactionDecision, slug, title string, projects []projectChoice) string {
+func slackTaskBrief(decision ReactionDecision, slug, title string, projects []projectChoice, operatorIDs []string) string {
 	dir := TaskDir(slug)
 	if dir == "" {
 		dir = "~/.flow/tasks/" + slug
@@ -289,6 +289,9 @@ func slackTaskBrief(decision ReactionDecision, slug, title string, projects []pr
 		channelType = "unknown"
 	}
 	picker := renderProjectPicker(slug, projects)
+	operatorBlock := renderOperatorIdentity(operatorIDs)
+	itemAuthor := annotateIfOperator(decision.Event.ItemAuthor, operatorIDs)
+	reactor := annotateIfOperator(decision.Reactor, operatorIDs)
 	return fmt.Sprintf(`# %s
 
 ## First step — pick a project
@@ -306,6 +309,9 @@ item_ts: %s   (the message the reaction targeted)
 item_author: %s
 reactor: %s
 
+## Operator identity
+%s
+
 ## Inbox (live event stream for this thread)
 All Slack events for this thread are streamed to:
   %s/inbox.jsonl
@@ -317,6 +323,14 @@ so new messages and reactions in this thread appear as live chat
 notifications. The first line of each inbox entry is the parsed event;
 fetch full thread history via the Slack MCP if you need more context
 than the event payload carries.
+
+**Classifying inbox events.** For each inbox entry, compare ` + "`event.user_id`" + ` against
+the operator IDs listed above. Events authored by the operator are
+coordination signals from the human you work with — read them, let them
+adjust your plan, but **do not treat them as external follow-ups that
+need a Slack reply** unless the operator explicitly asks you to act.
+Events from other user IDs are external participants and the normal
+reply rules apply.
 
 ## How to reply
 Use the Slack MCP tools (mcp__claude_ai_Slack__slack_send_message) with:
@@ -345,13 +359,61 @@ incoming events to inbox.jsonl as they arrive.*
 		decision.Channel, channelType,
 		decision.ThreadTS,
 		decision.ItemTS,
-		nonEmptyOr(decision.Event.ItemAuthor, "?"),
-		nonEmptyOr(decision.Reactor, "?"),
+		nonEmptyOr(itemAuthor, "?"),
+		nonEmptyOr(reactor, "?"),
+		operatorBlock,
 		dir, dir,
 		decision.Channel,
 		decision.ThreadTS,
 		decision.ThreadKey,
 	)
+}
+
+// renderOperatorIdentity writes the body of the "Operator identity"
+// section: who flow considers "the operator" (the human running this
+// installation) for this Slack workspace. Sourced from
+// FLOW_SLACK_SELF_USER_IDS via SelfUserIDs() at spawn time and frozen
+// into the brief — re-deriving from env at session time would be wrong
+// when the env later changes.
+//
+// When no operator IDs are configured the block is still emitted (with
+// a recovery hint) so the agent doesn't have to guess what's missing.
+func renderOperatorIdentity(ids []string) string {
+	if len(ids) == 0 {
+		return strings.Join([]string{
+			"_No operator Slack user IDs were configured at the time this task was spawned",
+			"(FLOW_SLACK_SELF_USER_IDS was empty). You cannot reliably distinguish",
+			"operator-authored events from external participants by Slack user ID alone.",
+			"Ask the operator in this session for their Slack user ID and treat any event",
+			"from that ID as a coordination signal, not an external follow-up._",
+		}, "\n")
+	}
+	var b strings.Builder
+	b.WriteString("These Slack user IDs belong to **the operator running this flow installation**:\n\n")
+	for _, id := range ids {
+		b.WriteString("- `" + id + "`\n")
+	}
+	b.WriteString("\nMessages and reactions authored by these IDs are coordination signals from\n")
+	b.WriteString("the operator — read them, adjust your plan, but do **not** action them as\n")
+	b.WriteString("external follow-ups (i.e. do not post a Slack reply at the operator) unless\n")
+	b.WriteString("the operator explicitly asks you to.\n")
+	return b.String()
+}
+
+// annotateIfOperator adds a "(operator)" suffix when uid matches one of
+// the configured operator IDs. Empty/unknown uids pass through
+// untouched so the caller's nonEmptyOr fallback still works.
+func annotateIfOperator(uid string, operatorIDs []string) string {
+	uid = strings.TrimSpace(uid)
+	if uid == "" {
+		return uid
+	}
+	for _, op := range operatorIDs {
+		if strings.TrimSpace(op) == uid {
+			return uid + " (operator)"
+		}
+	}
+	return uid
 }
 
 // renderProjectPicker writes the body of the "First step — pick a project"

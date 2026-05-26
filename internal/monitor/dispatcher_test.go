@@ -205,6 +205,110 @@ func TestRenderProjectPicker_EmptyCatalogFallsBack(t *testing.T) {
 	}
 }
 
+func TestDispatcher_BriefIncludesOperatorIdentity(t *testing.T) {
+	// Multi-workspace operator: both IDs must land in the brief so the
+	// downstream agent can match either against incoming inbox events. The
+	// reactor (the user adding the :claude: reaction) is also the operator
+	// in this scenario, so the "reactor:" line must carry the (operator)
+	// annotation — that's the eyeball cue when the brief is read top-down.
+	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me, U_alt")
+	t.Setenv("FLOW_SLACK_TRIGGER_EMOJI", "claude")
+	t.Setenv("FLOW_SLACK_AUTOOPEN", "0")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	d := NewDispatcher(db, nil)
+	if err := d.Dispatch(context.Background(), mustParseReaction(t, "U_me", "claude", "C123", "1.10", "1.01")); err != nil {
+		t.Fatalf("Dispatch err = %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("spawn count = %d, want 1", len(*spawns))
+	}
+	brief := (*spawns)[0].Brief
+
+	for _, want := range []string{
+		"## Operator identity",
+		"`U_me`",
+		"`U_alt`",
+		"reactor: U_me (operator)",
+		// The inbox classification copy must reference event.user_id so the
+		// agent knows which field to compare against.
+		"event.user_id",
+		"coordination signal",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q\n--- brief ---\n%s", want, brief)
+		}
+	}
+}
+
+func TestSlackTaskBrief_AnnotatesItemAuthorWhenOperator(t *testing.T) {
+	// When the operator reacted to their own earlier message (a common
+	// escalation pattern — react :claude: to one of your own coordination
+	// messages to spawn an agent on the thread), both reactor AND item_author
+	// equal the operator's ID. The brief must annotate both lines so the
+	// agent isn't tricked into thinking the item author is an external party
+	// to reply to.
+	decision := ReactionDecision{
+		Trigger:   true,
+		ThreadKey: "C123:1.01",
+		Channel:   "C123",
+		ThreadTS:  "1.01",
+		ItemTS:    "1.01",
+		Reactor:   "U_me",
+		Reaction:  "claude",
+		Event: InboundEvent{
+			Kind:        "reaction_added",
+			Channel:     "C123",
+			ChannelType: "channel",
+			TS:          "1.10",
+			ThreadTS:    "1.01",
+			UserID:      "U_me",
+			Reaction:    "claude",
+			ItemChannel: "C123",
+			ItemTS:      "1.01",
+			ItemAuthor:  "U_me",
+		},
+	}
+	brief := slackTaskBrief(decision, "slack-c123-1-01", "Slack reply", nil, []string{"U_me"})
+
+	for _, want := range []string{
+		"item_author: U_me (operator)",
+		"reactor: U_me (operator)",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q\n--- brief ---\n%s", want, brief)
+		}
+	}
+	// And the inverse: a non-operator item_author must NOT get the suffix.
+	decision.Event.ItemAuthor = "U_customer"
+	brief = slackTaskBrief(decision, "slack-c123-1-01", "Slack reply", nil, []string{"U_me"})
+	if strings.Contains(brief, "U_customer (operator)") {
+		t.Errorf("non-operator item_author should not be annotated:\n%s", brief)
+	}
+	if !strings.Contains(brief, "item_author: U_customer") {
+		t.Errorf("non-operator item_author still expected in brief:\n%s", brief)
+	}
+}
+
+func TestRenderOperatorIdentity_GracefulWhenUnconfigured(t *testing.T) {
+	body := renderOperatorIdentity(nil)
+	// Recovery copy must (a) explain why the block is empty and (b) tell
+	// the agent how to keep the classification rule from silently failing.
+	// Without this, an empty block would tacitly invite "everyone is
+	// external," which is the Goniyo failure mode.
+	for _, want := range []string{
+		"FLOW_SLACK_SELF_USER_IDS",
+		"Ask the operator",
+		"coordination signal",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("empty-id recovery copy missing %q\n--- body ---\n%s", want, body)
+		}
+	}
+}
+
 func TestDispatcher_CodexEmojiSpawnsCodexProvider(t *testing.T) {
 	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
 	t.Setenv("FLOW_SLACK_TRIGGER_EMOJI", "claude,codex")
