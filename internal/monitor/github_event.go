@@ -13,9 +13,11 @@ const (
 	GitHubEventPRReviewComment          GitHubEventKind = "pr_review_comment"
 	GitHubEventPRReviewChangesRequested GitHubEventKind = "pr_review_changes_requested"
 	GitHubEventPRReviewApproved         GitHubEventKind = "pr_review_approved"
+	GitHubEventPRComment                GitHubEventKind = "pr_comment"
 	GitHubEventPRHeadUpdated            GitHubEventKind = "pr_head_updated"
 	GitHubEventPRMerged                 GitHubEventKind = "pr_merged"
 	GitHubEventIssueAssigned            GitHubEventKind = "issue_assigned"
+	GitHubEventIssueComment             GitHubEventKind = "issue_comment"
 )
 
 type GitHubEvent struct {
@@ -54,15 +56,21 @@ func (ev GitHubEvent) IsPR() bool {
 		ev.Kind == GitHubEventPRReviewComment ||
 		ev.Kind == GitHubEventPRReviewChangesRequested ||
 		ev.Kind == GitHubEventPRReviewApproved ||
+		ev.Kind == GitHubEventPRComment ||
 		ev.Kind == GitHubEventPRHeadUpdated ||
 		ev.Kind == GitHubEventPRMerged
+}
+
+func (ev GitHubEvent) IsIssue() bool {
+	return ev.Kind == GitHubEventIssueAssigned ||
+		ev.Kind == GitHubEventIssueComment
 }
 
 func (ev GitHubEvent) LinkTag() string {
 	if ev.Number <= 0 || ev.RepoKey() == "" {
 		return ""
 	}
-	if ev.Kind == GitHubEventIssueAssigned {
+	if ev.IsIssue() {
 		return fmt.Sprintf("gh-issue:%s#%d", ev.RepoKey(), ev.Number)
 	}
 	return fmt.Sprintf("gh-pr:%s#%d", ev.RepoKey(), ev.Number)
@@ -76,7 +84,12 @@ func (ev GitHubEvent) EventKeyValue() string {
 		return ""
 	}
 	if ev.CommentID != "" {
-		return "review-comment:" + ev.CommentID
+		switch ev.Kind {
+		case GitHubEventPRComment, GitHubEventIssueComment:
+			return "issue-comment:" + ev.CommentID
+		default:
+			return "review-comment:" + ev.CommentID
+		}
 	}
 	return fmt.Sprintf("%s:%s", ev.LinkTag(), ev.Kind)
 }
@@ -93,7 +106,7 @@ func gitHubPRHeadEventKey(owner, repo string, number int, sha string) string {
 
 func GitHubSlugForEvent(ev GitHubEvent) string {
 	prefix := "gh-pr-"
-	if ev.Kind == GitHubEventIssueAssigned {
+	if ev.IsIssue() {
 		prefix = "gh-issue-"
 	}
 	base := strings.ToLower(strings.TrimSpace(ev.RepoKey()))

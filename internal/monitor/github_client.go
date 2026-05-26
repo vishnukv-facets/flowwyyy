@@ -24,6 +24,7 @@ type GitHubAPIClient interface {
 	GetPullRequest(ctx context.Context, owner, repo string, number int) (githubPullRequestRecord, error)
 	ListReviewComments(ctx context.Context, owner, repo string, number int, since string) ([]githubReviewCommentRecord, error)
 	ListReviews(ctx context.Context, owner, repo string, number int, since string) ([]githubReviewRecord, error)
+	ListIssueComments(ctx context.Context, owner, repo string, number int, since string) ([]githubIssueCommentRecord, error)
 }
 
 func GitHubPollingEnabled() bool {
@@ -121,6 +122,13 @@ func (p GitHubPoller) Poll(ctx context.Context) ([]GitHubEvent, error) {
 	for _, ev := range comments {
 		add(ev)
 	}
+	issueComments, err := p.pollTrackedIssueComments(ctx)
+	if err != nil {
+		return events, err
+	}
+	for _, ev := range issueComments {
+		add(ev)
+	}
 	return events, nil
 }
 
@@ -213,8 +221,71 @@ func (p GitHubPoller) pollTrackedPRComments(ctx context.Context) ([]GitHubEvent,
 				events = append(events, ev)
 			}
 		}
+		issueComments, err := p.Client.ListIssueComments(ctx, pr.Owner, pr.Repo, pr.Number, "")
+		if err != nil {
+			return events, err
+		}
+		for _, c := range issueComments {
+			ev, ok := c.toGitHubEvent(pr.Owner, pr.Repo, pr.Number, true)
+			if !ok {
+				continue
+			}
+			if p.isSelfAuthored(ev.Author) {
+				continue
+			}
+			events = append(events, ev)
+		}
 	}
 	return events, nil
+}
+
+// pollTrackedIssueComments fetches top-level comments for tracked issues
+// (rows in task_tags with prefix gh-issue:). Uses the same endpoint as
+// pollTrackedPRComments for PR top-level comments — GitHub serves issue
+// and PR conversation comments through /issues/{n}/comments uniformly.
+func (p GitHubPoller) pollTrackedIssueComments(ctx context.Context) ([]GitHubEvent, error) {
+	if p.DB == nil {
+		return nil, nil
+	}
+	issues, err := trackedGitHubIssues(p.DB)
+	if err != nil {
+		return nil, err
+	}
+	var events []GitHubEvent
+	for _, issue := range issues {
+		comments, err := p.Client.ListIssueComments(ctx, issue.Owner, issue.Repo, issue.Number, "")
+		if err != nil {
+			return events, err
+		}
+		for _, c := range comments {
+			ev, ok := c.toGitHubEvent(issue.Owner, issue.Repo, issue.Number, false)
+			if !ok {
+				continue
+			}
+			if p.isSelfAuthored(ev.Author) {
+				continue
+			}
+			events = append(events, ev)
+		}
+	}
+	return events, nil
+}
+
+// isSelfAuthored returns true when login matches one of the configured
+// SelfLogins (case-insensitive). Top-level comments authored by the
+// monitored user echo back through GitHub's comments API and would
+// otherwise wake the user's own task on their own comment.
+func (p GitHubPoller) isSelfAuthored(login string) bool {
+	login = strings.TrimSpace(login)
+	if login == "" {
+		return false
+	}
+	for _, self := range p.SelfLogins {
+		if strings.EqualFold(strings.TrimSpace(self), login) {
+			return true
+		}
+	}
+	return false
 }
 
 func shortGitHubSHA(sha string) string {
@@ -252,7 +323,41 @@ func trackedGitHubPRs(db *sql.DB) ([]trackedGitHubPR, error) {
 }
 
 func parseGitHubPRTag(tag string) (trackedGitHubPR, bool) {
-	raw := strings.TrimPrefix(strings.TrimSpace(tag), "gh-pr:")
+	return parseGitHubRefTag(tag, "gh-pr:")
+}
+
+// trackedGitHubIssue mirrors trackedGitHubPR but for gh-issue: tags. The
+// two are intentionally separate structs (vs. one shared type with a flag)
+// so the call sites' intent is obvious in tracing — issue-comments polling
+// only walks issues, PR-comments polling only walks PRs.
+type trackedGitHubIssue struct {
+	Owner  string
+	Repo   string
+	Number int
+}
+
+func trackedGitHubIssues(db *sql.DB) ([]trackedGitHubIssue, error) {
+	rows, err := db.Query(`SELECT DISTINCT tag FROM task_tags WHERE tag LIKE 'gh-issue:%'`)
+	if err != nil {
+		return nil, fmt.Errorf("list tracked github issues: %w", err)
+	}
+	defer rows.Close()
+	var out []trackedGitHubIssue
+	for rows.Next() {
+		var tag string
+		if err := rows.Scan(&tag); err != nil {
+			return nil, err
+		}
+		ref, ok := parseGitHubRefTag(tag, "gh-issue:")
+		if ok {
+			out = append(out, trackedGitHubIssue{Owner: ref.Owner, Repo: ref.Repo, Number: ref.Number})
+		}
+	}
+	return out, rows.Err()
+}
+
+func parseGitHubRefTag(tag, prefix string) (trackedGitHubPR, bool) {
+	raw := strings.TrimPrefix(strings.TrimSpace(tag), prefix)
 	if raw == tag || raw == "" {
 		return trackedGitHubPR{}, false
 	}
@@ -311,6 +416,23 @@ func (ghAPIClient) ListReviewComments(ctx context.Context, owner, repo string, n
 	var resp []githubReviewCommentRecord
 	if err := json.Unmarshal(out, &resp); err != nil {
 		return nil, fmt.Errorf("parse github review comments: %w", err)
+	}
+	return resp, nil
+}
+
+func (ghAPIClient) ListIssueComments(ctx context.Context, owner, repo string, number int, since string) ([]githubIssueCommentRecord, error) {
+	endpoint := fmt.Sprintf("repos/%s/%s/issues/%d/comments", owner, repo, number)
+	args := []string{"api", "-X", "GET", endpoint, "-f", "per_page=100", "-f", "sort=updated", "-f", "direction=desc"}
+	if strings.TrimSpace(since) != "" {
+		args = append(args, "-f", "since="+strings.TrimSpace(since))
+	}
+	out, err := exec.CommandContext(ctx, "gh", args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("gh api %s: %w (output: %s)", endpoint, err, strings.TrimSpace(string(out)))
+	}
+	var resp []githubIssueCommentRecord
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil, fmt.Errorf("parse github issue comments: %w", err)
 	}
 	return resp, nil
 }
@@ -453,6 +575,20 @@ type githubReviewCommentRecord struct {
 	UpdatedAt      string     `json:"updated_at"`
 }
 
+// githubIssueCommentRecord is one row from GET /repos/{o}/{r}/issues/{n}/comments.
+// The endpoint serves both PR top-level comments and issue comments (GitHub
+// treats PRs as a kind of issue), so the same record type backs both kinds.
+type githubIssueCommentRecord struct {
+	ID        int64      `json:"id"`
+	NodeID    string     `json:"node_id"`
+	Body      string     `json:"body"`
+	HTMLURL   string     `json:"html_url"`
+	IssueURL  string     `json:"issue_url"`
+	User      githubUser `json:"user"`
+	CreatedAt string     `json:"created_at"`
+	UpdatedAt string     `json:"updated_at"`
+}
+
 type githubReviewRecord struct {
 	ID          int64      `json:"id"`
 	NodeID      string     `json:"node_id"`
@@ -485,6 +621,42 @@ func (r githubReviewCommentRecord) toGitHubEvent(owner, repo string, number int)
 		Author:    r.User.Login,
 		CommentID: id,
 		EventKey:  "review-comment:" + id,
+		RawJSON:   string(raw),
+		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
+	}, true
+}
+
+// toGitHubEvent normalizes one issue-comments row into a GitHubEvent. The
+// caller decides whether the target is a PR or an issue (the API endpoint
+// is the same for both); we pass isPR through because the emitted Kind and
+// the LinkTag prefix differ.
+func (r githubIssueCommentRecord) toGitHubEvent(owner, repo string, number int, isPR bool) (GitHubEvent, bool) {
+	if owner == "" || repo == "" || number <= 0 {
+		return GitHubEvent{}, false
+	}
+	id := strings.TrimSpace(r.NodeID)
+	if id == "" && r.ID > 0 {
+		id = strconv.FormatInt(r.ID, 10)
+	}
+	if id == "" {
+		return GitHubEvent{}, false
+	}
+	kind := GitHubEventIssueComment
+	if isPR {
+		kind = GitHubEventPRComment
+	}
+	raw, _ := json.Marshal(r)
+	return GitHubEvent{
+		Kind:      kind,
+		Owner:     owner,
+		Repo:      repo,
+		Number:    number,
+		Body:      r.Body,
+		URL:       r.HTMLURL,
+		Author:    r.User.Login,
+		CommentID: id,
+		EventKey:  "issue-comment:" + id,
 		RawJSON:   string(raw),
 		CreatedAt: r.CreatedAt,
 		UpdatedAt: r.UpdatedAt,

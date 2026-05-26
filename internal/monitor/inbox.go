@@ -51,7 +51,8 @@ func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
 	switch source {
 	case "github":
 		switch ev.Kind {
-		case "pr_review_comment", "pr_review_changes_requested", "pr_head_updated":
+		case "pr_review_comment", "pr_review_changes_requested", "pr_head_updated",
+			"pr_comment", "issue_comment":
 			actionable = true
 		}
 	case "slack":

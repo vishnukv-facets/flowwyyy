@@ -42,7 +42,8 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	switch ev.Kind {
 	case GitHubEventPRAssigned, GitHubEventPRReviewRequested, GitHubEventIssueAssigned:
 		return d.dispatchGitHubItem(ctx, ev)
-	case GitHubEventPRReviewComment, GitHubEventPRReviewChangesRequested, GitHubEventPRReviewApproved:
+	case GitHubEventPRReviewComment, GitHubEventPRReviewChangesRequested, GitHubEventPRReviewApproved,
+		GitHubEventPRComment, GitHubEventIssueComment:
 		return d.dispatchGitHubReview(ctx, ev)
 	case GitHubEventPRHeadUpdated:
 		return d.dispatchGitHubHeadUpdated(ev)
@@ -259,7 +260,7 @@ func githubTaskName(ev GitHubEvent) string {
 		title = ev.LinkTag()
 	}
 	prefix := "PR"
-	if ev.Kind == GitHubEventIssueAssigned {
+	if ev.IsIssue() {
 		prefix = "Issue"
 	}
 	return fmt.Sprintf("%s %s#%d: %s", prefix, ev.RepoKey(), ev.Number, title)
@@ -275,8 +276,8 @@ func githubTaskBrief(ev GitHubEvent, slug string, projects []projectChoice) stri
 	b.WriteString("## First step — pick a project\n")
 	b.WriteString(renderGitHubProjectPicker(slug, projects))
 	b.WriteString("\n## What\n")
-	if ev.Kind == GitHubEventIssueAssigned {
-		fmt.Fprintf(&b, "Issue assignment: %s#%d\n", ev.RepoKey(), ev.Number)
+	if ev.IsIssue() {
+		fmt.Fprintf(&b, "Issue: %s#%d\n", ev.RepoKey(), ev.Number)
 	} else {
 		fmt.Fprintf(&b, "Pull request: %s#%d\n", ev.RepoKey(), ev.Number)
 	}

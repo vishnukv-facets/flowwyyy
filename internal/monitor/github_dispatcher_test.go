@@ -317,6 +317,116 @@ func TestGitHubDispatcher_DuplicateEventKeySuppressesAppend(t *testing.T) {
 	}
 }
 
+func TestGitHubDispatcher_PRTopLevelCommentAppendsToTrackedPR(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "IC_kwDOAAABBB",
+		Author:    "reviewer",
+		Body:      "Could you also address the bullets in the description?",
+		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#issuecomment-1",
+		EventKey:  "issue-comment:IC_kwDOAAABBB",
+		RawJSON:   `{"node_id":"IC_kwDOAAABBB"}`,
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox entries = %d, want 1", len(entries))
+	}
+	if entries[0].Event.Kind != string(GitHubEventPRComment) {
+		t.Fatalf("kind = %q", entries[0].Event.Kind)
+	}
+	// Top-level comments are the most common reviewer reply channel — they
+	// must be actionable so the same-session monitor wakes the bound task.
+	if !entries[0].Meta.Actionable {
+		t.Fatalf("meta = %+v, want actionable=true", entries[0].Meta)
+	}
+	if entries[0].Event.Text != ev.Body || entries[0].Event.URL != ev.URL {
+		t.Fatalf("event payload lost: %+v", entries[0].Event)
+	}
+}
+
+func TestGitHubDispatcher_IssueCommentAppendsToTrackedIssue(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-issue", db, "gh-issue:Facets-cloud/flow-manager#7")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventIssueComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    7,
+		CommentID: "IC_kwDOAAACCC",
+		Author:    "reporter",
+		Body:      "Any update on this?",
+		URL:       "https://github.com/Facets-cloud/flow-manager/issues/7#issuecomment-2",
+		EventKey:  "issue-comment:IC_kwDOAAACCC",
+		RawJSON:   `{"node_id":"IC_kwDOAAACCC"}`,
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-issue")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox entries = %d, want 1", len(entries))
+	}
+	if entries[0].Event.Kind != string(GitHubEventIssueComment) {
+		t.Fatalf("kind = %q", entries[0].Event.Kind)
+	}
+	if !entries[0].Meta.Actionable {
+		t.Fatalf("meta = %+v, want actionable=true", entries[0].Meta)
+	}
+}
+
+func TestGitHubDispatcher_DuplicateIssueCommentEventKeySuppressesAppend(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "IC_kwDOAAABBB",
+		Body:      "same top-level comment",
+		EventKey:  "issue-comment:IC_kwDOAAABBB",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("dispatch first: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("dispatch duplicate: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("duplicate event should append once, got %d", len(entries))
+	}
+}
+
 func TestGitHubDispatcher_HeadUpdatedAppendsToTrackedPR(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
