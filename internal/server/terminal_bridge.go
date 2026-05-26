@@ -50,14 +50,15 @@ type terminalHub struct {
 }
 
 type terminalLaunch struct {
-	Slug         string
-	SessionID    string
-	Provider     string
-	WorkDir      string
-	Args         []string
-	Created      bool
-	NeedsCapture bool
-	StartedAt    time.Time
+	Slug           string
+	SessionID      string
+	Provider       string
+	PermissionMode string
+	WorkDir        string
+	Args           []string
+	Created        bool
+	NeedsCapture   bool
+	StartedAt      time.Time
 }
 
 type terminalSession struct {
@@ -316,6 +317,7 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 	cmd.Env = append(terminalEnvWithHook(h.server.cfg.FlowRoot, h.server.cfg.CommandPath, h.server.cfg.HookURL),
 		"FLOW_TASK="+launch.Slug,
 		"FLOW_SESSION_PROVIDER="+provider,
+		"FLOW_PERMISSION_MODE="+normalizedTerminalPermissionMode(launch.PermissionMode),
 	)
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
@@ -376,7 +378,7 @@ func terminalEnvWithHook(flowRoot, commandPath, hookURL string) []string {
 	return env
 }
 
-func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider string) map[string]string {
+func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider, permissionMode string) map[string]string {
 	env := terminalEnvWithHook(flowRoot, commandPath, hookURL)
 	out := map[string]string{
 		"TERM":                      "xterm-256color",
@@ -390,6 +392,7 @@ func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider string) map[s
 		"FLOW_HOOK_OWNED":           "1",
 		"FLOW_TASK":                 slug,
 		"FLOW_SESSION_PROVIDER":     provider,
+		"FLOW_PERMISSION_MODE":      normalizedTerminalPermissionMode(permissionMode),
 	}
 	for _, key := range []string{"PATH", "FLOW_ROOT", "FLOW_HOOK_URL"} {
 		if value := envValueLocal(env, key); value != "" {
@@ -397,6 +400,14 @@ func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider string) map[s
 		}
 	}
 	return out
+}
+
+func normalizedTerminalPermissionMode(mode string) string {
+	normalized, err := flowdb.NormalizePermissionMode(mode)
+	if err != nil {
+		return "default"
+	}
+	return normalized
 }
 
 func setEnvValue(env []string, key, value string) []string {
@@ -524,19 +535,24 @@ func sharedTerminalSessionMatchesLaunch(name string, launch terminalLaunch) (boo
 	command := string(out)
 	task := shellCommandEnvValue(command, "FLOW_TASK")
 	provider := shellCommandEnvValue(command, "FLOW_SESSION_PROVIDER")
+	permissionMode := shellCommandEnvValue(command, "FLOW_PERMISSION_MODE")
 	// Older/manual sessions may not carry Flow's launch metadata. Preserve
 	// them unless we can positively identify a stale Flow-owned mismatch.
-	if task == "" && provider == "" {
+	if task == "" && provider == "" && permissionMode == "" {
 		return true, nil
 	}
 	wantProvider := strings.TrimSpace(launch.Provider)
 	if wantProvider == "" {
 		wantProvider = agents.ProviderClaude
 	}
+	wantPermissionMode := normalizedTerminalPermissionMode(launch.PermissionMode)
 	if task != "" && task != launch.Slug {
 		return false, nil
 	}
 	if provider != "" && provider != wantProvider {
+		return false, nil
+	}
+	if permissionMode != "" && normalizedTerminalPermissionMode(permissionMode) != wantPermissionMode {
 		return false, nil
 	}
 	return true, nil
@@ -622,7 +638,7 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		provider = agents.ProviderClaude
 	}
 	command := agentShellCommand(provider, launch.Args)
-	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider)
+	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider, launch.PermissionMode)
 	// Prepend `-f <flowRoot>/tmux.conf` so the tmux server we're about
 	// to start picks up flow's defaults (mouse scroll + larger
 	// scrollback). The user's ~/.tmux.conf is sourced from inside our
@@ -891,24 +907,26 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		}
 		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode)
 		return terminalLaunch{
-			Slug:         task.Slug,
-			SessionID:    sessionID,
-			Provider:     provider,
-			WorkDir:      task.WorkDir,
-			Args:         args,
-			Created:      created,
-			NeedsCapture: provider == agents.ProviderCodex,
-			StartedAt:    time.Now().Add(-2 * time.Second),
+			Slug:           task.Slug,
+			SessionID:      sessionID,
+			Provider:       provider,
+			PermissionMode: task.PermissionMode,
+			WorkDir:        task.WorkDir,
+			Args:           args,
+			Created:        created,
+			NeedsCapture:   provider == agents.ProviderCodex,
+			StartedAt:      time.Now().Add(-2 * time.Second),
 		}, nil
 	}
 	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode)
 	return terminalLaunch{
-		Slug:      task.Slug,
-		SessionID: sessionID,
-		Provider:  provider,
-		WorkDir:   task.WorkDir,
-		Args:      args,
-		Created:   created,
+		Slug:           task.Slug,
+		SessionID:      sessionID,
+		Provider:       provider,
+		PermissionMode: task.PermissionMode,
+		WorkDir:        task.WorkDir,
+		Args:           args,
+		Created:        created,
 	}, nil
 }
 

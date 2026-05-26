@@ -2211,14 +2211,23 @@ const App = () => {
       const slug = (target && target.slug) || '';
       if (!mode || !slug) return;
       const live = !!(target && target._live);
-      const apply = () => serverAction('update-permission-mode', { slug, permission_mode: mode, _live: live, provider: target.provider }).then(refreshUIData).catch(err => setToast(err.message));
+      const apply = () => serverAction('update-permission-mode', { slug, permission_mode: mode, _live: live, provider: target.provider })
+        .then(data => {
+          if (data.bridge && data.agent) {
+            setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }));
+            goto(`session/${data.agent.slug}`);
+            window.dispatchEvent(new CustomEvent('flow-terminal-restart', { detail: { slug: data.agent.slug } }));
+          }
+          return refreshUIData();
+        })
+        .catch(err => setToast(err.message));
       if (!live) { apply(); return; }
       setConfirm({
         title: <>Switch permissions to <span className="mono" style={{color: 'var(--text)'}}>{mode}</span>?</>,
         body: (
           <>
             This terminates the running session for <span className="mono" style={{color: 'var(--text)'}}>{slug}</span>.
-            <div style={{marginTop: 6, color: 'var(--text-dim)'}}>Reattach to spawn a fresh one with the new mode.</div>
+            <div style={{marginTop: 6, color: 'var(--text-dim)'}}>The terminal restarts immediately with the new mode.</div>
           </>
         ),
         confirm: `Switch to ${mode}`,
@@ -2265,7 +2274,14 @@ const App = () => {
     if (kind === 'create-flow') { openBridge('create-flow', target); return; }
     if (kind === 'update-permission-mode') {
       serverAction('update-permission-mode', target)
-        .then(() => refreshUIData())
+        .then(data => {
+          if (data.bridge && data.agent) {
+            setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }));
+            goto(`session/${data.agent.slug}`);
+            window.dispatchEvent(new CustomEvent('flow-terminal-restart', { detail: { slug: data.agent.slug } }));
+          }
+          return refreshUIData();
+        })
         .catch(err => setToast(err.message));
       return;
     }

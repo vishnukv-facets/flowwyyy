@@ -534,20 +534,37 @@ func (s *Server) updatePermissionMode(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 
-	restarted := false
-	if task.SessionID.Valid && strings.TrimSpace(task.SessionID.String) != "" && safeSessionRe.MatchString(task.SessionID.String) {
+	browserLive := s.terminals.running(task.Slug)
+	sharedLive := s.terminals.sharedRunning(task.Slug)
+	if browserLive {
+		s.terminals.stop(task.Slug)
+	} else if sharedLive {
+		_ = sharedTerminalKillSession(sharedTerminalSessionName(task.Slug))
+		s.terminals.sharedRunningCache.invalidate(task.Slug)
+	}
+
+	terminatedNative := false
+	if !browserLive && !sharedLive && task.SessionID.Valid && strings.TrimSpace(task.SessionID.String) != "" && safeSessionRe.MatchString(task.SessionID.String) {
 		if pid, perr := claudePIDForSession(task.SessionID.String); perr == nil {
 			if kerr := syscall.Kill(pid, syscall.SIGTERM); kerr == nil {
-				restarted = true
+				terminatedNative = true
 			}
 		}
 	}
 
 	msg := "permission mode set to " + mode
-	if restarted {
+	if browserLive || sharedLive {
+		msg += "; restarting browser terminal"
+		agent, err := s.agentForTask(task.Slug)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: msg, Agent: agent, Bridge: true, AlreadyLive: true}, http.StatusOK
+	}
+	if terminatedNative {
 		msg += "; current session terminated, reattach to apply"
 	}
-	return actionResponse{OK: true, Message: msg, AlreadyLive: restarted}, http.StatusOK
+	return actionResponse{OK: true, Message: msg, AlreadyLive: terminatedNative}, http.StatusOK
 }
 
 func (s *Server) updatePriority(req actionRequest) (actionResponse, int) {

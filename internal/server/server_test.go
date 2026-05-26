@@ -1293,6 +1293,67 @@ func TestUpdatePermissionModeStoresMode(t *testing.T) {
 	}
 }
 
+func TestUpdatePermissionModeRestartsLiveBrowserTerminal(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "11111111-2222-4333-8444-555555555555"
+	if _, err := db.Exec(
+		`UPDATE tasks SET
+			status = 'in-progress',
+			session_provider = 'codex',
+			session_id = ?,
+			session_started = ?,
+			permission_mode = 'default'
+		 WHERE slug = 'build-ui'`,
+		sessionID,
+		"2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	sess := &terminalSession{
+		hub:     srv.terminals,
+		slug:    "build-ui",
+		done:    make(chan struct{}),
+		clients: map[*terminalClient]struct{}{},
+	}
+	srv.terminals.mu.Lock()
+	srv.terminals.sessions["build-ui"] = sess
+	srv.terminals.mu.Unlock()
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:           "update-permission-mode",
+		Slug:           "build-ui",
+		PermissionMode: "bypass",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	if !resp.Bridge || resp.Agent == nil {
+		t.Fatalf("live permission change should reopen the browser bridge, got %+v", resp)
+	}
+	if resp.Agent.PermissionMode != "bypass" {
+		t.Fatalf("agent permission mode = %q, want bypass", resp.Agent.PermissionMode)
+	}
+	if srv.terminals.running("build-ui") {
+		t.Fatal("old browser terminal session still running after permission mode change")
+	}
+	select {
+	case <-sess.done:
+	default:
+		t.Fatal("old browser terminal session was not terminated")
+	}
+
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.PermissionMode != "bypass" {
+		t.Fatalf("permission mode = %q, want bypass", task.PermissionMode)
+	}
+}
+
 func TestUpdatePermissionModeRejectsInvalidMode(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -1538,6 +1599,10 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(body, "Permission mode") || !strings.Contains(body, "permission_mode, _providerChosen: true") {
 		t.Fatal("backlog spawn modal must let the user pick permission mode (default/auto/bypass) and forward it to the spawn action")
 	}
+	if !strings.Contains(body, "data.bridge && data.agent") ||
+		!strings.Contains(body, "flow-terminal-restart") {
+		t.Fatal("live permission-mode changes must reopen the browser bridge and signal the mounted terminal to reconnect")
+	}
 	if !strings.Contains(body, "taskStartBlocker(target)") {
 		t.Fatal("spawn action must refuse blocked/dependent backlog tasks before provider choice")
 	}
@@ -1597,6 +1662,10 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 	if !strings.Contains(string(screens), "const completedTask = current.task_status === 'done' || current.status === 'done';") ||
 		!strings.Contains(string(screens), "const nativeTranscriptMode = terminalMode === 'native' && completedTask;") {
 		t.Fatal("in-progress native sessions must open the interactive terminal; transcript-only mode is for completed tasks")
+	}
+	if !strings.Contains(string(screens), "window.addEventListener('flow-terminal-restart', restartHandler)") ||
+		!strings.Contains(string(screens), "setTerminalRestartKey(v => v + 1)") {
+		t.Fatal("session detail must reconnect its terminal when a live permission-mode change restarts the bridge")
 	}
 	if !strings.Contains(string(screens), "stripTerminalGeneratedInput(data)") {
 		t.Fatal("browser terminal must filter generated capability replies before sending input to the PTY")

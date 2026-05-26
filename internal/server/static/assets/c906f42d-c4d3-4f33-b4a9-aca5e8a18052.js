@@ -2242,6 +2242,18 @@ const SessionDetail = ({ agent, goto, action, gitDiffOpen = false, toggleGitDiff
     setTerminalRestartKey(0);
   }, [agent.slug, agent.session_id]);
 
+  useEffect(() => {
+    const restartHandler = (event) => {
+      const slug = event?.detail?.slug;
+      if (slug && slug !== agent.slug) return;
+      setTerminalStatus('connecting');
+      setTerminalRestartKey(v => v + 1);
+      setTimeout(() => window.dispatchEvent(new Event('flow-terminal-focus')), 0);
+    };
+    window.addEventListener('flow-terminal-restart', restartHandler);
+    return () => window.removeEventListener('flow-terminal-restart', restartHandler);
+  }, [agent.slug]);
+
   const provider = current.provider || 'claude';
   const terminalMode = current.terminal?.mode || 'idle';
   const completedTask = current.task_status === 'done' || current.status === 'done';
