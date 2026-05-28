@@ -2878,43 +2878,57 @@ const TaskTerminal = ({ agent, onStatus }) => {
 
     // Defensive scroll guard for copy operations. When the user is
     // scrolled up reading older session output and starts a
-    // drag-select, the viewport snaps to the bottom — apparently
-    // during the drag itself, before our debounced clipboard write
-    // even runs. Likely xterm.js's SelectionService resetting
-    // _userScrolling on mousedown ("user is interacting, snap to
-    // current content") similar in spirit to scrollOnUserInput but
-    // for mouse input.
+    // drag-select, the viewport snaps to the bottom during the drag.
+    // Likely xterm.js's SelectionService resetting _userScrolling on
+    // mousedown ("user is interacting, snap to current content").
     //
-    // Strategy: snapshot scrollTop on mousedown inside the terminal
-    // and watch the viewport's scroll events through the drag and a
-    // brief post-mouseup window. Restore only if scroll lands at the
-    // absolute bottom, which is the snap signature — drag-extension
-    // auto-scroll moves a line or two at a time and is left alone.
+    // Strategy: snapshot the buffer's logical viewport position on
+    // mousedown, then poll on every animation frame until 400 ms
+    // after mouseup. If the position snaps all the way to the
+    // buffer's base (the bottom), restore it via term.scrollToLine —
+    // going through xterm.js's API keeps its internal _userScrolling
+    // state consistent. Polling rather than listening for DOM scroll
+    // events catches the snap regardless of how xterm.js implements
+    // it (canvas renderer mutates internal state before/independent
+    // of DOM scrollTop in some paths).
     let copyGuardCleanup = null;
     const armCopyScrollGuard = () => {
       if (copyGuardCleanup) copyGuardCleanup();
-      const vp = host.querySelector('.xterm-viewport');
-      if (!vp) return;
-      const savedTop = vp.scrollTop;
-      const wasAtBottom = savedTop + vp.clientHeight >= vp.scrollHeight - 4;
-      if (wasAtBottom) return;
-      const onScroll = () => {
-        const nowAtBottom = vp.scrollTop + vp.clientHeight >= vp.scrollHeight - 4;
-        if (nowAtBottom && vp.scrollTop > savedTop + 4) {
-          vp.scrollTop = savedTop;
-        }
-      };
-      vp.addEventListener('scroll', onScroll);
+      const t = termRef.current;
+      if (!t) { console.log('[flow scroll-guard] skip: no term'); return; }
+      const buf = t.buffer.active;
+      const savedViewportY = buf.viewportY;
+      console.log('[flow scroll-guard] arm: viewportY=', savedViewportY, 'baseY=', buf.baseY);
+      if (savedViewportY >= buf.baseY) { console.log('[flow scroll-guard] skip: already at bottom'); return; }
+      let restored = false;
+      let frameId = 0;
       let disposeTimer = 0;
+      let maxSeenY = savedViewportY;
+      const tick = () => {
+        if (restored || !termRef.current) return;
+        const b = termRef.current.buffer.active;
+        if (b.viewportY > maxSeenY) {
+          console.log('[flow scroll-guard] tick: viewportY=', b.viewportY, 'baseY=', b.baseY);
+          maxSeenY = b.viewportY;
+        }
+        if (b.viewportY >= b.baseY && b.viewportY > savedViewportY + 1) {
+          console.log('[flow scroll-guard] RESTORE: from', b.viewportY, 'to', savedViewportY);
+          termRef.current.scrollToLine(savedViewportY);
+          restored = true;
+          return;
+        }
+        frameId = requestAnimationFrame(tick);
+      };
+      frameId = requestAnimationFrame(tick);
       const stop = () => {
+        if (frameId) { cancelAnimationFrame(frameId); frameId = 0; }
         if (disposeTimer) { clearTimeout(disposeTimer); disposeTimer = 0; }
-        vp.removeEventListener('scroll', onScroll);
         window.removeEventListener('mouseup', onMouseUp, true);
         copyGuardCleanup = null;
       };
       const onMouseUp = () => {
-        // Keep the guard alive briefly after mouseup so the post-drag
-        // clipboard write / OSC 52 / toast path is still covered.
+        // Keep guard alive briefly after mouseup so post-drag
+        // clipboard / OSC 52 / toast effects are still covered.
         disposeTimer = setTimeout(stop, 400);
       };
       window.addEventListener('mouseup', onMouseUp, true);
