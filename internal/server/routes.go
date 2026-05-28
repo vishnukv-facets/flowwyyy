@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -403,51 +404,14 @@ func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, t
 		writeError(w, errors.New("no files uploaded"), http.StatusBadRequest)
 		return
 	}
-	destDir := filepath.Join(s.cfg.FlowRoot, "tasks", task.Slug, "attachments")
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	files, err := s.saveTaskAttachmentFiles(task.Slug, headers)
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	now := time.Now()
-	files := make([]FileRef, 0, len(headers))
-	paths := make([]string, 0, len(headers))
-	for i, header := range headers {
-		src, err := header.Open()
-		if err != nil {
-			writeError(w, err, http.StatusBadRequest)
-			return
-		}
-		name := uploadedAttachmentFilename(header.Filename, header.Header.Get("Content-Type"), now, i)
-		path := uniqueAttachmentPath(destDir, name)
-		dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			_ = src.Close()
-			writeError(w, err, http.StatusInternalServerError)
-			return
-		}
-		n, copyErr := io.Copy(dst, src)
-		closeErr := dst.Close()
-		_ = src.Close()
-		if copyErr != nil {
-			_ = os.Remove(path)
-			writeError(w, copyErr, http.StatusInternalServerError)
-			return
-		}
-		if closeErr != nil {
-			_ = os.Remove(path)
-			writeError(w, closeErr, http.StatusInternalServerError)
-			return
-		}
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-		files = append(files, FileRef{
-			Filename: filepath.Base(path),
-			Path:     path,
-			MTime:    now.Format(time.RFC3339),
-			Size:     n,
-		})
-		paths = append(paths, shellQuoteArg(path))
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, shellQuoteArg(file.Path))
 	}
 	// Claude Code recognizes `@<path>` as a file reference; Codex auto-detects
 	// bare paths. Without this prefix, drag-and-drop in Claude Code sessions
@@ -461,6 +425,58 @@ func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, t
 		Files:      files,
 		InsertText: strings.Join(paths, " "),
 	})
+}
+
+func (s *Server) saveTaskAttachmentFiles(taskSlug string, headers []*multipart.FileHeader) ([]FileRef, error) {
+	if len(headers) == 0 {
+		return nil, errors.New("no files uploaded")
+	}
+	if err := validateSlug(taskSlug); err != nil {
+		return nil, err
+	}
+	destDir := filepath.Join(s.cfg.FlowRoot, "tasks", taskSlug, "attachments")
+	if !strings.HasPrefix(filepath.Clean(destDir), filepath.Join(s.cfg.FlowRoot, "tasks")+string(os.PathSeparator)) {
+		return nil, errors.New("invalid task attachment path")
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	files := make([]FileRef, 0, len(headers))
+	for i, header := range headers {
+		src, err := header.Open()
+		if err != nil {
+			return nil, err
+		}
+		name := uploadedAttachmentFilename(header.Filename, header.Header.Get("Content-Type"), now, i)
+		path := uniqueAttachmentPath(destDir, name)
+		dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		if err != nil {
+			_ = src.Close()
+			return nil, err
+		}
+		n, copyErr := io.Copy(dst, src)
+		closeErr := dst.Close()
+		_ = src.Close()
+		if copyErr != nil {
+			_ = os.Remove(path)
+			return nil, copyErr
+		}
+		if closeErr != nil {
+			_ = os.Remove(path)
+			return nil, closeErr
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		files = append(files, FileRef{
+			Filename: filepath.Base(path),
+			Path:     path,
+			MTime:    now.Format(time.RFC3339),
+			Size:     n,
+		})
+	}
+	return files, nil
 }
 
 func uploadedAttachmentFilename(name, contentType string, now time.Time, index int) string {

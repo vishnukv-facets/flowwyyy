@@ -1179,6 +1179,80 @@ func TestCreateFlowPersistsCodexProvider(t *testing.T) {
 	}
 }
 
+func TestCreateFlowMultipartImagesStoresAttachmentsInBrief(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := map[string]string{
+		"kind":            "create-flow",
+		"slug":            "image-task",
+		"name":            "Image Task",
+		"work_dir":        root,
+		"priority":        "medium",
+		"permission_mode": "auto",
+		"prompt":          "Use the attached screenshot.",
+	}
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	part, err := writer.CreateFormFile("images", "login callback.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("png bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/actions", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var resp actionResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.OK || resp.Agent == nil || resp.Agent.Slug != "image-task" {
+		t.Fatalf("response = %+v", resp)
+	}
+
+	attachmentsDir := filepath.Join(root, "tasks", "image-task", "attachments")
+	entries, err := os.ReadDir(attachmentsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.Contains(entries[0].Name(), "login-callback.png") {
+		t.Fatalf("attachments = %#v, want sanitized image attachment", entries)
+	}
+	attachmentPath := filepath.Join(attachmentsDir, entries[0].Name())
+	saved, err := os.ReadFile(attachmentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(saved) != "png bytes" {
+		t.Fatalf("saved body = %q", saved)
+	}
+	brief, err := os.ReadFile(filepath.Join(root, "tasks", "image-task", "brief.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(brief), "Use the attached screenshot.") ||
+		!strings.Contains(string(brief), "Attached images:") ||
+		!strings.Contains(string(brief), attachmentPath) {
+		t.Fatalf("brief = %q", brief)
+	}
+}
+
 func TestCreateFlowReactivatesDeletedArchivedTask(t *testing.T) {
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
@@ -1777,6 +1851,19 @@ func TestStaticActionPayloadForwardsProvider(t *testing.T) {
 		!strings.Contains(string(screens), "terminalClipboardFiles(event.clipboardData)") ||
 		!strings.Contains(string(screens), "host.addEventListener('drop', dropHandler)") {
 		t.Fatal("browser terminal must support pasted and dropped file attachments")
+	}
+	if !strings.Contains(body, "const serverFormAction = async (kind, formData)") ||
+		!strings.Contains(body, "if (kind === 'create-flow-images')") ||
+		!strings.Contains(string(screens), `accept="image/*"`) ||
+		!strings.Contains(string(screens), "handleImagePaste") ||
+		!strings.Contains(string(screens), "handleImageDrop") ||
+		!strings.Contains(string(screens), "formData.append('images'") {
+		t.Fatal("create flow modal must upload selected, pasted, or dropped images with the create-flow action")
+	}
+	if !strings.Contains(string(screens), "const createFlowSubmitHotkey = (e) =>") ||
+		!strings.Contains(string(screens), "onKeyDown={createFlowSubmitHotkey}") ||
+		!strings.Contains(string(screens), "(e.metaKey || e.ctrlKey) && e.key === 'Enter'") {
+		t.Fatal("create flow modal must submit on Cmd/Ctrl+Enter while focus is inside the modal")
 	}
 	if !strings.Contains(string(screens), "<th>Dependencies</th>") || strings.Count(string(screens), "DependencyBadges task=") < 3 {
 		t.Fatal("task screens should render dependencies in backlog, table, and project rows")

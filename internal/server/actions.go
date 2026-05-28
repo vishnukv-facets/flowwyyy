@@ -13,6 +13,7 @@ import (
 	"flow/internal/warp"
 	"flow/internal/workdirreg"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"os/exec"
@@ -42,6 +43,8 @@ type actionRequest struct {
 	Provider       string `json:"provider"`
 	PermissionMode string `json:"permission_mode"`
 	Mkdir          bool   `json:"mkdir"`
+
+	AttachmentFiles []*multipart.FileHeader `json:"-"`
 }
 
 type actionResponse struct {
@@ -72,15 +75,66 @@ func (s *Server) handleAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req actionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, err, http.StatusBadRequest)
-		return
+	contentType := strings.ToLower(strings.TrimSpace(r.Header.Get("Content-Type")))
+	if strings.HasPrefix(contentType, "multipart/form-data") {
+		var err error
+		req, err = s.multipartActionRequest(w, r)
+		if err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
+	} else {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, err, http.StatusBadRequest)
+			return
+		}
 	}
 	resp, status := s.runAction(req)
 	writeJSONStatus(w, resp, status)
 	if status < 400 && resp.OK {
 		s.publishUIChange(req.Kind)
 	}
+}
+
+func (s *Server) multipartActionRequest(w http.ResponseWriter, r *http.Request) (actionRequest, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxTerminalAttachmentUploadBytes)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		return actionRequest{}, err
+	}
+	req := actionRequest{
+		Kind:           strings.TrimSpace(r.FormValue("kind")),
+		Target:         strings.TrimSpace(r.FormValue("target")),
+		Slug:           strings.TrimSpace(r.FormValue("slug")),
+		Name:           strings.TrimSpace(r.FormValue("name")),
+		Path:           strings.TrimSpace(r.FormValue("path")),
+		Description:    strings.TrimSpace(r.FormValue("description")),
+		Project:        strings.TrimSpace(r.FormValue("project")),
+		WorkDir:        strings.TrimSpace(r.FormValue("work_dir")),
+		Priority:       strings.TrimSpace(r.FormValue("priority")),
+		Prompt:         r.FormValue("prompt"),
+		SessionID:      strings.TrimSpace(r.FormValue("session_id")),
+		Branch:         strings.TrimSpace(r.FormValue("branch")),
+		EntityKind:     strings.TrimSpace(r.FormValue("entity_kind")),
+		Provider:       strings.TrimSpace(r.FormValue("provider")),
+		PermissionMode: strings.TrimSpace(r.FormValue("permission_mode")),
+	}
+	if req.Kind == "" {
+		return actionRequest{}, errors.New("kind is required")
+	}
+	if raw := strings.TrimSpace(r.FormValue("mkdir")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return actionRequest{}, fmt.Errorf("mkdir: %w", err)
+		}
+		req.Mkdir = value
+	}
+	if r.MultipartForm != nil {
+		req.AttachmentFiles = r.MultipartForm.File["images"]
+		if len(req.AttachmentFiles) == 0 {
+			req.AttachmentFiles = r.MultipartForm.File["files"]
+		}
+	}
+	return req, nil
 }
 
 func (s *Server) runAction(req actionRequest) (actionResponse, int) {
@@ -377,8 +431,16 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 	}
-	if strings.TrimSpace(req.Prompt) != "" {
-		if err := s.writeTaskBrief(slug, name, req.Prompt); err != nil {
+	prompt := strings.TrimSpace(req.Prompt)
+	if len(req.AttachmentFiles) > 0 {
+		files, err := s.saveTaskAttachmentFiles(slug, req.AttachmentFiles)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+		prompt = promptWithAttachedImages(prompt, files)
+	}
+	if strings.TrimSpace(prompt) != "" {
+		if err := s.writeTaskBrief(slug, name, prompt); err != nil {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 	}
@@ -450,8 +512,16 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 	); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
-	if strings.TrimSpace(req.Prompt) != "" {
-		if err := s.writeTaskBrief(task.Slug, strings.TrimSpace(req.Name), req.Prompt); err != nil {
+	prompt := strings.TrimSpace(req.Prompt)
+	if len(req.AttachmentFiles) > 0 {
+		files, err := s.saveTaskAttachmentFiles(task.Slug, req.AttachmentFiles)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		prompt = promptWithAttachedImages(prompt, files)
+	}
+	if strings.TrimSpace(prompt) != "" {
+		if err := s.writeTaskBrief(task.Slug, strings.TrimSpace(req.Name), prompt); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 	}
@@ -462,6 +532,33 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 		Agent:   agent,
 		Bridge:  true,
 	}, http.StatusOK
+}
+
+func promptWithAttachedImages(prompt string, files []FileRef) string {
+	prompt = strings.TrimSpace(prompt)
+	if len(files) == 0 {
+		return prompt
+	}
+	var b strings.Builder
+	if prompt != "" {
+		b.WriteString(prompt)
+		b.WriteString("\n\n")
+	}
+	b.WriteString("Attached images:\n")
+	for _, file := range files {
+		if strings.TrimSpace(file.Filename) != "" {
+			b.WriteString("- ")
+			b.WriteString(file.Filename)
+			b.WriteString(": ")
+			b.WriteString(file.Path)
+			b.WriteByte('\n')
+			continue
+		}
+		b.WriteString("- ")
+		b.WriteString(file.Path)
+		b.WriteByte('\n')
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func (s *Server) createProject(req actionRequest) (actionResponse, int) {

@@ -1789,10 +1789,14 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
   const [workdir, setWorkdir] = useState(preselect?.workDir || WORKDIRS[0]?.path || '');
   const [prUrl, setPrUrl] = useState('');
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [images, setImages] = useState([]);
+  const [imageDragging, setImageDragging] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const imageInputRef = useRef(null);
 
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'new-flow';
   const providerIsAvailable = isCapabilityAvailable('providers', provider);
-  const canSubmit = name.trim().length > 2 && prompt.trim().length > 0 && providerIsAvailable && anyProviderAvailable();
+  const canSubmit = name.trim().length > 2 && prompt.trim().length > 0 && providerIsAvailable && anyProviderAvailable() && !submitting;
   const permissionCopy = provider === 'codex'
     ? {
       default: 'Codex approval on-request with workspace-write sandbox',
@@ -1805,10 +1809,80 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
       bypass: 'Claude dangerously skips permissions',
     };
 
-  const submit = () => {
+  const imageKey = (file) => `${file.name || 'image'}:${file.size}:${file.lastModified || 0}`;
+  const isImageFile = (file) => !!file && (
+    String(file.type || '').startsWith('image/') ||
+    /\.(png|jpe?g|gif|webp|avif|heic|heif)$/i.test(file.name || '')
+  );
+  const imageSize = (file) => file.size >= 1048576
+    ? `${(file.size / 1048576).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(file.size / 1024))} KB`;
+  const addImageFiles = (fileList) => {
+    const incoming = Array.from(fileList || []).filter(isImageFile);
+    if (!incoming.length) return;
+    setImages(current => {
+      const seen = new Set(current.map(imageKey));
+      const next = [...current];
+      incoming.forEach(file => {
+        const key = imageKey(file);
+        if (seen.has(key)) return;
+        seen.add(key);
+        next.push(file);
+      });
+      return next;
+    });
+  };
+  const handleImagePaste = (event) => {
+    const files = Array.from(event.clipboardData?.files || []).filter(isImageFile);
+    if (!files.length) return;
+    event.preventDefault();
+    addImageFiles(files);
+  };
+  const handleImageDrop = (event) => {
+    event.preventDefault();
+    setImageDragging(false);
+    addImageFiles(event.dataTransfer?.files);
+  };
+  const buildCreatePayload = () => ({
+    slug,
+    name,
+    project: project === '__adhoc' ? null : project,
+    branch: branch || `${slug}/main`,
+    provider,
+    permission_mode: permissionMode,
+    priority,
+    prompt,
+    work_dir: workdir,
+    pr_url: prUrl,
+  });
+  const buildCreateFormData = (payload) => {
+    const formData = new FormData();
+    Object.entries(payload).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) formData.append(key, value);
+    });
+    images.forEach(file => formData.append('images', file, file.name || 'image'));
+    return formData;
+  };
+  const submit = async () => {
     if (!canSubmit) return;
-    action('create-flow', { slug, name, project: project === '__adhoc' ? null : project, branch: branch || `${slug}/main`, provider, permission_mode: permissionMode, priority, prompt, work_dir: workdir, pr_url: prUrl });
-    onClose();
+    setSubmitting(true);
+    const payload = buildCreatePayload();
+    try {
+      const data = images.length
+        ? await action('create-flow-images', { slug, provider, formData: buildCreateFormData(payload) })
+        : await action('create-flow', payload);
+      if (data) {
+        onClose();
+        return;
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+  const createFlowSubmitHotkey = (e) => {
+    if (!((e.metaKey || e.ctrlKey) && e.key === 'Enter')) return;
+    e.preventDefault();
+    submit();
   };
 
   useEffect(() => {
@@ -1819,7 +1893,7 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
 
   return (
     <div className="modal-scrim centered" onClick={onClose}>
-      <div className="modal create-flow" style={{width: 620}} onClick={(e) => e.stopPropagation()}>
+      <div className="modal create-flow" style={{width: 620}} onClick={(e) => e.stopPropagation()} onPaste={handleImagePaste} onKeyDown={createFlowSubmitHotkey}>
         <div className="modal-head">
           <Icon name="plus" size={14}/>
           <span>Create flow</span>
@@ -1912,6 +1986,68 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
           </label>
 
           <label className="form-row">
+            <span className="form-label">Images <span className="mono dim">optional</span></span>
+            <input
+              ref={imageInputRef}
+              className="image-input"
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(e) => {
+                addImageFiles(e.target.files);
+                e.target.value = '';
+              }}
+            />
+            <div
+              className={`image-drop ${imageDragging ? 'dragging' : ''}`}
+              tabIndex={0}
+              onClick={() => imageInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  imageInputRef.current?.click();
+                }
+              }}
+              onPaste={handleImagePaste}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                setImageDragging(true);
+              }}
+              onDragOver={(e) => e.preventDefault()}
+              onDragLeave={() => setImageDragging(false)}
+              onDrop={handleImageDrop}
+            >
+              <span className="image-drop-icon"><Icon name="image-plus" size={16}/></span>
+              <span className="image-drop-copy">
+                <span className="image-drop-main">{images.length ? `${images.length} image${images.length === 1 ? '' : 's'} selected` : 'Add images'}</span>
+                <span className="image-drop-sub">PNG, JPG, GIF, WebP, AVIF, HEIC</span>
+              </span>
+            </div>
+            {images.length > 0 && (
+              <div className="image-list">
+                {images.map(file => (
+                  <span className="image-chip" key={imageKey(file)}>
+                    <Icon name="image" size={12}/>
+                    <span className="image-chip-name mono" title={file.name}>{file.name || 'image'}</span>
+                    <span className="image-chip-size mono">{imageSize(file)}</span>
+                    <button
+                      type="button"
+                      className="image-chip-remove"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setImages(current => current.filter(item => imageKey(item) !== imageKey(file)));
+                      }}
+                      aria-label={`Remove ${file.name || 'image'}`}
+                    >
+                      <Icon name="x" size={11}/>
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </label>
+
+          <label className="form-row">
             <span className="form-label">Initial prompt</span>
             <textarea className="form-input" rows={4} value={prompt} onChange={e => setPrompt(e.target.value)} placeholder="Tell the agent what to do. Include the repo, expected behavior, and how you want it verified."/>
           </label>
@@ -1923,7 +2059,7 @@ const CreateFlowModal = ({ onClose, projects, action, preselect }) => {
           <div style={{marginLeft: 'auto', display: 'flex', gap: 8}}>
             <button className="btn sm" onClick={onClose}>Cancel</button>
             <button className="btn sm primary" disabled={!canSubmit} onClick={submit}>
-              <Icon name="play" size={11}/>Spawn <ProviderMark provider={provider} size={12}/>{provider === 'codex' ? 'codex' : null}
+              <Icon name="play" size={11}/>{submitting ? 'Spawning' : 'Spawn'} <ProviderMark provider={provider} size={12}/>{provider === 'codex' ? 'codex' : null}
             </button>
           </div>
         </div>

@@ -661,7 +661,9 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .empty-state { padding: 40px; text-align: center; color: var(--text-dim); }
 
 /* ── Create flow modal ─────────────────────────────────── */
+.modal.create-flow { max-height: calc(100vh - 48px); display: flex; flex-direction: column; }
 .modal.create-flow .modal-body { padding: 18px 20px; }
+.modal.create-flow .modal-body { overflow: auto; }
 .modal-close { background: none; border: none; color: var(--text-dim); cursor: pointer; margin-left: auto; padding: 4px; border-radius: 3px; }
 .modal-close:hover { background: var(--surface-2); color: var(--text); }
 .form-row { display: flex; flex-direction: column; gap: 5px; }
@@ -679,6 +681,19 @@ code { font-family: var(--mono); background: var(--surface-2); padding: 1px 5px;
 .seg-btn.on { background: var(--surface-2); color: var(--text); }
 textarea.form-input { resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.5; }
 select.form-input { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%), linear-gradient(135deg, var(--text-dim) 50%, transparent 50%); background-position: calc(100% - 14px) 50%, calc(100% - 10px) 50%; background-size: 4px 4px, 4px 4px; background-repeat: no-repeat; padding-right: 24px; }
+.image-drop { display: flex; align-items: center; gap: 10px; min-height: 54px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: 4px; background: rgba(255,255,255,0.015); color: var(--text-dim); cursor: pointer; transition: border-color 120ms, background 120ms, color 120ms; }
+.image-drop:hover, .image-drop.dragging { border-color: var(--accent); background: rgba(124, 92, 255, 0.08); color: var(--text); }
+.image-drop-icon { width: 32px; height: 32px; border-radius: 4px; border: 1px solid var(--border); background: var(--surface-2); display: inline-flex; align-items: center; justify-content: center; color: var(--accent); flex-shrink: 0; }
+.image-drop-copy { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.image-drop-main { color: var(--text); font-size: 12.5px; }
+.image-drop-sub { font-size: 11px; color: var(--text-dim); }
+.image-input { display: none; }
+.image-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 7px; }
+.image-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 4px 5px 4px 7px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); color: var(--text-mid); font-size: 11px; }
+.image-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+.image-chip-size { color: var(--text-faint); font-size: 10px; }
+.image-chip-remove { width: 18px; height: 18px; border: none; border-radius: 3px; background: transparent; color: var(--text-dim); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+.image-chip-remove:hover { color: var(--text); background: var(--surface-3); }
 .modal-foot { align-items: center; }
 .btn[disabled] { opacity: 0.4; cursor: not-allowed; }
 
@@ -2069,6 +2084,19 @@ const App = () => {
     setToast(data.message || `${kind} completed`);
     return data;
   };
+  const serverFormAction = async (kind, formData) => {
+    if (!(formData instanceof FormData)) throw new Error('formData is required');
+    formData.set('kind', kind);
+    const resp = await fetch('/api/actions', {
+      method: 'POST',
+      body: formData,
+    });
+    const data = await resp.json().catch(() => ({ message: resp.statusText }));
+    if (!resp.ok) throw new Error(data.message || data.error || resp.statusText);
+    if (data.agent) upsertAgent(data.agent);
+    setToast(data.message || `${kind} completed`);
+    return data;
+  };
   const capabilityList = (group) => {
     const caps = (window.MC && window.MC.CAPABILITIES) || {};
     return Array.isArray(caps[group]) ? caps[group] : [];
@@ -2274,7 +2302,23 @@ const App = () => {
         });
     }
     if (kind === 'spawn-prompt') { setPalette(false); setCreateOpen(true); return; }
-    if (kind === 'create-flow') { openBridge('create-flow', target); return; }
+    if (kind === 'create-flow-images') {
+      if (!ensureProvider(target)) return null;
+      setToast(`opening ${target.slug}…`);
+      return serverFormAction('create-flow', target.formData)
+        .then(data => {
+          if (data.agent && data.agent.slug) {
+            setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }));
+          }
+          goto(`session/${(data.agent && data.agent.slug) || target.slug}`);
+          return data;
+        })
+        .catch(err => {
+          setToast(err.message);
+          return null;
+        });
+    }
+    if (kind === 'create-flow') { return openBridge('create-flow', target); }
     if (kind === 'update-permission-mode') {
       serverAction('update-permission-mode', target)
         .then(data => {
