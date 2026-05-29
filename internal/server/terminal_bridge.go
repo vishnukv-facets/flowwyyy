@@ -203,13 +203,30 @@ func terminalPasteInput(prompt string) string {
 }
 
 func (h *terminalHub) wakeTask(slug, prompt string) error {
-	if err := h.sendInput(slug, terminalPasteInput(prompt)); err == nil {
-		return nil
+	// Paste the prompt WITHOUT a trailing newline, then submit with a separate,
+	// delayed Enter. A \r in the same write as the bracketed-paste terminator
+	// gets absorbed into the (usually multi-line) input buffer instead of
+	// submitting — the prompt ends up sitting unsent in the box. Sending Enter
+	// as a distinct keystroke, after the editor has exited paste mode, reliably
+	// submits.
+	paste := "\x1b[200~" + prompt + "\x1b[201~"
+	if err := h.sendInput(slug, paste); err != nil {
+		if _, aerr := h.attach(slug, 120, 32); aerr != nil {
+			return aerr
+		}
+		if err := h.sendInput(slug, paste); err != nil {
+			return err
+		}
 	}
-	if _, err := h.attach(slug, 120, 32); err != nil {
-		return err
-	}
-	return h.sendInput(slug, terminalPasteInput(prompt))
+	go h.submitAfterPaste(slug)
+	return nil
+}
+
+// submitAfterPaste presses Enter shortly after a wake paste, once the input
+// editor has had a beat to finish processing the paste and leave paste mode.
+func (h *terminalHub) submitAfterPaste(slug string) {
+	time.Sleep(250 * time.Millisecond)
+	_ = h.sendInput(slug, "\r")
 }
 
 func (h *terminalHub) scrollbackText(slug string, limit int) (string, bool) {
