@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -74,6 +75,55 @@ func TestGitHubListener_MockPollerDispatchesAssignments(t *testing.T) {
 
 	if len(*spawns) != 2 {
 		t.Fatalf("spawn count = %d, want 2", len(*spawns))
+	}
+}
+
+// A real poll collects the assignee/review events first, then a later
+// sub-call (e.g. a flaky tracked-PR fetch) can fail — GitHubPoller.Poll
+// returns the already-collected events alongside the error. The listener must
+// still dispatch those collected events; otherwise one flaky PR starves every
+// other event (this is what hid a newly-assigned issue from the inbox).
+func TestGitHubListener_DispatchesCollectedEventsDespitePollError(t *testing.T) {
+	t.Setenv("FLOW_GH_ENABLED", "1")
+	t.Setenv("FLOW_GH_SELF_LOGINS", "me")
+	t.Setenv("FLOW_GH_AUTOOPEN", "0")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	polled := make(chan struct{}, 1)
+	l := NewGitHubListener(NewGitHubDispatcher(db, nil))
+	l.pollInterval = time.Hour // only the immediate pollOnce should run
+	l.pollFn = func(context.Context) ([]GitHubEvent, error) {
+		select {
+		case polled <- struct{}{}:
+		default:
+		}
+		return []GitHubEvent{
+			{
+				Kind:     GitHubEventIssueAssigned,
+				Owner:    "Facets-cloud",
+				Repo:     "raptor",
+				Number:   139,
+				Title:    "Raptor CLI — Known Bugs",
+				URL:      "https://github.com/Facets-cloud/raptor/issues/139",
+				EventKey: "issue:Facets-cloud/raptor#139:assigned",
+			},
+		}, errors.New("gh api repos/x/y/pulls/1/reviews: simulated late poll failure")
+	}
+
+	if err := l.Start(); err != nil {
+		t.Fatalf("Start err = %v", err)
+	}
+	select {
+	case <-polled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for poll")
+	}
+	l.Stop() // waits for the in-flight pollOnce (and its dispatch) to finish
+
+	if len(*spawns) != 1 {
+		t.Fatalf("spawn count = %d, want 1 (collected event must dispatch despite poll error)", len(*spawns))
 	}
 }
 

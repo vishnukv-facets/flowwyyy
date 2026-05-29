@@ -439,7 +439,11 @@ func (ghAPIClient) ListIssueComments(ctx context.Context, owner, repo string, nu
 
 func (ghAPIClient) ListReviews(ctx context.Context, owner, repo string, number int, since string) ([]githubReviewRecord, error) {
 	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", owner, repo, number)
-	out, err := exec.CommandContext(ctx, "gh", "api", endpoint, "-f", "per_page=100").CombinedOutput()
+	// -X GET is required: `gh api` defaults to POST as soon as any -f field is
+	// present, so without it this would POST to .../reviews and create a
+	// pending review (422 "one pending review per pull request"), failing the
+	// whole poll on every tick.
+	out, err := exec.CommandContext(ctx, "gh", "api", "-X", "GET", endpoint, "-f", "per_page=100").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("gh api %s: %w (output: %s)", endpoint, err, strings.TrimSpace(string(out)))
 	}

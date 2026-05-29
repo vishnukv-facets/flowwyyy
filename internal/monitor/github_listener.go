@@ -106,8 +106,11 @@ func (l *GitHubListener) run(ctx context.Context) {
 func (l *GitHubListener) pollOnce(ctx context.Context) {
 	events, err := l.poll(ctx)
 	if err != nil {
+		// A poll may fail partway through (e.g. one flaky tracked-PR fetch)
+		// yet still return the events it collected before the error. Log the
+		// failure but DON'T discard those events — otherwise a single failing
+		// PR starves every other event, including newly-assigned issues.
 		l.logFn("poll: %v", err)
-		return
 	}
 	for _, ev := range events {
 		if err := l.dispatcher.Dispatch(ctx, ev); err != nil {
