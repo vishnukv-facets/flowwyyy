@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -48,6 +49,7 @@ func cmdUIServe(args []string) int {
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	port := fs.Int("port", 8787, "TCP port to bind")
 	bg := fs.Bool("bg", false, "run the UI server in the background")
+	noQuote := fs.Bool("no-quote", false, "disable the anime quote shown beside the Mission Control greeting")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -59,12 +61,12 @@ func cmdUIServe(args []string) int {
 		return 2
 	}
 	if *bg {
-		return startUIBackground(*host, *port)
+		return startUIBackground(*host, *port, *noQuote)
 	}
-	return serveUI(*host, *port)
+	return serveUI(*host, *port, *noQuote)
 }
 
-func serveUI(host string, port int) int {
+func serveUI(host string, port int, noQuote bool) int {
 	root, err := flowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -105,11 +107,12 @@ func serveUI(host string, port int) int {
 		fmt.Fprintf(os.Stderr, "installed local agent hooks in %d existing workdir(s)\n", changed)
 	}
 	srv := server.New(server.Config{
-		DB:          db,
-		FlowRoot:    root,
-		Version:     Version,
-		CommandPath: commandPath,
-		HookURL:     hookURL,
+		DB:           db,
+		FlowRoot:     root,
+		Version:      Version,
+		CommandPath:  commandPath,
+		HookURL:      hookURL,
+		DisableQuote: noQuote,
 	})
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	fmt.Fprintf(os.Stderr, "flow ui listening on http://%s\n", addr)
@@ -122,7 +125,7 @@ func serveUI(host string, port int) int {
 	return srv.ListenAndServe(addr)
 }
 
-func startUIBackground(host string, port int) int {
+func startUIBackground(host string, port int, noQuote bool) int {
 	root, err := flowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -147,7 +150,11 @@ func startUIBackground(host string, port int) int {
 	}
 	defer logFile.Close()
 
-	cmd := exec.Command(exe, "ui", "serve", "--host", host, "--port", strconv.Itoa(port))
+	bgArgs := []string{"ui", "serve", "--host", host, "--port", strconv.Itoa(port)}
+	if noQuote {
+		bgArgs = append(bgArgs, "--no-quote")
+	}
+	cmd := exec.Command(exe, bgArgs...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Env = os.Environ()
@@ -165,6 +172,16 @@ func startUIBackground(host string, port int) int {
 	return 0
 }
 
-func preferredUIFlowBinary(fallback string) string {
+// preferredUIFlowBinary picks which binary the backgrounded `ui serve` re-execs.
+// It must be the binary currently running (os.Executable()), NOT a bare "flow"
+// PATH lookup: resolving "flow" via $PATH launches whatever is installed
+// (e.g. /usr/local/bin/flow), which may be a stale build with old embedded UI
+// assets — so `./flow ui serve --bg` would serve the old UI instead of the
+// freshly built one. Re-execing the current executable keeps --bg consistent
+// with the foreground server.
+func preferredUIFlowBinary(current string) string {
+	if strings.TrimSpace(current) != "" {
+		return current
+	}
 	return "flow"
 }

@@ -23,3 +23,6 @@
 
 # UI build toolchain deps (built assets under static/ stay committed)
 /internal/server/ui/node_modules/
+# wterm.wasm is copied from node_modules into public/ at build time, then
+# emitted to static/ (which is committed). The public/ copy is regenerated.
+/internal/server/ui/public/wterm.wasm

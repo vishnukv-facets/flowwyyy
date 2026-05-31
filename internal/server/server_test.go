@@ -485,7 +485,7 @@ func TestToolCallActivitySeriesBucketsByMinute(t *testing.T) {
 		{Type: "tool_use", Tool: "Bash", Time: ts(0)},
 		{Type: "tool_use", Tool: "Read", Time: ts(0)},
 		{Type: "tool_use", Tool: "Edit", Time: ts(5)},
-		{Type: "assistant", Text: "ignored", Time: ts(2)},
+		{Type: "assistant", Text: "counted", Time: ts(2)},
 		{Type: "tool_use", Tool: "Old", Time: ts(120)},
 		{Type: "tool_use", Tool: "Empty"},
 	}
@@ -494,18 +494,23 @@ func TestToolCallActivitySeriesBucketsByMinute(t *testing.T) {
 	if len(series) != 60 {
 		t.Fatalf("len = %d, want 60", len(series))
 	}
+	// Every timestamped entry within the last hour counts (any Type), so the
+	// activity strip is meaningful for Claude and Codex alike.
 	if series[59] != 2 {
-		t.Fatalf("current minute bucket = %d, want 2 (two tool_use entries at minute 0)", series[59])
+		t.Fatalf("current minute bucket = %d, want 2 (two entries at minute 0)", series[59])
+	}
+	if series[57] != 1 {
+		t.Fatalf("minute -2 bucket = %d, want 1 (assistant turn 2 min ago)", series[57])
 	}
 	if series[54] != 1 {
-		t.Fatalf("minute -5 bucket = %d, want 1 (one Edit tool_use 5 min ago)", series[54])
+		t.Fatalf("minute -5 bucket = %d, want 1 (one entry 5 min ago)", series[54])
 	}
 	for i, v := range series {
-		if i == 54 || i == 59 {
+		if i == 54 || i == 57 || i == 59 {
 			continue
 		}
 		if v != 0 {
-			t.Fatalf("bucket %d = %d, want 0 (no events; assistant text and >60min entries excluded)", i, v)
+			t.Fatalf("bucket %d = %d, want 0 (untimestamped and >60min entries excluded)", i, v)
 		}
 	}
 }
@@ -523,9 +528,10 @@ func TestToolCallActivitySeriesEmpty(t *testing.T) {
 }
 
 // TestToolCallActivitySeriesCodexShape exercises the function with the
-// transcript shape produced by parseCodexTranscriptLine: function_call and
-// local_shell_call records both flatten to uiTranscript{Type: "tool_use"},
-// with Time stamped from the outer payload by stampTranscriptEntries.
+// transcript shape produced by parseCodexTranscriptLine. Every timestamped
+// entry counts toward per-minute activity (calls, results, and turns), so
+// Codex sessions — which rarely surface discrete tool_use events — still
+// render a meaningful activity strip.
 func TestToolCallActivitySeriesCodexShape(t *testing.T) {
 	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	ts := func(minutesAgo int) string {
@@ -536,14 +542,17 @@ func TestToolCallActivitySeriesCodexShape(t *testing.T) {
 		{Type: "tool_use", Tool: "apply_patch", Input: `{"path":"foo"}`, Time: ts(0)},
 		{Type: "tool_use", Tool: "local_shell", Input: "ls -la", Time: ts(3)},
 		{Type: "tool_result", Tool: "result", Summary: "ok", Time: ts(3)},
-		{Type: "user", Text: "ignored", Time: ts(1)},
+		{Type: "user", Text: "counted", Time: ts(1)},
 	}
 	series := toolCallActivitySeries(transcript, now)
 	if series[59] != 1 {
 		t.Fatalf("current minute bucket = %d, want 1 (codex function_call)", series[59])
 	}
-	if series[56] != 1 {
-		t.Fatalf("minute -3 bucket = %d, want 1 (codex local_shell_call)", series[56])
+	if series[58] != 1 {
+		t.Fatalf("minute -1 bucket = %d, want 1 (user turn)", series[58])
+	}
+	if series[56] != 2 {
+		t.Fatalf("minute -3 bucket = %d, want 2 (local_shell call + its result)", series[56])
 	}
 }
 
@@ -552,6 +561,7 @@ func TestActivityHeatmapUsesTaskAndUpdateDates(t *testing.T) {
 	days := buildActivityHeatmap([]TaskView{{
 		Slug:      "build-ui",
 		Status:    "in-progress",
+		Live:      true, // a live session counts as active "now" (2026-05-15)
 		CreatedAt: "2026-05-12T10:00:00+05:30",
 		UpdatedAt: "2026-05-13T11:00:00+05:30",
 		Updates: []FileRef{{
@@ -1751,216 +1761,6 @@ func TestProjectBriefCanBeUpdatedFromUI(t *testing.T) {
 	}
 }
 
-func TestStaticActionPayloadForwardsProvider(t *testing.T) {
-	// The app shell / action-router logic moved out of index.html's inline
-	// <script> into the build source ui/src/main.jsx (transpiled to app.main.js).
-	data, err := os.ReadFile(filepath.Join("ui", "src", "main.jsx"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(data)
-	if !strings.Contains(body, "provider: target.provider") {
-		t.Fatal("serverAction payload must forward provider so UI-created Codex tasks do not default to Claude")
-	}
-	if !strings.Contains(body, "Start backlog task") || !strings.Contains(body, "_providerChosen") {
-		t.Fatal("backlog spawn must open the modal asking for provider and permission mode before opening a session")
-	}
-	if !strings.Contains(body, "Permission mode") || !strings.Contains(body, "permission_mode, _providerChosen: true") || !strings.Contains(body, "? target.permission_mode : 'auto'") {
-		t.Fatal("backlog spawn modal must let the user pick permission mode (default/auto/bypass) and forward it to the spawn action")
-	}
-	if !strings.Contains(body, "data.bridge && data.agent") ||
-		!strings.Contains(body, "flow-terminal-restart") {
-		t.Fatal("live permission-mode changes must reopen the browser bridge and signal the mounted terminal to reconnect")
-	}
-	if !strings.Contains(body, "taskStartBlocker(target)") {
-		t.Fatal("spawn action must refuse blocked/dependent backlog tasks before provider choice")
-	}
-	if !strings.Contains(body, "/api/tasks/${encodeURIComponent(sessionSlug)}/bridge") {
-		t.Fatal("completed session routes must fetch the full bridge snapshot instead of using capped ui-data transcripts")
-	}
-	if !strings.Contains(body, "setBridgeAgents(prev => ({ ...prev, [data.agent.slug]: data.agent }))") {
-		t.Fatal("spawn/attach actions must retain the action-returned agent locally until the terminal websocket updates the DB")
-	}
-	if !strings.Contains(body, "const mergedTerminalMode = (rawMode, bridgeMode) => {") {
-		t.Fatal("session routes must merge shared/browser terminal snapshots without pinning stale native mode")
-	}
-	if !strings.Contains(body, "rawSessionAgent && bridgeAgent") {
-		t.Fatal("session routes must prefer refreshed bridge snapshots for active session status")
-	}
-	if !strings.Contains(body, "mode: mergedTerminalMode(rawSessionAgent.terminal?.mode, bridgeAgent.terminal?.mode)") {
-		t.Fatal("session routes must prefer shared/browser bridge snapshots over stale native ui-data")
-	}
-	if !strings.Contains(body, "existing.status === agent.status") {
-		t.Fatal("session routes must refresh retained bridge snapshots when status changes without transcript growth")
-	}
-	if !strings.Contains(body, "const completedAgent = doneAgent ? (bridgeTranscriptCount > doneTranscriptCount ? bridgeAgent : doneAgent) : null") {
-		t.Fatal("completed session routes must not let a stale retained bridge agent override the done task snapshot")
-	}
-	if !strings.Contains(body, "if (kind === 'spawn-run')") || !strings.Contains(body, "goto(`session/${data.agent.slug}`)") {
-		t.Fatal("playbook spawn-run must navigate to the created browser terminal run")
-	}
-	if !strings.Contains(body, "if (kind === 'update-task-name')") {
-		t.Fatal("task detail must be able to update the task name from the UI")
-	}
-	tiles, err := staticFS.ReadFile("static/assets/dfbb0627-5c41-4bf8-85df-037b2d384519.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Count(string(tiles), `<Icon name="external-link" size={11}/>Open</button>`) < 3 {
-		t.Fatal("agent session tiles should label attach/navigation actions as Open with a navigation icon")
-	}
-	if !strings.Contains(string(tiles), "permissionWaiting ? 'Awaiting your approval' : 'Awaiting your input'") {
-		t.Fatal("question waits should be labeled as input instead of approval")
-	}
-	if !strings.Contains(string(tiles), "permissionWaiting ? (") || !strings.Contains(string(tiles), "onAction('pause', agent)") {
-		t.Fatal("non-permission waiting tiles should expose pause/open actions instead of approve/deny")
-	}
-	if !strings.Contains(string(tiles), "flowWaiting") || !strings.Contains(string(tiles), "onAction('clear-waiting', agent)") {
-		t.Fatal("flow waiting tiles should expose a direct unblock action")
-	}
-	if !strings.Contains(string(tiles), "tile-title") || !strings.Contains(string(tiles), "tile-ref mono") {
-		t.Fatal("agent tiles should render the human task name as the primary title and slug as the secondary ref")
-	}
-	if !strings.Contains(string(tiles), "const DependencyBadges") || !strings.Contains(string(tiles), "window.MC.DependencyBadges = DependencyBadges") {
-		t.Fatal("agent tiles must expose dependency badges for parent/child task relationships")
-	}
-	screens, err := staticFS.ReadFile("static/assets/c906f42d-c4d3-4f33-b4a9-aca5e8a18052.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(screens), "Attach to ") || strings.Contains(string(screens), ">Attach</button>") {
-		t.Fatal("session navigation copy should say Open instead of Attach")
-	}
-	if !strings.Contains(string(screens), "const completedTask = current.task_status === 'done' || current.status === 'done';") ||
-		!strings.Contains(string(screens), "const nativeTranscriptMode = terminalMode === 'native' && completedTask;") {
-		t.Fatal("in-progress native sessions must open the interactive terminal; transcript-only mode is for completed tasks")
-	}
-	if !strings.Contains(string(screens), "window.addEventListener('flow-terminal-restart', restartHandler)") ||
-		!strings.Contains(string(screens), "setTerminalRestartKey(v => v + 1)") {
-		t.Fatal("session detail must reconnect its terminal when a live permission-mode change restarts the bridge")
-	}
-	if !strings.Contains(string(screens), "stripTerminalGeneratedInput(data)") {
-		t.Fatal("browser terminal must filter generated capability replies before sending input to the PTY")
-	}
-	if !strings.Contains(string(screens), "return mouseMode !== 'none';") ||
-		strings.Contains(string(screens), "term.buffer?.active?.type === 'alternate' && mouseMode !== 'none'") {
-		t.Fatal("browser terminal must let tmux own wheel events whenever mouse tracking is enabled, even when alt-screen controls are stripped")
-	}
-	if !strings.Contains(string(screens), "const TERMINAL_SCROLLBACK_LINES = 4294967295;") {
-		t.Fatal("browser terminal scrollback should use xterm's maximum accepted line cap")
-	}
-	if !strings.Contains(string(screens), "/attachments") ||
-		!strings.Contains(string(screens), "terminalClipboardFiles(event.clipboardData)") ||
-		!strings.Contains(string(screens), "host.addEventListener('drop', dropHandler)") {
-		t.Fatal("browser terminal must support pasted and dropped file attachments")
-	}
-	if !strings.Contains(body, "const serverFormAction = async (kind, formData)") ||
-		!strings.Contains(body, "if (kind === 'create-flow-images')") ||
-		!strings.Contains(string(screens), `accept="image/*"`) ||
-		!strings.Contains(string(screens), "handleImagePaste") ||
-		!strings.Contains(string(screens), "handleImageDrop") ||
-		!strings.Contains(string(screens), "formData.append('images'") {
-		t.Fatal("create flow modal must upload selected, pasted, or dropped images with the create-flow action")
-	}
-	if !strings.Contains(string(screens), "const createFlowSubmitHotkey = (e) =>") ||
-		!strings.Contains(string(screens), "onKeyDown={createFlowSubmitHotkey}") ||
-		!strings.Contains(string(screens), "(e.metaKey || e.ctrlKey) && e.key === 'Enter'") {
-		t.Fatal("create flow modal must submit on Cmd/Ctrl+Enter while focus is inside the modal")
-	}
-	if !strings.Contains(string(screens), "<th>Dependencies</th>") || strings.Count(string(screens), "DependencyBadges task=") < 3 {
-		t.Fatal("task screens should render dependencies in backlog, table, and project rows")
-	}
-	for _, want := range []string{
-		"const [nameEditing, setNameEditing]",
-		"const [nameDraft, setNameDraft]",
-		"entity-title-input",
-		"action('update-task-name'",
-	} {
-		if !strings.Contains(string(screens), want) {
-			t.Fatalf("task detail name editor missing %q", want)
-		}
-	}
-	if !strings.Contains(string(screens), "const taskStartBlocker") || !strings.Contains(string(screens), "disabled={!anyProviderAvailable() || !!blockReason}") {
-		t.Fatal("task screens should disable spawn controls for blocked/dependent tasks")
-	}
-	if !strings.Contains(string(screens), "fetch(`/api/search?q=${encodeURIComponent(raw)}&limit=8`)") ||
-		!strings.Contains(string(screens), "Full-text search") ||
-		!strings.Contains(string(screens), "...(data.memories || [])") ||
-		!strings.Contains(string(screens), "Search briefs, updates, memories") {
-		t.Fatal("command palette should surface FTS-backed flow memory search results")
-	}
-}
-
-func TestStaticMemorySourcesHydration(t *testing.T) {
-	// App-shell hydration logic now lives in ui/src/main.jsx (built to app.main.js).
-	index, err := os.ReadFile(filepath.Join("ui", "src", "main.jsx"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	indexBody := string(index)
-	for _, want := range []string{
-		"AGENT_MEMORY_SOURCES = []",
-		"replaceArray(AGENT_MEMORY_SOURCES, fresh.AGENT_MEMORY_SOURCES)",
-		"window.MC.AGENT_MEMORY_SOURCES = AGENT_MEMORY_SOURCES",
-		"{route === 'memories' && <MemorySourcesView/>}",
-		"memories: AGENT_MEMORY_SOURCES.length",
-	} {
-		if !strings.Contains(indexBody, want) {
-			t.Fatalf("memory source UI hydration missing %q", want)
-		}
-	}
-
-	bootstrap, err := staticFS.ReadFile("static/assets/ebaab09c-07dc-4d0a-b14b-5fa8d1c49925.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(bootstrap), "const AGENT_MEMORY_SOURCES = []") ||
-		!strings.Contains(string(bootstrap), "KB_FILES, AGENT_MEMORY_SOURCES, WORKDIRS") {
-		t.Fatal("sample bootstrap must expose AGENT_MEMORY_SOURCES before live ui-data arrives")
-	}
-
-	screens, err := staticFS.ReadFile("static/assets/c906f42d-c4d3-4f33-b4a9-aca5e8a18052.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	screensBody := string(screens)
-	for _, want := range []string{
-		"const MemorySourcesView = () => {",
-		"const sources = Array.isArray(AGENT_MEMORY_SOURCES) ? AGENT_MEMORY_SOURCES : []",
-		"Rendered Markdown",
-		"<MarkdownView source={selected.content || ''}",
-		"MemorySourcesView, WorkdirsView",
-	} {
-		if !strings.Contains(screensBody, want) {
-			t.Fatalf("memory source screen missing %q", want)
-		}
-	}
-}
-
-func TestStaticPlaybookDetailUsesRealDataAndEditableBrief(t *testing.T) {
-	data, err := staticFS.ReadFile("static/assets/c906f42d-c4d3-4f33-b4a9-aca5e8a18052.js")
-	if err != nil {
-		t.Fatal(err)
-	}
-	body := string(data)
-	for _, want := range []string{
-		"fetch(`/api/playbooks/${encodeURIComponent(slug)}`)",
-		"fetch(`/api/playbooks/${encodeURIComponent(slug)}/brief`",
-		"method: 'PUT'",
-		"const recentRuns = detail ? (detail.recent_runs || []) : []",
-		"const relatedFiles = [",
-		"/${file.route}/${encodeURIComponent(file.filename)}",
-		"goto(`session/${r.slug}`)",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("playbook detail missing %q", want)
-		}
-	}
-	if strings.Contains(body, "trigger: 'cron'") || strings.Contains(body, "dur: '3m 24s'") {
-		t.Fatal("playbook detail should not render fake history rows")
-	}
-}
-
 func TestOverviewTaskUsesFlowRootAndFreshPrompt(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -2193,38 +1993,6 @@ func TestRestartFreshBrowserTerminalClearsExistingSession(t *testing.T) {
 	}
 	if task.Status != "in-progress" || !task.SessionID.Valid || task.SessionID.String != launch.SessionID {
 		t.Fatalf("task after websocket launch = %+v", task)
-	}
-}
-
-func TestStaticSessionUIHasFreshRestartDropdown(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join("static", "assets", "c906f42d-c4d3-4f33-b4a9-aca5e8a18052.js"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	js := string(body)
-	for _, want := range []string{
-		"restart-fresh",
-		"RestartDropdown",
-		"Restart fresh",
-		"aria-label=\"Restart options\"",
-	} {
-		if !strings.Contains(js, want) {
-			t.Fatalf("session UI missing %q", want)
-		}
-	}
-	if strings.Contains(js, "Pick restart mode") {
-		t.Fatal("restart control should be one visible dropdown button, not a subtle split-caret control")
-	}
-	if strings.Contains(js, "New session") {
-		t.Fatal("fresh restart should live in the restart dropdown, not as a separate New session button")
-	}
-	// app-shell action router moved to ui/src/main.jsx (built to app.main.js)
-	shell, err := os.ReadFile(filepath.Join("ui", "src", "main.jsx"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(shell), "restart-fresh") {
-		t.Fatal("app shell action router must wire restart-fresh to the browser bridge")
 	}
 }
 

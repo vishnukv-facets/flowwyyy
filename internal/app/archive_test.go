@@ -68,7 +68,10 @@ func TestCmdArchiveTask(t *testing.T) {
 	}
 }
 
-func TestCmdArchiveProjectDoesNotCascade(t *testing.T) {
+// TestCmdArchiveProjectCascadesToTasks pins the behavior that archiving a
+// project also archives the tasks it owns, and unarchiving restores them —
+// a container and its work move together.
+func TestCmdArchiveProjectCascadesToTasks(t *testing.T) {
 	root := setupArchiveTestEnv(t)
 	db := reopenArchiveTestDB(t, root)
 
@@ -91,8 +94,45 @@ func TestCmdArchiveProjectDoesNotCascade(t *testing.T) {
 	if err := db.QueryRow("SELECT archived_at FROM tasks WHERE slug = 'beta-task'").Scan(&taskArchived); err != nil {
 		t.Fatalf("select task: %v", err)
 	}
+	if !taskArchived.Valid {
+		t.Errorf("project's task was not cascade-archived")
+	}
+
+	// Unarchiving the project restores its tasks too.
+	if rc := cmdUnarchive([]string{"alpha"}); rc != 0 {
+		t.Fatalf("unarchive rc=%d", rc)
+	}
+	if err := db.QueryRow("SELECT archived_at FROM tasks WHERE slug = 'beta-task'").Scan(&taskArchived); err != nil {
+		t.Fatalf("select task after unarchive: %v", err)
+	}
 	if taskArchived.Valid {
-		t.Errorf("task archived_at was cascaded: %+v (should be null)", taskArchived)
+		t.Errorf("task was not cascade-unarchived: %+v", taskArchived)
+	}
+}
+
+// TestCmdArchivePlaybookCascadesToRuns verifies playbook archival cascades to
+// its run tasks.
+func TestCmdArchivePlaybookCascadesToRuns(t *testing.T) {
+	root := setupArchiveTestEnv(t)
+	db := reopenArchiveTestDB(t, root)
+
+	if err := flowdb.UpsertPlaybook(db, &flowdb.Playbook{Slug: "pb", Name: "PB", WorkDir: "/tmp/pb"}); err != nil {
+		t.Fatalf("insert playbook: %v", err)
+	}
+	insertTask(t, db, "pb-run", "PB run", "backlog", "medium", "/tmp/pb", nil)
+	if _, err := db.Exec(`UPDATE tasks SET kind = 'playbook_run', playbook_slug = 'pb' WHERE slug = 'pb-run'`); err != nil {
+		t.Fatalf("link run task: %v", err)
+	}
+
+	if rc := cmdArchive([]string{"pb"}); rc != 0 {
+		t.Fatalf("archive rc=%d", rc)
+	}
+	var runArchived sql.NullString
+	if err := db.QueryRow("SELECT archived_at FROM tasks WHERE slug = 'pb-run'").Scan(&runArchived); err != nil {
+		t.Fatalf("select run: %v", err)
+	}
+	if !runArchived.Valid {
+		t.Errorf("playbook run task was not cascade-archived")
 	}
 }
 

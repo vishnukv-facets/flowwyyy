@@ -209,6 +209,8 @@ func inboxJSONLTitle(ev monitor.InboundEvent) string {
 			return "Reaction :" + ev.Reaction + ":"
 		}
 		return "Reaction"
+	case "flow_notice":
+		return "flow"
 	}
 	// Fallback: humanise the snake_case kind.
 	return strings.ReplaceAll(kind, "_", " ")

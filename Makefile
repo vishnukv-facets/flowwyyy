@@ -6,16 +6,24 @@ INSTALL_DIR := $(HOME)/.local/bin
 VERSION  ?= dev
 LDFLAGS  := -X main.version=$(VERSION)
 
-.PHONY: build ui install uninstall test clean
+.PHONY: build ui ui-check rebuild install uninstall test clean
 
 build:
 	go build -ldflags '$(LDFLAGS)' -o $(BINARY) .
 
-# Rebuild the web UI assets (esbuild + Preact) into internal/server/static/assets.
+# Rebuild the web UI (Vite + React + TypeScript) into internal/server/static.
 # Built assets are committed and go:embed'd, so plain `make build` / `go build`
 # stay Node-free; run `make ui` only after editing UI source under internal/server/ui.
 ui:
-	cd internal/server/ui && pnpm install && node build.mjs
+	cd internal/server/ui && pnpm install && pnpm run build
+
+# Type-check the UI without emitting (fast feedback while editing UI source).
+ui-check:
+	cd internal/server/ui && pnpm install && pnpm run typecheck
+
+# Rebuild the UI assets and then the Go binary that embeds them — the one-shot
+# command after editing anything under internal/server/ui.
+rebuild: ui build
 
 test:
 	go test ./...

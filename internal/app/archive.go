@@ -1,6 +1,7 @@
 package app
 
 import (
+	"database/sql"
 	"flow/internal/flowdb"
 	"fmt"
 	"os"
@@ -56,28 +57,77 @@ func setArchivedAt(args []string, archive bool) int {
 	}
 
 	now := flowdb.NowISO()
-	var table string
+	// Archiving a project or playbook cascades to the tasks it owns (and
+	// unarchiving restores them), so a container and its work move together.
+	var table, childCol string
 	switch kind {
 	case "task":
 		table = "tasks"
 	case "project":
 		table = "projects"
+		childCol = "project_slug"
 	case "playbook":
 		table = "playbooks"
+		childCol = "playbook_slug"
 	}
-	var q string
-	var qargs []any
-	if archive {
-		q = fmt.Sprintf("UPDATE %s SET archived_at = ?, updated_at = ? WHERE slug = ?", table)
-		qargs = []any{now, now, slug}
-	} else {
-		q = fmt.Sprintf("UPDATE %s SET archived_at = NULL, updated_at = ? WHERE slug = ?", table)
-		qargs = []any{now, slug}
-	}
-	if _, err := db.Exec(q, qargs...); err != nil {
+
+	tx, err := db.Begin()
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	fmt.Printf("%s %s %s\n", pastVerb, kind, slug)
+	defer tx.Rollback()
+
+	if archive {
+		_, err = tx.Exec(fmt.Sprintf("UPDATE %s SET archived_at = ?, updated_at = ? WHERE slug = ?", table), now, now, slug)
+	} else {
+		_, err = tx.Exec(fmt.Sprintf("UPDATE %s SET archived_at = NULL, updated_at = ? WHERE slug = ?", table), now, slug)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	cascaded := 0
+	if childCol != "" {
+		var res sql.Result
+		if archive {
+			res, err = tx.Exec(
+				fmt.Sprintf("UPDATE tasks SET archived_at = ?, updated_at = ? WHERE %s = ? AND archived_at IS NULL AND deleted_at IS NULL", childCol),
+				now, now, slug,
+			)
+		} else {
+			res, err = tx.Exec(
+				fmt.Sprintf("UPDATE tasks SET archived_at = NULL, updated_at = ? WHERE %s = ? AND archived_at IS NOT NULL AND deleted_at IS NULL", childCol),
+				now, slug,
+			)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		if n, aerr := res.RowsAffected(); aerr == nil {
+			cascaded = int(n)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("%s %s %s", pastVerb, kind, slug)
+	if cascaded > 0 {
+		noun := "task"
+		if cascaded != 1 {
+			noun = "tasks"
+		}
+		verbed := "archived"
+		if !archive {
+			verbed = "unarchived"
+		}
+		fmt.Printf(" (%d %s also %s)", cascaded, noun, verbed)
+	}
+	fmt.Println()
 	return 0
 }

@@ -1090,8 +1090,13 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 	if err := s.ensureProviderAvailable(provider); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
-		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
+	// A done task is still resumable: opening it in a native terminal revisits
+	// the prior session (loading its context), mirroring the browser bridge
+	// which already special-cases done. Only gate startability for non-done.
+	if task.Status != "done" {
+		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
+		}
 	}
 	sharedName, hasBrowserShared := s.terminals.sharedSessionName(target)
 	createdShared := false

@@ -2,6 +2,8 @@ package server
 
 import (
 	"database/sql"
+	"net/http"
+	"sync"
 
 	"flow/internal/monitor"
 )
@@ -12,6 +14,10 @@ type Config struct {
 	Version     string
 	CommandPath string
 	HookURL     string
+	// DisableQuote turns off the anime quote beside the Mission Control
+	// greeting (flow ui serve --no-quote). The endpoint then returns an empty
+	// quote, which the UI hides — falling back to the static subtitle.
+	DisableQuote bool
 }
 
 type Server struct {
@@ -35,6 +41,20 @@ type Server struct {
 	monitorReconcile *monitorReconciler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
+
+	// quote{Mu,Key,Val} cache the Mission Control anime quote per
+	// (date + greeting bucket) so the external animechan API is called at most
+	// once per greeting change — see handleQuote.
+	quoteMu  sync.Mutex
+	quoteKey string
+	quoteVal QuoteView
+
+	// apiMux is the data-plane mux (/api/* routes only), built once and
+	// reused by both the HTTP Handler and the WebSocket-RPC bridge so the
+	// UI can run every data request and mutation over a single socket
+	// (see rpc_bridge.go) without duplicating route wiring.
+	apiOnce sync.Once
+	apiMux  http.Handler
 }
 
 type HealthView struct {
