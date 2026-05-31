@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Brain, Search } from 'lucide-react'
 import { useUiData, queryClient } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPost } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
 
 export function Memories() {
+  useDocumentTitle('Memories')
   const { data: ui, isLoading } = useUiData()
   const sources = useMemo(() => ui?.AGENT_MEMORY_SOURCES ?? [], [ui])
   const [selected, setSelected] = useState<string | null>(null)

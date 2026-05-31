@@ -138,7 +138,23 @@ CREATE TABLE IF NOT EXISTS search_docs (
     updated_at    TEXT NOT NULL
 );
 
+-- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
+-- enormous (whole-session JSONL — ~100x the size of all briefs/updates/memories
+-- combined) and searched only on demand, so they live in their own index:
+-- search_docs_fts (briefs/updates/memories) stays tiny and instant for the ⌘K
+-- palette, while search_docs_tx_fts carries the heavy transcript content and is
+-- only queried when transcript scope is requested. The triggers route each row
+-- to exactly one index by scope; scope is immutable per doc_key, so the delete
+-- side can safely target the matching index using old.scope.
 CREATE VIRTUAL TABLE IF NOT EXISTS search_docs_fts USING fts5(
+    title,
+    content,
+    content='search_docs',
+    content_rowid='id',
+    tokenize='unicode61'
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS search_docs_tx_fts USING fts5(
     title,
     content,
     content='search_docs',
@@ -148,19 +164,27 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_docs_fts USING fts5(
 
 CREATE TRIGGER IF NOT EXISTS search_docs_ai AFTER INSERT ON search_docs BEGIN
     INSERT INTO search_docs_fts(rowid, title, content)
-    VALUES (new.id, new.title, new.content);
+    SELECT new.id, new.title, new.content WHERE new.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope = 'transcript';
 END;
 
 CREATE TRIGGER IF NOT EXISTS search_docs_ad AFTER DELETE ON search_docs BEGIN
     INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
-    VALUES ('delete', old.id, old.title, old.content);
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(search_docs_tx_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope = 'transcript';
 END;
 
 CREATE TRIGGER IF NOT EXISTS search_docs_au AFTER UPDATE ON search_docs BEGIN
     INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
-    VALUES ('delete', old.id, old.title, old.content);
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(search_docs_tx_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope = 'transcript';
     INSERT INTO search_docs_fts(rowid, title, content)
-    VALUES (new.id, new.title, new.content);
+    SELECT new.id, new.title, new.content WHERE new.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope = 'transcript';
 END;
 
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug);
@@ -933,7 +957,79 @@ func runMigrations(db *sql.DB) error {
 	if err := migrateSearchDocsMemoryScope(db); err != nil {
 		return fmt.Errorf("migrate search docs memory scope: %w", err)
 	}
+	if err := migrateSearchDocsTranscriptFTS(db); err != nil {
+		return fmt.Errorf("migrate search docs transcript fts: %w", err)
+	}
 	return nil
+}
+
+// migrateSearchDocsTranscriptFTS splits transcripts out of the main FTS index
+// into their own (search_docs_tx_fts). Before this, every search — even a quick
+// ⌘K title lookup — had FTS scan the ~100 MB of transcript content sharing the
+// index, so common terms took seconds. We detect the old layout by the routing
+// trigger (the schema DDL may have already created an empty tx index via
+// IF NOT EXISTS, so table presence isn't a reliable signal), then rebuild both
+// indexes and repopulate them from the intact search_docs content — no file
+// re-walk needed.
+func migrateSearchDocsTranscriptFTS(db *sql.DB) error {
+	var triggerSQL string
+	err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE type='trigger' AND name='search_docs_ai'`).Scan(&triggerSQL)
+	if errors.Is(err, sql.ErrNoRows) {
+		// No search trigger yet (fresh DB) — the schema DDL already built the
+		// dual-index layout.
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(triggerSQL, "search_docs_tx_fts") {
+		return nil // already split
+	}
+	_, err = db.Exec(`
+DROP TRIGGER IF EXISTS search_docs_ai;
+DROP TRIGGER IF EXISTS search_docs_ad;
+DROP TRIGGER IF EXISTS search_docs_au;
+DROP TABLE IF EXISTS search_docs_fts;
+DROP TABLE IF EXISTS search_docs_tx_fts;
+
+CREATE VIRTUAL TABLE search_docs_fts USING fts5(
+    title, content, content='search_docs', content_rowid='id', tokenize='unicode61'
+);
+CREATE VIRTUAL TABLE search_docs_tx_fts USING fts5(
+    title, content, content='search_docs', content_rowid='id', tokenize='unicode61'
+);
+
+CREATE TRIGGER search_docs_ai AFTER INSERT ON search_docs BEGIN
+    INSERT INTO search_docs_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope = 'transcript';
+END;
+
+CREATE TRIGGER search_docs_ad AFTER DELETE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(search_docs_tx_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope = 'transcript';
+END;
+
+CREATE TRIGGER search_docs_au AFTER UPDATE ON search_docs BEGIN
+    INSERT INTO search_docs_fts(search_docs_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(search_docs_tx_fts, rowid, title, content)
+    SELECT 'delete', old.id, old.title, old.content WHERE old.scope = 'transcript';
+    INSERT INTO search_docs_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope <> 'transcript';
+    INSERT INTO search_docs_tx_fts(rowid, title, content)
+    SELECT new.id, new.title, new.content WHERE new.scope = 'transcript';
+END;
+
+INSERT INTO search_docs_fts(rowid, title, content)
+    SELECT id, title, content FROM search_docs WHERE scope <> 'transcript';
+INSERT INTO search_docs_tx_fts(rowid, title, content)
+    SELECT id, title, content FROM search_docs WHERE scope = 'transcript';
+`)
+	return err
 }
 
 // migrateSearchDocsMemoryScope widens the rebuildable FTS cache to include

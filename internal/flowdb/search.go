@@ -124,16 +124,53 @@ func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]Se
 	if len(scopes) == 0 {
 		scopes = DefaultSearchScopes()
 	}
-	ftsQuery := ftsQuery(query)
-	if ftsQuery == "" {
+	fts := ftsQuery(query)
+	if fts == "" {
 		return nil, nil
 	}
-	scopeArgs := make([]any, 0, len(scopes))
+	// Transcripts live in their own FTS index (see schema): partition the
+	// requested scopes so each set queries the right index. Non-transcript
+	// scopes hit the tiny search_docs_fts (instant); transcripts hit the heavy
+	// search_docs_tx_fts only when explicitly requested. The common case is one
+	// partition; mixed scopes (CLI `--in all`) run both and merge.
+	var main, transcript []SearchScope
 	for _, scope := range scopes {
-		scopeArgs = append(scopeArgs, string(scope))
+		if scope == SearchScopeTranscript {
+			transcript = append(transcript, scope)
+		} else {
+			main = append(main, scope)
+		}
 	}
-	args := []any{ftsQuery}
-	args = append(args, scopeArgs...)
+	var out []SearchResult
+	if len(main) > 0 {
+		rows, err := searchDocsInIndex(db, "search_docs_fts", fts, main, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	if len(transcript) > 0 {
+		rows, err := searchDocsInIndex(db, "search_docs_tx_fts", fts, transcript, limit)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// searchDocsInIndex runs the ranked FTS query against one of the two FTS
+// indexes (search_docs_fts or search_docs_tx_fts) for the given scopes. The
+// index name is interpolated directly — it's never user input, only one of the
+// two literals above.
+func searchDocsInIndex(db *sql.DB, index, fts string, scopes []SearchScope, limit int) ([]SearchResult, error) {
+	args := []any{fts}
+	for _, scope := range scopes {
+		args = append(args, string(scope))
+	}
 	args = append(args, limit)
 
 	rows, err := db.Query(fmt.Sprintf(`
@@ -142,12 +179,12 @@ func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]Se
 		       d.entity_slug,
 		       d.title,
 		       d.source_path,
-		       snippet(search_docs_fts, -1, '[', ']', ' ... ', 18),
+		       snippet(%[1]s, -1, '[', ']', ' ... ', 18),
 		       d.updated_at
-		FROM search_docs_fts
-		JOIN search_docs d ON d.id = search_docs_fts.rowid
-		WHERE search_docs_fts MATCH ?
-		  AND d.scope IN (%s)
+		FROM %[1]s
+		JOIN search_docs d ON d.id = %[1]s.rowid
+		WHERE %[1]s MATCH ?
+		  AND d.scope IN (%[2]s)
 		  AND (
 		       (d.entity_type = 'task' AND EXISTS (
 		            SELECT 1 FROM tasks t
@@ -163,8 +200,8 @@ func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]Se
 		       ))
 		    OR d.entity_type = 'memory'
 		  )
-		ORDER BY bm25(search_docs_fts), d.updated_at DESC
-		LIMIT ?`, sqlPlaceholders(len(scopes))), args...)
+		ORDER BY bm25(%[1]s), d.updated_at DESC
+		LIMIT ?`, index, sqlPlaceholders(len(scopes))), args...)
 	if err != nil {
 		return nil, err
 	}
@@ -257,10 +294,23 @@ func collectEntityMarkdownDocs(root, dir, entityType, slug, name string, include
 	entityDir := filepath.Join(root, dir, slug)
 	var docs []SearchDoc
 	if includeBriefs {
-		if doc, ok, err := fileSearchDoc(entityType+":"+slug+":brief", SearchScopeBrief, entityType, slug, name+" brief", filepath.Join(entityDir, "brief.md")); err != nil {
+		briefPath := filepath.Join(entityDir, "brief.md")
+		if doc, ok, err := fileSearchDoc(entityType+":"+slug+":brief", SearchScopeBrief, entityType, slug, name+" brief", briefPath); err != nil {
 			return nil, err
 		} else if ok {
 			docs = append(docs, doc)
+		} else {
+			// No brief.md (common for Slack/GitHub-originated tasks) — still index
+			// the name so the entity is findable by title, not just brief body.
+			docs = append(docs, SearchDoc{
+				Key:        entityType + ":" + slug + ":brief",
+				Scope:      SearchScopeBrief,
+				EntityType: entityType,
+				EntitySlug: slug,
+				Title:      name + " brief",
+				SourcePath: briefPath,
+				Content:    name,
+			})
 		}
 	}
 	if !includeUpdates {

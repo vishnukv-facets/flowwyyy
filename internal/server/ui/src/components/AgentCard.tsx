@@ -1,5 +1,5 @@
 import { useLocation } from 'wouter'
-import { GitBranch, Clock3, Radar } from 'lucide-react'
+import { GitBranch, Clock3, Radar, Coins } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
@@ -59,6 +59,14 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
         <span className="row" style={{ gap: 5 }}>
           <Clock3 size={12} /> {fromMinutes(agent.started_min)}
         </span>
+        {agent.tokens_used > 0 && (
+          <span
+            className="tag tok-pill"
+            title={`${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()} context tokens in use`}
+          >
+            <Coins size={11} /> {compact(agent.tokens_used)} tok
+          </span>
+        )}
       </div>
 
       <div className="acard-foot">

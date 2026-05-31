@@ -192,12 +192,19 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
             <div className="spacer" />
             <button
-              className="btn icon ghost sm"
-              onClick={() => setTheme(toggleTheme())}
+              className="btn icon ghost sm theme-toggle"
+              onClick={(e) => {
+                // Center of the button is the origin of the circular theme wipe.
+                const r = e.currentTarget.getBoundingClientRect()
+                setTheme(toggleTheme({ x: r.left + r.width / 2, y: r.top + r.height / 2 }))
+              }}
               aria-label="Toggle theme"
               title="Toggle theme"
             >
-              {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+              {/* key={theme} remounts the icon each swap so the spin-in plays. */}
+              <span key={theme} className="theme-toggle-icon">
+                {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
+              </span>
             </button>
           </div>
         </div>

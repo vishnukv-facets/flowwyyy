@@ -1,10 +1,12 @@
 import { RotateCcw, Trash2, Flame } from 'lucide-react'
 import { useUiData, useAction } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, Loading } from '../components/ui'
 import { confirmAction } from '../lib/confirm'
 import type { TrashItem } from '../lib/types'
 
 export function Trash() {
+  useDocumentTitle('Trash')
   const { data: ui, isLoading } = useUiData()
   const action = useAction()
 

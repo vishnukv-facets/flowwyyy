@@ -50,11 +50,17 @@ type Server struct {
 	quoteKey string
 	quoteVal QuoteView
 
-	// searchSync{Mu,At} serialize and throttle the search-index refresh so
-	// rapid /api/search calls (one per keystroke) can't pile up concurrent
-	// writes and lock the DB — see syncSearchThrottled.
-	searchSyncMu sync.Mutex
-	searchSyncAt time.Time
+	// searchSync{Mu,At,ing} serialize, throttle, and de-dupe the search-index
+	// refresh. The refresh is a filesystem walk + FTS rebuild that takes
+	// seconds. A scope's FIRST build is synchronous (so the query that needs it
+	// returns correct results); later refreshes run in the BACKGROUND, never on
+	// the /api/search request path. searchSyncAt records the last successful
+	// sync per scope (keyed by scope string); searchSyncing is the in-flight
+	// guard that stops a keystroke from stacking a second goroutine or racing a
+	// second SQLite writer — see syncSearchThrottled.
+	searchSyncMu  sync.Mutex
+	searchSyncAt  map[string]time.Time
+	searchSyncing bool
 
 	// apiMux is the data-plane mux (/api/* routes only), built once and
 	// reused by both the HTTP Handler and the WebSocket-RPC bridge so the

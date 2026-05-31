@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { HardDrive, Plus, Trash2 } from 'lucide-react'
 import { queryClient, useWorkdirs } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiAction } from '../lib/api'
 import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
@@ -9,6 +10,7 @@ import { EmptyState, ErrorNote, Loading } from '../components/ui'
 import { ago } from '../lib/format'
 
 export function Workdirs() {
+  useDocumentTitle('Workdirs')
   const { data, isLoading, error } = useWorkdirs()
   const [addOpen, setAddOpen] = useState(false)
   const [removing, setRemoving] = useState<string | null>(null)

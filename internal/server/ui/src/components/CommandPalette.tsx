@@ -73,7 +73,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [recents, setRecents] = useState<RecentItem[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const { data: search } = useSearch(q)
+  const { data: search, isFetching: searchFetching } = useSearch(q, scope)
   const { data: ui } = useUiData()
 
   useEffect(() => {
@@ -241,7 +241,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
         </div>
         <div className="palette-list" ref={listRef}>
           {flat.length === 0 && (
-            <div className="palette-empty">{q.trim() ? 'No matches' : 'Loading…'}</div>
+            <div className="palette-empty">{q.trim() ? (searchFetching ? 'Searching…' : 'No matches') : 'Loading…'}</div>
           )}
           {groups.map((g) => (
             <div key={g.label}>

@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Coins,
   GitBranch,
   GitFork,
   Loader2,
@@ -35,6 +36,7 @@ import {
   useUiData,
 } from '../lib/query'
 import { apiAction } from '../lib/api'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
 import type { DiffFile, TranscriptEntry, UiAgent } from '../lib/types'
@@ -52,6 +54,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
   const { data: task, isLoading, error } = useTask(slug)
   const { data: agent } = useTaskBridge(slug)
+  useDocumentTitle(task?.name)
   const [open, setOpen] = useState(false)
   const [restartKey, setRestartKey] = useState(0)
   const [termStatus, setTermStatus] = useState('')
@@ -211,6 +214,14 @@ export function SessionDetail({ slug }: { slug: string }) {
                 </div>
               )}
             </div>
+            {agent && agent.tokens_used > 0 && (
+              <span
+                className="tag tok-pill"
+                title={`${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()} context tokens in use`}
+              >
+                <Coins size={12} /> {compact(agent.tokens_used)} tok
+              </span>
+            )}
             {monitored && (
               <span className="badge mon" title="A background monitor is watching this task's inbox">
                 <Radar size={12} /> monitored

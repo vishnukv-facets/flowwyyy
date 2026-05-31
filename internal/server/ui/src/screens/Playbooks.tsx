@@ -1,11 +1,13 @@
 import { useLocation } from 'wouter'
 import { Archive, Play, Repeat } from 'lucide-react'
 import { usePlaybooks, useAction } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
 import { ago } from '../lib/format'
 
 export function Playbooks() {
+  useDocumentTitle('Playbooks')
   const [, navigate] = useLocation()
   const { data, isLoading, error } = usePlaybooks()
   const action = useAction()

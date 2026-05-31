@@ -489,6 +489,20 @@
   padding: 1px 6px;
 }
 
+/* Per-session token pill — the session's current context-token usage, tinted
+   with the accent so it reads as a distinct metric among the meta tags. */
+.tok-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.tok-pill svg {
+  opacity: 0.85;
+}
+
 /* --------------------------- empty / error ------------------------------ */
 .empty {
   display: flex;
@@ -2030,6 +2044,50 @@ select.input {
 .pulse-val { font-size: 23px; font-weight: 600; }
 .pulse-label { margin-top: 4px; }
 
+/* Mission Control "Streak & tokens" analytics panel (Activity rail card) */
+.stats-cap { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.stats-streaks { display: flex; gap: 8px; margin-bottom: 14px; }
+.stats-blk {
+  flex: 1;
+  text-align: center;
+  padding: 11px 6px 9px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 9px;
+}
+.stats-num { font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.stats-streaks .stats-blk:first-child .stats-num { color: var(--accent-2); }
+.stats-sub {
+  margin-top: 6px;
+  font-size: 9.5px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stats-tok-cap {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-3);
+  margin-bottom: 4px;
+}
+.stats-tokens { display: flex; flex-direction: column; }
+.stats-tok-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; }
+.stats-tok-row + .stats-tok-row { border-top: 1px solid var(--border-faint); }
+.stats-tok-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+.stats-tok-val { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.stats-tok-sess { font-size: 10.5px; min-width: 50px; text-align: right; }
+.stats-tok-total { margin-top: 2px; border-top: 1px solid var(--border); }
+.stats-tok-total .stats-tok-name { color: var(--text); font-weight: 600; }
+.stats-tok-total .stats-tok-val { font-weight: 600; }
+
 /* feed rows (inbox / backlog / playbooks) */
 .feed-row {
   display: flex;
@@ -2216,6 +2274,53 @@ select.input {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Theme toggle: the sun/moon spins + scales in on each swap (the icon span is
+   remounted via key={theme} so the animation replays every click). overflow
+   clip keeps the spin from bleeding past the round button. */
+.theme-toggle {
+  overflow: hidden;
+}
+.theme-toggle-icon {
+  display: inline-flex;
+  transform-origin: center;
+  animation: theme-icon-in 440ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes theme-icon-in {
+  0% {
+    transform: rotate(-150deg) scale(0.2);
+    opacity: 0;
+  }
+  60% {
+    opacity: 1;
+  }
+  100% {
+    transform: rotate(0) scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .theme-toggle-icon {
+    animation: none;
+  }
+}
+
+/* Full-page light↔dark wipe via the View Transitions API. We suppress the
+   browser's default cross-fade and instead reveal the NEW theme with a
+   clip-path circle (animated in JS from the toggle's center — see
+   toggleTheme). The new snapshot sits above the old so the wipe reads as the
+   new theme sweeping over the old. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 0;
+}
+::view-transition-new(root) {
+  z-index: 1;
 }
 
 /* ===================== batch: review-pass refinements ===================== */

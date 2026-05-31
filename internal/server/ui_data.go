@@ -33,6 +33,7 @@ type uiData struct {
 	Playbooks        []uiPlaybook     `json:"PLAYBOOKS_MC"`
 	Projects         []uiProject      `json:"PROJECTS_MC"`
 	ActivityHeatmap  []uiActivityDay  `json:"ACTIVITY_HEATMAP"`
+	Stats            uiStats          `json:"STATS"`
 	Capabilities     uiCapabilities   `json:"CAPABILITIES"`
 	Trash            uiTrash          `json:"TRASH"`
 	SampleTranscript []uiTranscript   `json:"SAMPLE_TRANSCRIPT"`
@@ -95,6 +96,22 @@ type uiActivityDay struct {
 	Date  string   `json:"date"`
 	Count int      `json:"count"`
 	Tasks []string `json:"tasks,omitempty"`
+}
+
+// uiStats are the at-a-glance Mission Control analytics: how consistently the
+// operator has been running agents (activity-day streaks, derived from the same
+// 12-week heatmap shown on the dashboard) and how many context tokens each
+// provider has in play across all tracked sessions.
+type uiStats struct {
+	CurrentStreak  int `json:"current_streak"` // consecutive active days ending today
+	LongestStreak  int `json:"longest_streak"` // longest active-day run in the window
+	ActiveDays     int `json:"active_days"`    // active days within the 12-week window
+	TokensTotal    int `json:"tokens_total"`
+	TokensClaude   int `json:"tokens_claude"`
+	TokensCodex    int `json:"tokens_codex"`
+	SessionsTotal  int `json:"sessions_total"`
+	SessionsClaude int `json:"sessions_claude"`
+	SessionsCodex  int `json:"sessions_codex"`
 }
 
 type uiTrash struct {
@@ -437,6 +454,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		doneCandidates[0].Status = "idle"
 		dead = &doneCandidates[0]
 	}
+	heatmap := buildActivityHeatmap(taskViews, time.Now())
 	return uiData{
 		Agents:           agents,
 		DeadAgent:        dead,
@@ -448,7 +466,8 @@ func (s *Server) buildUIData() (uiData, error) {
 		Workdirs:         workdirs,
 		Playbooks:        playbooks,
 		Projects:         projects,
-		ActivityHeatmap:  buildActivityHeatmap(taskViews, time.Now()),
+		ActivityHeatmap:  heatmap,
+		Stats:            buildUIStats(agents, doneCandidates, heatmap, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
@@ -802,7 +821,7 @@ func withTaskWorkDir(tv TaskView, workDir string) TaskView {
 type taskSessionInsights struct {
 	ActivityAt string
 	LastAction string
-	TokensUsed int
+	TokensUsed int // current context-window occupancy (latest turn)
 	TokensMax  int
 }
 
@@ -1323,6 +1342,80 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 		days[i].Count = len(distinct[days[i].Date])
 	}
 	return days
+}
+
+// buildUIStats derives the Mission Control analytics strip: activity-day streaks
+// from the heatmap, plus per-provider context-token and session totals across
+// every tracked session (live + done, deduped by slug).
+func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) uiStats {
+	var st uiStats
+	today := now.In(time.Local).Format("2006-01-02")
+	// Restrict to days up to and including today. The heatmap grid runs to the
+	// end of the current week, so the trailing future days (count 0) would
+	// otherwise read as a broken streak.
+	onByDay := make([]bool, 0, len(heatmap))
+	for _, d := range heatmap {
+		if d.Date > today {
+			continue
+		}
+		on := d.Count > 0
+		onByDay = append(onByDay, on)
+		if on {
+			st.ActiveDays++
+		}
+	}
+	// Longest run of consecutive active days anywhere in the window.
+	run := 0
+	for _, on := range onByDay {
+		if on {
+			run++
+			if run > st.LongestStreak {
+				st.LongestStreak = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	// Current streak: count back from today. A not-yet-active today doesn't break
+	// the streak (you may simply not have started yet) — skip it once, then count
+	// consecutive active days backwards.
+	for i := len(onByDay) - 1; i >= 0; i-- {
+		if onByDay[i] {
+			st.CurrentStreak++
+		} else if i == len(onByDay)-1 {
+			continue // grace: today hasn't been touched yet
+		} else {
+			break
+		}
+	}
+	// Token + session totals per provider, deduped by slug so a session present
+	// in both the live and done lists isn't counted twice.
+	seen := make(map[string]bool)
+	tally := func(list []uiAgent) {
+		for _, a := range list {
+			if a.Slug == "" || seen[a.Slug] {
+				continue
+			}
+			seen[a.Slug] = true
+			// TokensUsed is each session's current context-window occupancy (the
+			// "X/258k" bar on its card). We sum that rather than a cumulative
+			// per-turn total: agents re-read their whole cached context every
+			// turn, so summing per-turn usage counts the same tokens dozens of
+			// times and balloons far past what was ever actually consumed.
+			st.TokensTotal += a.TokensUsed
+			st.SessionsTotal++
+			if a.Provider == agents.ProviderCodex {
+				st.TokensCodex += a.TokensUsed
+				st.SessionsCodex++
+			} else {
+				st.TokensClaude += a.TokensUsed
+				st.SessionsClaude++
+			}
+		}
+	}
+	tally(live)
+	tally(done)
+	return st
 }
 
 func activityTimeForFile(file FileRef) (time.Time, bool) {

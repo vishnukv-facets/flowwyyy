@@ -170,6 +170,11 @@ func (s *Server) ListenAndServe(addr string) int {
 	// the DB is unset (tests, healthchecks). Errors are swallowed
 	// inside; we never want a slow ~/.codex to block startup.
 	go s.backfillSessionPaths()
+	// Warm the search index once at boot so the first ⌘K query hits a fresh
+	// FTS index instead of triggering an inline rebuild. Runs in the
+	// background (the rebuild walks the whole flow root) and routes the timer
+	// through syncSearchThrottled so it shares the in-flight guard.
+	go s.warmSearchIndex()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()

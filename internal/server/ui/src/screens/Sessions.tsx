@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'wouter'
 import { ChevronRight, FolderGit2, Repeat, TerminalSquare } from 'lucide-react'
 import { useUiData } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
 import type { UiAgent } from '../lib/types'
@@ -12,6 +13,7 @@ const ADHOC = '__adhoc'
 const PB_PREFIX = 'pb:'
 
 export function Sessions() {
+  useDocumentTitle('Sessions')
   const { data: ui, isLoading, error } = useUiData()
   const [filter, setFilter] = useState<Filter>('all')
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())

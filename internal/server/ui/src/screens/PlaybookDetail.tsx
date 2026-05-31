@@ -1,6 +1,7 @@
 import { useLocation } from 'wouter'
 import { ArrowLeft, Play } from 'lucide-react'
 import { usePlaybook, useAction } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
 import { ErrorNote, Loading } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
@@ -52,6 +53,7 @@ export function PlaybookDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
   const { data: pb, isLoading, error } = usePlaybook(slug)
   const action = useAction()
+  useDocumentTitle(pb?.name)
 
   if (isLoading) return <div className="page"><Loading /></div>
   if (error) return <div className="page"><ErrorNote error={error} /></div>

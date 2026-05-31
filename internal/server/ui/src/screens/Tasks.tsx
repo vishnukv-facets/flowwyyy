@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useLocation } from 'wouter'
 import { Archive, CornerLeftUp, GitFork, Loader2, Pencil } from 'lucide-react'
 import { useAction, useTasks, type TaskFilters } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago } from '../lib/format'
@@ -21,6 +22,7 @@ const PRIOS = [
 ]
 
 export function Tasks() {
+  useDocumentTitle('Tasks')
   const [, navigate] = useLocation()
   const [status, setStatus] = useState('')
   const [priority, setPriority] = useState('')

@@ -26,26 +26,19 @@ type animechanResponse struct {
 	} `json:"data"`
 }
 
-// greetingBucket mirrors the frontend greeting() time-of-day buckets so the
-// quote rotates in lockstep with the greeting headline.
-func greetingBucket(t time.Time) string {
-	switch h := t.Hour(); {
-	case h >= 5 && h < 12:
-		return "morning"
-	case h >= 12 && h < 17:
-		return "afternoon"
-	case h >= 17 && h < 21:
-		return "evening"
-	default:
-		return "night"
-	}
+// quoteBucket is the cache key for the anime quote: one bucket per clock hour
+// (e.g. "2026-05-31-16"). A new quote is therefore fetched at most once an hour
+// and the same quote is served for every refresh within that hour. The date is
+// part of the key so 16:00 today and 16:00 tomorrow get different quotes.
+func quoteBucket(t time.Time) string {
+	return t.Format("2006-01-02-15")
 }
 
-// handleQuote returns a random anime quote for the current greeting bucket.
-// The result is cached per (date + bucket): the external animechan API is hit
-// at most once each time the greeting changes, never on every page load or
-// refresh — that's the rate-limit guard. The frontend also keys its request
-// by bucket, but the server cache is the real backstop across clients/reloads.
+// handleQuote returns a random anime quote for the current hour bucket. The
+// result is cached per bucket: the external animechan API is hit at most once
+// per hour, never on every page load or refresh — that's the rate-limit guard.
+// The frontend keys its request by the same hour bucket; the server cache is
+// the real backstop across clients/reloads.
 func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
@@ -55,11 +48,12 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().In(time.Local)
+	// The bucket param is the client's hour key; fall back to ours when absent.
 	bucket := strings.TrimSpace(r.URL.Query().Get("bucket"))
 	if bucket == "" {
-		bucket = greetingBucket(now)
+		bucket = quoteBucket(now)
 	}
-	key := now.Format("2006-01-02") + ":" + bucket
+	key := bucket
 
 	s.quoteMu.Lock()
 	hit := s.quoteKey == key && s.quoteVal.Quote != ""

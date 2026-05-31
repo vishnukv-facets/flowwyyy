@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { BookText } from 'lucide-react'
 import { useKB } from '../lib/query'
 import { queryClient } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPutText } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
@@ -10,6 +11,7 @@ import type { KBFileView } from '../lib/types'
 const baseName = (filename: string) => filename.replace(/\.md$/, '')
 
 export function KnowledgeBase() {
+  useDocumentTitle('Knowledge Base')
   const { data, isLoading } = useKB()
   const [selected, setSelected] = useState<string | null>(null)
 

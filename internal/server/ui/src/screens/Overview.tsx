@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, Repeat, AlertTriangle, Snowflake, TerminalSquare, Inbox as InboxIcon } from 'lucide-react'
+import { ArrowRight, Activity, Repeat, AlertTriangle, Snowflake, TerminalSquare, Flame, Inbox as InboxIcon } from 'lucide-react'
 import { useInbox, useQuote, useUiData } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago, fromMinutes } from '../lib/format'
-import type { ActivityDay, InboxFeedEntry, PlaybookRun } from '../lib/types'
+import { ago, compact, fromMinutes } from '../lib/format'
+import type { ActivityDay, InboxFeedEntry, PlaybookRun, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -51,30 +52,87 @@ function todayISO(): string {
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`
 }
 
-// Greeting headline + the time-of-day "bucket" that keys the anime quote.
-// Buckets mirror the server's greetingBucket() so the two stay in lockstep.
-function greetingInfo(): { text: string; bucket: string } {
-  const h = new Date().getHours()
-  if (h >= 5 && h < 12) return { text: 'Good morning', bucket: 'morning' }
-  if (h >= 12 && h < 17) return { text: 'Good afternoon', bucket: 'afternoon' }
-  if (h >= 17 && h < 21) return { text: 'Good evening', bucket: 'evening' }
-  return { text: 'Good night', bucket: 'night' } // 21:00–04:59
+// Greeting headline (time-of-day) plus the hour "bucket" that keys the anime
+// quote. The headline still tracks morning/afternoon/evening/night, but the
+// quote now rotates hourly: hourKey is "YYYY-MM-DD-HH", matching the server's
+// quoteBucket() so the two stay in lockstep and the same quote is served for
+// every refresh within the hour.
+function greetingInfo(): { text: string; bucket: string; hourKey: string } {
+  const d = new Date()
+  const h = d.getHours()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const hourKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}-${pad(h)}`
+  const text =
+    h >= 5 && h < 12
+      ? 'Good morning'
+      : h >= 12 && h < 17
+        ? 'Good afternoon'
+        : h >= 17 && h < 21
+          ? 'Good evening'
+          : 'Good night' // 21:00–04:59
+  const bucket = text.replace('Good ', '')
+  return { text, bucket, hourKey }
 }
 
-// Re-evaluates each minute; only triggers a re-render when the bucket actually
-// flips, so the greeting (and its quote) update live without a page reload.
+// Re-evaluates each minute; re-renders only when the greeting bucket OR the
+// hour flips, so the headline and its (hourly) quote update live without a
+// page reload.
 function useGreeting() {
   const [info, setInfo] = useState(greetingInfo)
   useEffect(() => {
     const id = setInterval(() => {
       setInfo((prev) => {
         const next = greetingInfo()
-        return next.bucket === prev.bucket ? prev : next
+        return next.bucket === prev.bucket && next.hourKey === prev.hourKey ? prev : next
       })
     }, 60_000)
     return () => clearInterval(id)
   }, [])
   return info
+}
+
+// Mission Control analytics: activity-day streaks (the same active days that
+// light up the 12-week calendar above) and per-provider context-token totals
+// across every tracked session. Uses the real Claude/Codex logos so the split
+// reads at a glance.
+function StatsPanel({ stats }: { stats: UiStats }) {
+  return (
+    <div className="stats-panel">
+      <div className="eyebrow stats-cap"><Flame size={13} /> Streak &amp; tokens</div>
+      <div className="stats-streaks">
+        <div className="stats-blk">
+          <div className="num stats-num">{stats.current_streak}</div>
+          <div className="stats-sub">current streak</div>
+        </div>
+        <div className="stats-blk">
+          <div className="num stats-num">{stats.longest_streak}</div>
+          <div className="stats-sub">longest streak</div>
+        </div>
+        <div className="stats-blk">
+          <div className="num stats-num">{stats.active_days}</div>
+          <div className="stats-sub">active · 12 wk</div>
+        </div>
+      </div>
+      <div className="stats-tok-cap">context in play · all sessions</div>
+      <div className="stats-tokens">
+        <div className="stats-tok-row">
+          <span className="stats-tok-name"><ProviderIcon provider="claude" size={14} /> Claude</span>
+          <span className="mono stats-tok-val">{compact(stats.tokens_claude)}</span>
+          <span className="faint mono stats-tok-sess">{stats.sessions_claude} sess</span>
+        </div>
+        <div className="stats-tok-row">
+          <span className="stats-tok-name"><ProviderIcon provider="codex" size={14} /> Codex</span>
+          <span className="mono stats-tok-val">{compact(stats.tokens_codex)}</span>
+          <span className="faint mono stats-tok-sess">{stats.sessions_codex} sess</span>
+        </div>
+        <div className="stats-tok-row stats-tok-total">
+          <span className="stats-tok-name">Combined</span>
+          <span className="mono stats-tok-val">{compact(stats.tokens_total)}</span>
+          <span className="faint mono stats-tok-sess">{stats.sessions_total} sess</span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function heatLevel(count: number, max: number): number {
@@ -238,11 +296,12 @@ function PlaybookSpark({ runs, fallback }: { runs?: PlaybookRun[]; fallback: num
 }
 
 export function Overview() {
+  useDocumentTitle('Mission Control')
   const [, navigate] = useLocation()
   const { data: ui, isLoading, error } = useUiData()
   const { data: inbox } = useInbox()
-  const { text: greeting, bucket } = useGreeting()
-  const { data: quote } = useQuote(bucket)
+  const { text: greeting, hourKey } = useGreeting()
+  const { data: quote } = useQuote(hourKey)
 
   // One row per thread (task), newest message first — Slack AND GitHub.
   const inboxThreads = useMemo(() => {
@@ -429,6 +488,8 @@ export function Overview() {
             <div style={{ display: 'flex', justifyContent: 'center' }}>
               <MiniCalendar days={ui.ACTIVITY_HEATMAP} />
             </div>
+            <div className="hairline" style={{ margin: '14px 0' }} />
+            <StatsPanel stats={ui.STATS} />
           </section>
 
           <section className="card rail-card">

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
 import { Inbox as InboxIcon, ExternalLink, Play } from 'lucide-react'
 import { useInbox, useInboxConversation } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
 import { Md } from '../components/Markdown'
 import { ago, dateTime } from '../lib/format'
@@ -60,6 +61,7 @@ interface Convo {
 }
 
 export function InboxScreen() {
+  useDocumentTitle('Inbox')
   const { data, isLoading } = useInbox()
   const [selected, setSelected] = useState<string | null>(null)
 

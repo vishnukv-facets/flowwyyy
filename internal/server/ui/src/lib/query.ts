@@ -146,9 +146,10 @@ export function useWorkdirs() {
 export function useInbox() {
   return useQuery({ queryKey: ['inbox'], queryFn: () => apiGet<InboxFeed>('/api/inbox') })
 }
-// Keyed by greeting bucket: a new quote is fetched only when the bucket flips
-// (morning→afternoon→…). staleTime Infinity means it's never refetched within
-// a bucket. The server caches per bucket too, so animechan is hit once/change.
+// Keyed by hour bucket ("YYYY-MM-DD-HH"): a new quote is fetched only when the
+// hour flips. staleTime Infinity means it's never refetched within the hour no
+// matter how many times the page reloads. The server caches per bucket too, so
+// animechan is hit at most once per hour across all clients.
 export function useQuote(bucket: string) {
   return useQuery({
     queryKey: ['quote', bucket],
@@ -177,18 +178,28 @@ export function useMarkdown(path: string | undefined, staleMs = 15000) {
   })
 }
 
-export function useSearch(query: string) {
+export function useSearch(query: string, scope = 'all') {
   const q = query.trim()
+  // Transcripts are huge (whole session JSONL); FTS over them costs seconds for
+  // common terms (e.g. "facets" 6.7s vs 0.3s without). They're searched ONLY
+  // when the Transcripts chip is active — matching the backend's opt-in design —
+  // so the default ⌘K search stays instant. Other chips (tasks/projects/etc.)
+  // are filtered client-side from the briefs+updates+memories result.
+  const inScopes = scope === 'transcripts' ? 'transcripts' : 'briefs,updates,memories'
   return useQuery({
-    queryKey: ['search', q],
+    queryKey: ['search', q, inScopes],
     enabled: q.length >= 2,
     staleTime: 2000,
+    // A cold-scope build can transiently 500 under rapid typing (DB write
+    // contention). Retry quickly so a blip recovers at fetch time instead of
+    // caching an error that sticks as a permanent "No matches" for that term.
+    retry: 3,
+    retryDelay: 250,
     queryFn: () =>
       apiGet<SearchResponse>(
         // `in` takes document scopes (briefs cover task/project/playbook briefs);
-        // entity-type names like "tasks" are invalid and 400. The palette's
-        // scope chips filter the returned groups client-side.
-        `/api/search?q=${encodeURIComponent(q)}&in=all&limit=8`,
+        // entity-type names like "tasks" are invalid and 400.
+        `/api/search?q=${encodeURIComponent(q)}&in=${inScopes}&limit=8`,
       ),
   })
 }

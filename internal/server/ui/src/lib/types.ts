@@ -347,6 +347,18 @@ export interface TrashItem {
   archived: boolean
 }
 
+export interface UiStats {
+  current_streak: number
+  longest_streak: number
+  active_days: number
+  tokens_total: number
+  tokens_claude: number
+  tokens_codex: number
+  sessions_total: number
+  sessions_claude: number
+  sessions_codex: number
+}
+
 export interface UiData {
   AGENTS: UiAgent[]
   DEAD_AGENT: UiAgent | null
@@ -359,6 +371,7 @@ export interface UiData {
   PLAYBOOKS_MC: PlaybookMC[]
   PROJECTS_MC: ProjectMC[]
   ACTIVITY_HEATMAP: ActivityDay[]
+  STATS: UiStats
   CAPABILITIES: Capabilities
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }
   FLOWDB: { path: string; display_path: string; bytes: number; human_size: string; exists: boolean }

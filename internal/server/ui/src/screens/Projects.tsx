@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useLocation } from 'wouter'
 import { Archive, FolderGit2, Plus } from 'lucide-react'
 import { useAction, useProjects } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { CreateProjectModal } from '../components/modals'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
@@ -19,6 +20,7 @@ function cleanTaskTitle(name: string): string {
 }
 
 export function Projects() {
+  useDocumentTitle('Projects')
   const [, navigate] = useLocation()
   const { data, isLoading, error } = useProjects()
   const action = useAction()

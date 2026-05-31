@@ -1,6 +1,7 @@
 import { useLocation } from 'wouter'
 import { ArrowLeft } from 'lucide-react'
 import { useProject, useProjectTasks } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
 import { ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago } from '../lib/format'
@@ -9,6 +10,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
   const { data: project, isLoading, error } = useProject(slug)
   const { data: tasks } = useProjectTasks(slug)
+  useDocumentTitle(project?.name)
 
   if (isLoading) return <div className="page"><Loading /></div>
   if (error) return <div className="page"><ErrorNote error={error} /></div>
