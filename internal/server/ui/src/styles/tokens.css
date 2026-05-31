@@ -1,0 +1,115 @@
+/* ============================================================================
+   flow · operator console — design tokens
+   Aligned to the official flow brand (flow_branding.html): indigo primary
+   (#645df6), teal secondary, brand dark surfaces, Plus Jakarta Sans +
+   JetBrains Mono. Light & dark are a single [data-theme] swap.
+   ========================================================================== */
+
+:root {
+  --font-sans: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r: 9px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-1: 120ms;
+  --dur-2: 220ms;
+  --dur-3: 420ms;
+
+  --rail-w: 236px;
+  --rail-w-collapsed: 66px;
+  --topbar-h: 56px;
+  --maxw: 1540px;
+}
+
+/* ----------------------------------- DARK -------------------------------- */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #0c0c0c;
+  --bg-1: #111114;
+  --bg-2: #16161b;
+  --bg-3: #1d1d24;
+  --surface-hover: #232330;
+  --rail-bg: #0a0a0c;
+
+  --border: #26262e;
+  --border-strong: #34343f;
+  --border-faint: #1b1b21;
+
+  --text: #e7e7ea;
+  --text-2: #aeaeb8;
+  --text-3: #74747f;
+  --text-inv: #0c0c0c;
+
+  --accent: #645df6;
+  --accent-hi: #8b87f8;
+  --accent-lo: #3d36c5;
+  --accent-soft: rgba(100, 93, 246, 0.16);
+  --accent-line: rgba(100, 93, 246, 0.45);
+  --accent-2: #5eead4;
+
+  --ok: #2eb672;
+  --ok-soft: rgba(46, 182, 114, 0.15);
+  --warn: #f5a623;
+  --warn-soft: rgba(245, 166, 35, 0.15);
+  --danger: #e25757;
+  --danger-soft: rgba(226, 87, 87, 0.15);
+  --info: #6ea8e6;
+  --info-soft: rgba(110, 168, 230, 0.15);
+
+  --shadow-pop: 0 22px 60px -14px rgba(0, 0, 0, 0.72), 0 0 0 1px var(--border);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --grid-dot: rgba(255, 255, 255, 0.022);
+  --selection: rgba(100, 93, 246, 0.32);
+  --scrim: rgba(4, 4, 6, 0.7);
+}
+
+/* ----------------------------------- LIGHT ------------------------------- */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #e9ebf0;
+  --bg-1: #f0f1f5;
+  --bg-2: #f7f8fb;
+  --bg-3: #ffffff;
+  --surface-hover: #eef0f5;
+  --rail-bg: #e4e6ec;
+
+  --border: rgba(22, 24, 34, 0.12);
+  --border-strong: rgba(22, 24, 34, 0.24);
+  --border-faint: rgba(22, 24, 34, 0.06);
+
+  --text: #181a21;
+  --text-2: #555a67;
+  --text-3: #8a8e9b;
+  --text-inv: #ffffff;
+
+  --accent: #574ce6;
+  --accent-hi: #4339c4;
+  --accent-lo: #3d36c5;
+  --accent-soft: rgba(87, 76, 230, 0.12);
+  --accent-line: rgba(87, 76, 230, 0.4);
+  --accent-2: #15b8a0;
+
+  --ok: #1f9d57;
+  --ok-soft: rgba(31, 157, 87, 0.13);
+  --warn: #b1771a;
+  --warn-soft: rgba(177, 119, 26, 0.14);
+  --danger: #cf4a40;
+  --danger-soft: rgba(207, 74, 64, 0.12);
+  --info: #2f6da8;
+  --info-soft: rgba(47, 109, 168, 0.12);
+
+  --shadow-pop: 0 24px 60px -20px rgba(40, 40, 70, 0.4), 0 0 0 1px var(--border);
+  --shadow-card: 0 1px 2px rgba(40, 40, 70, 0.07);
+  --grid-dot: rgba(30, 30, 60, 0.05);
+  --selection: rgba(87, 76, 230, 0.2);
+  --scrim: rgba(30, 30, 50, 0.34);
+}

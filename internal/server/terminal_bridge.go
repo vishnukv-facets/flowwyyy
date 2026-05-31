@@ -29,7 +29,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const terminalScrollbackBytes = 1024 * 1024 * 1024
+// terminalScrollbackBytes caps the per-session in-memory scrollback we retain
+// for replay when a browser (re)attaches. It was originally 1 GiB — effectively
+// "never trim" — which let a long-lived or chatty agent session balloon the
+// server's RSS and pay ever-larger append reallocations. 2 MiB is ~10k lines of
+// dense output: more than enough replay context while keeping the server light.
+const terminalScrollbackBytes = 2 * 1024 * 1024
+
+// terminalScrollbackHeadroom lets the buffer overshoot the cap before we trim,
+// so the O(cap) trim copy happens once per headroom-worth of output instead of
+// on every append once full. Without it, a fast-redrawing TUI (Claude/Codex
+// spinners) would recopy the whole buffer on every chunk — quadratic, and a
+// real CPU sink.
+const terminalScrollbackHeadroom = 256 * 1024
 
 var terminalUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -1331,7 +1343,9 @@ func (s *terminalSession) appendScrollback(data []byte) {
 	defer s.mu.Unlock()
 	s.scrollback = append(s.scrollback, data...)
 	s.lastOutputAt = time.Now()
-	if len(s.scrollback) > terminalScrollbackBytes {
+	// Trim in bulk once we overshoot the cap by the headroom, dropping back to
+	// the cap — amortizes the copy to ~once per headroom bytes (see consts).
+	if len(s.scrollback) > terminalScrollbackBytes+terminalScrollbackHeadroom {
 		s.scrollback = append([]byte(nil), s.scrollback[len(s.scrollback)-terminalScrollbackBytes:]...)
 	}
 }

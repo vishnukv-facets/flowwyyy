@@ -212,8 +212,19 @@ func (d *GitHubDispatcher) createGitHubTask(ctx context.Context, ev GitHubEvent)
 	attached, _ := resolveProjectForRepo(d.DB, ev.RepoKey())
 	projects, _ := listProjectChoices(d.DB)
 	brief := githubTaskBrief(ev, slug, projects, attached)
-	if err := spawnFlowTask(ctx, githubTaskName(ev), slug, brief, ProviderForGitHubLabels(ev.Labels), attached); err != nil {
+	requested := ProviderForGitHubLabels(ev.Labels)
+	provider, fellBack, ok := ResolveProvider(requested)
+	if !ok {
+		return "", fmt.Errorf("monitor: cannot start session — neither Claude Code nor Codex is installed")
+	}
+	if err := spawnFlowTask(ctx, githubTaskName(ev), slug, brief, provider, attached); err != nil {
 		return "", err
+	}
+	if fellBack {
+		providerNotice(slug, fmt.Sprintf(
+			"%s isn't installed on this machine — started this session with %s instead.",
+			ProviderDisplayName(requested), ProviderDisplayName(provider),
+		))
 	}
 	for _, tag := range []string{"github", ev.LinkTag()} {
 		if err := tagFlowTask(ctx, slug, tag); err != nil {

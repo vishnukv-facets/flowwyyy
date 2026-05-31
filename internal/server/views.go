@@ -401,6 +401,7 @@ func BuildKBFileView(path string) KBFileView {
 	if err != nil {
 		return view
 	}
+	view.Content = string(body)
 	for _, line := range strings.Split(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "- ") {

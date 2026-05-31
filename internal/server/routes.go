@@ -898,7 +898,8 @@ func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
-	if !getOnly(w, r) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	parts, ok := routeParts(w, r, "/api/kb/")
@@ -920,7 +921,36 @@ func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	serveMarkdown(w, filepath.Join(s.cfg.FlowRoot, "kb", parts[0]))
+	path := filepath.Join(s.cfg.FlowRoot, "kb", parts[0])
+	if r.Method == http.MethodPut {
+		s.saveKBFile(w, r, path, parts[0])
+		return
+	}
+	serveMarkdown(w, path)
+}
+
+func (s *Server) saveKBFile(w http.ResponseWriter, r *http.Request, path, name string) {
+	// Confine writes to the kb/ dir even if the (already-validated) name somehow
+	// resolves elsewhere — defense in depth, matching saveProjectBrief.
+	cleanBase := filepath.Join(filepath.Clean(s.cfg.FlowRoot), "kb") + string(os.PathSeparator)
+	if !strings.HasPrefix(filepath.Clean(path), cleanBase) {
+		writeError(w, errors.New("invalid KB path"), http.StatusBadRequest)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1024*1024))
+	if err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "name": name})
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
@@ -947,10 +977,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	if err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, scopes); err != nil {
-		writeError(w, fmt.Errorf("index search docs: %w", err), http.StatusInternalServerError)
-		return
-	}
+	s.syncSearchThrottled(scopes)
 	results, err := flowdb.SearchDocs(s.cfg.DB, q, scopes, limit)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -976,7 +1003,135 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// FTS matches brief/update/transcript bodies, but many tasks (Slack/GitHub
+	// originated) have no brief and only carry their term in the title. Merge a
+	// direct name match so entities are always findable by name.
+	s.appendNameMatches(&resp, q, limit)
 	writeJSON(w, resp)
+}
+
+// appendNameMatches prepends tasks/projects/playbooks whose name contains the
+// query (case-insensitive LIKE), deduped against the FTS results already in
+// resp. This guarantees title hits regardless of FTS body indexing.
+func (s *Server) appendNameMatches(resp *SearchResponse, q string, limit int) {
+	like := "%" + q + "%"
+	for _, e := range []struct {
+		table, etype string
+		bucket       *[]SearchResult
+	}{
+		{"tasks", "task", &resp.Tasks},
+		{"projects", "project", &resp.Projects},
+		{"playbooks", "playbook", &resp.Playbooks},
+	} {
+		seen := map[string]bool{}
+		for _, r := range *e.bucket {
+			seen[r.Slug] = true
+		}
+		rows, err := s.cfg.DB.Query(
+			fmt.Sprintf(`SELECT slug, name FROM %s WHERE name LIKE ? AND deleted_at IS NULL AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?`, e.table),
+			like, limit,
+		)
+		if err != nil {
+			continue
+		}
+		var added []SearchResult
+		for rows.Next() {
+			var slug, name string
+			if rows.Scan(&slug, &name) != nil {
+				continue
+			}
+			if seen[slug] {
+				continue
+			}
+			seen[slug] = true
+			added = append(added, SearchResult{Type: e.etype, Scope: "name", Slug: slug, Name: name, URL: searchResultURL(e.etype, slug)})
+		}
+		rows.Close()
+		*e.bucket = append(added, *e.bucket...)
+	}
+}
+
+// searchSyncThrottle is the minimum gap between background refreshes of an
+// already-built scope. Search content (briefs, updates, transcripts, memories)
+// changes on the order of minutes, not keystrokes, and new entities are always
+// findable by name via appendNameMatches regardless of index freshness — so a
+// generous window keeps the index current without burning CPU rebuilding it on
+// every search.
+const searchSyncThrottle = 30 * time.Second
+
+// syncSearchThrottled keeps the FTS index fresh without ever paying the rebuild
+// cost on the hot path. A full filesystem walk + FTS rebuild takes seconds, and
+// the palette fires one /api/search per keystroke; doing the rebuild inline
+// made the first keystroke of each window pay the whole cost (~7s observed) and
+// pegged the CPU while typing.
+//
+//   - A scope that's never been indexed (cold) is built SYNCHRONOUSLY, so the
+//     query that needs it returns correct results rather than an empty list.
+//     This is a one-time cost per scope; in production the boot warm-up pays it
+//     before any user search.
+//   - An already-built scope that's merely stale is refreshed in the BACKGROUND
+//     and the request returns immediately against the existing index.
+//
+// searchSyncing serializes the actual rebuild (only one at a time) so rapid
+// typing can't stack goroutines or race a second SQLite writer — the original
+// source of intermittent 500s. A refresh failure is non-fatal: the scope's
+// timestamp is left unchanged so we retry next call.
+func (s *Server) syncSearchThrottled(scopes []flowdb.SearchScope) {
+	s.searchSyncMu.Lock()
+	now := time.Now()
+	var stale []flowdb.SearchScope
+	cold := false
+	for _, sc := range scopes {
+		last, ok := s.searchSyncAt[string(sc)]
+		if !ok {
+			stale = append(stale, sc)
+			cold = true
+		} else if now.Sub(last) >= searchSyncThrottle {
+			stale = append(stale, sc)
+		}
+	}
+	if len(stale) == 0 || s.searchSyncing {
+		s.searchSyncMu.Unlock()
+		return
+	}
+	s.searchSyncing = true
+	s.searchSyncMu.Unlock()
+
+	doSync := func() {
+		err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, stale)
+		s.searchSyncMu.Lock()
+		if err == nil {
+			if s.searchSyncAt == nil {
+				s.searchSyncAt = make(map[string]time.Time)
+			}
+			at := time.Now()
+			for _, sc := range stale {
+				s.searchSyncAt[string(sc)] = at
+			}
+		}
+		s.searchSyncing = false
+		s.searchSyncMu.Unlock()
+	}
+
+	if cold {
+		doSync() // synchronous: the caller's query depends on this scope existing
+	} else {
+		go doSync() // warm refresh: never block the search request
+	}
+}
+
+// warmSearchIndex builds the default-scope FTS index once at boot (briefs,
+// updates, memories) so the first ⌘K query hits a fresh index instead of
+// triggering an inline rebuild. Transcripts are deliberately excluded: they're
+// huge and opt-in (the Transcripts chip), so we build them lazily on first use
+// rather than paying that cost — and holding a long write transaction — at
+// every startup. Routes through syncSearchThrottled so an early search that
+// arrives first simply wins the in-flight guard and this becomes a no-op.
+func (s *Server) warmSearchIndex() {
+	if s.cfg.DB == nil || strings.TrimSpace(s.cfg.FlowRoot) == "" {
+		return
+	}
+	s.syncSearchThrottled(flowdb.DefaultSearchScopes())
 }
 
 func ftsSearchResult(result flowdb.SearchResult) SearchResult {

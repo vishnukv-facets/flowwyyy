@@ -21,6 +21,15 @@ import (
 //go:embed all:static
 var staticFS embed.FS
 
+func init() {
+	// The web UI ships a WebAssembly terminal core (wterm). Browsers want
+	// the correct MIME for streaming compilation; Go's default table omits
+	// .wasm on some platforms, so register it explicitly. handleStatic and
+	// the RPC bridge both resolve types via mime.TypeByExtension.
+	_ = mime.AddExtensionType(".wasm", "application/wasm")
+	_ = mime.AddExtensionType(".mjs", "text/javascript")
+}
+
 func New(cfg Config) *Server {
 	s := &Server{cfg: cfg}
 	s.terminals = newTerminalHub(s)
@@ -56,8 +65,11 @@ func New(cfg Config) *Server {
 	return s
 }
 
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
+// registerAPIRoutes wires every /api/* data-plane route onto mux. It is
+// shared by the public HTTP Handler and the in-process apiHandler the
+// WebSocket-RPC bridge dispatches through, so the route table has exactly
+// one source of truth.
+func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ui-data.js", s.handleUIDataJS)
 	mux.HandleFunc("/api/ui-data", s.handleUIDataJSON)
@@ -79,9 +91,29 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/kb", s.handleKB)
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
+	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
+	mux.HandleFunc("/api/quote", s.handleQuote)
+}
+
+// apiHandler lazily builds and caches the data-plane mux used by the
+// WebSocket-RPC bridge. It carries only /api/* routes — never the static
+// or websocket routes — so RPC frames can't reach the upgrade handlers.
+func (s *Server) apiHandler() http.Handler {
+	s.apiOnce.Do(func() {
+		mux := http.NewServeMux()
+		s.registerAPIRoutes(mux)
+		s.apiMux = mux
+	})
+	return s.apiMux
+}
+
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	s.registerAPIRoutes(mux)
 	mux.HandleFunc("/ws/terminal", s.handleTerminalWebSocket)
 	mux.HandleFunc("/ws/events", s.handleEventWebSocket)
+	mux.HandleFunc("/ws/rpc", s.handleRPCWebSocket)
 	mux.HandleFunc("/ws", s.handleWebSocketPlaceholder)
 	mux.HandleFunc("/", s.handleStatic)
 	return mux
@@ -138,6 +170,11 @@ func (s *Server) ListenAndServe(addr string) int {
 	// the DB is unset (tests, healthchecks). Errors are swallowed
 	// inside; we never want a slow ~/.codex to block startup.
 	go s.backfillSessionPaths()
+	// Warm the search index once at boot so the first ⌘K query hits a fresh
+	// FTS index instead of triggering an inline rebuild. Runs in the
+	// background (the rebuild walks the whole flow root) and routes the timer
+	// through syncSearchThrottled so it shares the in-flight guard.
+	go s.warmSearchIndex()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -32,11 +33,53 @@ type uiData struct {
 	Playbooks        []uiPlaybook     `json:"PLAYBOOKS_MC"`
 	Projects         []uiProject      `json:"PROJECTS_MC"`
 	ActivityHeatmap  []uiActivityDay  `json:"ACTIVITY_HEATMAP"`
+	Stats            uiStats          `json:"STATS"`
 	Capabilities     uiCapabilities   `json:"CAPABILITIES"`
 	Trash            uiTrash          `json:"TRASH"`
 	SampleTranscript []uiTranscript   `json:"SAMPLE_TRANSCRIPT"`
 	SampleDiffFiles  []uiDiffFile     `json:"SAMPLE_DIFF_FILES"`
 	FlowDB           uiFlowDB         `json:"FLOWDB"`
+	User             uiUser           `json:"USER"`
+}
+
+// uiUser carries the operator's display name so the dashboard can greet
+// them. Derived from the OS account; falls back gracefully when unknown.
+type uiUser struct {
+	Name     string `json:"name"`      // first name, for greetings
+	FullName string `json:"full_name"`
+	Username string `json:"username"`
+}
+
+func currentUIUser() uiUser {
+	u, err := user.Current()
+	if err != nil || u == nil {
+		return uiUser{Name: "there"}
+	}
+	full := strings.TrimSpace(u.Name)
+	username := strings.TrimSpace(u.Username)
+	// On some platforms Username is "domain\\user" — keep the last segment.
+	if i := strings.LastIndexAny(username, `\/`); i >= 0 {
+		username = username[i+1:]
+	}
+	display := full
+	if display == "" {
+		display = username
+	}
+	first := display
+	if fields := strings.Fields(display); len(fields) > 0 {
+		first = fields[0]
+	}
+	if first == "" {
+		first = "there"
+	}
+	// macOS often reports the account name in ALL CAPS — soften to Title case
+	// so the greeting reads "Vishnu", not "VISHNU".
+	if first == strings.ToUpper(first) && first != strings.ToLower(first) {
+		r := []rune(strings.ToLower(first))
+		r[0] = []rune(strings.ToUpper(string(r[0])))[0]
+		first = string(r)
+	}
+	return uiUser{Name: first, FullName: full, Username: username}
 }
 
 // uiFlowDB carries on-disk stats for flow.db (plus a display-friendly
@@ -53,6 +96,22 @@ type uiActivityDay struct {
 	Date  string   `json:"date"`
 	Count int      `json:"count"`
 	Tasks []string `json:"tasks,omitempty"`
+}
+
+// uiStats are the at-a-glance Mission Control analytics: how consistently the
+// operator has been running agents (activity-day streaks, derived from the same
+// 12-week heatmap shown on the dashboard) and how many context tokens each
+// provider has in play across all tracked sessions.
+type uiStats struct {
+	CurrentStreak  int `json:"current_streak"` // consecutive active days ending today
+	LongestStreak  int `json:"longest_streak"` // longest active-day run in the window
+	ActiveDays     int `json:"active_days"`    // active days within the 12-week window
+	TokensTotal    int `json:"tokens_total"`
+	TokensClaude   int `json:"tokens_claude"`
+	TokensCodex    int `json:"tokens_codex"`
+	SessionsTotal  int `json:"sessions_total"`
+	SessionsClaude int `json:"sessions_claude"`
+	SessionsCodex  int `json:"sessions_codex"`
 }
 
 type uiTrash struct {
@@ -78,6 +137,8 @@ type uiAgent struct {
 	Slug            string         `json:"slug"`
 	Name            string         `json:"name"`
 	Project         *string        `json:"project"`
+	Kind            string         `json:"kind"`
+	PlaybookSlug    *string        `json:"playbook_slug,omitempty"`
 	Parent          *TaskSummary   `json:"parent,omitempty"`
 	Parents         []TaskSummary  `json:"parents,omitempty"`
 	Children        []TaskSummary  `json:"children,omitempty"`
@@ -206,13 +267,22 @@ type uiTaskCounts struct {
 }
 
 type uiPlaybook struct {
-	Slug     string  `json:"slug"`
-	Name     string  `json:"name"`
-	Project  *string `json:"project"`
-	RunsWeek int     `json:"runs_week"`
-	LastMin  *int    `json:"last_min"`
-	Spark    []int   `json:"spark"`
-	WorkDir  string  `json:"work_dir"`
+	Slug     string          `json:"slug"`
+	Name     string          `json:"name"`
+	Project  *string         `json:"project"`
+	RunsWeek int             `json:"runs_week"`
+	LastMin  *int            `json:"last_min"`
+	Spark    []int           `json:"spark"`
+	Runs     []uiPlaybookRun `json:"runs"`
+	WorkDir  string          `json:"work_dir"`
+}
+
+// uiPlaybookRun is one run shown as a hoverable bar in the Active Playbooks
+// strip — enough to tell the operator when it ran and how it ended.
+type uiPlaybookRun struct {
+	Name      string `json:"name"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
 }
 
 type uiKBFile struct {
@@ -384,6 +454,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		doneCandidates[0].Status = "idle"
 		dead = &doneCandidates[0]
 	}
+	heatmap := buildActivityHeatmap(taskViews, time.Now())
 	return uiData{
 		Agents:           agents,
 		DeadAgent:        dead,
@@ -395,12 +466,14 @@ func (s *Server) buildUIData() (uiData, error) {
 		Workdirs:         workdirs,
 		Playbooks:        playbooks,
 		Projects:         projects,
-		ActivityHeatmap:  buildActivityHeatmap(taskViews, time.Now()),
+		ActivityHeatmap:  heatmap,
+		Stats:            buildUIStats(agents, doneCandidates, heatmap, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
 		SampleDiffFiles:  diffFiles,
 		FlowDB:           s.uiFlowDB(),
+		User:             currentUIUser(),
 	}, nil
 }
 
@@ -662,6 +735,8 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		Slug:            tv.Slug,
 		Name:            tv.Name,
 		Project:         tv.ProjectSlug,
+		Kind:            tv.Kind,
+		PlaybookSlug:    tv.PlaybookSlug,
 		Parent:          tv.Parent,
 		Parents:         tv.Parents,
 		Children:        tv.Children,
@@ -746,7 +821,7 @@ func withTaskWorkDir(tv TaskView, workDir string) TaskView {
 type taskSessionInsights struct {
 	ActivityAt string
 	LastAction string
-	TokensUsed int
+	TokensUsed int // current context-window occupancy (latest turn)
 	TokensMax  int
 }
 
@@ -967,6 +1042,18 @@ func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
 			v := minutesSince(p.RecentRuns[0].CreatedAt)
 			lastMin = &v
 		}
+		// RecentRuns is newest-first; the strip reads oldest→newest left-to-right,
+		// so take the most recent 16 and reverse them.
+		const maxRuns = 16
+		recent := p.RecentRuns
+		if len(recent) > maxRuns {
+			recent = recent[:maxRuns]
+		}
+		runs := make([]uiPlaybookRun, 0, len(recent))
+		for i := len(recent) - 1; i >= 0; i-- {
+			r := recent[i]
+			runs = append(runs, uiPlaybookRun{Name: r.Name, Status: r.Status, CreatedAt: r.CreatedAt})
+		}
 		out = append(out, uiPlaybook{
 			Slug:     p.Slug,
 			Name:     p.Name,
@@ -974,6 +1061,7 @@ func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
 			RunsWeek: p.RunCount7d,
 			LastMin:  lastMin,
 			Spark:    lastSevenFromThirty(p.RunDays30),
+			Runs:     runs,
 			WorkDir:  p.WorkDir,
 		})
 	}
@@ -1187,50 +1275,147 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 	days := make([]uiActivityDay, 84)
 	index := make(map[string]int, len(days))
 	seenTasks := make(map[string]map[string]bool)
+	// Count is the number of DISTINCT tasks touched on a day, not the raw sum of
+	// timestamp events. A single task carries several timestamps (created,
+	// updated, session started/resumed, + each update file) that often share the
+	// same instant — summing them inflates the number and double-counts. Distinct
+	// tasks/day matches the tooltip's task list and reads honestly.
+	distinct := make(map[string]map[string]bool)
 	for i := range days {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		days[i] = uiActivityDay{Date: date}
 		index[date] = i
 	}
-	add := func(ts time.Time, slug string) {
+	// distinct counting is keyed by slug (stable, collision-free); the displayed
+	// task list uses the human name so the tooltip never leaks a raw slug
+	// (e.g. slack-<channel>-<ts>) — see the "no raw Slack IDs in UI" rule.
+	add := func(ts time.Time, slug, name string) {
 		date := ts.In(time.Local).Format("2006-01-02")
-		i, ok := index[date]
-		if !ok {
+		if _, ok := index[date]; !ok {
 			return
 		}
-		days[i].Count++
+		if distinct[date] == nil {
+			distinct[date] = map[string]bool{}
+		}
+		distinct[date][slug] = true
 		if seenTasks[date] == nil {
 			seenTasks[date] = map[string]bool{}
 		}
-		if !seenTasks[date][slug] && len(days[i].Tasks) < 5 {
-			days[i].Tasks = append(days[i].Tasks, slug)
+		if !seenTasks[date][slug] && len(days[index[date]].Tasks) < 5 {
+			label := name
+			if label == "" {
+				label = slug
+			}
+			days[index[date]].Tasks = append(days[index[date]].Tasks, label)
 			seenTasks[date][slug] = true
 		}
 	}
-	addString := func(ts string, slug string) {
+	addString := func(ts string, slug, name string) {
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
-			add(t, slug)
+			add(t, slug, name)
 		}
 	}
 	for _, task := range tasks {
-		addString(task.CreatedAt, task.Slug)
-		addString(task.UpdatedAt, task.Slug)
+		addString(task.CreatedAt, task.Slug, task.Name)
+		addString(task.UpdatedAt, task.Slug, task.Name)
 		if task.SessionStarted != nil {
-			addString(*task.SessionStarted, task.Slug)
+			addString(*task.SessionStarted, task.Slug, task.Name)
 		}
 		if task.SessionLastResumed != nil {
-			addString(*task.SessionLastResumed, task.Slug)
+			addString(*task.SessionLastResumed, task.Slug, task.Name)
 		}
 		for _, update := range task.Updates {
 			if t, ok := activityTimeForFile(update); ok {
-				add(t, task.Slug)
+				add(t, task.Slug, task.Name)
 			}
 		}
-		if task.Status == "in-progress" || task.Live {
-			add(now, task.Slug)
+		// Only a genuinely live session counts as activity "now". Merely being
+		// in-progress (open but idle, last touched days ago) must NOT light up
+		// today — that falsely inflates today's count with stale tasks. Real
+		// created/updated/session/update timestamps already place those tasks on
+		// the days they were actually touched.
+		if task.Live {
+			add(now, task.Slug, task.Name)
 		}
 	}
+	for i := range days {
+		days[i].Count = len(distinct[days[i].Date])
+	}
 	return days
+}
+
+// buildUIStats derives the Mission Control analytics strip: activity-day streaks
+// from the heatmap, plus per-provider context-token and session totals across
+// every tracked session (live + done, deduped by slug).
+func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) uiStats {
+	var st uiStats
+	today := now.In(time.Local).Format("2006-01-02")
+	// Restrict to days up to and including today. The heatmap grid runs to the
+	// end of the current week, so the trailing future days (count 0) would
+	// otherwise read as a broken streak.
+	onByDay := make([]bool, 0, len(heatmap))
+	for _, d := range heatmap {
+		if d.Date > today {
+			continue
+		}
+		on := d.Count > 0
+		onByDay = append(onByDay, on)
+		if on {
+			st.ActiveDays++
+		}
+	}
+	// Longest run of consecutive active days anywhere in the window.
+	run := 0
+	for _, on := range onByDay {
+		if on {
+			run++
+			if run > st.LongestStreak {
+				st.LongestStreak = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	// Current streak: count back from today. A not-yet-active today doesn't break
+	// the streak (you may simply not have started yet) — skip it once, then count
+	// consecutive active days backwards.
+	for i := len(onByDay) - 1; i >= 0; i-- {
+		if onByDay[i] {
+			st.CurrentStreak++
+		} else if i == len(onByDay)-1 {
+			continue // grace: today hasn't been touched yet
+		} else {
+			break
+		}
+	}
+	// Token + session totals per provider, deduped by slug so a session present
+	// in both the live and done lists isn't counted twice.
+	seen := make(map[string]bool)
+	tally := func(list []uiAgent) {
+		for _, a := range list {
+			if a.Slug == "" || seen[a.Slug] {
+				continue
+			}
+			seen[a.Slug] = true
+			// TokensUsed is each session's current context-window occupancy (the
+			// "X/258k" bar on its card). We sum that rather than a cumulative
+			// per-turn total: agents re-read their whole cached context every
+			// turn, so summing per-turn usage counts the same tokens dozens of
+			// times and balloons far past what was ever actually consumed.
+			st.TokensTotal += a.TokensUsed
+			st.SessionsTotal++
+			if a.Provider == agents.ProviderCodex {
+				st.TokensCodex += a.TokensUsed
+				st.SessionsCodex++
+			} else {
+				st.TokensClaude += a.TokensUsed
+				st.SessionsClaude++
+			}
+		}
+	}
+	tally(live)
+	tally(done)
+	return st
 }
 
 func activityTimeForFile(file FileRef) (time.Time, bool) {
@@ -1283,29 +1468,46 @@ func formatActivity(seconds int) string {
 }
 
 // toolCallActivitySeries returns a 60-cell activity series for the agent
-// tile, where each cell counts tool_use entries observed in the
+// tile, where each cell counts transcript entries observed in the
 // corresponding minute of the last hour. Cell 0 is 59 minutes ago;
 // cell 59 is the current minute. Anything older than 60 minutes is
-// dropped. This replaces the older synthetic activitySeries with real
-// per-minute data from the provider transcript.
+// dropped. Every timestamped entry counts (tool calls, assistant/user
+// turns, tool results) so the strip is meaningful for both Claude and
+// Codex — Codex transcripts rarely surface as discrete tool_use events.
 func toolCallActivitySeries(transcript []uiTranscript, now time.Time) []int {
 	out := make([]int, 60)
 	if len(transcript) == 0 {
 		return out
 	}
-	cutoff := now.Add(-time.Duration(len(out)) * time.Minute)
+	// Anchor the window to the session's most recent activity rather than
+	// wall-clock now. A session that crashed or went idle days ago still shows
+	// the bars from its final active hour instead of an empty strip — the tile
+	// chart is meaningful regardless of how long ago the session ran.
+	anchor := time.Time{}
 	for _, e := range transcript {
-		if e.Type != "tool_use" || strings.TrimSpace(e.Time) == "" {
+		if strings.TrimSpace(e.Time) == "" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339, e.Time); err == nil && t.After(anchor) {
+			anchor = t
+		}
+	}
+	if anchor.IsZero() || anchor.After(now) {
+		anchor = now
+	}
+	cutoff := anchor.Add(-time.Duration(len(out)) * time.Minute)
+	for _, e := range transcript {
+		if strings.TrimSpace(e.Time) == "" {
 			continue
 		}
 		t, err := time.Parse(time.RFC3339, e.Time)
 		if err != nil {
 			continue
 		}
-		if t.Before(cutoff) || t.After(now.Add(time.Minute)) {
+		if t.Before(cutoff) || t.After(anchor.Add(time.Minute)) {
 			continue
 		}
-		minutesAgo := int(now.Sub(t) / time.Minute)
+		minutesAgo := int(anchor.Sub(t) / time.Minute)
 		if minutesAgo < 0 {
 			minutesAgo = 0
 		}

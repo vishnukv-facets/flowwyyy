@@ -161,12 +161,22 @@ func (d *Dispatcher) createSlackTask(ctx context.Context, decision ReactionDecis
 	// which still leaves the agent free to ask "which project?" blind.
 	projects, _ := listProjectChoices(d.DB)
 	brief := slackTaskBrief(decision, slug, name, projects, SelfUserIDs())
-	provider := ProviderForEmoji(decision.Reaction)
+	requested := ProviderForEmoji(decision.Reaction)
+	provider, fellBack, ok := ResolveProvider(requested)
+	if !ok {
+		return "", fmt.Errorf("monitor: cannot start session — neither Claude Code nor Codex is installed")
+	}
 	// Slack reactions don't carry a repo, so there's nothing to auto-attach;
 	// the brief's project picker still lets the agent attach one (which now
 	// adopts the project work_dir, see cmdUpdateTask).
 	if err := spawnFlowTask(ctx, name, slug, brief, provider, ""); err != nil {
 		return "", err
+	}
+	if fellBack {
+		providerNotice(slug, fmt.Sprintf(
+			"%s isn't installed on this machine — started this session with %s instead.",
+			ProviderDisplayName(requested), ProviderDisplayName(provider),
+		))
 	}
 	if err := tagFlowTask(ctx, slug, "slack-reply"); err != nil {
 		return slug, err

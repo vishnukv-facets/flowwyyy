@@ -179,6 +179,19 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "archived " + target, Output: out}, http.StatusOK
+	case "done":
+		if err := validateSlug(target); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		// `flow done` flips status, snapshots git, and runs the headless KB /
+		// project-update close-out sweep (the slow part — within runFlowCommand's
+		// 2-minute budget). Output is returned so the UI can confirm which phases
+		// actually ran.
+		out, err := s.runFlowCommand("done", target)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "marked " + target + " done", Output: out}, http.StatusOK
 	case "delete", "restore":
 		if err := validateSlug(target); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
@@ -226,11 +239,60 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.forkTask(req)
 	case "edit-playbook":
 		return s.editPlaybook(target)
+	case "nudge":
+		return s.nudgeSession(target, req.Prompt)
 	case "overview-chat":
 		return s.overviewChat(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}
+}
+
+// nudgeSession delivers a user-typed instruction into a task's agent session
+// without opening the terminal. It reuses the exact path the inbox monitor uses
+// to auto-inject on new messages (see deliverInboxEvents): inject into the live
+// server-managed PTY if one exists, otherwise resume the session and inject —
+// but never duplicate a session the user is running in an external terminal.
+func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return actionResponse{OK: false, Message: "instruction is empty"}, http.StatusBadRequest
+	}
+	if slug == "" {
+		return actionResponse{OK: false, Message: "no session specified"}, http.StatusBadRequest
+	}
+	// Live server PTY → inject straight away (paste + delayed Enter).
+	if s.terminals != nil && s.terminals.running(slug) {
+		if err := s.terminals.wakeTask(slug, text); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil {
+		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound
+	}
+	// A native (user-owned terminal) session is alive: flow has no PTY to inject
+	// into and must not spawn a duplicate.
+	if s.taskAgentProcessLive(task) {
+		return actionResponse{OK: false, Message: "Session is running in an external terminal — open it there to send."}, http.StatusConflict
+	}
+	if task.Status != "backlog" && task.Status != "in-progress" {
+		return actionResponse{OK: false, Message: "Session is finished — reopen it to send an instruction."}, http.StatusConflict
+	}
+	provider := task.SessionProvider
+	if provider == "" {
+		provider = "claude"
+	}
+	if err := s.ensureProviderAvailable(provider); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	// No live session: wakeTask resumes a server PTY (--resume the prior session)
+	// via attach, then injects the instruction.
+	if err := s.terminals.wakeTask(slug, text); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	return actionResponse{OK: true, Message: "Resumed session and sent instruction"}, http.StatusOK
 }
 
 func qualifiedEntityRef(kind, slug string) (string, error) {
@@ -323,7 +385,45 @@ func (s *Server) destroyDeletedEntity(kind, slug string) (actionResponse, int) {
 	if err := tx.Commit(); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
+	// The row is gone; reclaim the on-disk directory the entity owned
+	// (tasks/<slug>, projects/<slug>, playbooks/<slug>) — its brief, updates,
+	// inbox.jsonl, and workspace. Best-effort: the authoritative delete is the
+	// row, so a leftover dir shouldn't fail the action, but destroy must fully
+	// clean up rather than orphaning files in ~/.flow.
+	if dir := s.entityDir(kind, slug); dir != "" {
+		_ = os.RemoveAll(dir)
+	}
 	return actionResponse{OK: true, Message: "deleted " + kind + " " + slug}, http.StatusOK
+}
+
+// entityDir resolves the ~/.flow directory that backs a trashable entity, with
+// the result confined to <FlowRoot>/<tasks|projects|playbooks>/ so a crafted
+// slug can never escape the data tree.
+func (s *Server) entityDir(kind, slug string) string {
+	if validateSlug(slug) != nil {
+		return ""
+	}
+	var sub string
+	switch strings.TrimSpace(kind) {
+	case "task":
+		sub = "tasks"
+	case "project":
+		sub = "projects"
+	case "playbook":
+		sub = "playbooks"
+	default:
+		return ""
+	}
+	root := strings.TrimSpace(s.cfg.FlowRoot)
+	if root == "" {
+		return ""
+	}
+	base := filepath.Clean(filepath.Join(root, sub)) + string(os.PathSeparator)
+	dir := filepath.Clean(filepath.Join(root, sub, slug))
+	if !strings.HasPrefix(dir, base) {
+		return ""
+	}
+	return dir
 }
 
 func entityTable(kind string) (string, error) {
@@ -1090,8 +1190,13 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 	if err := s.ensureProviderAvailable(provider); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
-		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
+	// A done task is still resumable: opening it in a native terminal revisits
+	// the prior session (loading its context), mirroring the browser bridge
+	// which already special-cases done. Only gate startability for non-done.
+	if task.Status != "done" {
+		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
+		}
 	}
 	sharedName, hasBrowserShared := s.terminals.sharedSessionName(target)
 	createdShared := false

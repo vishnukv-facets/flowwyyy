@@ -2,6 +2,9 @@ package server
 
 import (
 	"database/sql"
+	"net/http"
+	"sync"
+	"time"
 
 	"flow/internal/monitor"
 )
@@ -12,6 +15,10 @@ type Config struct {
 	Version     string
 	CommandPath string
 	HookURL     string
+	// DisableQuote turns off the anime quote beside the Mission Control
+	// greeting (flow ui serve --no-quote). The endpoint then returns an empty
+	// quote, which the UI hides — falling back to the static subtitle.
+	DisableQuote bool
 }
 
 type Server struct {
@@ -35,6 +42,32 @@ type Server struct {
 	monitorReconcile *monitorReconciler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
+
+	// quote{Mu,Key,Val} cache the Mission Control anime quote per
+	// (date + greeting bucket) so the external animechan API is called at most
+	// once per greeting change — see handleQuote.
+	quoteMu  sync.Mutex
+	quoteKey string
+	quoteVal QuoteView
+
+	// searchSync{Mu,At,ing} serialize, throttle, and de-dupe the search-index
+	// refresh. The refresh is a filesystem walk + FTS rebuild that takes
+	// seconds. A scope's FIRST build is synchronous (so the query that needs it
+	// returns correct results); later refreshes run in the BACKGROUND, never on
+	// the /api/search request path. searchSyncAt records the last successful
+	// sync per scope (keyed by scope string); searchSyncing is the in-flight
+	// guard that stops a keystroke from stacking a second goroutine or racing a
+	// second SQLite writer — see syncSearchThrottled.
+	searchSyncMu  sync.Mutex
+	searchSyncAt  map[string]time.Time
+	searchSyncing bool
+
+	// apiMux is the data-plane mux (/api/* routes only), built once and
+	// reused by both the HTTP Handler and the WebSocket-RPC bridge so the
+	// UI can run every data request and mutation over a single socket
+	// (see rpc_bridge.go) without duplicating route wiring.
+	apiOnce sync.Once
+	apiMux  http.Handler
 }
 
 type HealthView struct {
@@ -305,6 +338,7 @@ type KBFileView struct {
 	Size     int64  `json:"size"`
 	Entries  int    `json:"entries"`
 	Preview  string `json:"preview"`
+	Content  string `json:"content"`
 }
 
 type WorkdirView struct {

@@ -180,8 +180,12 @@ func parseTranscriptFile(path string) ([]TranscriptEntry, error) {
 }
 
 type transcriptUsageStats struct {
-	TokensUsed    int
-	TokensMax     int
+	// TokensUsed is the CURRENT context-window occupancy — the most recent
+	// turn's token total (it's overwritten, not summed). This is the "38k/258k"
+	// fill bar on a session card, paired with TokensMax (the model's context
+	// window).
+	TokensUsed int
+	TokensMax  int
 	Model         string
 	LastTimestamp string
 }

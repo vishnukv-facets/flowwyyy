@@ -1,0 +1,95 @@
+/* ============================================================================
+   highlight.js theme — theme-aware via CSS variables (light & dark).
+   A calm, crafted palette tuned to the clay accent; no neon.
+   ========================================================================== */
+
+[data-theme='dark'] {
+  --hl-comment: #6b675f;
+  --hl-keyword: #d98a6a;
+  --hl-built: #c9a25e;
+  --hl-string: #88b07f;
+  --hl-number: #cf8d6f;
+  --hl-title: #79a7d6;
+  --hl-attr: #c9a25e;
+  --hl-type: #84b3c4;
+  --hl-meta: #8a857c;
+  --hl-tag: #8b9bb0;
+  --hl-add: #51b06d;
+  --hl-del: #d65a4d;
+}
+[data-theme='light'] {
+  --hl-comment: #9a9081;
+  --hl-keyword: #b24e1f;
+  --hl-built: #8a6a1c;
+  --hl-string: #3f7a44;
+  --hl-number: #a3531f;
+  --hl-title: #2c6aa3;
+  --hl-attr: #8a6a1c;
+  --hl-type: #2b7a8c;
+  --hl-meta: #8a857c;
+  --hl-tag: #50607a;
+  --hl-add: #2f8a4f;
+  --hl-del: #b23a30;
+}
+
+.hljs {
+  color: var(--text);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--hl-comment);
+  font-style: italic;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-operator {
+  color: var(--hl-keyword);
+}
+.hljs-built_in,
+.hljs-attr,
+.hljs-attribute,
+.hljs-class .hljs-title {
+  color: var(--hl-attr);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-bullet,
+.hljs-addition {
+  color: var(--hl-string);
+}
+.hljs-number,
+.hljs-symbol,
+.hljs-meta .hljs-string {
+  color: var(--hl-number);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: var(--hl-title);
+}
+.hljs-type,
+.hljs-title.class_,
+.hljs-template-variable,
+.hljs-variable {
+  color: var(--hl-type);
+}
+.hljs-tag,
+.hljs-punctuation {
+  color: var(--hl-tag);
+}
+.hljs-meta,
+.hljs-doctag {
+  color: var(--hl-meta);
+}
+.hljs-deletion {
+  color: var(--hl-del);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 600;
+}
