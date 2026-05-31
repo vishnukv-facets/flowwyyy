@@ -977,10 +977,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	if err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, scopes); err != nil {
-		writeError(w, fmt.Errorf("index search docs: %w", err), http.StatusInternalServerError)
-		return
-	}
+	s.syncSearchThrottled(scopes)
 	results, err := flowdb.SearchDocs(s.cfg.DB, q, scopes, limit)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -1007,6 +1004,24 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, resp)
+}
+
+// syncSearchThrottled refreshes the FTS index at most once every few seconds,
+// serialized behind a mutex. The palette fires one /api/search per keystroke;
+// without this, each would kick off a concurrent SyncSearchDocs write and the
+// resulting SQLite lock contention surfaced as intermittent 500s ("No matches"
+// in the UI). A refresh failure is non-fatal — we still query whatever's
+// already indexed rather than blanking the results.
+func (s *Server) syncSearchThrottled(scopes []flowdb.SearchScope) {
+	s.searchSyncMu.Lock()
+	defer s.searchSyncMu.Unlock()
+	if !s.searchSyncAt.IsZero() && time.Since(s.searchSyncAt) < 5*time.Second {
+		return
+	}
+	if err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, scopes); err != nil {
+		return
+	}
+	s.searchSyncAt = time.Now()
 }
 
 func ftsSearchResult(result flowdb.SearchResult) SearchResult {

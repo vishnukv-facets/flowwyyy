@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"net/http"
 	"sync"
+	"time"
 
 	"flow/internal/monitor"
 )
@@ -48,6 +49,12 @@ type Server struct {
 	quoteMu  sync.Mutex
 	quoteKey string
 	quoteVal QuoteView
+
+	// searchSync{Mu,At} serialize and throttle the search-index refresh so
+	// rapid /api/search calls (one per keystroke) can't pile up concurrent
+	// writes and lock the DB — see syncSearchThrottled.
+	searchSyncMu sync.Mutex
+	searchSyncAt time.Time
 
 	// apiMux is the data-plane mux (/api/* routes only), built once and
 	// reused by both the HTTP Handler and the WebSocket-RPC bridge so the

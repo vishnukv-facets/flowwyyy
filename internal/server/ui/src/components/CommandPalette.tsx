@@ -225,10 +225,9 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           />
           <span className="kbd">esc</span>
         </div>
-        {q.trim() && (
-          <div className="palette-scopes">
-            {SCOPES.map((s) => (
-              <button
+        <div className="palette-scopes">
+          {SCOPES.map((s) => (
+            <button
                 key={s.id}
                 className={`palette-chip${scope === s.id ? ' active' : ''}`}
                 onClick={() => {
@@ -238,9 +237,8 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               >
                 {s.label}
               </button>
-            ))}
-          </div>
-        )}
+          ))}
+        </div>
         <div className="palette-list" ref={listRef}>
           {flat.length === 0 && (
             <div className="palette-empty">{q.trim() ? 'No matches' : 'Loading…'}</div>
