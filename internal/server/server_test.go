@@ -276,6 +276,86 @@ func TestSearchReadsMemoryBodies(t *testing.T) {
 	}
 }
 
+func TestKBFileSaveRejectsStaleMTime(t *testing.T) {
+	root, db := testRootDB(t)
+	path := filepath.Join(root, "kb", "user.md")
+	baseTime := time.Now().Add(-time.Hour).Round(0)
+	newerTime := baseTime.Add(time.Second)
+	if err := os.WriteFile(path, []byte("loaded\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	loadedMTime := baseTime.Format(time.RFC3339Nano)
+
+	if err := os.WriteFile(path, []byte("newer on disk\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, newerTime, newerTime); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPut,
+		"/api/kb/user.md?mtime="+url.QueryEscape(loadedMTime),
+		strings.NewReader("stale browser draft\n"),
+	)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "newer on disk\n" {
+		t.Fatalf("file was overwritten by stale save: %q", body)
+	}
+}
+
+func TestMemoryWriteRejectsStaleMTime(t *testing.T) {
+	root, db := testRootDB(t)
+	if err := flowdb.UpsertWorkdir(db, root, "flow", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "AGENTS.md")
+	baseTime := time.Now().Add(-time.Hour).Round(0)
+	newerTime := baseTime.Add(time.Second)
+	if err := os.WriteFile(path, []byte("loaded\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, baseTime, baseTime); err != nil {
+		t.Fatal(err)
+	}
+	loadedMTime := baseTime.Format(time.RFC3339Nano)
+
+	if err := os.WriteFile(path, []byte("newer on disk\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, newerTime, newerTime); err != nil {
+		t.Fatal(err)
+	}
+
+	payload := fmt.Sprintf(`{"path":%q,"text":"stale browser draft\n","mtime":%q}`, path, loadedMTime)
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/memory", strings.NewReader(payload))
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "newer on disk\n" {
+		t.Fatalf("file was overwritten by stale save: %q", body)
+	}
+}
+
 func TestUIDataUsesFlowRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

@@ -46,8 +46,9 @@ func (s *Server) handleMemoryWrite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Path string `json:"path"`
-		Text string `json:"text"`
+		Path  string `json:"path"`
+		Text  string `json:"text"`
+		MTime string `json:"mtime"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024*1024)).Decode(&req); err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -66,9 +67,13 @@ func (s *Server) handleMemoryWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errors.New("path is not an editable memory source"), http.StatusForbidden)
 		return
 	}
+	if err := requireUnmodifiedFile(path, req.MTime); err != nil {
+		writeError(w, err, statusForMTimeError(err))
+		return
+	}
 	if err := os.WriteFile(path, []byte(req.Text), 0o644); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "path": path})
+	writeJSON(w, map[string]any{"ok": true, "path": path, "mtime": buildMemorySource(memorySourceCandidate{path: path}).MTime})
 }

@@ -120,7 +120,7 @@ func buildMemorySource(candidate memorySourceCandidate) uiMemorySource {
 		src.Error = "path is a directory"
 		return src
 	}
-	src.MTime = info.ModTime().Format(time.RFC3339)
+	src.MTime = info.ModTime().Format(time.RFC3339Nano)
 	src.Size = info.Size()
 	src.Format = "text"
 	if strings.EqualFold(filepath.Ext(candidate.path), ".md") {

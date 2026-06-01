@@ -52,8 +52,11 @@ export async function apiActionForm(
   return data
 }
 
-export async function apiPutText(path: string, text: string): Promise<void> {
-  const r = await rpc.request({ method: 'PUT', path, text })
+export async function apiPutText(path: string, text: string, opts: { mtime?: string } = {}): Promise<void> {
+  const url = opts.mtime
+    ? `${path}${path.includes('?') ? '&' : '?'}mtime=${encodeURIComponent(opts.mtime)}`
+    : path
+  const r = await rpc.request({ method: 'PUT', path: url, text })
   if (r.status >= 400) throw new ApiError(r.status, errText(r))
 }
 

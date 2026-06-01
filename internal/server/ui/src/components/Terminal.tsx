@@ -32,6 +32,8 @@ const TERMINAL_SCROLLBACK_LINES = 4294967295
 // fit at t=0 measures a not-yet-final box. Fitting again at increasing delays
 // converges on the correct grid without spamming resizes forever.
 const TERMINAL_FIT_DELAYS_MS = [0, 40, 160, 420, 900]
+const TERMINAL_RECONNECT_INITIAL_MS = 400
+const TERMINAL_RECONNECT_MAX_MS = 8000
 
 // Device-Attributes responses the terminal *emits* in reply to DA queries
 // (ESC [ ? … c / ESC [ > … c). If the host echoes them back to us as input we
@@ -124,7 +126,8 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
 
     let destroyed = false
     let ws: WebSocket | null = null
-    let wsOpened = false
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+    let reconnectBackoff = TERMINAL_RECONNECT_INITIAL_MS
     let lastSize = ''
     let sawFirstOutput = false // first output frame is the history replay
 
@@ -307,22 +310,48 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
         resizeFrame = 0
         fitNow()
         term.refresh(0, Math.max(0, term.rows - 1))
-        if (!wsOpened) openWS()
+        openWS()
       })
+    }
+
+    const clearReconnect = () => {
+      if (!reconnectTimer) return
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+
+    const scheduleReconnect = () => {
+      if (destroyed || reconnectTimer) return
+      const delay = reconnectBackoff
+      reconnectBackoff = Math.min(Math.round(reconnectBackoff * 1.7), TERMINAL_RECONNECT_MAX_MS)
+      onStatus?.('status', `reconnecting in ${Math.max(1, Math.ceil(delay / 1000))}s`)
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        openWS()
+      }, delay)
     }
 
     // Connect the socket once, at the real fitted size. If the host isn't laid
     // out yet (fit yields a degenerate grid), bail — the ResizeObserver's first
     // real callback re-enters here with a valid size.
     const openWS = () => {
-      if (wsOpened || destroyed) return
+      if (
+        destroyed ||
+        (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING))
+      )
+        return
       fitNow()
       if (term.cols < 2 || term.rows < 2) return
-      wsOpened = true
       lastSize = `${term.cols}x${term.rows}`
+      if (sawFirstOutput) {
+        term.clear()
+        sawFirstOutput = false
+      }
       const sock = new WebSocket(termWsURL(slug, term.cols, term.rows))
       ws = sock
       sock.onopen = () => {
+        clearReconnect()
+        reconnectBackoff = TERMINAL_RECONNECT_INITIAL_MS
         onStatus?.('open', 'connected')
         scheduleFits()
       }
@@ -347,10 +376,17 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
         else if (m.type === 'error') onStatus?.('error', m.message ?? 'terminal error')
       }
       sock.onclose = () => {
-        if (!destroyed) onStatus?.('closed', 'terminal disconnected')
+        if (ws === sock) ws = null
+        if (!destroyed) {
+          onStatus?.('closed', 'terminal disconnected')
+          scheduleReconnect()
+        }
       }
       sock.onerror = () => {
-        if (!destroyed) onStatus?.('error', 'connection error')
+        if (!destroyed) {
+          onStatus?.('error', 'connection error')
+          scheduleReconnect()
+        }
       }
     }
 
@@ -413,6 +449,7 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
 
     return () => {
       destroyed = true
+      clearReconnect()
       clearTimeout(focusTimer)
       fitTimers.forEach(clearTimeout)
       if (resizeFrame) cancelAnimationFrame(resizeFrame)

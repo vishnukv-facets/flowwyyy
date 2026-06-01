@@ -21,6 +21,8 @@ import (
 
 const maxTerminalAttachmentUploadBytes = 50 << 20
 
+var errFileChangedOnDisk = errors.New("file changed on disk since it was loaded; reload before saving")
+
 type terminalAttachmentUploadResponse struct {
 	Files      []FileRef `json:"files"`
 	InsertText string    `json:"insert_text"`
@@ -937,6 +939,10 @@ func (s *Server) saveKBFile(w http.ResponseWriter, r *http.Request, path, name s
 		writeError(w, errors.New("invalid KB path"), http.StatusBadRequest)
 		return
 	}
+	if err := requireUnmodifiedFile(path, r.URL.Query().Get("mtime")); err != nil {
+		writeError(w, err, statusForMTimeError(err))
+		return
+	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1024*1024))
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -950,7 +956,33 @@ func (s *Server) saveKBFile(w http.ResponseWriter, r *http.Request, path, name s
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "name": name})
+	writeJSON(w, map[string]any{"ok": true, "name": name, "mtime": BuildKBFileView(path).MTime})
+}
+
+func requireUnmodifiedFile(path, expected string) error {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return nil
+	}
+	want, err := time.Parse(time.RFC3339Nano, expected)
+	if err != nil {
+		return fmt.Errorf("invalid mtime %q: %w", expected, err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.ModTime().Equal(want) {
+		return errFileChangedOnDisk
+	}
+	return nil
+}
+
+func statusForMTimeError(err error) int {
+	if errors.Is(err, errFileChangedOnDisk) {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
 }
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
