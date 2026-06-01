@@ -6,6 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago, dueTone } from '../lib/format'
+import { clickable } from '../lib/a11y'
 import type { TaskView } from '../lib/types'
 
 const STATUSES = [
@@ -180,7 +181,7 @@ function TaskRow({ task, onOpen }: { task: TaskView; onOpen: () => void }) {
   const parentName = task.parent?.name || task.parent_slug
 
   return (
-    <tr onClick={() => !editing && onOpen()}>
+    <tr {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
       <td>
         <StatusDot status={task.live ? 'running' : task.waiting_on ? 'waiting' : task.status} />
       </td>

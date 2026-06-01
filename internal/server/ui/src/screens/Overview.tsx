@@ -7,6 +7,7 @@ import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago, compact, compactTokens, dueTone } from '../lib/format'
+import { clickable } from '../lib/a11y'
 import type { ActivityDay, InboxFeedEntry, PlaybookRun, TaskView, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -477,7 +478,7 @@ export function Overview() {
               {backlog.slice(0, 8).map((t) => {
                 const tone = dueTone(t.due_date, t.due_info)
                 return (
-                  <div key={t.slug} className="lrow" onClick={() => navigate(`/session/${t.slug}`)}>
+                  <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => navigate(`/session/${t.slug}`))}>
                     <span className={`prio ${t.priority}`} />
                     <ProviderIcon provider={t.session_provider} size={14} />
                     <div className="lrow-main">
@@ -534,7 +535,7 @@ export function Overview() {
             <div className="rail-body">
               {inboxThreads.length === 0 && <div className="faint" style={{ padding: 8 }}>No recent messages.</div>}
               {inboxThreads.map(({ entry, unread }) => (
-                <div key={entry.task_slug} className="feed-row" onClick={() => navigate('/inbox')}>
+                <div key={entry.task_slug} className="feed-row" aria-label={`Open inbox — ${entry.task_name}`} {...clickable(() => navigate('/inbox'))}>
                   {unread > 0 ? <span className="unread-dot" /> : <span className="dot idle" />}
                   <SourceIcon source={entry.source} size={13} />
                   <div className="lrow-main">
@@ -560,7 +561,7 @@ export function Overview() {
             </div>
             <div className="rail-body">
               {activePlaybooks.slice(0, 5).map((p) => (
-                <div key={p.slug} className="feed-row" onClick={() => navigate(`/playbook/${p.slug}`)}>
+                <div key={p.slug} className="feed-row" aria-label={`Open playbook ${p.name}`} {...clickable(() => navigate(`/playbook/${p.slug}`))}>
                   <div className="lrow-main">
                     <div className="feed-title clip">{p.name}</div>
                     <div className="feed-sub clip">{p.runs_week} runs · 7d</div>

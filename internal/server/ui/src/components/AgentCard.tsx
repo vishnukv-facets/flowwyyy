@@ -4,6 +4,7 @@ import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
+import { clickable } from '../lib/a11y'
 
 const BADGE_TONE: Record<string, string> = {
   waiting: 'warn',
@@ -26,7 +27,11 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
   const isDone = agent.task_status === 'done'
   const badgeStatus = isDone ? 'done' : agent.status
   return (
-    <article className="card acard" onClick={() => navigate(`/session/${agent.slug}`)}>
+    <article
+      className="card acard"
+      aria-label={`Open session ${agent.name}`}
+      {...clickable(() => navigate(`/session/${agent.slug}`))}
+    >
       <div className="acard-top">
         <ProviderIcon provider={agent.provider} size={17} />
         <div style={{ flex: 1, minWidth: 0 }}>

@@ -6,6 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
+import { clickable } from '../lib/a11y'
 import { ago } from '../lib/format'
 import type { ToolCapability } from '../lib/types'
 
@@ -76,7 +77,12 @@ export function Playbooks() {
       ) : (
         <div className="grid cards stagger">
           {data.map((p) => (
-            <article key={p.slug} className="card acard" onClick={() => navigate(`/playbook/${p.slug}`)}>
+            <article
+              key={p.slug}
+              className="card acard"
+              aria-label={`Open playbook ${p.name}`}
+              {...clickable(() => navigate(`/playbook/${p.slug}`))}
+            >
               <div className="acard-top">
                 <Repeat size={16} className="dim" style={{ marginTop: 2 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>

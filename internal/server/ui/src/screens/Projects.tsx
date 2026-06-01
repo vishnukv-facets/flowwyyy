@@ -6,6 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { CreateProjectModal } from '../components/modals'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
+import { clickable } from '../lib/a11y'
 
 // Chat/Slack-derived task names often carry a trailing URL or permalink
 // (e.g. "#channel - https://chat.google.com/room/…"). Strip that noise so
@@ -70,7 +71,12 @@ export function Projects() {
       ) : (
         <div className="grid cards stagger">
           {data.map((p) => (
-            <article key={p.slug} className="card acard" onClick={() => navigate(`/project/${p.slug}`)}>
+            <article
+              key={p.slug}
+              className="card acard"
+              aria-label={`Open project ${p.name}`}
+              {...clickable(() => navigate(`/project/${p.slug}`))}
+            >
               <div className="acard-top">
                 <FolderGit2 size={17} className="dim" style={{ marginTop: 1 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>

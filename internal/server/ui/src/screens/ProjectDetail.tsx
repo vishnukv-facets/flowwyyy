@@ -7,6 +7,7 @@ import { BriefPanel } from '../components/BriefPanel'
 import { Md } from '../components/Markdown'
 import { ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago, dateTime } from '../lib/format'
+import { clickable } from '../lib/a11y'
 import type { FileRef } from '../lib/types'
 
 export function ProjectDetail({ slug }: { slug: string }) {
@@ -60,7 +61,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
           </div>
           <div className="rows">
             {(tasks ?? []).map((t) => (
-              <div key={t.slug} className="lrow" onClick={() => navigate(`/session/${t.slug}`)}>
+              <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => navigate(`/session/${t.slug}`))}>
                 <StatusDot status={t.live ? 'running' : t.status} />
                 <ProviderIcon provider={t.session_provider} size={14} />
                 <div className="lrow-main">

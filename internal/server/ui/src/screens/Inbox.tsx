@@ -6,6 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
 import { Md } from '../components/Markdown'
 import { ago, dateTime } from '../lib/format'
+import { clickable } from '../lib/a11y'
 import type { InboxFeedEntry } from '../lib/types'
 
 // Slack/GitHub use :claude:/:codex: shortcodes to trigger an agent. In rendered
@@ -115,7 +116,12 @@ export function InboxScreen() {
             <div className="h-lg">{data.unread_count} unread · {data.task_count} threads</div>
           </div>
           {convos.map((c) => (
-            <div key={c.slug} className={`pli${selected === c.slug ? ' active' : ''}`} onClick={() => setSelected(c.slug)}>
+            <div
+              key={c.slug}
+              className={`pli${selected === c.slug ? ' active' : ''}`}
+              aria-pressed={selected === c.slug}
+              {...clickable(() => setSelected(c.slug))}
+            >
               <div className="pli-top">
                 {c.unread > 0 && <span className="unread-dot" />}
                 <SourceIcon source={c.source} />

@@ -5,6 +5,7 @@ import { useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
+import { clickable } from '../lib/a11y'
 import type { UiAgent } from '../lib/types'
 
 type Filter = 'all' | 'running' | 'waiting' | 'idle' | 'done'
@@ -108,7 +109,7 @@ export function Sessions() {
             const runningN = agents.filter((a) => a.status === 'running').length
             return (
               <section key={key}>
-                <div className="group-head" onClick={() => toggle(key)}>
+                <div className="group-head" aria-expanded={open} {...clickable(() => toggle(key))}>
                   <ChevronRight size={15} className={`group-caret${open ? ' open' : ''}`} />
                   {isAdhoc ? (
                     <span className="dot idle" />

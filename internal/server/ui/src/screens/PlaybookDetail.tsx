@@ -6,6 +6,7 @@ import { BriefPanel } from '../components/BriefPanel'
 import { ErrorNote, Loading } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago } from '../lib/format'
+import { clickable } from '../lib/a11y'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -120,7 +121,7 @@ export function PlaybookDetail({ slug }: { slug: string }) {
           </div>
           <div className="rows">
             {(pb.recent_runs ?? []).map((r) => (
-              <div key={r.slug} className="lrow" onClick={() => navigate(`/session/${r.slug}`)}>
+              <div key={r.slug} className="lrow" aria-label={`Open run ${r.name}`} {...clickable(() => navigate(`/session/${r.slug}`))}>
                 <div className="lrow-main">
                   <div className="lrow-title clip">{r.name}</div>
                   <div className="lrow-sub clip">{r.status} · {ago(r.created_at)}</div>
