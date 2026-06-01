@@ -58,9 +58,9 @@ export function Memories() {
     )
   }
 
-  const saveActive = async (text: string) => {
+  const saveActive = async (text: string, version?: string) => {
     if (!active) return
-    await apiPost('/api/memory', { path: active.path, text })
+    await apiPost('/api/memory', { path: active.path, text, mtime: version })
     await queryClient.invalidateQueries({ queryKey: ['ui-data'] })
   }
 
@@ -135,6 +135,7 @@ export function Memories() {
                 <DocEditor
                   key={active.id}
                   content={active.content ?? ''}
+                  version={active.mtime}
                   onSave={saveActive}
                   onWikiLink={onWikiLink}
                   backlinks={backlinks}

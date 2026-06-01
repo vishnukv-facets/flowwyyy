@@ -68,8 +68,8 @@ function KBDoc({ files, filename, onSelect }: { files: KBFileView[]; filename: s
 
   if (!file) return null
 
-  const save = async (text: string) => {
-    await apiPutText(`/api/kb/${encodeURIComponent(filename)}`, text)
+  const save = async (text: string, version?: string) => {
+    await apiPutText(`/api/kb/${encodeURIComponent(filename)}`, text, { mtime: version })
     await queryClient.invalidateQueries({ queryKey: ['kb'] })
     await queryClient.invalidateQueries({ queryKey: ['md', `/api/kb/${encodeURIComponent(filename)}`] })
   }
@@ -83,7 +83,13 @@ function KBDoc({ files, filename, onSelect }: { files: KBFileView[]; filename: s
   return (
     <div style={{ padding: '24px 28px', maxWidth: 820 }}>
       <div className="eyebrow" style={{ marginBottom: 12 }}>{filename}</div>
-      <DocEditor content={file.content || ''} onSave={save} onWikiLink={onWikiLink} backlinks={backlinks} />
+      <DocEditor
+        content={file.content || ''}
+        version={file.mtime}
+        onSave={save}
+        onWikiLink={onWikiLink}
+        backlinks={backlinks}
+      />
     </div>
   )
 }

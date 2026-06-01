@@ -394,7 +394,7 @@ func BuildKBFileView(path string) KBFileView {
 		Path:     path,
 	}
 	if info != nil {
-		view.MTime = info.ModTime().Format(time.RFC3339)
+		view.MTime = info.ModTime().Format(time.RFC3339Nano)
 		view.Size = info.Size()
 	}
 	body, err := os.ReadFile(path)

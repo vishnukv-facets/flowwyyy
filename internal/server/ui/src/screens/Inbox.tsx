@@ -3,7 +3,7 @@ import { useLocation } from 'wouter'
 import { Inbox as InboxIcon, ExternalLink, Play } from 'lucide-react'
 import { useInbox, useInboxConversation } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
-import { EmptyState, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
+import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
 import { Md } from '../components/Markdown'
 import { ago, dateTime } from '../lib/format'
 import type { InboxFeedEntry } from '../lib/types'
@@ -62,7 +62,7 @@ interface Convo {
 
 export function InboxScreen() {
   useDocumentTitle('Inbox')
-  const { data, isLoading } = useInbox()
+  const { data, isLoading, error } = useInbox()
   const [selected, setSelected] = useState<string | null>(null)
 
   const convos = useMemo<Convo[]>(() => {
@@ -93,6 +93,7 @@ export function InboxScreen() {
   }, [convos, selected])
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
+  if (error) return <div className="page"><ErrorNote error={error} /></div>
   if (!data || convos.length === 0) {
     return (
       <div className="page">
@@ -140,8 +141,9 @@ export function InboxScreen() {
 
 function Conversation({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
-  const { data, isLoading } = useInboxConversation(slug)
+  const { data, isLoading, error } = useInboxConversation(slug)
   if (isLoading) return <div style={{ padding: 24 }}><Loading rows={4} /></div>
+  if (error) return <div style={{ padding: 24 }}><ErrorNote error={error} /></div>
   if (!data) return null
   return (
     <div style={{ padding: '22px 26px', maxWidth: 820 }}>

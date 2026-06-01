@@ -58,7 +58,7 @@ type Tab = 'brief' | 'diff' | 'transcript' | 'updates'
 export function SessionDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
   const { data: task, isLoading, error } = useTask(slug)
-  const { data: agent } = useTaskBridge(slug)
+  const { data: agent, error: agentError } = useTaskBridge(slug)
   useDocumentTitle(task?.name)
   const [open, setOpen] = useState(false)
   const [restartKey, setRestartKey] = useState(0)
@@ -402,6 +402,7 @@ export function SessionDetail({ slug }: { slug: string }) {
               {side ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
             </button>
           </div>
+          {agentError && <ErrorNote error={agentError} />}
 
           <div className={`term-shell${full ? ' fullscreen' : ''}`}>
             <div className="term-bar">
@@ -493,7 +494,7 @@ export function SessionDetail({ slug }: { slug: string }) {
             </div>
             <div className="tab-body" style={{ padding: '14px 14px' }}>
               {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} />}
-              {tab === 'diff' && <DiffTab files={agent?.diff_files} onExpand={() => setDiffModal(true)} />}
+              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} />}
               {tab === 'transcript' && (
                 <TranscriptTab
                   slug={slug}
@@ -511,7 +512,7 @@ export function SessionDetail({ slug }: { slug: string }) {
       </div>
 
       <Modal open={diffModal} onClose={() => setDiffModal(false)} title={`Changes · ${agent?.diff?.files ?? 0} files`} width={1100}>
-        <DiffTab files={agent?.diff_files} />
+        <DiffTab files={agent?.diff_files} error={agentError} />
       </Modal>
 
       <Modal open={transcriptModal} onClose={() => setTranscriptModal(false)} title="Transcript" width={1000}>
@@ -525,11 +526,10 @@ export function SessionDetail({ slug }: { slug: string }) {
   )
 }
 
-// Inline close-out progress shown when "Mark done" runs `flow done`. The CLI
-// performs three phases (git snapshot → status flip → headless KB/project
-// sweep) as one synchronous call; we surface them as live steps. The first two
-// are quick, so they advance on a short cadence; the sweep step holds in
-// "running" for the real duration until the action resolves.
+// Inline close-out progress shown when "Mark done" runs `flow done`. The
+// backend currently exposes completion/error only, not per-phase events, so the
+// UI keeps the steps pending while the synchronous action runs and marks them
+// complete only after the backend confirms success.
 const DONE_STEPS = [
   'Saving git close-out snapshot',
   'Marking task as done',
@@ -542,10 +542,6 @@ function DoneProgress({ slug, onClose }: { slug: string; onClose: () => void }) 
 
   useEffect(() => {
     let cancelled = false
-    const timers = [
-      window.setTimeout(() => !cancelled && setPhase((p) => Math.max(p, 1)), 850),
-      window.setTimeout(() => !cancelled && setPhase((p) => Math.max(p, 2)), 1650),
-    ]
     ;(async () => {
       try {
         // The close-out sweep (headless claude) can run well past the 30s
@@ -564,7 +560,6 @@ function DoneProgress({ slug, onClose }: { slug: string; onClose: () => void }) 
     })()
     return () => {
       cancelled = true
-      timers.forEach(clearTimeout)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
@@ -794,7 +789,8 @@ function BriefTab({ slug, summary }: { slug: string; summary?: string }) {
   return <Md source={data} />
 }
 
-function DiffTab({ files, onExpand }: { files?: DiffFile[]; onExpand?: () => void }) {
+function DiffTab({ files, error, onExpand }: { files?: DiffFile[]; error?: unknown; onExpand?: () => void }) {
+  if (error) return <ErrorNote error={error} />
   if (!files || files.length === 0) return <div className="faint">No local git changes.</div>
   return (
     <div>
@@ -845,8 +841,9 @@ function TranscriptTab({
   onExpand?: () => void
   full?: boolean
 }) {
-  const { data, isLoading } = useTaskTranscript(slug, active)
+  const { data, isLoading, error } = useTaskTranscript(slug, active)
   if (isLoading && !fallback) return <Loading label="transcript" />
+  if (error) return <ErrorNote error={error} />
   const entries: TranscriptEntry[] = data?.available ? data.entries : []
   if (entries.length === 0) {
     if (fallback && fallback.length) {
