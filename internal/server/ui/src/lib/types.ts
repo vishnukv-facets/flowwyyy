@@ -106,6 +106,7 @@ export interface PlaybookView {
   work_dir: string
   created_at: string
   updated_at: string
+  archived_at: string | null
   brief_path: string
   updates: FileRef[]
   aux_files: FileRef[]

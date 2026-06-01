@@ -341,6 +341,14 @@
   transform: translateY(-2px);
   box-shadow: 0 10px 30px -16px rgba(0, 0, 0, 0.5);
 }
+/* Archived items surfaced by the "show archived" toggle read as muted history. */
+.acard.archived {
+  opacity: 0.58;
+  border-style: dashed;
+}
+.acard.archived:hover {
+  opacity: 1;
+}
 .acard-top {
   display: flex;
   align-items: flex-start;
