@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { useLocation } from 'wouter'
-import { ArrowLeft, Play } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Pencil, Play, X } from 'lucide-react'
 import { usePlaybook, useAction } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
@@ -54,6 +55,8 @@ export function PlaybookDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
   const { data: pb, isLoading, error } = usePlaybook(slug)
   const action = useAction()
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState('')
   useDocumentTitle(pb?.name)
 
   if (isLoading) return <div className="page"><Loading /></div>
@@ -67,6 +70,22 @@ export function PlaybookDetail({ slug }: { slug: string }) {
     )
   }
 
+  const startRename = () => {
+    setName(pb.name)
+    setEditing(true)
+  }
+  const saveRename = () => {
+    const trimmed = name.trim()
+    if (!trimmed || trimmed === pb.name) {
+      setEditing(false)
+      return
+    }
+    action.mutate(
+      { kind: 'update-playbook', slug: pb.slug, name: trimmed },
+      { onSuccess: () => setEditing(false) },
+    )
+  }
+
   return (
     <div className="page">
       <button className="btn ghost sm" style={{ marginBottom: 14 }} onClick={() => navigate('/playbooks')}>
@@ -76,12 +95,46 @@ export function PlaybookDetail({ slug }: { slug: string }) {
       <div className="detail-head">
         <div style={{ flex: 1 }}>
           <div className="eyebrow">playbook</div>
-          <div className="detail-title">{pb.name}</div>
+          {editing ? (
+            <input
+              className="input inline-rename"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  saveRename()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setEditing(false)
+                }
+              }}
+            />
+          ) : (
+            <div className="detail-title">{pb.name}</div>
+          )}
           <div className="detail-ref">{pb.slug}{pb.project_slug ? ` · ${pb.project_slug}` : ''}</div>
         </div>
-        <button className="btn primary" disabled={action.isPending} onClick={runPlaybook}>
-          <Play size={15} /> Run playbook
-        </button>
+        {editing ? (
+          <>
+            <button className="btn icon ghost sm" title="Save" aria-label="Save" onClick={saveRename} disabled={action.isPending}>
+              {action.isPending ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+            </button>
+            <button className="btn icon ghost sm" title="Cancel" aria-label="Cancel" onClick={() => setEditing(false)} disabled={action.isPending}>
+              <X size={14} />
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="btn icon ghost sm" title="Rename playbook" aria-label="Rename playbook" onClick={startRename}>
+              <Pencil size={13} />
+            </button>
+            <button className="btn primary" disabled={action.isPending} onClick={runPlaybook}>
+              <Play size={15} /> Run playbook
+            </button>
+          </>
+        )}
       </div>
 
       <div className="meta-grid" style={{ marginBottom: 16 }}>

@@ -229,6 +229,10 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.updateProvider(req)
 	case "update-task-name":
 		return s.updateTaskName(req)
+	case "update-project":
+		return s.updateProject(req)
+	case "update-playbook":
+		return s.updatePlaybook(req)
 	case "pause":
 		return s.pauseTask(target)
 	case "clear-waiting":
@@ -844,6 +848,83 @@ func (s *Server) updateTaskName(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	return actionResponse{OK: true, Message: "task name updated"}, http.StatusOK
+}
+
+// updateProject edits a project's display name and/or priority in place — the
+// browser twin of `flow update project`. Slug rename is deliberately not
+// exposed here (it moves the on-disk ~/.flow/projects/<slug> dir and cascades
+// references — a CLI-only operation). At least one of name/priority must be
+// given.
+func (s *Server) updateProject(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	name := strings.TrimSpace(req.Name)
+	priorityRaw := strings.TrimSpace(req.Priority)
+	if name == "" && priorityRaw == "" {
+		return actionResponse{OK: false, Message: "nothing to update (provide name and/or priority)"}, http.StatusBadRequest
+	}
+	var priority string
+	if priorityRaw != "" {
+		p, err := flowdb.NormalizePriority(priorityRaw)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		priority = p
+	}
+	project, err := flowdb.GetProject(s.cfg.DB, target)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "project not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	now := flowdb.NowISO()
+	var changed []string
+	if name != "" && name != project.Name {
+		if _, err := s.cfg.DB.Exec(`UPDATE projects SET name = ?, updated_at = ? WHERE slug = ?`, name, now, project.Slug); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		changed = append(changed, "name")
+	}
+	if priority != "" && priority != project.Priority {
+		if _, err := s.cfg.DB.Exec(`UPDATE projects SET priority = ?, updated_at = ? WHERE slug = ?`, priority, now, project.Slug); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		changed = append(changed, "priority")
+	}
+	if len(changed) == 0 {
+		return actionResponse{OK: true, Message: "project unchanged"}, http.StatusOK
+	}
+	return actionResponse{OK: true, Message: "project " + strings.Join(changed, " + ") + " updated"}, http.StatusOK
+}
+
+// updatePlaybook edits a playbook's display name in place. Slug rename (which
+// moves the playbook dir and cascades to playbook-run tasks) stays CLI-only.
+func (s *Server) updatePlaybook(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return actionResponse{OK: false, Message: "playbook name is required"}, http.StatusBadRequest
+	}
+	pb, err := flowdb.GetPlaybook(s.cfg.DB, target)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "playbook not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	if pb.Name == name {
+		return actionResponse{OK: true, Message: "playbook name unchanged"}, http.StatusOK
+	}
+	if _, err := s.cfg.DB.Exec(`UPDATE playbooks SET name = ?, updated_at = ? WHERE slug = ?`, name, flowdb.NowISO(), pb.Slug); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	return actionResponse{OK: true, Message: "playbook name updated"}, http.StatusOK
 }
 
 func (s *Server) pauseTask(target string) (actionResponse, int) {
