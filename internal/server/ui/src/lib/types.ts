@@ -379,6 +379,17 @@ export interface UiData {
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }
   FLOWDB: { path: string; display_path: string; bytes: number; human_size: string; exists: boolean }
   USER: { name: string; full_name: string; username: string }
+  FLOATING_SESSIONS: FloatingSession[]
+}
+
+// FloatingSession is one adhoc Ask Flow terminal tracked server-side. The tray
+// renders a chip per entry; `running` reflects whether its PTY is attached.
+export interface FloatingSession {
+  id: string
+  provider: string
+  title: string
+  running: boolean
+  created_at: string
 }
 
 export interface HealthView {

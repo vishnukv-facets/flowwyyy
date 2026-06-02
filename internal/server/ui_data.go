@@ -40,6 +40,20 @@ type uiData struct {
 	SampleDiffFiles  []uiDiffFile     `json:"SAMPLE_DIFF_FILES"`
 	FlowDB           uiFlowDB         `json:"FLOWDB"`
 	User             uiUser           `json:"USER"`
+	// FloatingSessions are adhoc Ask Flow terminals registered server-side.
+	// The operator console renders one tray chip per entry so they survive
+	// navigation and reloads (the window state lives client-side).
+	FloatingSessions []floatingSessionInfo `json:"FLOATING_SESSIONS"`
+}
+
+// floatingSessionInfo is one adhoc floating (Ask Flow) session as surfaced to
+// the tray. Running reflects whether its PTY is currently attached.
+type floatingSessionInfo struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+	Title    string `json:"title"`
+	Running  bool   `json:"running"`
+	Created  string `json:"created_at"`
 }
 
 // uiUser carries the operator's display name so the dashboard can greet
@@ -475,7 +489,18 @@ func (s *Server) buildUIData() (uiData, error) {
 		SampleDiffFiles:  diffFiles,
 		FlowDB:           s.uiFlowDB(),
 		User:             currentUIUser(),
+		FloatingSessions: s.floatingSessionList(),
 	}, nil
+}
+
+// floatingSessionList returns the adhoc Ask Flow sessions for the tray, or an
+// empty slice when the terminal hub isn't wired (keeps the JSON field a stable
+// array rather than null).
+func (s *Server) floatingSessionList() []floatingSessionInfo {
+	if s.terminals == nil {
+		return []floatingSessionInfo{}
+	}
+	return s.terminals.floatingSessions()
 }
 
 // uiFlowDB reports the on-disk size of flow.db. Missing-file is not an

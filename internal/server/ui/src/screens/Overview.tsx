@@ -5,7 +5,7 @@ import { useAction, useInbox, useOverview, useQuote, useUiData } from '../lib/qu
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { AgentPicker } from '../components/pickers'
-import { FloatingTerminalWindow, type FloatingTerminalDescriptor } from '../components/FloatingTerminalWindow'
+import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago, compact, compactTokens, dueTone } from '../lib/format'
@@ -303,7 +303,7 @@ export function Overview() {
   const [, navigate] = useLocation()
   const [askFlow, setAskFlow] = useState('')
   const [askProvider, setAskProvider] = useState('claude')
-  const [floatingTerminal, setFloatingTerminal] = useState<FloatingTerminalDescriptor | null>(null)
+  const { open: openFloatingTerminal } = useFloatingTerminals()
   const { data: ui, isLoading, error } = useUiData()
   const { data: overview } = useOverview()
   const { data: inbox } = useInbox()
@@ -325,7 +325,7 @@ export function Overview() {
       {
         onSuccess: (resp) => {
           setAskFlow('')
-          if (resp.floating_terminal) setFloatingTerminal(resp.floating_terminal)
+          if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal)
         },
       },
     )
@@ -458,9 +458,6 @@ export function Overview() {
           Open
         </button>
       </section>
-      {floatingTerminal && (
-        <FloatingTerminalWindow terminal={floatingTerminal} onClose={() => setFloatingTerminal(null)} />
-      )}
 
       <div className="card pulse" style={{ marginBottom: 18 }}>
         {stats.map((s) => (

@@ -990,6 +990,91 @@ select.input {
     display: none;
   }
 }
+/* Minimized = kept mounted (live terminal) but hidden, so restore is instant
+   and the PTY/scrollback survive without a reconnect. */
+.floating-terminal.hidden {
+  display: none;
+}
+
+/* Adhoc Ask Flow tray — a bottom-right dock of session chips. Server-backed,
+   so it survives navigation and reload; one chip per live adhoc session. */
+.adhoc-tray {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  max-width: 320px;
+}
+.adhoc-tray-label {
+  align-self: flex-end;
+  color: #8e95a8;
+  margin-bottom: 2px;
+}
+.adhoc-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+  background: #151720;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 55%, #111);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px -16px rgba(8, 10, 18, 0.6);
+}
+.adhoc-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 60%, #111);
+  background: color-mix(in srgb, var(--accent) 12%, #151720);
+}
+.adhoc-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #e8e7ef;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.adhoc-chip-main .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.adhoc-chip-main .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: #8e95a8;
+}
+.adhoc-chip-main .dot.running {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.adhoc-chip .btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #cfd2dc;
+}
+.adhoc-chip .btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+@media (max-width: 720px) {
+  .adhoc-tray {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+  }
+}
 /* Absolutely fill the host so FitAddon always measures the same box and xterm
    manages its OWN viewport/screen heights. (Forcing .xterm-viewport height:100%
    fought xterm's rows×cellHeight sizing and left the prompt sitting above the

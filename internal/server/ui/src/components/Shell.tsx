@@ -30,6 +30,7 @@ import { CommandPalette } from './CommandPalette'
 import { CreateTaskModal } from './modals'
 import { Toaster } from './Toaster'
 import { ConfirmHost } from './ConfirmHost'
+import { FloatingTerminalLayer } from './FloatingTerminalTray'
 
 interface NavDef {
   to: string
@@ -259,6 +260,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
       <CreateTaskModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <FloatingTerminalLayer />
       <Toaster />
       <ConfirmHost />
     </div>

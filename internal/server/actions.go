@@ -258,6 +258,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.nudgeSession(target, req.Prompt)
 	case "overview-chat":
 		return s.overviewChat(req)
+	case "close-floating-terminal":
+		return s.closeFloatingTerminal(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}
@@ -1716,6 +1718,24 @@ func (s *Server) overviewChat(req actionRequest) (actionResponse, int) {
 	}
 	terminal := s.terminals.registerFloatingLaunch(launch, "Ask Flow")
 	return actionResponse{OK: true, Message: "opened floating overview agent", FloatingTerminal: &terminal}, http.StatusOK
+}
+
+// closeFloatingTerminal ends an adhoc Ask Flow session: it terminates the PTY
+// (if attached) and forgets the launch so the tray chip disappears. Idempotent
+// — closing an already-gone session still returns OK so the UI can prune.
+func (s *Server) closeFloatingTerminal(req actionRequest) (actionResponse, int) {
+	id := strings.TrimSpace(req.Slug)
+	if id == "" {
+		id = strings.TrimSpace(req.Target)
+	}
+	if err := validateSlug(id); err != nil {
+		return actionResponse{OK: false, Message: "floating terminal id: " + err.Error()}, http.StatusBadRequest
+	}
+	if s.terminals == nil {
+		return actionResponse{OK: true, Message: "no terminal hub"}, http.StatusOK
+	}
+	s.terminals.stopFloating(id)
+	return actionResponse{OK: true, Message: "closed floating terminal " + id}, http.StatusOK
 }
 
 func overviewBrief(prompt string) string {

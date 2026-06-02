@@ -57,6 +57,10 @@ type terminalHub struct {
 	mu               sync.Mutex
 	sessions         map[string]*terminalSession
 	floatingLaunches map[string]terminalLaunch
+	// floatingMeta carries the display metadata (title, provider, created)
+	// for each registered adhoc floating session, so the tray can list them
+	// independently of whether their PTY is currently attached.
+	floatingMeta map[string]floatingSessionMeta
 	// sharedRunningCache backs sharedRunning, which is invoked once per task
 	// per SSE tick (every 2s). Each raw call forks `tmux has-session` — with
 	// N tasks visible that's N forks per tick. The cache collapses repeats
@@ -76,6 +80,15 @@ type terminalLaunch struct {
 	Created        bool
 	NeedsCapture   bool
 	StartedAt      time.Time
+}
+
+// floatingSessionMeta is the display metadata for one registered adhoc
+// floating (Ask Flow) session. Stored separately from terminalLaunch so the
+// tray can render a session before/after its PTY is attached.
+type floatingSessionMeta struct {
+	Provider string
+	Title    string
+	Created  time.Time
 }
 
 type terminalSession struct {
@@ -117,6 +130,7 @@ func newTerminalHub(s *Server) *terminalHub {
 		server:             s,
 		sessions:           map[string]*terminalSession{},
 		floatingLaunches:   map[string]terminalLaunch{},
+		floatingMeta:       map[string]floatingSessionMeta{},
 		sharedRunningCache: newTTLCache[string, bool](2500 * time.Millisecond),
 	}
 }
@@ -228,12 +242,80 @@ func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, err
 func (h *terminalHub) registerFloatingLaunch(launch terminalLaunch, title string) floatingTerminalResponse {
 	h.mu.Lock()
 	h.floatingLaunches[launch.Slug] = launch
+	if _, ok := h.floatingMeta[launch.Slug]; !ok {
+		h.floatingMeta[launch.Slug] = floatingSessionMeta{
+			Provider: launch.Provider,
+			Title:    strings.TrimSpace(title),
+			Created:  time.Now(),
+		}
+	}
 	h.mu.Unlock()
+	// Let the tray (sourced from the UiData snapshot) pick up the new session.
+	if h.server != nil {
+		h.server.publishUIChange("floating")
+	}
 	return floatingTerminalResponse{
 		ID:       launch.Slug,
 		Provider: launch.Provider,
 		Title:    strings.TrimSpace(title),
 	}
+}
+
+// floatingSessions returns the current set of adhoc floating sessions for the
+// tray, marking which ones currently have a live PTY attached. Order is left
+// to the client (it sorts by created_at).
+func (h *terminalHub) floatingSessions() []floatingSessionInfo {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	out := make([]floatingSessionInfo, 0, len(h.floatingLaunches))
+	for id, launch := range h.floatingLaunches {
+		meta := h.floatingMeta[id]
+		provider := meta.Provider
+		if provider == "" {
+			provider = launch.Provider
+		}
+		running := false
+		if sess := h.sessions[id]; sess != nil {
+			running = sess.running()
+		}
+		created := ""
+		if !meta.Created.IsZero() {
+			created = meta.Created.UTC().Format(time.RFC3339)
+		}
+		out = append(out, floatingSessionInfo{
+			ID:       id,
+			Provider: provider,
+			Title:    meta.Title,
+			Running:  running,
+			Created:  created,
+		})
+	}
+	return out
+}
+
+// stopFloating terminates an adhoc floating session's PTY (if attached) and
+// forgets its launch + metadata, so it disappears from the tray and can't be
+// reattached. Returns true when there was something to stop. Mirrors stop()
+// but also clears the floating registry. Publishes a UI change so the tray
+// updates.
+func (h *terminalHub) stopFloating(id string) bool {
+	h.mu.Lock()
+	_, known := h.floatingLaunches[id]
+	delete(h.floatingLaunches, id)
+	delete(h.floatingMeta, id)
+	sess := h.sessions[id]
+	delete(h.sessions, id)
+	h.mu.Unlock()
+	if sess != nil {
+		if h.server != nil && h.server.inboxMonitors != nil {
+			h.server.inboxMonitors.stop(id)
+		}
+		sess.terminate()
+	}
+	if (known || sess != nil) && h.server != nil {
+		h.server.publishUIChange("floating")
+	}
+	return known || sess != nil
 }
 
 func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSession, error) {
