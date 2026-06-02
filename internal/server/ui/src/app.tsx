@@ -13,12 +13,15 @@ import { KnowledgeBase } from './screens/KB'
 import { Memories } from './screens/Memories'
 import { Workdirs } from './screens/Workdirs'
 import { Trash } from './screens/Trash'
+import { Settings } from './screens/Settings'
 import { EmptyState } from './components/ui'
+import { FloatingTerminalsProvider } from './lib/floatingTerminals'
 
 export function App() {
   return (
-    <Shell>
-      <Switch>
+    <FloatingTerminalsProvider>
+      <Shell>
+        <Switch>
         <Route path="/" component={Overview} />
         <Route path="/sessions" component={Sessions} />
         <Route path="/session/:slug">{(p) => <SessionDetail slug={p.slug} />}</Route>
@@ -31,13 +34,15 @@ export function App() {
         <Route path="/kb" component={KnowledgeBase} />
         <Route path="/memories" component={Memories} />
         <Route path="/workdirs" component={Workdirs} />
+        <Route path="/settings" component={Settings} />
         <Route path="/trash" component={Trash} />
-        <Route>
-          <div className="page">
-            <EmptyState title="Not found" hint="That route doesn't exist." />
-          </div>
-        </Route>
-      </Switch>
-    </Shell>
+          <Route>
+            <div className="page">
+              <EmptyState title="Not found" hint="That route doesn't exist." />
+            </div>
+          </Route>
+        </Switch>
+      </Shell>
+    </FloatingTerminalsProvider>
   )
 }

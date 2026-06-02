@@ -184,6 +184,11 @@ func (s *Server) detectSlackIntegration() uiToolCapability {
 		c.Reason = "tokens detected but listener not initialised (no DB?)"
 		return c
 	}
+	if s.slackListener.Suppressed() {
+		c.Status = "inactive"
+		c.Reason = "another flow process already owns the Slack Socket Mode connection for this app token; this instance is not listening (stop the other server to take over)"
+		return c
+	}
 	if !s.slackListener.Running() {
 		c.Status = "configured"
 		c.Reason = "listener not started"

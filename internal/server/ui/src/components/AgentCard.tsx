@@ -1,9 +1,10 @@
 import { useLocation } from 'wouter'
-import { GitBranch, Clock3, Radar, Coins, AlertTriangle } from 'lucide-react'
+import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2 } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
+import { useFloatingTerminals } from '../lib/floatingTerminals'
 
 const BADGE_TONE: Record<string, string> = {
   waiting: 'warn',
@@ -19,6 +20,7 @@ const STATUS_LABEL: Record<string, string> = {
 
 export function AgentCard({ agent }: { agent: UiAgent }) {
   const [, navigate] = useLocation()
+  const { popOut } = useFloatingTerminals()
   const waiting = agent.status === 'waiting'
   // A finished task should read as "done", not as the residual runtime state
   // (its session is merely idle/released). task_status is the source of truth
@@ -51,6 +53,28 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
           <StatusDot status={badgeStatus} />
           {isDone ? 'done' : STATUS_LABEL[agent.status] ?? agent.status}
         </span>
+        <button
+          className="btn icon ghost sm acard-open"
+          title="Pop out as a floating window"
+          aria-label="Pop out as a floating window"
+          onClick={(e) => {
+            e.stopPropagation()
+            popOut({ slug: agent.slug, provider: agent.provider, title: agent.name })
+          }}
+        >
+          <PictureInPicture2 size={13} />
+        </button>
+        <button
+          className="btn icon ghost sm acard-open"
+          title="Open session in a new tab"
+          aria-label="Open session in a new tab"
+          onClick={(e) => {
+            e.stopPropagation()
+            window.open(`/session/${agent.slug}`, '_blank', 'noopener,noreferrer')
+          }}
+        >
+          <ExternalLink size={13} />
+        </button>
       </div>
 
       {waiting && agent.waiting_for?.why && (

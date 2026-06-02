@@ -2393,10 +2393,13 @@ lists tags under the `tags:` line), follow this bootstrap:
    object `{enqueued_at, event}` where `event.Kind` may include
    `pr_assigned`, `pr_review_requested`, `issue_assigned`,
    `pr_review_comment`, `pr_review_changes_requested`,
-   `pr_review_approved`, `pr_head_updated`, or `pr_merged`.
+   `pr_review_approved`, `pr_head_updated`, `pr_merged`, or `pr_closed`.
 4. **Use the same-session monitor.** Flow wakes the same Flow-owned
-   terminal session when new actionable GitHub events arrive. If you are
-   diagnosing monitor behavior manually, the equivalent file tail is
+   terminal session when ANY new GitHub event arrives for this task —
+   every PR/issue event is actionable (comments, head updates, approvals,
+   merges, closes, assignments), so a merge or close reliably reaches a
+   live session and you can act on it (wrap up, proceed, or rework). If you
+   are diagnosing monitor behavior manually, the equivalent file tail is
    `tail -F ~/.flow/tasks/<your-slug>/inbox.jsonl`.
 5. **Review from current GitHub state.** Use `gh pr view`, `gh pr diff`,
    `gh pr checkout`, or `gh api` as needed before approving, requesting
@@ -2405,7 +2408,11 @@ lists tags under the `tags:` line), follow this bootstrap:
 6. **Respect lifecycle events.** A `pr_head_updated` event means new
    commits landed and the PR should be reviewed again. A `pr_merged`
    event means the monitor has marked the associated flow task done; do
-   not reopen it unless the user asks for follow-up work.
+   not reopen it unless the user asks for follow-up work — wake here is to
+   let you post a closing note and wrap up, not to keep working. A
+   `pr_closed` event means the PR was closed WITHOUT merging; the task is
+   left as-is (not auto-done) so you can decide whether to close it out or
+   keep going (e.g. the work moves to a new PR).
 
 **Anti-patterns specific to GitHub tasks:**
 

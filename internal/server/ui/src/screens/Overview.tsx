@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
-import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon } from 'lucide-react'
-import { useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
+import { ArrowRight, Activity, BarChart3, CalendarClock, Coins, Repeat, AlertTriangle, Snowflake, TerminalSquare, TrendingUp, Flame, Inbox as InboxIcon, Loader2, SendHorizontal, Sparkles } from 'lucide-react'
+import { useAction, useInbox, useOverview, useQuote, useTasks, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
+import { AgentPicker } from '../components/pickers'
+import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
 import { ago, compact, compactTokens, dueTone } from '../lib/format'
@@ -432,9 +434,13 @@ function ProjectProgressCard({ projects, onOpen }: { projects: ProjectMC[]; onOp
 export function Overview() {
   useDocumentTitle('Mission Control')
   const [, navigate] = useLocation()
+  const [askFlow, setAskFlow] = useState('')
+  const [askProvider, setAskProvider] = useState('claude')
+  const { open: openFloatingTerminal } = useFloatingTerminals()
   const { data: ui, isLoading, error } = useUiData()
   const { data: overview } = useOverview()
   const { data: inbox } = useInbox()
+  const action = useAction()
   // One task fetch (incl. done) feeds both the agenda lens and the analytics
   // trends: open tasks drive the due buckets, done tasks drive throughput and
   // time-to-done. A done task with a past due date must NOT show as "overdue",
@@ -447,6 +453,26 @@ export function Overview() {
   )
   const { text: greeting, hourKey } = useGreeting()
   const { data: quote } = useQuote(hourKey)
+  const providerOptions = useMemo(() => ui?.CAPABILITIES.providers ?? [], [ui?.CAPABILITIES.providers])
+  const effectiveAskProvider = useMemo(() => {
+    const available = providerOptions.filter((p) => p.available !== false)
+    if (!available.length) return askProvider
+    return available.some((p) => p.id === askProvider) ? askProvider : available[0].id
+  }, [askProvider, providerOptions])
+
+  const submitAskFlow = () => {
+    const prompt = askFlow.trim()
+    if (!prompt || action.isPending) return
+    action.mutate(
+      { kind: 'overview-chat', prompt, provider: effectiveAskProvider },
+      {
+        onSuccess: (resp) => {
+          setAskFlow('')
+          if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal)
+        },
+      },
+    )
+  }
 
   // High-priority backlog, sourced from /api/overview so the rows carry
   // due_info / assignee / stale_days (the UiData BACKLOG bucket drops them).
@@ -540,6 +566,41 @@ export function Overview() {
           ))}
         </div>
       </div>
+
+      <section className="ask-flow">
+        <div className="ask-flow-mark">
+          <Sparkles size={18} />
+        </div>
+        <div className="ask-flow-main">
+          <div className="eyebrow">Ask Flow</div>
+          <input
+            className="ask-flow-input"
+            aria-label="Ask Flow"
+            value={askFlow}
+            disabled={action.isPending}
+            placeholder="Triage my day, inspect stalled sessions, or route work into tasks…"
+            onChange={(e) => setAskFlow(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                submitAskFlow()
+              }
+            }}
+          />
+        </div>
+        <div className="ask-flow-actions">
+          <AgentPicker value={effectiveAskProvider} onChange={setAskProvider} providers={providerOptions} />
+        </div>
+        <button
+          type="button"
+          className="btn primary"
+          disabled={!askFlow.trim() || action.isPending}
+          onClick={submitAskFlow}
+        >
+          {action.isPending ? <Loader2 size={15} className="spin" /> : <SendHorizontal size={15} />}
+          Open
+        </button>
+      </section>
 
       <div className="card pulse" style={{ marginBottom: 18 }}>
         {stats.map((s) => (

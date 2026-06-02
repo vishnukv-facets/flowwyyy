@@ -32,7 +32,13 @@ func init() {
 
 func New(cfg Config) *Server {
 	s := &Server{cfg: cfg}
+	// Export persisted settings (config.json) into the process env before any
+	// listener reads them, so UI-managed config is authoritative.
+	s.applyConfigToEnv()
 	s.terminals = newTerminalHub(s)
+	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
+	// process, so the Ask Flow tray survives a flow-server restart.
+	s.terminals.loadFloatingFromDisk()
 	s.events = newEventHub()
 	s.reconcile = newLivenessReconciler(s)
 	s.transcripts = newTranscriptCache()
@@ -73,6 +79,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/ui-data.js", s.handleUIDataJS)
 	mux.HandleFunc("/api/ui-data", s.handleUIDataJSON)
+	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/api/events", s.handleUIEvents)
 	mux.HandleFunc("/api/actions", s.handleAction)
 	mux.HandleFunc("/api/hooks/agent", s.handleAgentHook)
@@ -112,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux)
 	mux.HandleFunc("/ws/terminal", s.handleTerminalWebSocket)
+	mux.HandleFunc("/ws/floating-terminal", s.handleFloatingTerminalWebSocket)
 	mux.HandleFunc("/ws/events", s.handleEventWebSocket)
 	mux.HandleFunc("/ws/rpc", s.handleRPCWebSocket)
 	mux.HandleFunc("/ws", s.handleWebSocketPlaceholder)
@@ -156,6 +164,25 @@ func (s *Server) ListenAndServe(addr string) int {
 			fmt.Fprintf(os.Stderr, "warning: slack listener start: %v\n", err)
 		}
 		defer s.slackListener.Stop()
+	}
+	// Durable Slack backfill. The live Socket Mode listener above loses any
+	// events that arrive while its socket is down — every restart, any network
+	// blip — because Socket Mode never replays them. This goroutine reconciles
+	// each monitored thread against the Slack Web API on boot and on an
+	// interval, appending missed replies to inbox.jsonl so the Inbox and the
+	// same-session monitor catch up regardless of socket gaps. It runs off the
+	// Web API (independent of the socket) and is a no-op when no Slack token is
+	// configured.
+	if s.cfg.DB != nil {
+		if rc := monitor.NewSlackRepliesClient(); rc != nil {
+			backfill := monitor.NewSlackBackfill(s.cfg.DB, rc, 0)
+			backfill.SetLogger(func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, format+"\n", args...)
+			})
+			bfCtx, bfCancel := context.WithCancel(context.Background())
+			defer bfCancel()
+			go backfill.Run(bfCtx)
+		}
 	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.

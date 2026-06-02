@@ -105,7 +105,7 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 	// Subagent stop/start events don't represent the parent agent's state.
 	// Recording them on agent_runtime_states would flicker the parent
 	// between idle and running, so we skip the upsert.
-	if runtimeStatus := agentHookRuntimeStatus(kind); runtimeStatus != "" && sessionID != "" && !isSubagentEvent(kind, subagentID) {
+	if runtimeStatus := agentHookRuntimeStatus(kind, provider); runtimeStatus != "" && sessionID != "" && !isSubagentEvent(kind, subagentID) {
 		if err := flowdb.UpsertAgentRuntimeState(s.cfg.DB, flowdb.AgentRuntimeStateInput{
 			Provider:  provider,
 			SessionID: sessionID,
@@ -438,7 +438,16 @@ func agentHookKind(eventName string, payload map[string]any) string {
 	return event
 }
 
-func agentHookRuntimeStatus(kind string) string {
+func agentHookRuntimeStatus(kind, provider string) string {
+	// Codex has no Notification/Elicitation/TeammateIdle hook (those are
+	// Claude-only), so its only "I've yielded to the user" signal is Stop. For
+	// Codex a Stop means "turn finished, awaiting your input" → waiting, which
+	// fires the notification bell/toast. Claude's Stop stays a quiet turn
+	// boundary because Claude emits dedicated idle_prompt/Notification events
+	// when it actually needs you.
+	if provider == "codex" && kind == "stop" {
+		return "waiting"
+	}
 	switch kind {
 	case "permission_request", "permission_prompt", "elicitation", "elicitation_dialog", "idle_prompt":
 		return "waiting"

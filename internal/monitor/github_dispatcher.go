@@ -85,6 +85,8 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		return d.dispatchGitHubHeadUpdated(ev)
 	case GitHubEventPRMerged:
 		return d.dispatchGitHubMerged(ev)
+	case GitHubEventPRClosed:
+		return d.dispatchGitHubClosed(ev)
 	default:
 		return nil
 	}
@@ -177,6 +179,27 @@ func (d *GitHubDispatcher) dispatchGitHubMerged(ev GitHubEvent) error {
 	if err := d.markTaskDoneFromGitHubMerge(slug); err != nil {
 		return err
 	}
+	return d.recordEvent(ev, slug)
+}
+
+func (d *GitHubDispatcher) dispatchGitHubClosed(ev GitHubEvent) error {
+	slug, found, err := d.findTaskByGitHubTag(ev.LinkTag())
+	if err != nil {
+		return fmt.Errorf("github monitor: lookup task by tag: %w", err)
+	}
+	if !found {
+		// No tracked task for an already-closed PR: nothing to wake, and
+		// spawning a task for a dead PR would just be noise. Record the event
+		// so a later open/reopen doesn't re-dispatch it.
+		return d.recordEvent(ev, "")
+	}
+	if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
+		return fmt.Errorf("github monitor: append inbox: %w", err)
+	}
+	// Deliberately NOT auto-marking the task done. A close-without-merge is
+	// ambiguous — the PR may be reopened, or the work may continue on a new
+	// PR. The inbox event is actionable (see ClassifyInboxEvent), so the live
+	// session wakes and the agent decides whether to close or carry on.
 	return d.recordEvent(ev, slug)
 }
 

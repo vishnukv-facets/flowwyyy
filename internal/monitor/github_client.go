@@ -186,6 +186,21 @@ func (p GitHubPoller) pollTrackedPRComments(ctx context.Context) ([]GitHubEvent,
 			continue
 		}
 		if detail.State != "" && !strings.EqualFold(detail.State, "open") {
+			// Closed without merging (merge is handled above). Surface it once
+			// so the live session wakes and the agent can decide whether to
+			// close the task or reopen and rework. Don't fetch comments on a
+			// dead PR. Dedup is by the pr-closed event key, so it fires once.
+			events = append(events, GitHubEvent{
+				Kind:     GitHubEventPRClosed,
+				Owner:    pr.Owner,
+				Repo:     pr.Repo,
+				Number:   pr.Number,
+				BaseRef:  detail.Base.Name,
+				HeadRef:  detail.Head.Name,
+				HeadSHA:  detail.Head.SHA,
+				Body:     fmt.Sprintf("Pull request %s/%s#%d was closed without merging.", pr.Owner, pr.Repo, pr.Number),
+				EventKey: fmt.Sprintf("pr-closed:%s/%s#%d", pr.Owner, pr.Repo, pr.Number),
+			})
 			continue
 		}
 		if detail.Head.SHA != "" {

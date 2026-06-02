@@ -236,8 +236,10 @@ func TestGitHubDispatcher_ApprovedReviewAppendsWithoutReopeningTrackedPR(t *test
 	if len(entries) != 1 {
 		t.Fatalf("inbox entries = %d, want 1", len(entries))
 	}
-	if entries[0].Event.Kind != string(GitHubEventPRReviewApproved) || entries[0].Meta.Actionable {
-		t.Fatalf("entry = %+v", entries[0])
+	// Approval is actionable now (the agent should wake to proceed, e.g. merge)
+	// but it must still NOT reopen a task the user already marked done.
+	if entries[0].Event.Kind != string(GitHubEventPRReviewApproved) || !entries[0].Meta.Actionable {
+		t.Fatalf("entry = %+v (approved review should be actionable so the session wakes)", entries[0])
 	}
 	task, err := flowdb.GetTask(db, "tracked-pr")
 	if err != nil {
@@ -460,6 +462,45 @@ func TestGitHubDispatcher_HeadUpdatedAppendsToTrackedPR(t *testing.T) {
 	}
 	if task.Status != "backlog" {
 		t.Fatalf("status = %q, want backlog after new PR head", task.Status)
+	}
+}
+
+func TestGitHubDispatcher_ClosedPRAppendsAndStaysActionableWithoutMarkingDone(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:     GitHubEventPRClosed,
+		Owner:    "Facets-cloud",
+		Repo:     "flow-manager",
+		Number:   42,
+		Body:     "Pull request Facets-cloud/flow-manager#42 was closed without merging.",
+		EventKey: "pr-closed:Facets-cloud/flow-manager#42",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	task, err := flowdb.GetTask(db, "tracked-pr")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	// Close-without-merge is ambiguous; the agent decides. Status must be left
+	// untouched (unlike merge, which auto-marks done).
+	if task.Status != "backlog" {
+		t.Fatalf("status = %q, want backlog (close must not auto-mark done)", task.Status)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event.Kind != string(GitHubEventPRClosed) {
+		t.Fatalf("entries = %#v", entries)
+	}
+	if !entries[0].Meta.Actionable {
+		t.Fatal("pr_closed inbox entry must be actionable so the live session wakes")
 	}
 }
 

@@ -26,10 +26,15 @@ type SlackConversation struct {
 }
 
 // SlackMessage is the small, testable subset of conversations.replies data
-// needed to derive thread context.
+// needed to derive thread context and reconcile missed replies. TS/ThreadTS/
+// SubType are populated for the backfill path (see slack_backfill.go); title
+// generation only reads User/Text.
 type SlackMessage struct {
-	User string
-	Text string
+	User     string
+	Text     string
+	TS       string
+	ThreadTS string
+	SubType  string
 }
 
 // SlackUser is the small, testable subset of users.info data needed for
@@ -97,8 +102,11 @@ func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID,
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, msg := range msgs {
 		out = append(out, SlackMessage{
-			User: firstNonEmpty(msg.User, msg.Username),
-			Text: msg.Text,
+			User:     firstNonEmpty(msg.User, msg.Username),
+			Text:     msg.Text,
+			TS:       msg.Timestamp,
+			ThreadTS: msg.ThreadTimestamp,
+			SubType:  msg.SubType,
 		})
 	}
 	return out, nil

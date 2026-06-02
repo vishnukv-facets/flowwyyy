@@ -303,6 +303,196 @@
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
 }
 
+/* ----------------------------- settings -------------------------------- */
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+.settings-card {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.settings-card-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 14px;
+  color: var(--text-2);
+  border-bottom: 1px solid var(--border);
+}
+.settings-card-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0;
+  color: var(--text);
+}
+.settings-card-body {
+  padding: 12px 14px;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 38px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+.setting-row:last-child {
+  border-bottom: 0;
+}
+.setting-row.compact {
+  align-items: baseline;
+}
+.setting-label {
+  flex: none;
+  min-width: 92px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+.setting-value {
+  min-width: 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.cap-list {
+  display: grid;
+  gap: 2px;
+}
+.cap-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border-faint);
+}
+.cap-row:last-child {
+  border-bottom: 0;
+}
+/* editable settings (config registry) */
+.config-form {
+  display: grid;
+  gap: 13px;
+}
+.config-field {
+  display: grid;
+  gap: 5px;
+}
+.config-field-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.config-src {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--text-3);
+  background: var(--bg-3);
+}
+.config-src.config {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.config-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+.config-help {
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.4;
+}
+.config-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+/* redesigned settings page: summary bar + labelled sections */
+.settings-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 22px;
+  padding: 0;
+  overflow: hidden;
+}
+.settings-summary .sum-item {
+  padding: 13px 16px;
+  border-right: 1px solid var(--border-faint);
+  min-width: 0;
+}
+.settings-summary .sum-item:last-child {
+  border-right: 0;
+}
+.sum-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  margin-bottom: 5px;
+}
+.sum-value {
+  font-size: 13.5px;
+  color: var(--text);
+}
+.sum-value.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.settings-section {
+  margin-bottom: 22px;
+}
+.settings-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 2px 11px;
+}
+.settings-section-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.cap-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--text-3);
+  flex: none;
+}
+.cap-dot.on {
+  background: var(--ok);
+}
+.cap-dot.off {
+  background: var(--danger);
+}
+.cap-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.cap-sub {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
 /* ----------------------------- stat row --------------------------------- */
 .stat-row {
   display: grid;
@@ -769,6 +959,372 @@ select.input {
   position: relative;
   overflow: hidden;
 }
+.floating-terminal {
+  position: fixed;
+  /* Base only — the live z is set inline (see FLOATING_Z_BASE/nextZ); this keeps
+     the window above the fullscreen session terminal (95) if inline is absent. */
+  z-index: 97;
+  width: min(720px, calc(100vw - 24px));
+  height: min(460px, calc(100vh - 96px));
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: #0f1015;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 68%, #111);
+  border-radius: 8px;
+  box-shadow: 0 22px 60px -22px rgba(8, 10, 18, 0.58), 0 6px 18px -10px rgba(8, 10, 18, 0.55);
+  overflow: hidden;
+}
+.floating-terminal.minimized {
+  width: min(520px, calc(100vw - 24px));
+  height: 43px;
+  min-height: 43px;
+}
+.floating-terminal-head {
+  height: 43px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px 0 12px;
+  color: #f2f0eb;
+  background: #151720;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: grab;
+  user-select: none;
+}
+.floating-terminal-head:active {
+  cursor: grabbing;
+}
+.floating-terminal-title,
+.floating-terminal-meta,
+.provider-chip {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
+.floating-terminal-title {
+  gap: 8px;
+  font-weight: 650;
+  font-size: 13px;
+}
+.floating-terminal-title .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: #8e95a8;
+}
+.floating-terminal-title .dot.running {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.floating-terminal-meta {
+  gap: 8px;
+  max-width: 260px;
+  color: #a8adbd;
+  font-size: 11.5px;
+}
+.floating-terminal-meta .mono {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.provider-chip {
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #e8e7ef;
+  font-size: 11.5px;
+  text-transform: capitalize;
+}
+.floating-terminal-head .btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #e8e7ef;
+}
+.floating-terminal-head .btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.floating-terminal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: #0a0b0e;
+}
+.floating-terminal-body .flow-term {
+  flex: 1;
+  height: 100%;
+  border-radius: 0;
+  padding: 10px 12px;
+}
+@media (max-width: 720px) {
+  .floating-terminal {
+    left: 12px !important;
+    right: 12px;
+    top: auto !important;
+    bottom: 12px;
+    width: auto;
+    height: 58vh;
+    min-height: 280px;
+  }
+  .floating-terminal.minimized {
+    width: auto;
+    min-height: 43px;
+    height: 43px;
+  }
+  .floating-terminal-head {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+  }
+  .floating-terminal-meta {
+    display: none;
+  }
+}
+/* Minimized = kept mounted (live terminal) but hidden, so restore is instant
+   and the PTY/scrollback survive without a reconnect. */
+.floating-terminal.hidden {
+  display: none;
+}
+/* Bottom-right resize grip — an L-corner that drags the window's size. */
+.floating-terminal-resize {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  z-index: 3;
+  cursor: nwse-resize;
+  border-right: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-bottom-right-radius: 6px;
+  opacity: 0.5;
+  touch-action: none;
+}
+.floating-terminal-resize:hover {
+  opacity: 1;
+}
+
+/* Adhoc Ask Flow tray — a bottom-right dock of session chips. Server-backed,
+   so it survives navigation and reload; one chip per live adhoc session. */
+.adhoc-tray {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  /* Above the fullscreen session terminal (95) so chips stay clickable in
+     full-view mode; below the floating windows and modal scrim (100). */
+  z-index: 97;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  max-width: 320px;
+}
+/* Header pill that doubles as the collapsed state — click to retract the chip
+   list into the corner / expand it back upward. */
+.adhoc-tray-toggle {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 9px 5px 12px;
+  background: #151720;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 55%, #111);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px -16px rgba(8, 10, 18, 0.6);
+  color: #8e95a8;
+  cursor: pointer;
+  transition: border-color 140ms ease, color 140ms ease;
+}
+.adhoc-tray-toggle:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, #111);
+  color: #cfd2dc;
+}
+.adhoc-tray-toggle .eyebrow {
+  color: inherit;
+}
+.adhoc-tray-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 22%, #151720);
+  color: #e8e7ef;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.adhoc-tray-caret {
+  margin-left: -1px;
+  color: inherit;
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.adhoc-tray.collapsed .adhoc-tray-caret {
+  transform: rotate(180deg);
+}
+.adhoc-tray-list {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.adhoc-tray.collapsed .adhoc-tray-list {
+  grid-template-rows: 0fr;
+}
+.adhoc-tray-list-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-height: 0;
+  /* clip the chips as they slide away; padding lives inside so it collapses
+     too (and leaves room for the chips' drop shadow when open) */
+  overflow: hidden;
+  padding-top: 8px;
+}
+.adhoc-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 10px;
+  background: #151720;
+  border: 1px solid color-mix(in srgb, var(--accent-line) 55%, #111);
+  border-radius: 999px;
+  box-shadow: 0 12px 30px -16px rgba(8, 10, 18, 0.6);
+}
+.adhoc-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 60%, #111);
+  background: color-mix(in srgb, var(--accent) 12%, #151720);
+}
+.adhoc-chip-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #e8e7ef;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.adhoc-chip-main .clip {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.adhoc-chip-main .dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: #8e95a8;
+}
+.adhoc-chip-main .dot.running {
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.adhoc-chip .btn {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #cfd2dc;
+}
+.adhoc-chip .btn:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff;
+}
+@media (max-width: 720px) {
+  .adhoc-tray {
+    right: 12px;
+    bottom: 12px;
+    max-width: calc(100vw - 24px);
+  }
+}
+
+/* Attention popups — appear ONLY when a tray/floating session is waiting on
+   you. Top-right notification stack; each card is a prompt with Open/Dismiss.
+   No resting icon when nothing needs you. */
+.attn-stack {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+}
+.attn-pop {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  background: #0f1015;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, #111);
+  border-radius: 11px;
+  box-shadow: 0 18px 46px -20px rgba(8, 10, 18, 0.66);
+  animation: attn-pop-in 180ms var(--ease, ease);
+}
+@keyframes attn-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.attn-pop-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--warn);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--warn) 18%, transparent);
+  animation: attn-pulse-dot 1.6s ease-in-out infinite;
+}
+@keyframes attn-pulse-dot {
+  0%,
+  100% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 26%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--warn) 0%, transparent);
+  }
+}
+.attn-pop-icon {
+  flex: none;
+  display: inline-flex;
+}
+.attn-pop-main {
+  flex: 1;
+  min-width: 0;
+}
+.attn-pop-title {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: #f2f0eb;
+}
+.attn-pop-sub {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.attn-pop-actions {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 /* Absolutely fill the host so FitAddon always measures the same box and xterm
    manages its OWN viewport/screen heights. (Forcing .xterm-viewport height:100%
    fought xterm's rows×cellHeight sizing and left the prompt sitting above the
@@ -1109,6 +1665,18 @@ select.input {
   border-radius: 50%;
   background: var(--accent);
   flex: none;
+}
+.inbox-reply {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+}
+.inbox-reply .nudge {
+  margin-top: 9px;
+  padding-top: 0;
+  border-top: 0;
 }
 
 /* ----------------------------- detail header ---------------------------- */
@@ -1635,6 +2203,16 @@ select.input {
   display: inline-grid;
   place-items: center;
   color: var(--accent-hi);
+}
+/* "open in new tab" on a session card — present but unobtrusive next to the
+   status badge; brightens on hover/focus. */
+.acard-open {
+  opacity: 0.5;
+  flex: none;
+}
+.acard-open:hover,
+.acard-open:focus-visible {
+  opacity: 1;
 }
 .acard-mon svg {
   animation: l-glow 2.2s ease-in-out infinite;
@@ -2322,6 +2900,25 @@ select.input {
   color: var(--text-3);
   border-bottom: 1px solid var(--border-faint);
   margin-bottom: 4px;
+}
+.notif-permission {
+  width: calc(100% - 6px);
+  margin: 3px 3px 6px;
+  padding: 8px 10px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+}
+.notif-permission:not(.muted):hover {
+  background: var(--surface-hover);
+}
+.notif-permission.muted {
+  color: var(--text-3);
+  background: var(--bg-2);
+  border-color: var(--border);
 }
 .notif-empty {
   padding: 22px 12px;
@@ -3140,6 +3737,79 @@ summary.detail-branch.as-button:hover {
   gap: 7px;
   justify-content: flex-end;
   max-width: 460px;
+}
+.ask-flow {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 13px;
+  margin: 0 0 18px;
+  padding: 13px 14px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 55%, transparent), transparent 72%),
+    var(--bg-1);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow-sm);
+}
+.ask-flow-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  color: var(--accent-hi);
+  background: var(--bg-2);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+}
+.ask-flow-main {
+  min-width: 0;
+}
+.ask-flow-input {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  margin-top: 2px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+.ask-flow-input::placeholder {
+  color: var(--text-3);
+}
+.ask-flow-input:disabled {
+  opacity: 0.65;
+}
+.ask-flow-actions {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.ask-flow-actions .agent-seg {
+  max-width: 250px;
+}
+@media (max-width: 720px) {
+  .ask-flow {
+    grid-template-columns: 1fr;
+  }
+  .ask-flow-mark {
+    display: none;
+  }
+  .ask-flow .btn {
+    width: 100%;
+    justify-content: center;
+  }
+  .ask-flow-actions .agent-seg {
+    width: 100%;
+  }
+  .ask-flow-actions .agent-seg button {
+    flex: 1;
+  }
 }
 .env-pill {
   display: inline-flex;

@@ -50,11 +50,13 @@ func ClassifyInboxEvent(ev InboundEvent) InboxEventMeta {
 	actionable := false
 	switch source {
 	case "github":
-		switch ev.Kind {
-		case "pr_review_comment", "pr_review_changes_requested", "pr_head_updated",
-			"pr_comment", "issue_comment":
-			actionable = true
-		}
+		// Every GitHub PR/issue lifecycle event wakes the live session so the
+		// agent can act on it: reply to a comment, re-review on a new head,
+		// proceed on approval, or wrap up on merge/close. Previously only
+		// comments and head-updates were actionable, so merges, approvals, and
+		// closes were recorded to the inbox but silently never woke the session
+		// (the agent never learned the PR had merged/closed).
+		actionable = true
 	case "slack":
 		switch ev.Kind {
 		case "message", "app_mention":

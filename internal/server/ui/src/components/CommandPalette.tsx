@@ -193,7 +193,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
 
   if (!open) return null
 
-  const go = (it: Item) => {
+  const go = (it: Item, newTab = false) => {
+    // ⌘/Ctrl held → open in a new browser tab instead of navigating in place
+    // (mirrors the open-in-new-tab button on session cards).
+    if (newTab && it.to) {
+      window.open(it.to, '_blank', 'noopener,noreferrer')
+      onClose()
+      return
+    }
     if (it.to && it.to !== '/') pushRecent({ label: it.label, sub: it.sub, to: it.to })
     onClose()
     navigate(it.to)
@@ -219,10 +226,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                 e.preventDefault()
                 setActive((a) => Math.max(0, a - 1))
               } else if (e.key === 'Enter' && flat[active]) {
-                go(flat[active])
+                go(flat[active], e.metaKey || e.ctrlKey)
               }
             }}
           />
+          <span className="kbd" title="Hold ⌘ (or Ctrl) and press Enter to open in a new tab">⌘↵ new tab</span>
           <span className="kbd">esc</span>
         </div>
         <div className="palette-scopes">
@@ -256,7 +264,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
                     key={it.key}
                     className={`palette-item${i === active ? ' active' : ''}`}
                     onMouseEnter={() => setActive(i)}
-                    onClick={() => go(it)}
+                    onClick={(e) => go(it, e.metaKey || e.ctrlKey)}
                   >
                     <span className="palette-item-icon dim">{it.icon}</span>
                     <span className="col" style={{ minWidth: 0, flex: 1 }}>

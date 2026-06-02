@@ -53,9 +53,14 @@ var terminalUpgrader = websocket.Upgrader{
 }
 
 type terminalHub struct {
-	server   *Server
-	mu       sync.Mutex
-	sessions map[string]*terminalSession
+	server           *Server
+	mu               sync.Mutex
+	sessions         map[string]*terminalSession
+	floatingLaunches map[string]terminalLaunch
+	// floatingMeta carries the display metadata (title, provider, created)
+	// for each registered adhoc floating session, so the tray can list them
+	// independently of whether their PTY is currently attached.
+	floatingMeta map[string]floatingSessionMeta
 	// sharedRunningCache backs sharedRunning, which is invoked once per task
 	// per SSE tick (every 2s). Each raw call forks `tmux has-session` — with
 	// N tasks visible that's N forks per tick. The cache collapses repeats
@@ -71,9 +76,19 @@ type terminalLaunch struct {
 	PermissionMode string
 	WorkDir        string
 	Args           []string
+	FreeAgent      bool
 	Created        bool
 	NeedsCapture   bool
 	StartedAt      time.Time
+}
+
+// floatingSessionMeta is the display metadata for one registered adhoc
+// floating (Ask Flow) session. Stored separately from terminalLaunch so the
+// tray can render a session before/after its PTY is attached.
+type floatingSessionMeta struct {
+	Provider string
+	Title    string
+	Created  time.Time
 }
 
 type terminalSession struct {
@@ -114,6 +129,8 @@ func newTerminalHub(s *Server) *terminalHub {
 	return &terminalHub{
 		server:             s,
 		sessions:           map[string]*terminalSession{},
+		floatingLaunches:   map[string]terminalLaunch{},
+		floatingMeta:       map[string]floatingSessionMeta{},
 		sharedRunningCache: newTTLCache[string, bool](2500 * time.Millisecond),
 	}
 }
@@ -136,6 +153,38 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 
 	sess, err := s.terminals.attach(slug, cols, rows)
+	if err != nil {
+		_ = conn.WriteJSON(terminalWSMessage{Type: "error", Message: err.Error()})
+		_ = conn.Close()
+		return
+	}
+
+	client := &terminalClient{conn: conn, send: make(chan terminalWSMessage, 128), done: make(chan struct{})}
+	sess.addClient(client, true)
+
+	go client.writeLoop()
+	client.readLoop(sess)
+	sess.removeClient(client)
+}
+
+func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if err := validateSlug(id); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	cols := intQueryDefault(r, "cols", 120)
+	rows := intQueryDefault(r, "rows", 32)
+	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+
+	sess, err := s.terminals.attachFloating(id, cols, rows)
 	if err != nil {
 		_ = conn.WriteJSON(terminalWSMessage{Type: "error", Message: err.Error()})
 		_ = conn.Close()
@@ -187,6 +236,130 @@ func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, err
 	if h.server != nil && h.server.inboxMonitors != nil {
 		h.server.inboxMonitors.start(slug)
 	}
+	return sess, nil
+}
+
+func (h *terminalHub) registerFloatingLaunch(launch terminalLaunch, title string) floatingTerminalResponse {
+	h.mu.Lock()
+	h.floatingLaunches[launch.Slug] = launch
+	if _, ok := h.floatingMeta[launch.Slug]; !ok {
+		h.floatingMeta[launch.Slug] = floatingSessionMeta{
+			Provider: launch.Provider,
+			Title:    strings.TrimSpace(title),
+			Created:  time.Now(),
+		}
+	}
+	h.persistFloatingLocked()
+	h.mu.Unlock()
+	// Let the tray (sourced from the UiData snapshot) pick up the new session.
+	if h.server != nil {
+		h.server.publishUIChange("floating")
+	}
+	return floatingTerminalResponse{
+		ID:       launch.Slug,
+		Provider: launch.Provider,
+		Title:    strings.TrimSpace(title),
+	}
+}
+
+// floatingSessions returns the current set of adhoc floating sessions for the
+// tray, marking which ones currently have a live PTY attached. Order is left
+// to the client (it sorts by created_at).
+func (h *terminalHub) floatingSessions() []floatingSessionInfo {
+	type snap struct {
+		id, provider, title, created, sid string
+		running                           bool
+	}
+	h.mu.Lock()
+	snaps := make([]snap, 0, len(h.floatingLaunches))
+	for id, launch := range h.floatingLaunches {
+		meta := h.floatingMeta[id]
+		provider := meta.Provider
+		if provider == "" {
+			provider = launch.Provider
+		}
+		sid := launch.SessionID
+		running := false
+		if sess := h.sessions[id]; sess != nil {
+			running = sess.running()
+			// Codex captures its real thread id after launch; prefer it so the
+			// runtime-state lookup keys on the id the hook actually reports.
+			if cap := strings.TrimSpace(sess.sessionID); cap != "" {
+				sid = cap
+			}
+		}
+		created := ""
+		if !meta.Created.IsZero() {
+			created = meta.Created.UTC().Format(time.RFC3339)
+		}
+		snaps = append(snaps, snap{id: id, provider: provider, title: meta.Title, created: created, sid: sid, running: running})
+	}
+	h.mu.Unlock()
+
+	// Resolve waiting state outside the hub lock (it's a DB read). Adhoc
+	// sessions have no task row, but the agent hook still records their runtime
+	// state keyed by session_id, so "awaiting your input" is queryable here.
+	out := make([]floatingSessionInfo, 0, len(snaps))
+	for _, s := range snaps {
+		waiting, why := false, ""
+		if s.sid != "" && h.server != nil && h.server.cfg.DB != nil {
+			if st, err := flowdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, s.provider, s.sid); err == nil && st != nil && st.Status == "waiting" {
+				waiting = true
+				if st.Message.Valid {
+					why = strings.TrimSpace(st.Message.String)
+				}
+			}
+		}
+		out = append(out, floatingSessionInfo{
+			ID: s.id, Provider: s.provider, Title: s.title, Running: s.running,
+			Waiting: waiting, WaitingWhy: why, Created: s.created,
+		})
+	}
+	return out
+}
+
+// stopFloating terminates an adhoc floating session's PTY (if attached) and
+// forgets its launch + metadata, so it disappears from the tray and can't be
+// reattached. Returns true when there was something to stop. Mirrors stop()
+// but also clears the floating registry. Publishes a UI change so the tray
+// updates.
+func (h *terminalHub) stopFloating(id string) bool {
+	h.mu.Lock()
+	_, known := h.floatingLaunches[id]
+	delete(h.floatingLaunches, id)
+	delete(h.floatingMeta, id)
+	sess := h.sessions[id]
+	delete(h.sessions, id)
+	h.persistFloatingLocked()
+	h.mu.Unlock()
+	if sess != nil {
+		if h.server != nil && h.server.inboxMonitors != nil {
+			h.server.inboxMonitors.stop(id)
+		}
+		sess.terminate()
+	}
+	if (known || sess != nil) && h.server != nil {
+		h.server.publishUIChange("floating")
+	}
+	return known || sess != nil
+}
+
+func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSession, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if sess := h.sessions[id]; sess != nil && sess.running() {
+		_ = sess.resize(cols, rows)
+		return sess, nil
+	}
+	launch, ok := h.floatingLaunches[id]
+	if !ok {
+		return nil, fmt.Errorf("floating terminal not found: %s", id)
+	}
+	sess, err := h.startSessionLocked(launch, cols, rows)
+	if err != nil {
+		return nil, err
+	}
+	h.sessions[id] = sess
 	return sess, nil
 }
 
@@ -346,8 +519,13 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 		cmd = exec.Command(bin, launch.Args...)
 	}
 	cmd.Dir = launch.WorkDir
-	cmd.Env = append(terminalEnvWithHook(h.server.cfg.FlowRoot, h.server.cfg.CommandPath, h.server.cfg.HookURL),
-		"FLOW_TASK="+launch.Slug,
+	env := terminalEnvWithHook(h.server.cfg.FlowRoot, h.server.cfg.CommandPath, h.server.cfg.HookURL)
+	if launch.FreeAgent {
+		env = append(env, "FLOW_FREE_AGENT=1")
+	} else {
+		env = append(env, "FLOW_TASK="+launch.Slug)
+	}
+	cmd.Env = append(env,
 		"FLOW_SESSION_PROVIDER="+provider,
 		"FLOW_PERMISSION_MODE="+normalizedTerminalPermissionMode(launch.PermissionMode),
 	)
@@ -434,7 +612,7 @@ func terminalEnvWithHook(flowRoot, commandPath, hookURL string) []string {
 	return env
 }
 
-func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider, permissionMode string) map[string]string {
+func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider, permissionMode string, freeAgent bool) map[string]string {
 	env := terminalEnvWithHook(flowRoot, commandPath, hookURL)
 	out := map[string]string{
 		"TERM":                      "xterm-256color",
@@ -446,9 +624,13 @@ func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider, permissionMo
 		"LANG":                      "en_US.UTF-8",
 		"LC_CTYPE":                  "en_US.UTF-8",
 		"FLOW_HOOK_OWNED":           "1",
-		"FLOW_TASK":                 slug,
 		"FLOW_SESSION_PROVIDER":     provider,
 		"FLOW_PERMISSION_MODE":      normalizedTerminalPermissionMode(permissionMode),
+	}
+	if freeAgent {
+		out["FLOW_FREE_AGENT"] = "1"
+	} else {
+		out["FLOW_TASK"] = slug
 	}
 	for _, key := range []string{"PATH", "FLOW_ROOT", "FLOW_HOOK_URL", "GH_TOKEN"} {
 		if value := envValueLocal(env, key); value != "" {
@@ -694,7 +876,7 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		provider = agents.ProviderClaude
 	}
 	command := agentShellCommand(provider, launch.Args)
-	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider, launch.PermissionMode)
+	env := terminalEnvMap(s.cfg.FlowRoot, s.cfg.CommandPath, s.cfg.HookURL, launch.Slug, provider, launch.PermissionMode, launch.FreeAgent)
 	// Prepend `-f <flowRoot>/tmux.conf` so the tmux server we're about
 	// to start picks up flow's defaults (mouse scroll + larger
 	// scrollback). The user's ~/.tmux.conf is sourced from inside our
@@ -987,6 +1169,43 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 	}, nil
 }
 
+func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunch, error) {
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		return terminalLaunch{}, errors.New("prompt is required")
+	}
+	flowRoot := strings.TrimSpace(s.cfg.FlowRoot)
+	if flowRoot == "" {
+		return terminalLaunch{}, errors.New("flow root is not configured")
+	}
+	absRoot, err := filepath.Abs(flowRoot)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	provider, err := flowdb.NormalizeSessionProvider(req.Provider)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	permissionMode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	sessionID := uuid.NewString()
+	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode)
+	return terminalLaunch{
+		Slug:           "overview-" + uuid.NewString(),
+		SessionID:      sessionID,
+		Provider:       provider,
+		PermissionMode: permissionMode,
+		WorkDir:        absRoot,
+		Args:           args,
+		FreeAgent:      true,
+		Created:        true,
+		NeedsCapture:   false,
+		StartedAt:      time.Now().Add(-2 * time.Second),
+	}, nil
+}
+
 func (s *terminalSession) captureCodexSession(started time.Time) {
 	if started.IsZero() {
 		started = time.Now().Add(-2 * time.Second)
@@ -1198,52 +1417,82 @@ func (s *terminalSession) running() bool {
 	}
 }
 
-func (s *terminalSession) addClient(client *terminalClient, replay bool) {
+// captureReplay returns the authoritative pane history used to (re)seed a
+// browser's scrollback: a fresh capture-pane spanning tmux's full history when
+// the session is tmux-backed, else the sanitized accumulated byte stream. This
+// is the only complete source of history — the live attach stream repaints
+// repaint-style agents (Codex) in place and never accumulates their scrollback.
+func (s *terminalSession) captureReplay() []byte {
 	s.mu.Lock()
-	s.clients[client] = struct{}{}
 	scrollback := append([]byte(nil), s.scrollback...)
-	status := s.exitStatus
-	closed := s.closed
-	provider := s.provider
-	sessionID := s.sessionID
 	sharedName := s.sharedName
 	s.mu.Unlock()
+	if sharedName != "" {
+		if captured, err := sharedTerminalCaptureHistory(sharedName); err == nil {
+			return captured
+		}
+	}
+	if len(scrollback) > 0 {
+		return stripTerminalAltScreenControls(scrollback)
+	}
+	return nil
+}
 
+// sendHistory re-sends the full pane history to one client as a "history"
+// reseed. The browser requests this when the user scrolls to the top of a
+// repaint-style (Codex) session, then rebuilds its scrollback from it so the
+// first message becomes reachable. Claude appends inline and accumulates
+// scrollback naturally, so it never needs this.
+func (s *terminalSession) sendHistory(client *terminalClient) {
+	if data := s.captureReplay(); len(data) > 0 {
+		client.queue(terminalWSMessage{Type: "history", Data: string(data)})
+	}
+}
+
+func (s *terminalSession) addClient(client *terminalClient, replay bool) {
+	// Seed the history replay BEFORE this client joins the broadcast set.
+	//
+	// captureReplay execs `tmux capture-pane` (slow, tens of ms). If the client
+	// were already in s.clients during that window, a concurrent readPTY →
+	// broadcast could queue LIVE output frames AHEAD of this history dump. The
+	// client's FIFO send channel would then carry [live…, history], so the
+	// browser paints newer text first and the big history dump lands underneath
+	// it — exactly the "scrollback is reversed / blocks out of order" bug.
+	//
+	// So: run the slow capture first (outside the lock), then queue status +
+	// replay and join the broadcast set together under s.mu. queue() is
+	// non-blocking, so holding the lock across it can't deadlock with broadcast.
+	// Every live frame this client receives is now ordered strictly after the
+	// replayed history.
+	//
+	// For tmux-backed sessions captureReplay returns a FRESH rendered
+	// capture-pane (clean final state of every history line, full scrollback),
+	// not flow's raw byte stream — the raw stream is tmux redraws + status-bar
+	// paints that strand stacked "[flow-…]" bars and reflow garble.
+	var replayData []byte
+	if replay {
+		replayData = s.captureReplay()
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	provider := s.provider
 	if provider == "" {
 		provider = agents.ProviderClaude
 	}
 	message := "connected to " + provider
-	if sessionID != "" {
-		message += " session " + sessionID
+	if s.sessionID != "" {
+		message += " session " + s.sessionID
 	} else {
 		message += " session pending capture"
 	}
 	client.queue(terminalWSMessage{Type: "status", Message: message})
-	if replay {
-		// For tmux-backed sessions, replay a FRESH rendered capture-pane of the
-		// pane history rather than flow's raw accumulated byte stream. The raw
-		// stream is a sequence of tmux redraws + status-bar paints; dumping it
-		// into the browser terminal strands stacked "[flow-…]" status bars and
-		// reflow garble in scrollback. capture-pane is the final rendered state
-		// of every history line — clean, and it spans tmux's full (effectively
-		// unlimited) history so the browser can scroll to the start. Fall back to
-		// the accumulated scrollback (the non-tmux/direct-PTY path) if capture is
-		// unavailable.
-		var replayData []byte
-		if sharedName != "" {
-			if captured, err := sharedTerminalCaptureHistory(sharedName); err == nil {
-				replayData = captured
-			}
-		}
-		if replayData == nil && len(scrollback) > 0 {
-			replayData = stripTerminalAltScreenControls(scrollback)
-		}
-		if len(replayData) > 0 {
-			client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
-		}
+	if len(replayData) > 0 {
+		client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
 	}
-	if closed {
-		client.queue(terminalWSMessage{Type: "status", Message: status})
+	s.clients[client] = struct{}{}
+	if s.closed {
+		client.queue(terminalWSMessage{Type: "status", Message: s.exitStatus})
 	}
 }
 
@@ -1440,6 +1689,10 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 			}
 		case "resize":
 			_ = sess.resize(msg.Cols, msg.Rows)
+		case "history":
+			// Client scrolled to the top of a repaint-style session and wants
+			// the authoritative full history to rebuild its scrollback.
+			sess.sendHistory(c)
 		}
 	}
 }
