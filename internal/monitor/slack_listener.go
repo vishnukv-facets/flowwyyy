@@ -33,11 +33,13 @@ import (
 type SlackListener struct {
 	dispatcher *Dispatcher
 
-	mu        sync.Mutex
-	running   bool
-	connected bool
-	cancel    context.CancelFunc
-	done      chan struct{}
+	mu         sync.Mutex
+	running    bool
+	connected  bool
+	suppressed bool
+	lockFile   *os.File
+	cancel     context.CancelFunc
+	done       chan struct{}
 
 	// Hooks for tests. Production paths use the real slack-go client.
 	connectFn func(ctx context.Context) (eventsCh <-chan socketmode.Event, ack func(req socketmode.Request), runErr <-chan error)
@@ -70,6 +72,22 @@ func (l *SlackListener) Running() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.running
+}
+
+// Suppressed reports that the listener deliberately did NOT start a Socket
+// Mode connection because another flow process already holds the
+// app-token-scoped singleton lock. Distinct from "not started": the env is
+// fully configured and a connection WOULD have been attempted, but a
+// sibling process owns the slot. Mission Control surfaces this so the user
+// understands why this instance shows no Slack activity instead of silently
+// fighting another process for events.
+func (l *SlackListener) Suppressed() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.suppressed
 }
 
 func (l *SlackListener) setConnected(v bool) {
@@ -173,6 +191,33 @@ func (l *SlackListener) Start() error {
 		l.logFn("not starting: SocketModeEnabled() is false (set FLOW_SLACK_APP_TOKEN + SLACK_BOT_TOKEN and FLOW_SLACK_SOCKET_MODE=1)")
 		return nil
 	}
+	// Singleton guard. Slack Socket Mode delivers each event to exactly one
+	// connected socket, so a second flow process listening on the same app
+	// token silently steals a share of the events — and if that process runs
+	// against a different FLOW_ROOT (a stray smoke-test server, a worktree
+	// build) its share lands in the wrong task inboxes and is lost. Only the
+	// first process to claim the app-token-scoped lock starts a listener; the
+	// rest skip Socket Mode but still serve their own UI/API.
+	//
+	// connectFn != nil means a test injected a mock connector — tests must
+	// not contend for the real machine-wide slot, and have no real socket to
+	// double up on anyway.
+	if l.connectFn == nil {
+		lockFile, acquired, err := acquireSocketModeLock(socketModeLockPath(SlackAppToken()))
+		switch {
+		case err != nil:
+			// Unexpected lock failure: fail OPEN to preserve prior behavior,
+			// but warn loudly so the operator can investigate.
+			l.logFn("socket-mode singleton lock unavailable (%v); starting listener anyway", err)
+		case !acquired:
+			l.suppressed = true
+			l.logFn("not starting Socket Mode: another flow process already holds the Slack connection for this app token. Slack routes each event to a single socket, so a second listener would split — and possibly drop — your Slack events. Stop the other flow server if this process should own Slack.")
+			return nil
+		default:
+			l.lockFile = lockFile
+			l.suppressed = false
+		}
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	l.cancel = cancel
 	l.done = make(chan struct{})
@@ -193,8 +238,13 @@ func (l *SlackListener) Stop() {
 		return
 	}
 	l.mu.Lock()
+	lockFile := l.lockFile
+	l.lockFile = nil
+	l.suppressed = false
 	if !l.running {
 		l.mu.Unlock()
+		// Covers the suppressed / never-started case; nil-safe.
+		releaseSocketModeLock(lockFile)
 		return
 	}
 	cancel := l.cancel
@@ -213,6 +263,9 @@ func (l *SlackListener) Stop() {
 			l.logFn("stop: timeout waiting for listener goroutine to exit")
 		}
 	}
+	// Release the singleton slot only after the goroutine has stopped using
+	// the socket, so a clean restart can immediately reclaim it.
+	releaseSocketModeLock(lockFile)
 }
 
 func (l *SlackListener) run(ctx context.Context) {
