@@ -127,8 +127,17 @@ export function useTaskTranscript(slug: string | undefined, enabled = true) {
   })
 }
 
-export function useProjects() {
-  return useQuery({ queryKey: ['projects'], queryFn: () => apiGet<ProjectView[]>('/api/projects') })
+export interface ProjectListOpts {
+  include_archived?: boolean
+}
+export function useProjects(opts: ProjectListOpts = {}) {
+  return useQuery({
+    queryKey: ['projects', opts],
+    queryFn: () =>
+      apiGet<ProjectView[]>(
+        `/api/projects${qs(opts as Record<string, string | boolean | number | undefined>)}`,
+      ),
+  })
 }
 export function useProject(slug: string | undefined) {
   return useQuery({
@@ -146,8 +155,18 @@ export function useProjectTasks(slug: string | undefined) {
   })
 }
 
-export function usePlaybooks() {
-  return useQuery({ queryKey: ['playbooks'], queryFn: () => apiGet<PlaybookView[]>('/api/playbooks') })
+export interface PlaybookListOpts {
+  include_archived?: boolean
+  project?: string
+}
+export function usePlaybooks(opts: PlaybookListOpts = {}) {
+  return useQuery({
+    queryKey: ['playbooks', opts],
+    queryFn: () =>
+      apiGet<PlaybookView[]>(
+        `/api/playbooks${qs(opts as Record<string, string | boolean | number | undefined>)}`,
+      ),
+  })
 }
 export function usePlaybook(slug: string | undefined) {
   return useQuery({

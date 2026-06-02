@@ -6,6 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPutText } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
+import { clickable } from '../lib/a11y'
 import { CreateKBModal } from '../components/modals'
 import type { KBFileView } from '../lib/types'
 
@@ -59,7 +60,12 @@ export function KnowledgeBase() {
             <div className="h-lg">{files.length} documents</div>
           </div>
           {files.map((f) => (
-            <div key={f.filename} className={`pli${selected === f.filename ? ' active' : ''}`} onClick={() => setSelected(f.filename)}>
+            <div
+              key={f.filename}
+              className={`pli${selected === f.filename ? ' active' : ''}`}
+              aria-pressed={selected === f.filename}
+              {...clickable(() => setSelected(f.filename))}
+            >
               <div className="pli-top">
                 <BookText size={14} className="dim" />
                 <span className="pli-title clip">{baseName(f.filename)}</span>

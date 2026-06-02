@@ -5,6 +5,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPost } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
+import { clickable } from '../lib/a11y'
 
 export function Memories() {
   useDocumentTitle('Memories')
@@ -112,7 +113,12 @@ export function Memories() {
             <div className="faint" style={{ padding: '18px 14px', fontSize: 13 }}>No sources match.</div>
           ) : (
             filtered.map((s) => (
-              <div key={s.id} className={`pli${selected === s.id ? ' active' : ''}`} onClick={() => setSelected(s.id)}>
+              <div
+                key={s.id}
+                className={`pli${selected === s.id ? ' active' : ''}`}
+                aria-pressed={selected === s.id}
+                {...clickable(() => setSelected(s.id))}
+              >
                 <div className="pli-top">
                   <span className={`dot ${s.available ? 'running' : 'idle'}`} />
                   <span className="pli-title clip">{s.label}</span>

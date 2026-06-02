@@ -258,7 +258,12 @@ export function Shell({ children }: { children: ReactNode }) {
         <main className="content">{children}</main>
       </div>
 
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onNewTask={() => setCreateOpen(true)}
+        onToggleTheme={() => setTheme(toggleTheme())}
+      />
       <CreateTaskModal open={createOpen} onClose={() => setCreateOpen(false)} />
       <FloatingTerminalLayer />
       <Toaster />

@@ -13,8 +13,15 @@ import {
   Zap,
   AlertTriangle,
   CircleDashed,
+  ChevronRight,
+  Plus,
+  SunMoon,
+  CheckCircle2,
+  Ban,
+  Send,
 } from 'lucide-react'
-import { useSearch, useUiData } from '../lib/query'
+import { useAction, useSearch, useUiData } from '../lib/query'
+import { confirmAction } from '../lib/confirm'
 import type { SearchResult } from '../lib/types'
 import { ProviderIcon, StatusDot } from './ui'
 import { fromSeconds, fromMinutes } from '../lib/format'
@@ -39,6 +46,10 @@ interface Item {
   to: string
   icon: ReactNode
   meta?: ReactNode
+  // Command-mode items run an action instead of navigating. keepOpen leaves the
+  // palette open after running (used to pre-fill a verb that still needs a target).
+  run?: () => void
+  keepOpen?: boolean
 }
 interface Group {
   label: string
@@ -65,7 +76,17 @@ function resultIcon(type: string) {
   return <Hash size={15} />
 }
 
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function CommandPalette({
+  open,
+  onClose,
+  onNewTask,
+  onToggleTheme,
+}: {
+  open: boolean
+  onClose: () => void
+  onNewTask?: () => void
+  onToggleTheme?: () => void
+}) {
   const [, navigate] = useLocation()
   const [q, setQ] = useState('')
   const [active, setActive] = useState(0)
@@ -73,7 +94,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   const [recents, setRecents] = useState<RecentItem[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
-  const { data: search, isFetching: searchFetching } = useSearch(q, scope)
+  const action = useAction()
+  // A leading ">" switches the palette from finder to command mode.
+  const isCommand = q.startsWith('>')
+  const { data: search, isFetching: searchFetching } = useSearch(isCommand ? '' : q, scope)
   const { data: ui } = useUiData()
 
   useEffect(() => {
@@ -179,7 +203,107 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
     return groups
   }, [search, scope])
 
-  const groups = q.trim() ? searchGroups : defaultGroups
+  // Command mode (query starts with ">"): turn the finder into a verb runner.
+  // Target verbs (done/kill/nudge) resolve a task from the live fleet; the rest
+  // (new task / toggle theme) fire immediately.
+  const commandGroups = useMemo<Group[]>(() => {
+    if (!isCommand) return []
+    const cmd = q.slice(1).replace(/^\s+/, '')
+    const lower = cmd.toLowerCase()
+
+    const TARGET_VERBS = [
+      { primary: 'done', label: 'Mark done', kind: 'done', keys: ['mark done', 'done', 'finish', 'complete'], icon: <CheckCircle2 size={15} /> },
+      { primary: 'kill', label: 'Kill session', kind: 'kill', keys: ['kill', 'stop'], icon: <Ban size={15} /> },
+      { primary: 'nudge', label: 'Nudge', kind: 'nudge', keys: ['nudge'], icon: <Send size={15} /> },
+    ]
+
+    // Target mode: the text matches "<verb> " (or an exact verb) — list tasks.
+    let activeVerb: (typeof TARGET_VERBS)[number] | null = null
+    let targetQuery = ''
+    for (const v of TARGET_VERBS) {
+      const k = [...v.keys].sort((a, b) => b.length - a.length).find((kk) => lower === kk || lower.startsWith(kk + ' '))
+      if (k) {
+        activeVerb = v
+        targetQuery = cmd.slice(k.length).trim()
+        break
+      }
+    }
+
+    if (activeVerb) {
+      const verb = activeVerb
+      const pool: { slug: string; name: string; sub: string }[] = []
+      const seen = new Set<string>()
+      for (const a of ui?.AGENTS ?? []) {
+        if (!seen.has(a.slug)) {
+          seen.add(a.slug)
+          pool.push({ slug: a.slug, name: a.name, sub: a.project || 'ad-hoc' })
+        }
+      }
+      // kill only targets live sessions; done/nudge can also act on backlog.
+      if (verb.kind !== 'kill') {
+        for (const t of ui?.BACKLOG ?? []) {
+          if (!seen.has(t.slug)) {
+            seen.add(t.slug)
+            pool.push({ slug: t.slug, name: t.name, sub: t.project || 'backlog' })
+          }
+        }
+      }
+      const nq = targetQuery.toLowerCase()
+      const items: Item[] = pool
+        .filter((p) => !nq || p.name.toLowerCase().includes(nq) || p.slug.toLowerCase().includes(nq))
+        .slice(0, 8)
+        .map((p) => ({
+          key: `cmd-${verb.kind}-${p.slug}`,
+          label: `${verb.label}: ${p.name}`,
+          sub: `${p.slug} · ${p.sub}`,
+          to: '',
+          icon: verb.icon,
+          run: async () => {
+            if (verb.kind === 'nudge') {
+              navigate(`/session/${p.slug}`)
+              return
+            }
+            const ok = await confirmAction({
+              title: `${verb.label}?`,
+              body:
+                verb.kind === 'done'
+                  ? `"${p.name}" will be marked done and run the close-out sweep.`
+                  : `Terminate the running session for "${p.name}".`,
+              confirmLabel: verb.label,
+              danger: true,
+            })
+            if (ok) action.mutate({ kind: verb.kind, target: p.slug })
+          },
+        }))
+      return [{ label: verb.label, icon: verb.icon, items }]
+    }
+
+    // Discovery mode: list commands whose keys match the partial text.
+    const match = (keys: string[]) => !lower || keys.some((k) => k.startsWith(lower) || lower.startsWith(k))
+    const items: Item[] = []
+    for (const v of TARGET_VERBS) {
+      if (match(v.keys))
+        items.push({
+          key: `verb-${v.kind}`,
+          label: v.label,
+          sub: `> ${v.primary} <task>`,
+          to: '',
+          icon: v.icon,
+          keepOpen: true,
+          run: () => {
+            setQ(`>${v.primary} `)
+            setActive(0)
+          },
+        })
+    }
+    if (match(['new task', 'new', 'add task', 'create task']))
+      items.push({ key: 'cmd-new-task', label: 'New task', sub: 'open the create-task form', to: '', icon: <Plus size={15} />, run: () => onNewTask?.() })
+    if (match(['toggle theme', 'theme', 'dark mode', 'light mode']))
+      items.push({ key: 'cmd-theme', label: 'Toggle theme', sub: 'switch light / dark', to: '', icon: <SunMoon size={15} />, run: () => onToggleTheme?.() })
+    return items.length ? [{ label: 'Commands', icon: <ChevronRight size={12} />, items }] : []
+  }, [isCommand, q, ui, navigate, action, onNewTask, onToggleTheme])
+
+  const groups = isCommand ? commandGroups : q.trim() ? searchGroups : defaultGroups
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups])
 
   useEffect(() => {
@@ -194,6 +318,11 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
   if (!open) return null
 
   const go = (it: Item, newTab = false) => {
+    if (it.run) {
+      it.run()
+      if (!it.keepOpen) onClose()
+      return
+    }
     // ⌘/Ctrl held → open in a new browser tab instead of navigating in place
     // (mirrors the open-in-new-tab button on session cards).
     if (newTab && it.to) {
@@ -215,7 +344,7 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <input
             ref={inputRef}
             className="palette-field"
-            placeholder="Search tasks, projects, briefs, updates, memories…"
+            placeholder="Search… or type > for commands"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -233,9 +362,10 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
           <span className="kbd" title="Hold ⌘ (or Ctrl) and press Enter to open in a new tab">⌘↵ new tab</span>
           <span className="kbd">esc</span>
         </div>
-        <div className="palette-scopes">
-          {SCOPES.map((s) => (
-            <button
+        {!isCommand && (
+          <div className="palette-scopes">
+            {SCOPES.map((s) => (
+              <button
                 key={s.id}
                 className={`palette-chip${scope === s.id ? ' active' : ''}`}
                 onClick={() => {
@@ -245,11 +375,14 @@ export function CommandPalette({ open, onClose }: { open: boolean; onClose: () =
               >
                 {s.label}
               </button>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
         <div className="palette-list" ref={listRef}>
           {flat.length === 0 && (
-            <div className="palette-empty">{q.trim() ? (searchFetching ? 'Searching…' : 'No matches') : 'Loading…'}</div>
+            <div className="palette-empty">
+              {isCommand ? 'No matching command' : q.trim() ? (searchFetching ? 'Searching…' : 'No matches') : 'Loading…'}
+            </div>
           )}
           {groups.map((g) => (
             <div key={g.label}>

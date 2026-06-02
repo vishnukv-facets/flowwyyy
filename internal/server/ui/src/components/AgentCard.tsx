@@ -4,6 +4,7 @@ import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
+import { clickable } from '../lib/a11y'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
 
 const BADGE_TONE: Record<string, string> = {
@@ -18,7 +19,17 @@ const STATUS_LABEL: Record<string, string> = {
   stale: 'stalled',
 }
 
-export function AgentCard({ agent }: { agent: UiAgent }) {
+export function AgentCard({
+  agent,
+  selectable = false,
+  selected = false,
+  onToggle,
+}: {
+  agent: UiAgent
+  selectable?: boolean
+  selected?: boolean
+  onToggle?: () => void
+}) {
   const [, navigate] = useLocation()
   const { popOut } = useFloatingTerminals()
   const waiting = agent.status === 'waiting'
@@ -28,8 +39,22 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
   const isDone = agent.task_status === 'done'
   const badgeStatus = isDone ? 'done' : agent.status
   return (
-    <article className="card acard" onClick={() => navigate(`/session/${agent.slug}`)}>
+    <article
+      className={`card acard${selected ? ' selected' : ''}`}
+      aria-label={`Open session ${agent.name}`}
+      {...clickable(() => navigate(`/session/${agent.slug}`))}
+    >
       <div className="acard-top">
+        {selectable && (
+          <input
+            type="checkbox"
+            className="acard-check"
+            checked={selected}
+            aria-label={`Select ${agent.name}`}
+            onClick={(e) => e.stopPropagation()}
+            onChange={() => onToggle?.()}
+          />
+        )}
         <ProviderIcon provider={agent.provider} size={17} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="acard-title clip">{agent.name}</div>

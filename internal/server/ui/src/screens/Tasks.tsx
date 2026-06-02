@@ -1,11 +1,25 @@
-import { useState } from 'react'
-import { useLocation } from 'wouter'
-import { Archive, CornerLeftUp, GitFork, Loader2, Pencil, Trash2 } from 'lucide-react'
-import { useAction, useTasks, type TaskFilters } from '../lib/query'
+import { useMemo, useState } from 'react'
+import { useLocation, useSearch } from 'wouter'
+import {
+  Archive,
+  ChevronDown,
+  ChevronUp,
+  CornerLeftUp,
+  GitFork,
+  Loader2,
+  Pencil,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react'
+import { useAction, useTasks, queryClient, type TaskFilters } from '../lib/query'
+import { apiAction } from '../lib/api'
+import { pushToast } from '../lib/toast'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago, dueTone } from '../lib/format'
+import { clickable } from '../lib/a11y'
 import type { TaskView } from '../lib/types'
 
 const STATUSES = [
@@ -20,18 +34,80 @@ const PRIOS = [
   { v: 'medium', label: 'Medium' },
   { v: 'low', label: 'Low' },
 ]
-const SORTS = [
-  { v: 'recent', label: 'Recent' },
-  { v: 'due', label: 'Due' },
-] as const
-type SortKey = (typeof SORTS)[number]['v']
+const PRIO_RANK: Record<string, number> = { high: 0, medium: 1, low: 2 }
+
+type SortField = 'name' | 'project' | 'priority' | 'due' | 'updated' | 'created'
+type SortDir = 'asc' | 'desc'
+// Default direction when a column is first clicked: names/projects read better
+// ascending, everything else newest/highest first.
+const DEFAULT_DIR: Record<SortField, SortDir> = {
+  name: 'asc',
+  project: 'asc',
+  priority: 'asc',
+  due: 'asc',
+  updated: 'desc',
+  created: 'desc',
+}
+
+function compareTasks(a: TaskView, b: TaskView, field: SortField, dir: SortDir): number {
+  const mul = dir === 'asc' ? 1 : -1
+  switch (field) {
+    case 'name':
+      return mul * a.name.localeCompare(b.name)
+    case 'project':
+      return mul * (a.project_slug || '').localeCompare(b.project_slug || '')
+    case 'priority':
+      return mul * ((PRIO_RANK[a.priority] ?? 9) - (PRIO_RANK[b.priority] ?? 9))
+    case 'due':
+      // Dated tasks always sort before undated ones; dir flips order among the
+      // dated set (asc = soonest/overdue first).
+      if (a.due_date && b.due_date) return mul * (a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0)
+      if (a.due_date) return -1
+      if (b.due_date) return 1
+      return 0
+    case 'updated':
+      return mul * (Date.parse(a.updated_at) - Date.parse(b.updated_at))
+    case 'created':
+    default:
+      return mul * (Date.parse(a.created_at) - Date.parse(b.created_at))
+  }
+}
 
 export function Tasks() {
   useDocumentTitle('Tasks')
   const [, navigate] = useLocation()
-  const [status, setStatus] = useState('')
-  const [priority, setPriority] = useState('')
-  const [sort, setSort] = useState<SortKey>('recent')
+  const search = useSearch()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkPending, setBulkPending] = useState(false)
+
+  // URL is the source of truth for every filter/sort — so they survive a
+  // refresh and are shareable. We parse on each render and write via replace.
+  const params = useMemo(() => new URLSearchParams(search), [search])
+  const status = params.get('status') ?? ''
+  const priority = params.get('priority') ?? ''
+  const project = params.get('project') ?? ''
+  const tag = params.get('tag') ?? ''
+  const q = params.get('q') ?? ''
+  const sortField = (params.get('sort') as SortField) || 'created'
+  const sortDir = (params.get('dir') as SortDir) || 'desc'
+
+  const setParams = (patch: Record<string, string>) => {
+    const next = new URLSearchParams(search)
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) next.set(k, v)
+      else next.delete(k)
+    }
+    const qs = next.toString()
+    navigate(qs ? `/tasks?${qs}` : '/tasks', { replace: true })
+  }
+
+  const onSort = (field: SortField) => {
+    if (field === sortField) {
+      setParams({ sort: field, dir: sortDir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      setParams({ sort: field, dir: DEFAULT_DIR[field] })
+    }
+  }
 
   const filters: TaskFilters = {
     status: status || undefined,
@@ -39,19 +115,86 @@ export function Tasks() {
     include_done: status === 'done',
   }
   const { data, isLoading, error } = useTasks(filters)
-  const tasks = (data ?? [])
-    .filter((t) => t.kind !== 'playbook_run' || status === 'done')
-    .slice()
-    .sort((a, b) => {
-      // Due sort: dated tasks first by soonest due (overdue = earliest date,
-      // sorts first), undated last; recent sort: newest-created first.
-      if (sort === 'due') {
-        if (a.due_date && b.due_date) return a.due_date < b.due_date ? -1 : a.due_date > b.due_date ? 1 : 0
-        if (a.due_date) return -1
-        if (b.due_date) return 1
-      }
-      return Date.parse(b.created_at) - Date.parse(a.created_at)
+
+  // Status/priority filter the server query; project/tag/text + sort run
+  // client-side so the chip options stay visible regardless of the active one.
+  const base = useMemo(
+    () => (data ?? []).filter((t) => t.kind !== 'playbook_run' || status === 'done'),
+    [data, status],
+  )
+  const projectOpts = useMemo(
+    () => Array.from(new Set(base.map((t) => t.project_slug || '').filter(Boolean))).sort(),
+    [base],
+  )
+  const tagOpts = useMemo(
+    () => Array.from(new Set(base.flatMap((t) => t.tags ?? []))).sort(),
+    [base],
+  )
+  const tasks = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return base
+      .filter((t) => {
+        if (project && (t.project_slug || '') !== project) return false
+        if (tag && !(t.tags ?? []).includes(tag)) return false
+        if (!needle) return true
+        return [t.name, t.slug, t.project_slug || '', ...(t.tags ?? [])].some((s) =>
+          s.toLowerCase().includes(needle),
+        )
+      })
+      .slice()
+      .sort((a, b) => compareTasks(a, b, sortField, sortDir))
+  }, [base, project, tag, q, sortField, sortDir])
+
+  const toggleSel = (slug: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      next.has(slug) ? next.delete(slug) : next.add(slug)
+      return next
     })
+  const visibleSlugs = useMemo(() => tasks.map((t) => t.slug), [tasks])
+  const allSelected = visibleSlugs.length > 0 && visibleSlugs.every((s) => selected.has(s))
+  const toggleSelectAll = () =>
+    setSelected((prev) => {
+      if (allSelected) {
+        const next = new Set(prev)
+        visibleSlugs.forEach((s) => next.delete(s))
+        return next
+      }
+      return new Set([...prev, ...visibleSlugs])
+    })
+
+  // Bulk = iterate the existing single-target action behind one confirm.
+  const runBulk = async (opts: {
+    kind: string
+    verb: string
+    extra?: Record<string, string>
+    entityKind?: string
+    danger?: boolean
+  }) => {
+    const slugs = [...selected]
+    if (!slugs.length) return
+    const ok = await confirmAction({
+      title: `${opts.verb} ${slugs.length} task${slugs.length === 1 ? '' : 's'}?`,
+      body: `This runs "${opts.verb.toLowerCase()}" on each selected task, one at a time.`,
+      confirmLabel: opts.verb,
+      danger: opts.danger ?? true,
+    })
+    if (!ok) return
+    setBulkPending(true)
+    const results = await Promise.allSettled(
+      slugs.map((s) =>
+        apiAction({ kind: opts.kind, target: s, ...(opts.entityKind ? { entity_kind: opts.entityKind } : {}), ...opts.extra }),
+      ),
+    )
+    setBulkPending(false)
+    const failed = results.filter((r) => r.status === 'rejected').length
+    setSelected(new Set())
+    queryClient.invalidateQueries()
+    if (failed) pushToast('error', `${opts.verb}: ${failed}/${slugs.length} failed`)
+    else pushToast('ok', `${opts.verb.toLowerCase()} ${slugs.length} task${slugs.length === 1 ? '' : 's'}`)
+  }
+
+  const filtersActive = !!(status || priority || project || tag || q)
 
   return (
     <div className="page">
@@ -62,28 +205,64 @@ export function Tasks() {
         </div>
       </div>
 
-      <div className="row gap wrap" style={{ marginBottom: 18, gap: 16 }}>
+      <div className="row gap wrap" style={{ marginBottom: 18, gap: 14, alignItems: 'center' }}>
+        <div className="input-icon" style={{ maxWidth: 220 }}>
+          <Search size={14} className="dim" />
+          <input
+            className="input"
+            placeholder="Filter tasks…"
+            value={q}
+            onChange={(e) => setParams({ q: e.target.value })}
+          />
+        </div>
         <div className="segmented">
           {STATUSES.map((s) => (
-            <button key={s.v} className={status === s.v ? 'active' : ''} onClick={() => setStatus(s.v)}>
+            <button key={s.v} className={status === s.v ? 'active' : ''} onClick={() => setParams({ status: s.v })}>
               {s.label}
             </button>
           ))}
         </div>
         <div className="segmented">
           {PRIOS.map((p) => (
-            <button key={p.v} className={priority === p.v ? 'active' : ''} onClick={() => setPriority(p.v)}>
+            <button key={p.v} className={priority === p.v ? 'active' : ''} onClick={() => setParams({ priority: p.v })}>
               {p.label}
             </button>
           ))}
         </div>
-        <div className="segmented">
-          {SORTS.map((s) => (
-            <button key={s.v} className={sort === s.v ? 'active' : ''} onClick={() => setSort(s.v)}>
-              {s.label}
+        {projectOpts.length > 1 && (
+          <div className="chips">
+            <button className={`chip${project === '' ? ' active' : ''}`} onClick={() => setParams({ project: '' })}>
+              all projects
             </button>
-          ))}
-        </div>
+            {projectOpts.map((p) => (
+              <button
+                key={p}
+                className={`chip${project === p ? ' active' : ''}`}
+                onClick={() => setParams({ project: project === p ? '' : p })}
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+        {tagOpts.length > 0 && (
+          <div className="chips">
+            {tagOpts.map((t) => (
+              <button
+                key={t}
+                className={`chip${tag === t ? ' active' : ''}`}
+                onClick={() => setParams({ tag: tag === t ? '' : t })}
+              >
+                #{t}
+              </button>
+            ))}
+          </div>
+        )}
+        {filtersActive && (
+          <button className="btn ghost sm" onClick={() => navigate('/tasks', { replace: true })}>
+            <X size={13} /> Clear
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -93,9 +272,10 @@ export function Tasks() {
       ) : tasks.length === 0 ? (
         <EmptyState title="No tasks match" hint="Adjust the filters or create a new task." />
       ) : (
-        <div className="card" style={{ padding: '6px 14px 4px' }}>
+        <div className="card" style={{ padding: '6px 14px 4px', marginBottom: selected.size > 0 ? 72 : 0 }}>
           <table className="tbl fixed">
             <colgroup>
+              <col style={{ width: 30 }} />
               <col style={{ width: 28 }} />
               <col />
               <col style={{ width: 152 }} />
@@ -109,31 +289,111 @@ export function Tasks() {
             </colgroup>
             <thead>
               <tr>
+                <th>
+                  <input
+                    type="checkbox"
+                    aria-label="Select all tasks"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
                 <th />
-                <th>Task</th>
+                <SortableTh field="name" label="Task" sortField={sortField} sortDir={sortDir} onSort={onSort} />
                 <th>Dependencies</th>
-                <th>Project</th>
-                <th>Priority</th>
-                <th>Due</th>
+                <SortableTh field="project" label="Project" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+                <SortableTh field="priority" label="Priority" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+                <SortableTh field="due" label="Due" sortField={sortField} sortDir={sortDir} onSort={onSort} />
                 <th>Agent</th>
                 <th>Tags</th>
-                <th style={{ textAlign: 'right' }}>Updated</th>
+                <SortableTh field="updated" label="Updated" align="right" sortField={sortField} sortDir={sortDir} onSort={onSort} />
                 <th />
               </tr>
             </thead>
             <tbody>
               {tasks.map((t) => (
-                <TaskRow key={t.slug} task={t} onOpen={() => navigate(`/session/${t.slug}`)} />
+                <TaskRow
+                  key={t.slug}
+                  task={t}
+                  selected={selected.has(t.slug)}
+                  onToggleSel={() => toggleSel(t.slug)}
+                  onOpen={() => navigate(`/session/${t.slug}`)}
+                />
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <div className="bulk-bar" role="toolbar" aria-label="Bulk actions">
+          <span className="bulk-count">{selected.size} selected</span>
+          <span className="faint" style={{ fontSize: 12 }}>priority</span>
+          {(['high', 'medium', 'low'] as const).map((p) => (
+            <button
+              key={p}
+              className="btn ghost sm"
+              disabled={bulkPending}
+              onClick={() => runBulk({ kind: 'update-priority', verb: `Set ${p}`, extra: { priority: p }, danger: false })}
+            >
+              <span className={`prio ${p}`} /> {p}
+            </button>
+          ))}
+          <div className="spacer" />
+          <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'archive', verb: 'Archive' })}>
+            <Archive size={13} /> Archive
+          </button>
+          <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'delete', verb: 'Trash', entityKind: 'task' })}>
+            <Trash2 size={13} /> Trash
+          </button>
+          <button className="btn icon ghost sm" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}>
+            <X size={14} />
+          </button>
         </div>
       )}
     </div>
   )
 }
 
-function TaskRow({ task, onOpen }: { task: TaskView; onOpen: () => void }) {
+function SortableTh({
+  field,
+  label,
+  sortField,
+  sortDir,
+  onSort,
+  align,
+}: {
+  field: SortField
+  label: string
+  sortField: SortField
+  sortDir: SortDir
+  onSort: (f: SortField) => void
+  align?: 'right'
+}) {
+  const active = sortField === field
+  return (
+    <th
+      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      style={align === 'right' ? { textAlign: 'right' } : undefined}
+    >
+      <button className={`th-sort${active ? ' active' : ''}`} onClick={() => onSort(field)}>
+        {label}
+        {active && (sortDir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
+      </button>
+    </th>
+  )
+}
+
+function TaskRow({
+  task,
+  selected,
+  onToggleSel,
+  onOpen,
+}: {
+  task: TaskView
+  selected: boolean
+  onToggleSel: () => void
+  onOpen: () => void
+}) {
   const action = useAction()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(task.name)
@@ -180,7 +440,16 @@ function TaskRow({ task, onOpen }: { task: TaskView; onOpen: () => void }) {
   const parentName = task.parent?.name || task.parent_slug
 
   return (
-    <tr onClick={() => !editing && onOpen()}>
+    <tr className={selected ? 'row-selected' : ''} {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
+      <td>
+        <input
+          type="checkbox"
+          aria-label={`Select ${task.name}`}
+          checked={selected}
+          onClick={(e) => e.stopPropagation()}
+          onChange={onToggleSel}
+        />
+      </td>
       <td>
         <StatusDot status={task.live ? 'running' : task.waiting_on ? 'waiting' : task.status} />
       </td>

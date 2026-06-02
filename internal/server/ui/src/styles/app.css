@@ -531,6 +531,46 @@
   transform: translateY(-2px);
   box-shadow: 0 10px 30px -16px rgba(0, 0, 0, 0.5);
 }
+/* Archived items surfaced by the "show archived" toggle read as muted history. */
+.acard.archived {
+  opacity: 0.58;
+  border-style: dashed;
+}
+.acard.archived:hover {
+  opacity: 1;
+}
+/* Multi-select on the Sessions fleet view. */
+.acard.selected {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 1px var(--accent-line) inset;
+}
+.acard-check {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex: none;
+}
+/* Sticky bulk-action bar — floats above the fleet while a selection is held. */
+.bulk-bar {
+  position: sticky;
+  bottom: 16px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow: 0 14px 40px -18px rgba(0, 0, 0, 0.7);
+}
+.bulk-count {
+  font-size: 13px;
+  font-weight: 600;
+}
 .acard-top {
   display: flex;
   align-items: flex-start;
@@ -666,6 +706,30 @@
 }
 .tbl tbody tr:hover {
   background: var(--surface-hover);
+}
+.tbl tbody tr.row-selected {
+  background: var(--accent-soft);
+}
+/* Sortable column header — a button that reads like the plain th label until
+   active, then accent-tinted with a direction caret. */
+.th-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  color: inherit;
+}
+.th-sort:hover {
+  color: var(--text);
+}
+.th-sort.active {
+  color: var(--accent-hi);
 }
 
 /* tag chips */

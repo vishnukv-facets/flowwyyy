@@ -1866,6 +1866,119 @@ func TestUpdateTaskNameRejectsBlankName(t *testing.T) {
 	}
 }
 
+func TestUpdateProjectStoresNameAndPriority(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root) // project "flow", priority high
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	resp, status := srv.runAction(actionRequest{
+		Kind:     "update-project",
+		Slug:     "flow",
+		Name:     "Flow Manager",
+		Priority: "low",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	project, err := flowdb.GetProject(db, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Name != "Flow Manager" {
+		t.Fatalf("project name = %q, want updated", project.Name)
+	}
+	if project.Priority != "low" {
+		t.Fatalf("project priority = %q, want low", project.Priority)
+	}
+}
+
+func TestUpdateProjectPriorityOnly(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	resp, status := srv.runAction(actionRequest{Kind: "update-project", Slug: "flow", Priority: "medium"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	project, err := flowdb.GetProject(db, "flow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if project.Priority != "medium" || project.Name != "Flow project" {
+		t.Fatalf("expected only priority changed, got %+v", project)
+	}
+}
+
+func TestUpdateProjectRejectsInvalidPriority(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "update-project", Slug: "flow", Priority: "urgent"})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("expected 400, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestUpdateProjectRequiresAField(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "update-project", Slug: "flow"})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("expected 400 when no field given, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestUpdateProjectUnknownSlug(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "update-project", Slug: "no-such", Name: "X"})
+	if status != http.StatusNotFound || resp.OK {
+		t.Fatalf("expected 404, got status=%d resp=%+v", status, resp)
+	}
+}
+
+func TestUpdatePlaybookStoresName(t *testing.T) {
+	root, db := testRootDB(t)
+	now := "2026-05-12T10:00:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO playbooks (slug, name, work_dir, created_at, updated_at) VALUES ('daily', 'Daily standup', ?, ?, ?)`,
+		root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	resp, status := srv.runAction(actionRequest{Kind: "update-playbook", Slug: "daily", Name: "Daily review"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	pb, err := flowdb.GetPlaybook(db, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pb.Name != "Daily review" {
+		t.Fatalf("playbook name = %q, want updated", pb.Name)
+	}
+}
+
+func TestUpdatePlaybookRejectsBlankName(t *testing.T) {
+	root, db := testRootDB(t)
+	now := "2026-05-12T10:00:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO playbooks (slug, name, work_dir, created_at, updated_at) VALUES ('daily', 'Daily standup', ?, ?, ?)`,
+		root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "update-playbook", Slug: "daily", Name: "   "})
+	if status != http.StatusBadRequest || resp.OK {
+		t.Fatalf("expected 400, got status=%d resp=%+v", status, resp)
+	}
+}
+
 func TestCreateProjectRequiresWorkDir(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})

@@ -9,6 +9,7 @@ import { WorkdirPicker } from './WorkdirPicker'
 import { apiAction, apiActionForm, fileToRpcFile } from '../lib/api'
 import { pushToast } from '../lib/toast'
 import { queryClient, useProjects, useUiData } from '../lib/query'
+import { clickable } from '../lib/a11y'
 
 function slugify(s: string): string {
   return s
@@ -293,7 +294,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
             <PriorityPicker value={priority} onChange={setPriority} />
           </Field>
         </div>
-        <div className="dropzone" onClick={() => fileInput.current?.click()}>
+        <div className="dropzone" aria-label="Attach images" {...clickable(() => fileInput.current?.click())}>
           <ImagePlus size={15} className="dim" />
           <span>
             <b>Attach images</b> — click, drag &amp; drop, or paste{' '}

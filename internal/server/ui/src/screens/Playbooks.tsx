@@ -1,23 +1,57 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
-import { Archive, ChevronDown, Play, Plus, Repeat, Trash2 } from 'lucide-react'
+import { Archive, ChevronDown, Play, Plus, Repeat, Search, Trash2 } from 'lucide-react'
 import { usePlaybooks, useAction, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
+import { clickable } from '../lib/a11y'
 import { CreatePlaybookModal } from '../components/modals'
 import { ago } from '../lib/format'
 import type { ToolCapability } from '../lib/types'
 
+const SORTS = [
+  { v: 'recent', label: 'Recent' },
+  { v: 'name', label: 'Name' },
+  { v: 'runs', label: 'Runs · 7d' },
+  { v: 'last', label: 'Last run' },
+] as const
+type SortKey = (typeof SORTS)[number]['v']
+
 export function Playbooks() {
   useDocumentTitle('Playbooks')
   const [, navigate] = useLocation()
-  const { data, isLoading, error } = usePlaybooks()
+  const [q, setQ] = useState('')
+  const [sort, setSort] = useState<SortKey>('recent')
+  const [showArchived, setShowArchived] = useState(false)
+  const { data, isLoading, error } = usePlaybooks({ include_archived: showArchived })
   const { data: ui } = useUiData()
   const action = useAction()
   const providers = ui?.CAPABILITIES?.providers ?? []
   const [createOpen, setCreateOpen] = useState(false)
+
+  const lastRunAt = (p: { recent_runs?: { created_at: string }[] }) =>
+    p.recent_runs?.[0] ? Date.parse(p.recent_runs[0].created_at) : 0
+  const shown = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    return (data ?? [])
+      .filter((p) => {
+        if (!needle) return true
+        return (
+          p.name.toLowerCase().includes(needle) ||
+          p.slug.toLowerCase().includes(needle) ||
+          (p.project_slug ?? '').toLowerCase().includes(needle)
+        )
+      })
+      .slice()
+      .sort((a, b) => {
+        if (sort === 'name') return a.name.localeCompare(b.name)
+        if (sort === 'runs') return b.run_count_7d - a.run_count_7d
+        if (sort === 'last') return lastRunAt(b) - lastRunAt(a)
+        return Date.parse(b.updated_at) - Date.parse(a.updated_at)
+      })
+  }, [data, q, sort])
 
   // Close any open run-options popover when clicking outside it (same idiom as
   // the SessionDetail more-actions menu — native <details> won't self-close).
@@ -72,43 +106,93 @@ export function Playbooks() {
         </button>
       </div>
 
+      {!isLoading && !error && data && data.length > 0 && (
+        <div className="row gap wrap" style={{ marginBottom: 18, gap: 14, alignItems: 'center' }}>
+          <div className="input-icon" style={{ maxWidth: 280 }}>
+            <Search size={14} className="dim" />
+            <input
+              className="input"
+              placeholder="Filter by name, slug, or project…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+          </div>
+          <div className="segmented">
+            {SORTS.map((s) => (
+              <button key={s.v} className={sort === s.v ? 'active' : ''} onClick={() => setSort(s.v)}>
+                {s.label}
+              </button>
+            ))}
+          </div>
+          <div className="chips">
+            <button
+              className={`chip${showArchived ? ' active' : ''}`}
+              aria-pressed={showArchived}
+              onClick={() => setShowArchived((v) => !v)}
+            >
+              <Archive size={12} /> archived
+            </button>
+          </div>
+          <div className="spacer" />
+          <span className="faint mono" style={{ fontSize: 12 }}>
+            {shown.length}
+            {shown.length !== (data?.length ?? 0) ? ` / ${data?.length}` : ''}
+          </span>
+        </div>
+      )}
+
       {isLoading ? (
         <Loading rows={4} />
       ) : error ? (
         <ErrorNote error={error} />
       ) : !data || data.length === 0 ? (
         <EmptyState icon={<Repeat size={30} />} title="No playbooks" hint="Playbooks are reusable task templates an agent runs on demand." />
+      ) : shown.length === 0 ? (
+        <EmptyState icon={<Repeat size={30} />} title="No playbooks match" hint="Adjust the filter or toggle archived." />
       ) : (
         <div className="grid cards stagger">
-          {data.map((p) => (
-            <article key={p.slug} className="card acard" onClick={() => navigate(`/playbook/${p.slug}`)}>
+          {shown.map((p) => {
+            const archived = !!p.archived_at
+            return (
+            <article
+              key={p.slug}
+              className={`card acard${archived ? ' archived' : ''}`}
+              aria-label={`Open playbook ${p.name}`}
+              {...clickable(() => navigate(`/playbook/${p.slug}`))}
+            >
               <div className="acard-top">
                 <Repeat size={16} className="dim" style={{ marginTop: 2 }} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div className="acard-title clip">{p.name}</div>
                   <div className="acard-ref clip">{p.project_slug || 'no project'}</div>
                 </div>
-                <PlaybookRunControl
-                  providers={providers}
-                  pending={action.isPending}
-                  onRun={(opts) => runWith(p.slug, opts)}
-                />
-                <button
-                  className="btn icon ghost sm row-action"
-                  title="Archive playbook"
-                  aria-label="Archive playbook"
-                  onClick={(e) => archive(e, p.slug, p.name)}
-                >
-                  <Archive size={14} />
-                </button>
-                <button
-                  className="btn icon ghost sm row-action"
-                  title="Move to trash"
-                  aria-label="Move playbook to trash"
-                  onClick={(e) => trash(e, p.slug, p.name)}
-                >
-                  <Trash2 size={14} />
-                </button>
+                {archived ? (
+                  <span className="tag">archived</span>
+                ) : (
+                  <>
+                    <PlaybookRunControl
+                      providers={providers}
+                      pending={action.isPending}
+                      onRun={(opts) => runWith(p.slug, opts)}
+                    />
+                    <button
+                      className="btn icon ghost sm row-action"
+                      title="Archive playbook"
+                      aria-label="Archive playbook"
+                      onClick={(e) => archive(e, p.slug, p.name)}
+                    >
+                      <Archive size={14} />
+                    </button>
+                    <button
+                      className="btn icon ghost sm row-action"
+                      title="Move to trash"
+                      aria-label="Move playbook to trash"
+                      onClick={(e) => trash(e, p.slug, p.name)}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
               </div>
               <div className="acard-foot" style={{ borderTop: 'none', paddingTop: 0 }}>
                 <span className="num" style={{ fontSize: 12.5 }}>
@@ -121,7 +205,8 @@ export function Playbooks() {
                 <div className="faint" style={{ fontSize: 11.5 }}>last run {ago(p.recent_runs[0].created_at)}</div>
               )}
             </article>
-          ))}
+            )
+          })}
         </div>
       )}
       <CreatePlaybookModal open={createOpen} onClose={() => setCreateOpen(false)} />

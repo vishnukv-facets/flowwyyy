@@ -1,13 +1,15 @@
 import { useState } from 'react'
 import { useLocation } from 'wouter'
-import { ArrowLeft, FileText } from 'lucide-react'
-import { useMarkdown, useProject, useProjectTasks } from '../lib/query'
+import { ArrowLeft, Check, FileText, Loader2, Pencil, X } from 'lucide-react'
+import { useAction, useMarkdown, useProject, useProjectTasks } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
 import { Md } from '../components/Markdown'
+import { PriorityPicker } from '../components/pickers'
 import { ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago, dateTime } from '../lib/format'
-import type { FileRef } from '../lib/types'
+import { clickable } from '../lib/a11y'
+import type { FileRef, ProjectView } from '../lib/types'
 
 export function ProjectDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
@@ -25,14 +27,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
         <ArrowLeft size={14} /> Projects
       </button>
 
-      <div className="detail-head">
-        <div style={{ flex: 1 }}>
-          <div className="eyebrow">project</div>
-          <div className="detail-title">{project.name}</div>
-          <div className="detail-ref">{project.slug}</div>
-        </div>
-        <span className={`prio ${project.priority}`}>{project.priority}</span>
-      </div>
+      <ProjectHead project={project} />
 
       <div className="meta-grid" style={{ marginBottom: 24 }}>
         <div className="meta-cell"><div className="meta-k">working dir</div><div className="meta-v mono clip" title={project.work_dir}>{project.work_dir}</div></div>
@@ -60,7 +55,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
           </div>
           <div className="rows">
             {(tasks ?? []).map((t) => (
-              <div key={t.slug} className="lrow" onClick={() => navigate(`/session/${t.slug}`)}>
+              <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => navigate(`/session/${t.slug}`))}>
                 <StatusDot status={t.live ? 'running' : t.status} />
                 <ProviderIcon provider={t.session_provider} size={14} />
                 <div className="lrow-main">
@@ -92,6 +87,81 @@ export function ProjectDetail({ slug }: { slug: string }) {
           </div>
         )}
       </section>
+    </div>
+  )
+}
+
+// Editable project header — display name + priority edit in place via the
+// update-project action (slug rename stays CLI-only). Mirrors the inline-rename
+// idiom from the Tasks table row.
+function ProjectHead({ project }: { project: ProjectView }) {
+  const action = useAction()
+  const [editing, setEditing] = useState(false)
+  const [name, setName] = useState(project.name)
+  const [priority, setPriority] = useState(project.priority)
+
+  const start = () => {
+    setName(project.name)
+    setPriority(project.priority)
+    setEditing(true)
+  }
+  const cancel = () => setEditing(false)
+  const save = () => {
+    const trimmed = name.trim()
+    if (!trimmed || (trimmed === project.name && priority === project.priority)) {
+      cancel()
+      return
+    }
+    action.mutate(
+      { kind: 'update-project', slug: project.slug, name: trimmed, priority },
+      { onSuccess: () => setEditing(false) },
+    )
+  }
+
+  if (editing) {
+    return (
+      <div className="detail-head">
+        <div style={{ flex: 1 }}>
+          <div className="eyebrow">project</div>
+          <input
+            className="input inline-rename"
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                save()
+              } else if (e.key === 'Escape') {
+                e.preventDefault()
+                cancel()
+              }
+            }}
+          />
+          <div className="detail-ref">{project.slug}</div>
+        </div>
+        <PriorityPicker value={priority} onChange={setPriority} />
+        <button className="btn icon ghost sm" title="Save" aria-label="Save" onClick={save} disabled={action.isPending}>
+          {action.isPending ? <Loader2 size={14} className="spin" /> : <Check size={14} />}
+        </button>
+        <button className="btn icon ghost sm" title="Cancel" aria-label="Cancel" onClick={cancel} disabled={action.isPending}>
+          <X size={14} />
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="detail-head">
+      <div style={{ flex: 1 }}>
+        <div className="eyebrow">project</div>
+        <div className="detail-title">{project.name}</div>
+        <div className="detail-ref">{project.slug}</div>
+      </div>
+      <span className={`prio ${project.priority}`}>{project.priority}</span>
+      <button className="btn icon ghost sm" title="Edit name & priority" aria-label="Edit project" onClick={start}>
+        <Pencil size={13} />
+      </button>
     </div>
   )
 }
