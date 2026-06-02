@@ -16,6 +16,7 @@ const (
 	GitHubEventPRComment                GitHubEventKind = "pr_comment"
 	GitHubEventPRHeadUpdated            GitHubEventKind = "pr_head_updated"
 	GitHubEventPRMerged                 GitHubEventKind = "pr_merged"
+	GitHubEventPRClosed                 GitHubEventKind = "pr_closed"
 	GitHubEventIssueAssigned            GitHubEventKind = "issue_assigned"
 	GitHubEventIssueComment             GitHubEventKind = "issue_comment"
 )
@@ -58,7 +59,8 @@ func (ev GitHubEvent) IsPR() bool {
 		ev.Kind == GitHubEventPRReviewApproved ||
 		ev.Kind == GitHubEventPRComment ||
 		ev.Kind == GitHubEventPRHeadUpdated ||
-		ev.Kind == GitHubEventPRMerged
+		ev.Kind == GitHubEventPRMerged ||
+		ev.Kind == GitHubEventPRClosed
 }
 
 func (ev GitHubEvent) IsIssue() bool {

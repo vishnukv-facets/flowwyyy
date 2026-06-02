@@ -298,6 +298,35 @@ func TestGitHubPollerDropsSelfAuthoredIssueComments(t *testing.T) {
 	}
 }
 
+func TestGitHubPollerEmitsClosedAndSkipsCommentsForUnmergedClosedTrackedPR(t *testing.T) {
+	db := dispatcherTestDB(t)
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+	client := &fakeGitHubAPIClient{
+		prs: map[string]githubPullRequestRecord{
+			"Facets-cloud/flow-manager#42": {
+				State:  "closed",
+				Merged: false,
+				Head:   githubRef{Name: "feature/github", SHA: "abc123"},
+			},
+		},
+		commentRows: []githubReviewCommentRecord{
+			{NodeID: "PRRC_1", Body: "stale comment"},
+		},
+	}
+	p := GitHubPoller{DB: db, Client: client, SelfLogins: []string{"me"}}
+
+	events, err := p.Poll(context.Background())
+	if err != nil {
+		t.Fatalf("Poll: %v", err)
+	}
+	if len(client.commentPRs) != 0 {
+		t.Fatalf("closed PR should not fetch comments, got calls %v", client.commentPRs)
+	}
+	if len(events) != 1 || events[0].Kind != GitHubEventPRClosed {
+		t.Fatalf("events = %#v", events)
+	}
+}
+
 func TestGitHubPollerEmitsMergedAndSkipsCommentsForMergedTrackedPR(t *testing.T) {
 	db := dispatcherTestDB(t)
 	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")

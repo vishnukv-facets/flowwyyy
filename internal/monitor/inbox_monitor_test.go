@@ -25,7 +25,10 @@ func TestInboxMonitorScanOnce_WakesForActionableBatch(t *testing.T) {
 	if err := AppendInboxEvent(slug, InboundEvent{Kind: "pr_review_comment", ChannelType: "github", Text: "fix this"}); err != nil {
 		t.Fatalf("AppendInboxEvent() error = %v", err)
 	}
-	if err := AppendInboxEvent(slug, InboundEvent{Kind: "pr_merged", ChannelType: "github", Text: "merged"}); err != nil {
+	// reaction_added is recorded but non-actionable, so it must NOT wake the
+	// session — it's the control here. (All github events are actionable now,
+	// so a github event can no longer serve as the non-actionable case.)
+	if err := AppendInboxEvent(slug, InboundEvent{Kind: "reaction_added", ChannelType: "slack", Text: "noise"}); err != nil {
 		t.Fatalf("AppendInboxEvent() error = %v", err)
 	}
 	target := &recordingWakeTarget{}

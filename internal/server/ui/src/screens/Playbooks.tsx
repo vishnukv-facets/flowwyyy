@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
-import { Archive, ChevronDown, Play, Repeat, Search, Trash2 } from 'lucide-react'
+import { Archive, ChevronDown, Play, Plus, Repeat, Search, Trash2 } from 'lucide-react'
 import { usePlaybooks, useAction, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { AgentPicker, PermissionPicker } from '../components/pickers'
 import { EmptyState, ErrorNote, Loading, Sparkline } from '../components/ui'
 import { clickable } from '../lib/a11y'
+import { CreatePlaybookModal } from '../components/modals'
 import { ago } from '../lib/format'
 import type { ToolCapability } from '../lib/types'
 
@@ -28,6 +29,7 @@ export function Playbooks() {
   const { data: ui } = useUiData()
   const action = useAction()
   const providers = ui?.CAPABILITIES?.providers ?? []
+  const [createOpen, setCreateOpen] = useState(false)
 
   const lastRunAt = (p: { recent_runs?: { created_at: string }[] }) =>
     p.recent_runs?.[0] ? Date.parse(p.recent_runs[0].created_at) : 0
@@ -99,6 +101,9 @@ export function Playbooks() {
           <div className="eyebrow">repeatable workflows</div>
           <h1 className="h-xl">Playbooks</h1>
         </div>
+        <button type="button" className="btn primary" onClick={() => setCreateOpen(true)}>
+          <Plus size={15} /> New playbook
+        </button>
       </div>
 
       {!isLoading && !error && data && data.length > 0 && (
@@ -204,6 +209,7 @@ export function Playbooks() {
           })}
         </div>
       )}
+      <CreatePlaybookModal open={createOpen} onClose={() => setCreateOpen(false)} />
     </div>
   )
 }

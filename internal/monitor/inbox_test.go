@@ -151,6 +151,25 @@ func TestAppendInboxEvent_AddsClassifiedMeta(t *testing.T) {
 	}
 }
 
+func TestClassifyInboxEvent_GitHubLifecycleEventsAreActionable(t *testing.T) {
+	// Every GitHub PR/issue event must wake the live session — including the
+	// lifecycle events (merge, close, approval, assignment) that were
+	// previously informational-only and silently never woke the agent.
+	for _, kind := range []string{
+		"pr_merged", "pr_closed", "pr_review_approved",
+		"pr_assigned", "pr_review_requested", "pr_head_updated",
+		"pr_review_comment", "pr_comment", "issue_comment", "issue_assigned",
+	} {
+		meta := ClassifyInboxEvent(InboundEvent{Kind: kind, ChannelType: "github"})
+		if meta.Source != "github" {
+			t.Errorf("kind %q: source = %q, want github", kind, meta.Source)
+		}
+		if !meta.Actionable {
+			t.Errorf("kind %q: Actionable = false, want true (every GitHub event should wake the session)", kind)
+		}
+	}
+}
+
 func TestReadInboxEntries_AcceptsLegacyRowsWithoutMeta(t *testing.T) {
 	slug := inboxTestSlug(t)
 	if err := os.MkdirAll(TaskDir(slug), 0o755); err != nil {

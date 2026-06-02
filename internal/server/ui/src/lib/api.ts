@@ -67,6 +67,24 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return r.json as T
 }
 
+/**
+ * Upload image/files to a live task terminal. The server stores them under the
+ * task's attachments dir and returns `insert_text` — the file reference(s) to
+ * inject into the PTY (`@path` for Claude, bare path for Codex). Used by the
+ * terminal's drag/drop/paste handlers.
+ */
+export async function uploadTerminalAttachments(slug: string, files: File[]): Promise<string> {
+  const rpcFiles = await Promise.all(files.map((f) => fileToRpcFile(f, 'files')))
+  const r = await rpc.request({
+    method: 'POST',
+    path: `/api/tasks/${encodeURIComponent(slug)}/attachments`,
+    files: rpcFiles,
+  })
+  if (r.status >= 400) throw new ApiError(r.status, errText(r))
+  const data = (r.json ?? {}) as { insert_text?: string }
+  return data.insert_text ?? ''
+}
+
 /** Read a File/Blob as a base64 RpcFile for upload over the socket. */
 export function fileToRpcFile(file: File, field = 'images'): Promise<RpcFile> {
   return new Promise((resolve, reject) => {

@@ -380,6 +380,25 @@ export interface UiData {
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }
   FLOWDB: { path: string; display_path: string; bytes: number; human_size: string; exists: boolean }
   USER: { name: string; full_name: string; username: string }
+  FLOATING_SESSIONS: FloatingSession[]
+}
+
+// FloatingSession is one adhoc Ask Flow terminal tracked server-side. The tray
+// renders a chip per entry; `running` reflects whether its PTY is attached.
+export interface FloatingSession {
+  id: string
+  provider: string
+  title: string
+  running: boolean
+  waiting?: boolean
+  waiting_why?: string
+  created_at: string
+}
+
+export interface HealthView {
+  ok: boolean
+  version: string
+  flow_root: string
 }
 
 export interface TranscriptEntry {
@@ -465,14 +484,39 @@ export interface ActionResponse {
   message: string
   output?: string
   agent?: UiAgent
+  floating_terminal?: {
+    id: string
+    provider: string
+    title: string
+  }
   bridge?: boolean
   already_live?: boolean
+}
+
+// One configurable setting surfaced in the Settings page. `value` is the
+// current value (always "" for secrets); `set` reports whether an explicit
+// (non-default) value is present; `source` is config | env | default.
+export interface SettingField {
+  key: string
+  label: string
+  group: string
+  type: 'string' | 'secret' | 'bool' | 'int' | 'enum'
+  default?: string
+  options?: string[]
+  help?: string
+  value: string
+  set: boolean
+  source: 'config' | 'env' | 'default'
+}
+export interface SettingsResponse {
+  fields: SettingField[]
 }
 
 export interface ActionRequest {
   kind: string
   target?: string
   slug?: string
+  settings?: Record<string, string>
   name?: string
   path?: string
   description?: string

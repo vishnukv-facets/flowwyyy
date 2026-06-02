@@ -436,6 +436,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 key={`${slug}#${restartKey}`}
                 slug={slug}
                 restartKey={restartKey}
+                provider={provider}
                 onStatus={(kind, msg) => {
                   setTermStatus(kind === 'error' ? `error: ${msg}` : msg)
                   if (kind === 'open') setTermConn('open')

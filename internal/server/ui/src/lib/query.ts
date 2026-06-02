@@ -5,6 +5,7 @@ import { events } from './events'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
+  HealthView,
   InboxConversation,
   InboxFeed,
   KBFileView,
@@ -13,6 +14,7 @@ import type {
   ProjectView,
   QuoteView,
   SearchResponse,
+  SettingsResponse,
   TaskView,
   TranscriptResponse,
   UiAgent,
@@ -69,6 +71,15 @@ export function useUiData() {
     queryFn: () => apiGet<UiData>('/api/ui-data'),
     refetchInterval: 5000,
   })
+}
+export function useSettings() {
+  return useQuery({
+    queryKey: ['settings'],
+    queryFn: () => apiGet<SettingsResponse>('/api/settings'),
+  })
+}
+export function useHealth() {
+  return useQuery({ queryKey: ['health'], queryFn: () => apiGet<HealthView>('/api/health') })
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })
