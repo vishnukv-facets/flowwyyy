@@ -43,7 +43,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	if s.cfg.DisableQuote {
+	if s.cfg.DisableQuote || !missionQuoteEnabled() {
 		writeJSON(w, QuoteView{})
 		return
 	}

@@ -8,6 +8,7 @@ import { confirmAction } from '../lib/confirm'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading } from '../components/ui'
+import { Select } from '../components/Select'
 import { clickable } from '../lib/a11y'
 import type { UiAgent } from '../lib/types'
 
@@ -208,19 +209,16 @@ export function Sessions() {
             />
           </div>
           {projectOpts.length > 1 && (
-            <div className="chips">
-              <button className={`chip${projectFilter === '' ? ' active' : ''}`} onClick={() => setProjectFilter('')}>
-                all projects
-              </button>
-              {projectOpts.map((p) => (
-                <button
-                  key={p}
-                  className={`chip${projectFilter === p ? ' active' : ''}`}
-                  onClick={() => setProjectFilter((cur) => (cur === p ? '' : p))}
-                >
-                  {p}
-                </button>
-              ))}
+            <div className="filter-select">
+              <Select
+                value={projectFilter}
+                onChange={setProjectFilter}
+                options={[
+                  { value: '', label: `All projects · ${projectOpts.length}` },
+                  ...projectOpts.map((p) => ({ value: p, label: p })),
+                ]}
+                placeholder="Projects"
+              />
             </div>
           )}
           {providerOpts.length > 1 && (

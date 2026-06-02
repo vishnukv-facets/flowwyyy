@@ -413,20 +413,41 @@ func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, t
 	}
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		paths = append(paths, shellQuoteArg(file.Path))
-	}
-	// Claude Code recognizes `@<path>` as a file reference; Codex auto-detects
-	// bare paths. Without this prefix, drag-and-drop in Claude Code sessions
-	// drops the path into the prompt as plain text instead of attaching.
-	if task.SessionProvider == "claude" {
-		for i, p := range paths {
-			paths[i] = "@" + p
-		}
+		paths = append(paths, file.Path)
 	}
 	writeJSON(w, terminalAttachmentUploadResponse{
 		Files:      files,
-		InsertText: strings.Join(paths, " "),
+		InsertText: attachmentInsertText(task.SessionProvider, paths),
 	})
+}
+
+// attachmentInsertText frames uploaded attachment paths for injection into the
+// live agent's input box. The two providers detect an image-file path very
+// differently, so this is deliberately provider-aware:
+//
+//   - Claude Code only runs its image-path → `[Image #N]` collapse on
+//     BRACKETED-PASTE input (ESC[200~ … ESC[201~) — never on the
+//     character-by-character typed bytes the terminal bridge actually delivers.
+//     So we wrap each path as its own paste. The path must be UNQUOTED for the
+//     detection to fire (bracketed paste already carries spaces verbatim, so the
+//     shell-quoting we use elsewhere would instead break the match). An earlier
+//     `@<path>` prefix triggered Claude's file-MENTION picker, which just left
+//     the raw path sitting in the prompt — the opposite of attaching it.
+//   - Codex collapses a plain typed path already, and its TUI is not guaranteed
+//     to honor bracketed paste (the delimiters could land as literal garbage),
+//     so we leave Codex on the bare shell-quoted path that works today.
+func attachmentInsertText(provider string, paths []string) string {
+	out := make([]string, len(paths))
+	if strings.TrimSpace(provider) == "codex" {
+		for i, p := range paths {
+			out[i] = shellQuoteArg(p)
+		}
+		return strings.Join(out, " ")
+	}
+	for i, p := range paths {
+		out[i] = "\x1b[200~" + p + "\x1b[201~"
+	}
+	return strings.Join(out, " ")
 }
 
 func (s *Server) saveTaskAttachmentFiles(taskSlug string, headers []*multipart.FileHeader) ([]FileRef, error) {

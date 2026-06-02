@@ -18,6 +18,7 @@ import { pushToast } from '../lib/toast'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
+import { Select } from '../components/Select'
 import { ago, dueTone } from '../lib/format'
 import { clickable } from '../lib/a11y'
 import type { TaskView } from '../lib/types'
@@ -230,32 +231,29 @@ export function Tasks() {
           ))}
         </div>
         {projectOpts.length > 1 && (
-          <div className="chips">
-            <button className={`chip${project === '' ? ' active' : ''}`} onClick={() => setParams({ project: '' })}>
-              all projects
-            </button>
-            {projectOpts.map((p) => (
-              <button
-                key={p}
-                className={`chip${project === p ? ' active' : ''}`}
-                onClick={() => setParams({ project: project === p ? '' : p })}
-              >
-                {p}
-              </button>
-            ))}
+          <div className="filter-select">
+            <Select
+              value={project}
+              onChange={(v) => setParams({ project: v })}
+              options={[
+                { value: '', label: `All projects · ${projectOpts.length}` },
+                ...projectOpts.map((p) => ({ value: p, label: p })),
+              ]}
+              placeholder="Projects"
+            />
           </div>
         )}
         {tagOpts.length > 0 && (
-          <div className="chips">
-            {tagOpts.map((t) => (
-              <button
-                key={t}
-                className={`chip${tag === t ? ' active' : ''}`}
-                onClick={() => setParams({ tag: tag === t ? '' : t })}
-              >
-                #{t}
-              </button>
-            ))}
+          <div className="filter-select">
+            <Select
+              value={tag}
+              onChange={(v) => setParams({ tag: v })}
+              options={[
+                { value: '', label: `All tags · ${tagOpts.length}` },
+                ...tagOpts.map((t) => ({ value: t, label: `#${t}` })),
+              ]}
+              placeholder="Tags"
+            />
           </div>
         )}
         {filtersActive && (

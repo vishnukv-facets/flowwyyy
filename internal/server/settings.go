@@ -56,6 +56,19 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_GH_AUTOOPEN", Label: "Auto-open on event", Group: "GitHub", Type: settingBool, Default: "true", Help: "Open a session automatically when a new GitHub item is detected."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
+	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
+}
+
+// missionQuoteEnabled reports whether the Mission Control anime quote should be
+// served. Default on; toggled off via the FLOW_MISSION_QUOTE setting (read at
+// request time so the Settings toggle applies live).
+func missionQuoteEnabled() bool {
+	switch strings.TrimSpace(strings.ToLower(os.Getenv("FLOW_MISSION_QUOTE"))) {
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func settingSpecFor(key string) (settingSpec, bool) {

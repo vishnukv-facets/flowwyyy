@@ -293,9 +293,11 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
 
     // ---- image attach: drop / paste ------------------------------------
     // Drag, drop, or paste an image onto the terminal to attach it to the live
-    // agent. The server stores it under the task and returns a file reference
-    // (`@path` for Claude, bare path for Codex) that we inject into the PTY —
-    // the agent then reads the image. (Restores a pre-rewrite capability.)
+    // agent. The server stores it under the task and returns provider-framed
+    // insert text (see attachmentInsertText in routes.go): Claude gets the path
+    // wrapped in a bracketed paste so its image detector fires; Codex gets the
+    // bare path. We forward those bytes to the PTY verbatim and the agent
+    // collapses the path to an `[Image #N]` attachment.
     const attachImageFiles = async (files: File[]) => {
       const images = files.filter((f) => f.type.startsWith('image/'))
       if (images.length === 0) return

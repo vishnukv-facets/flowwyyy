@@ -2783,11 +2783,15 @@ func TestTaskAttachmentUploadStoresFileAndReturnsInsertText(t *testing.T) {
 	if !strings.Contains(file.Path, filepath.Join(root, "tasks", "build-ui", "attachments")) {
 		t.Fatalf("path = %q, want task attachment dir", file.Path)
 	}
-	if !strings.Contains(resp.InsertText, shellQuoteArg(file.Path)) {
-		t.Fatalf("insert_text = %q, want quoted path %q", resp.InsertText, file.Path)
+	// Claude only collapses an image path to [Image #N] on bracketed-paste input,
+	// so the path is wrapped in ESC[200~ … ESC[201~ and left UNQUOTED (quoting
+	// would break the match). It must NOT carry the old '@' mention prefix.
+	wantPaste := "\x1b[200~" + file.Path + "\x1b[201~"
+	if resp.InsertText != wantPaste {
+		t.Fatalf("insert_text = %q, want bracketed-paste-framed bare path %q", resp.InsertText, wantPaste)
 	}
-	if !strings.HasPrefix(resp.InsertText, "@") {
-		t.Fatalf("insert_text = %q, want '@'-prefixed Claude file reference", resp.InsertText)
+	if strings.HasPrefix(resp.InsertText, "@") {
+		t.Fatalf("insert_text = %q, must not carry the '@' mention prefix", resp.InsertText)
 	}
 	saved, err := os.ReadFile(file.Path)
 	if err != nil {
