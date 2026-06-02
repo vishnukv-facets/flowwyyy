@@ -1319,11 +1319,44 @@ select.input {
   display: flex;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 8px 12px;
   background: var(--bg-2);
   font-family: var(--font-mono);
   font-size: 12px;
+  border: 0;
   border-bottom: 1px solid var(--border-faint);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.diff-file-head:hover {
+  background: var(--bg-3);
+}
+.diff-chevron {
+  flex: none;
+  color: var(--text-3);
+  transition: transform var(--dur-1) var(--ease);
+}
+.diff-chevron.collapsed {
+  transform: rotate(-90deg);
+}
+/* a file changed since the last visit — accent the frame + badge */
+.diff-file.changed {
+  border-color: var(--accent-line);
+}
+.diff-new-badge {
+  flex: none;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border-radius: var(--r-xs);
+  padding: 1px 6px;
+}
+.diff-new-count {
+  color: var(--accent-hi);
 }
 .diff-code {
   font-family: var(--font-mono);

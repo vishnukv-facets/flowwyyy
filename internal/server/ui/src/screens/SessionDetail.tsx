@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronsDownUp,
   Circle,
   Coins,
   GitBranch,
@@ -48,6 +49,7 @@ import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
 import type { DiffFile, TranscriptEntry, UiAgent } from '../lib/types'
 import { buildFamilyTree, countNodes, nodeStatus, type OrchNode } from '../lib/orchestration'
+import { changedSinceLook, commitLook } from '../lib/difflook'
 import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
 import { Modal } from '../components/Modal'
@@ -512,7 +514,7 @@ export function SessionDetail({ slug }: { slug: string }) {
             </div>
             <div className="tab-body" style={{ padding: '14px 14px' }}>
               {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} />}
-              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} />}
+              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} slug={slug} trackLook />}
               {tab === 'transcript' && (
                 <TranscriptTab
                   slug={slug}
@@ -531,7 +533,7 @@ export function SessionDetail({ slug }: { slug: string }) {
       </div>
 
       <Modal open={diffModal} onClose={() => setDiffModal(false)} title={`Changes · ${agent?.diff?.files ?? 0} files`} width={1100}>
-        <DiffTab files={agent?.diff_files} error={agentError} />
+        <DiffTab files={agent?.diff_files} error={agentError} slug={slug} />
       </Modal>
 
       <Modal open={transcriptModal} onClose={() => setTranscriptModal(false)} title="Transcript" width={1000}>
@@ -812,41 +814,96 @@ function BriefTab({ slug, summary }: { slug: string; summary?: string }) {
   return <Md source={data} />
 }
 
-function DiffTab({ files, error, onExpand }: { files?: DiffFile[]; error?: unknown; onExpand?: () => void }) {
+function DiffTab({
+  files,
+  error,
+  onExpand,
+  slug,
+  trackLook,
+}: {
+  files?: DiffFile[]
+  error?: unknown
+  onExpand?: () => void
+  slug?: string
+  trackLook?: boolean
+}) {
+  // Per-file collapse — a set of collapsed filenames (all expanded by default).
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
+  // "Since I last looked" — files whose signature changed since the last visit.
+  // Computed once per mount against the stored baseline, which is then advanced
+  // so the next visit compares against this one.
+  const [changed, setChanged] = useState<Set<string>>(new Set())
+  const looked = useRef(false)
+  useEffect(() => {
+    if (!trackLook || !slug || !files || files.length === 0 || looked.current) return
+    setChanged(changedSinceLook(slug, files))
+    commitLook(slug, files)
+    looked.current = true
+  }, [trackLook, slug, files])
+
   if (error) return <ErrorNote error={error} />
   if (!files || files.length === 0) return <div className="faint">No local git changes.</div>
+
+  const allCollapsed = collapsed.size === files.length
+  const toggle = (name: string) =>
+    setCollapsed((s) => {
+      const next = new Set(s)
+      if (next.has(name)) next.delete(name)
+      else next.add(name)
+      return next
+    })
+  const toggleAll = () => setCollapsed(allCollapsed ? new Set() : new Set(files.map((f) => f.name)))
+
   return (
     <div>
-      {onExpand && (
-        <div className="row" style={{ marginBottom: 10 }}>
-          <span className="faint mono" style={{ fontSize: 11 }}>{files.length} files changed</span>
-          <div className="spacer" />
+      <div className="row" style={{ marginBottom: 10 }}>
+        <span className="faint mono" style={{ fontSize: 11 }}>
+          {files.length} file{files.length === 1 ? '' : 's'} changed
+          {changed.size > 0 && (
+            <span className="diff-new-count"> · {changed.size} new since last look</span>
+          )}
+        </span>
+        <div className="spacer" />
+        <button className="btn ghost sm" onClick={toggleAll} title={allCollapsed ? 'Expand all files' : 'Collapse all files'}>
+          <ChevronsDownUp size={13} /> {allCollapsed ? 'Expand all' : 'Collapse all'}
+        </button>
+        {onExpand && (
           <button className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
-        </div>
-      )}
-      {files.map((f) => (
-        <div key={f.name} className="diff-file">
-          <div className="diff-file-head">
-            <span className="clip" style={{ flex: 1 }}>{f.name}</span>
-            <span className="diffstat"><span className="add">+{f.add}</span> <span className="rem">−{f.rem}</span></span>
-          </div>
-          <div className="diff-code">
-            {(f.hunks ?? []).map((h, hi) => (
-              <div key={hi}>
-                <div className="diff-hunk-head">{h.header}</div>
-                {h.lines.map((l, li) => (
-                  <div key={li} className={`diff-line ${l.type}`}>
-                    <span className="ln">{l.n}</span>
-                    <span className="cd">{l.type === 'add' ? '+' : l.type === 'rem' ? '−' : ' '}{l.code}</span>
+        )}
+      </div>
+      {files.map((f) => {
+        const isCollapsed = collapsed.has(f.name)
+        const isChanged = changed.has(f.name)
+        return (
+          <div key={f.name} className={`diff-file${isChanged ? ' changed' : ''}`}>
+            <button className="diff-file-head" onClick={() => toggle(f.name)} aria-expanded={!isCollapsed}>
+              <ChevronDown size={13} className={`diff-chevron${isCollapsed ? ' collapsed' : ''}`} />
+              <span className="clip" style={{ flex: 1, textAlign: 'left' }}>{f.name}</span>
+              {isChanged && (
+                <span className="diff-new-badge" title="Changed since you last viewed this diff">new</span>
+              )}
+              <span className="diffstat"><span className="add">+{f.add}</span> <span className="rem">−{f.rem}</span></span>
+            </button>
+            {!isCollapsed && (
+              <div className="diff-code">
+                {(f.hunks ?? []).map((h, hi) => (
+                  <div key={hi}>
+                    <div className="diff-hunk-head">{h.header}</div>
+                    {h.lines.map((l, li) => (
+                      <div key={li} className={`diff-line ${l.type}`}>
+                        <span className="ln">{l.n}</span>
+                        <span className="cd">{l.type === 'add' ? '+' : l.type === 'rem' ? '−' : ' '}{l.code}</span>
+                      </div>
+                    ))}
                   </div>
                 ))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
