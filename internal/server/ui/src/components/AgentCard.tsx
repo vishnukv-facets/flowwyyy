@@ -1,5 +1,5 @@
 import { useLocation } from 'wouter'
-import { GitBranch, Clock3, Radar, Coins, AlertTriangle } from 'lucide-react'
+import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
@@ -51,6 +51,17 @@ export function AgentCard({ agent }: { agent: UiAgent }) {
           <StatusDot status={badgeStatus} />
           {isDone ? 'done' : STATUS_LABEL[agent.status] ?? agent.status}
         </span>
+        <button
+          className="btn icon ghost sm acard-open"
+          title="Open session in a new tab"
+          aria-label="Open session in a new tab"
+          onClick={(e) => {
+            e.stopPropagation()
+            window.open(`/session/${agent.slug}`, '_blank', 'noopener,noreferrer')
+          }}
+        >
+          <ExternalLink size={13} />
+        </button>
       </div>
 
       {waiting && agent.waiting_for?.why && (

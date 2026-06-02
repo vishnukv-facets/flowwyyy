@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
+import { uploadTerminalAttachments } from '../lib/api'
 
 // Live PTY terminal powered by xterm.js, bound to flow's /ws/terminal JSON
 // protocol: server pushes {type:"output"|"status"|"error"}, client sends
@@ -75,6 +76,10 @@ const TERMINAL_THEME: ITheme = {
 interface Props {
   slug: string
   restartKey?: number
+  // Repaint-style agents (Codex) repaint their UI in place, so the live stream
+  // never accumulates their scrollback; we reseed full history on scroll-to-top
+  // for them. Claude appends inline and accumulates naturally — no reseed.
+  provider?: string
   onStatus?: (kind: 'status' | 'error' | 'closed' | 'open', message: string) => void
 }
 
@@ -85,8 +90,11 @@ function termWsURL(slug: string, cols: number, rows: number): string {
   )}&cols=${cols}&rows=${rows}`
 }
 
-export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
+export function TaskTerminal({ slug, restartKey = 0, provider, onStatus }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
+  // Track the latest provider without restarting the terminal effect on change.
+  const providerRef = useRef(provider)
+  providerRef.current = provider
 
   useEffect(() => {
     const host = hostRef.current
@@ -130,9 +138,26 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
     let reconnectBackoff = TERMINAL_RECONNECT_INITIAL_MS
     let lastSize = ''
     let sawFirstOutput = false // first output frame is the history replay
+    let historyInFlight = false
+    let lastHistoryReq = 0
 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
+    }
+
+    // Ask the server for the authoritative full pane history and rebuild
+    // scrollback from it. Needed for repaint-style agents (Codex) whose live
+    // frames repaint in place and never grow xterm's scrollback — without this
+    // you can't scroll up to the first message. Claude accumulates scrollback
+    // inline, so it's skipped. Guarded against spam (one in-flight + cooldown).
+    const requestFullHistory = () => {
+      if (providerRef.current !== 'codex') return
+      if (historyInFlight) return
+      const now = Date.now()
+      if (now - lastHistoryReq < 1500) return
+      lastHistoryReq = now
+      historyInFlight = true
+      send({ type: 'history' })
     }
 
     // ---- OSC 52 → system clipboard -------------------------------------
@@ -194,6 +219,9 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
       if (lines !== 0) {
         term.scrollLines(lines)
         wheelRemainder -= lines
+        // Reached the top scrolling up: pull the full history so the start of
+        // the session is reachable even for repaint-style agents.
+        if (lines < 0 && term.buffer.active.viewportY <= 0) requestFullHistory()
       }
       event.preventDefault()
       event.stopPropagation()
@@ -206,8 +234,10 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
       if (!event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return true
       if (event.code === 'PageUp') term.scrollPages(-1)
       else if (event.code === 'PageDown') term.scrollPages(1)
-      else if (event.code === 'Home') term.scrollToTop()
-      else if (event.code === 'End') term.scrollToBottom()
+      else if (event.code === 'Home') {
+        term.scrollToTop()
+        requestFullHistory()
+      } else if (event.code === 'End') term.scrollToBottom()
       else return true
       event.preventDefault()
       return false
@@ -260,6 +290,48 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
     }
     host.addEventListener('mousedown', onHostMouseDown, true)
 
+    // ---- image attach: drop / paste ------------------------------------
+    // Drag, drop, or paste an image onto the terminal to attach it to the live
+    // agent. The server stores it under the task and returns a file reference
+    // (`@path` for Claude, bare path for Codex) that we inject into the PTY —
+    // the agent then reads the image. (Restores a pre-rewrite capability.)
+    const attachImageFiles = async (files: File[]) => {
+      const images = files.filter((f) => f.type.startsWith('image/'))
+      if (images.length === 0) return
+      try {
+        const insert = await uploadTerminalAttachments(slug, images)
+        if (insert) {
+          send({ type: 'input', data: insert + ' ' })
+          pushToast('ok', images.length > 1 ? `attached ${images.length} images` : 'image attached')
+          term.focus()
+        }
+      } catch (err) {
+        pushToast('error', err instanceof Error ? err.message : 'image attach failed')
+      }
+    }
+    const onHostPaste = (e: ClipboardEvent) => {
+      const files = Array.from(e.clipboardData?.files ?? [])
+      if (!files.some((f) => f.type.startsWith('image/'))) return // text paste → let xterm handle it
+      // xterm's own paste handler (on its root element, inside this host) calls
+      // stopPropagation, so we must intercept in the CAPTURE phase and stop it
+      // here to claim the image before xterm swallows the event.
+      e.preventDefault()
+      e.stopPropagation()
+      void attachImageFiles(files)
+    }
+    const onHostDragOver = (e: DragEvent) => {
+      if (Array.from(e.dataTransfer?.types ?? []).includes('Files')) e.preventDefault()
+    }
+    const onHostDrop = (e: DragEvent) => {
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (!files.some((f) => f.type.startsWith('image/'))) return
+      e.preventDefault()
+      void attachImageFiles(files)
+    }
+    host.addEventListener('paste', onHostPaste, true) // capture: beat xterm's stopPropagation
+    host.addEventListener('dragover', onHostDragOver)
+    host.addEventListener('drop', onHostDrop)
+
     // ---- auto-copy selection to clipboard ------------------------------
     let selectionCopyTimer = 0 as unknown as ReturnType<typeof setTimeout> | 0
     const flushSelectionCopy = () => {
@@ -294,6 +366,18 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
     }
     const fitNow = () => {
       try {
+        // Re-measure the cell BEFORE fitting. xterm only measures the cell at
+        // open() and on resize — NOT when a webfont finishes loading. So after
+        // JetBrains Mono loads, xterm keeps the fallback metrics it measured at
+        // open(); FitAddon then divides the host by that stale (smaller) cell
+        // height, computes too many rows, and the bottom rows — the live input
+        // box — overflow the host and clip below the fold. (A zoom "fixed" it
+        // only because the DPR change forced this same re-measure.) measure()
+        // updates the render service's dimensions synchronously, so the very
+        // next fit.fit() reads the correct cell height. This is the root fix the
+        // earlier font-race patches missed: they re-fit but never re-measured.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(term as any)._core?._charSizeService?.measure?.()
         fit.fit()
       } catch {
         /* host not measurable yet */
@@ -372,6 +456,17 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
               term.scrollToBottom()
             }
           })
+        } else if (m.type === 'history' && m.data != null) {
+          // Authoritative full-history reseed (server sendHistory): rebuild the
+          // buffer so a repaint-style session becomes scrollable to its first
+          // message, then jump to the top the user was reaching for. Done via
+          // the write queue (clear saved lines + screen + home, then history) so
+          // it's ordered after any pending live frames — a synchronous reset()
+          // would race ahead of queued writes. Newer live frames land below the
+          // history (the bottom rows, off-screen while the user reads the top).
+          historyInFlight = false
+          term.write('\x1b[3J\x1b[2J\x1b[H')
+          term.write(m.data, () => term.scrollToTop())
         } else if (m.type === 'status') onStatus?.('status', m.message ?? '')
         else if (m.type === 'error') onStatus?.('error', m.message ?? 'terminal error')
       }
@@ -459,6 +554,9 @@ export function TaskTerminal({ slug, restartKey = 0, onStatus }: Props) {
       window.removeEventListener('resize', resize)
       document.removeEventListener('visibilitychange', onVisible)
       host.removeEventListener('mousedown', onHostMouseDown, true)
+      host.removeEventListener('paste', onHostPaste, true)
+      host.removeEventListener('dragover', onHostDragOver)
+      host.removeEventListener('drop', onHostDrop)
       dataDisposable.dispose()
       resizeDisposable.dispose()
       selectionDisposable.dispose()

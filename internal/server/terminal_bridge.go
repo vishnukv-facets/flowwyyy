@@ -1198,15 +1198,45 @@ func (s *terminalSession) running() bool {
 	}
 }
 
+// captureReplay returns the authoritative pane history used to (re)seed a
+// browser's scrollback: a fresh capture-pane spanning tmux's full history when
+// the session is tmux-backed, else the sanitized accumulated byte stream. This
+// is the only complete source of history — the live attach stream repaints
+// repaint-style agents (Codex) in place and never accumulates their scrollback.
+func (s *terminalSession) captureReplay() []byte {
+	s.mu.Lock()
+	scrollback := append([]byte(nil), s.scrollback...)
+	sharedName := s.sharedName
+	s.mu.Unlock()
+	if sharedName != "" {
+		if captured, err := sharedTerminalCaptureHistory(sharedName); err == nil {
+			return captured
+		}
+	}
+	if len(scrollback) > 0 {
+		return stripTerminalAltScreenControls(scrollback)
+	}
+	return nil
+}
+
+// sendHistory re-sends the full pane history to one client as a "history"
+// reseed. The browser requests this when the user scrolls to the top of a
+// repaint-style (Codex) session, then rebuilds its scrollback from it so the
+// first message becomes reachable. Claude appends inline and accumulates
+// scrollback naturally, so it never needs this.
+func (s *terminalSession) sendHistory(client *terminalClient) {
+	if data := s.captureReplay(); len(data) > 0 {
+		client.queue(terminalWSMessage{Type: "history", Data: string(data)})
+	}
+}
+
 func (s *terminalSession) addClient(client *terminalClient, replay bool) {
 	s.mu.Lock()
 	s.clients[client] = struct{}{}
-	scrollback := append([]byte(nil), s.scrollback...)
 	status := s.exitStatus
 	closed := s.closed
 	provider := s.provider
 	sessionID := s.sessionID
-	sharedName := s.sharedName
 	s.mu.Unlock()
 
 	if provider == "" {
@@ -1229,16 +1259,7 @@ func (s *terminalSession) addClient(client *terminalClient, replay bool) {
 		// unlimited) history so the browser can scroll to the start. Fall back to
 		// the accumulated scrollback (the non-tmux/direct-PTY path) if capture is
 		// unavailable.
-		var replayData []byte
-		if sharedName != "" {
-			if captured, err := sharedTerminalCaptureHistory(sharedName); err == nil {
-				replayData = captured
-			}
-		}
-		if replayData == nil && len(scrollback) > 0 {
-			replayData = stripTerminalAltScreenControls(scrollback)
-		}
-		if len(replayData) > 0 {
+		if replayData := s.captureReplay(); len(replayData) > 0 {
 			client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
 		}
 	}
@@ -1440,6 +1461,10 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 			}
 		case "resize":
 			_ = sess.resize(msg.Cols, msg.Rows)
+		case "history":
+			// Client scrolled to the top of a repaint-style session and wants
+			// the authoritative full history to rebuild its scrollback.
+			sess.sendHistory(c)
 		}
 	}
 }

@@ -1603,6 +1603,16 @@ select.input {
   place-items: center;
   color: var(--accent-hi);
 }
+/* "open in new tab" on a session card — present but unobtrusive next to the
+   status badge; brightens on hover/focus. */
+.acard-open {
+  opacity: 0.5;
+  flex: none;
+}
+.acard-open:hover,
+.acard-open:focus-visible {
+  opacity: 1;
+}
 .acard-mon svg {
   animation: l-glow 2.2s ease-in-out infinite;
 }
