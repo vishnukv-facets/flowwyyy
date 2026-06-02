@@ -271,7 +271,7 @@ func TestGitHubPollerFetchesIssueCommentsForTrackedIssue(t *testing.T) {
 	}
 }
 
-func TestGitHubPollerDropsSelfAuthoredIssueComments(t *testing.T) {
+func TestGitHubPollerDeliversSelfAuthoredIssueComments(t *testing.T) {
 	db := dispatcherTestDB(t)
 	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
 	client := &fakeGitHubAPIClient{
@@ -279,22 +279,28 @@ func TestGitHubPollerDropsSelfAuthoredIssueComments(t *testing.T) {
 			"Facets-cloud/flow-manager#42": {State: "open"},
 		},
 		issueCommentRows: []githubIssueCommentRecord{
-			{NodeID: "IC_self", Body: "my own comment", User: githubUser{Login: "Me"}},
+			{NodeID: "IC_self", Body: "fix merge conflicts", User: githubUser{Login: "Me"}},
 			{NodeID: "IC_other", Body: "their comment", User: githubUser{Login: "other"}},
 		},
 	}
-	// SelfLogins is case-insensitive; passing "me" must still match "Me".
+	// Operator-authored (self-login) top-level comments MUST be delivered — they
+	// are the operator's instruction channel on a monitored PR. SelfLogins still
+	// drives the search queries, so it's set, but it no longer drops comments.
 	p := GitHubPoller{DB: db, Client: client, SelfLogins: []string{"me"}}
 
 	events, err := p.Poll(context.Background())
 	if err != nil {
 		t.Fatalf("Poll: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("events = %#v, want 1 (self-authored dropped)", events)
+	keys := map[string]bool{}
+	for _, e := range events {
+		keys[e.EventKey] = true
 	}
-	if events[0].EventKey != "issue-comment:IC_other" {
-		t.Fatalf("kept wrong event: %#v", events[0])
+	if !keys["issue-comment:IC_self"] {
+		t.Errorf("self-authored top-level comment must be delivered; got %#v", events)
+	}
+	if !keys["issue-comment:IC_other"] {
+		t.Errorf("external top-level comment must be delivered; got %#v", events)
 	}
 }
 

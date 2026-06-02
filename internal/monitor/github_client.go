@@ -79,6 +79,10 @@ func (p GitHubPoller) Poll(ctx context.Context) ([]GitHubEvent, error) {
 	if p.Client == nil {
 		p.Client = ghAPIClient{}
 	}
+	// Before polling tracked PRs, link any in-progress task to a PR opened on
+	// its branch since the last cycle — so a PR raised mid-task is tagged and
+	// its comments/reviews start flowing the same cycle (not only at flow done).
+	linkInProgressTaskPRs(ctx, p.DB)
 	var events []GitHubEvent
 	seen := map[string]bool{}
 	add := func(ev GitHubEvent) {
@@ -245,9 +249,13 @@ func (p GitHubPoller) pollTrackedPRComments(ctx context.Context) ([]GitHubEvent,
 			if !ok {
 				continue
 			}
-			if p.isSelfAuthored(ev.Author) {
-				continue
-			}
+			// Deliver top-level PR comments even when authored by the operator's
+			// own login. Commenting on a monitored PR is the operator's primary
+			// way to instruct the agent (e.g. "fix merge conflicts"); silently
+			// dropping self-authored comments meant those instructions never
+			// reached the task. Persistent per-event dedup (HasGitHubEvent)
+			// guarantees each comment wakes the session exactly once, so there's
+			// no echo loop — same as the already-unfiltered head-update wake.
 			events = append(events, ev)
 		}
 	}
@@ -277,30 +285,13 @@ func (p GitHubPoller) pollTrackedIssueComments(ctx context.Context) ([]GitHubEve
 			if !ok {
 				continue
 			}
-			if p.isSelfAuthored(ev.Author) {
-				continue
-			}
+			// Deliver operator-authored top-level comments too (see the rationale
+			// in pollTrackedPRComments) — they're how the operator talks to the
+			// agent on a monitored issue; per-event dedup makes it fire once.
 			events = append(events, ev)
 		}
 	}
 	return events, nil
-}
-
-// isSelfAuthored returns true when login matches one of the configured
-// SelfLogins (case-insensitive). Top-level comments authored by the
-// monitored user echo back through GitHub's comments API and would
-// otherwise wake the user's own task on their own comment.
-func (p GitHubPoller) isSelfAuthored(login string) bool {
-	login = strings.TrimSpace(login)
-	if login == "" {
-		return false
-	}
-	for _, self := range p.SelfLogins {
-		if strings.EqualFold(strings.TrimSpace(self), login) {
-			return true
-		}
-	}
-	return false
 }
 
 func shortGitHubSHA(sha string) string {

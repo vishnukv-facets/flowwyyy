@@ -2316,11 +2316,32 @@ under the `tags:` line), follow this bootstrap:
    use the Slack MCP tools — primarily
    `mcp__claude_ai_Slack__slack_read_thread` against the channel +
    thread_ts in your brief.
-6. **Reply.** Use `mcp__claude_ai_Slack__slack_send_message` with
-   `channel` and `thread_ts` from your brief. Posts go as the user (User
-   Token), not a bot, so write in their voice and avoid claims you can't
-   back up. Save a progress note after each meaningful exchange so the
-   thread's history is captured in flow even if the inbox file rotates.
+6. **Reply.** Post into the originating thread (`channel` + `thread_ts`
+   from your brief). Posts go as the user (User Token), not a bot, so
+   write in their voice and avoid claims you can't back up. The send
+   tool and the attribution footer differ by provider:
+   - **Claude Code sessions:** use `mcp__claude_ai_Slack__slack_send_message`.
+     It appends a `Sent using @Claude` attribution footer automatically —
+     do NOT add your own; you'd double it.
+   - **Codex sessions:** use the Slack plugin's send-message tool
+     (`slack@openai-curated`). That plugin does NOT add any attribution,
+     so you MUST append your own footer as the LAST line of the message
+     body, mirroring Claude's behavior so the reader can see an agent
+     sent it. Separate it from the reply with a blank line:
+
+     ```
+     <your reply text>
+
+     Sent using @codex
+     ```
+
+     Always append this footer to every Codex-sent Slack reply. (If a
+     Codex Slack app/bot exists in the workspace, `@`-mention it so it
+     renders as a chip like `@Claude` does; otherwise the plain
+     `@codex` text is fine.)
+
+   Save a progress note after each meaningful exchange so the thread's
+   history is captured in flow even if the inbox file rotates.
 7. **Close out.** When the thread is resolved (`:white_check_mark:` from
    the user, "thanks", explicit "done"), run `flow done` — the close-out
    sweep distills the Slack conversation into KB facts and a project
@@ -2392,8 +2413,13 @@ lists tags under the `tags:` line), follow this bootstrap:
    `~/.flow/tasks/<your-slug>/inbox.jsonl` in order. Each line is a JSON
    object `{enqueued_at, event}` where `event.Kind` may include
    `pr_assigned`, `pr_review_requested`, `issue_assigned`,
+   `pr_comment`, `issue_comment` (top-level conversation comments),
    `pr_review_comment`, `pr_review_changes_requested`,
    `pr_review_approved`, `pr_head_updated`, `pr_merged`, or `pr_closed`.
+   Top-level comments arrive even when the operator authored them on
+   their own PR/issue — that is the operator's primary way to instruct
+   you mid-task (e.g. "fix merge conflicts"); act on the instruction. Do
+   not re-action a comment you yourself posted.
 4. **Use the same-session monitor.** Flow wakes the same Flow-owned
    terminal session when ANY new GitHub event arrives for this task —
    every PR/issue event is actionable (comments, head updates, approvals,
