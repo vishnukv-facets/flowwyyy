@@ -44,6 +44,7 @@ interface ClaudeRefs {
   book: RefObject<SVGGElement>
   heart: RefObject<SVGGElement>
   board: RefObject<SVGGElement>
+  surf: RefObject<SVGGElement>
   dream: RefObject<SVGGElement>
   laptop: RefObject<SVGGElement>
 }
@@ -64,6 +65,7 @@ function useClaudeRefs(): ClaudeRefs {
     book: useRef<SVGGElement>(null),
     heart: useRef<SVGGElement>(null),
     board: useRef<SVGGElement>(null),
+    surf: useRef<SVGGElement>(null),
     dream: useRef<SVGGElement>(null),
     laptop: useRef<SVGGElement>(null),
   }
@@ -156,6 +158,15 @@ function ClaudeFigure({ r, withProps = false }: { r: ClaudeRefs; withProps?: boo
               <rect x="11" y="44" width="42" height="2.6" rx="1.3" fill="#c08348" />
               <rect x="17" y="46.4" width="5" height="3.4" rx="1.5" fill="#8a5836" />
               <rect x="42" y="46.4" width="5" height="3.4" rx="1.5" fill="#8a5836" />
+            </g>
+            {/* surfboard (surf) — under the feet while riding the wave. The wave
+                itself is a separate rail-layer element; this is just the board the
+                rider stands on. Its upturned nose flips with travel direction via
+                the group's scaleX. */}
+            <g ref={r.surf} style={{ display: 'none' }}>
+              <rect x="12" y="42" width="40" height="3.4" rx="1.7" fill="#e8e6df" />
+              <rect x="12" y="43.4" width="40" height="1" rx="0.5" fill={CORAL} />
+              <rect x="48" y="40.4" width="6" height="3" rx="1.5" fill="#e8e6df" transform="rotate(-20 51 41.9)" />
             </g>
             {/* dream bubble (asleep) */}
             <g ref={r.dream} style={{ display: 'none' }}>
@@ -415,6 +426,8 @@ export function ClaudeFlowScene({ width = 248, className, only }: { width?: numb
 // bit before dozing off again. Poke while awake = pet/tickle; drag it along.
 // ---------------------------------------------------------------------------
 const RUNNER_W = 42
+const WAVE_W = 58 // swell graphic width (px) — wider than the mascot so it can ride it
+const WAVE_H = 15 // swell crest height (px) — a touch under the mascot's ~24px body
 const WAKE_NUDGES = 4 // pokes needed to anger it awake
 const NUDGE_WINDOW_MS = 2500 // stop poking this long → it settles back to deep sleep
 const NIGHT_AWAKE_MS = 24000 // once woken at night, works this long (sans new sessions) then sleeps
@@ -423,6 +436,7 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
   const r = useClaudeRefs()
   const wrapRef = useRef<HTMLDivElement>(null)
   const svgRef = useRef<SVGSVGElement>(null)
+  const waveRef = useRef<SVGSVGElement>(null)
   const browsRef = useRef<SVGGElement>(null)
   const zzzRef = useRef<SVGGElement>(null)
   const downRef = useRef<(e: { clientX: number }) => void>(() => {})
@@ -438,16 +452,17 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
   const prevInbox = useRef(inbox)
 
   useEffect(() => {
-    const wrap = wrapRef.current, svg = svgRef.current, brows = browsRef.current, zzzG = zzzRef.current
+    const wrap = wrapRef.current, svg = svgRef.current, waveEl = waveRef.current, brows = browsRef.current, zzzG = zzzRef.current
     const cg = r.group.current, breath = r.breath.current, eyes = r.eyes.current
     const legsG = r.legs.current, nubL = r.nubL.current, nubR = r.nubR.current
     const flag = r.flag.current, dbL = r.dumbbellL.current, dbR = r.dumbbellR.current, confG = r.conf.current
     const mug = r.mug.current, book = r.book.current, heart = r.heart.current, board = r.board.current, dream = r.dream.current
-    const laptop = r.laptop.current
-    if (!wrap || !svg || !brows || !zzzG || !cg || !breath || !eyes || !legsG || !nubL || !nubR || !flag || !dbL || !dbR || !confG || !mug || !book || !heart || !board || !dream || !laptop) return
+    const laptop = r.laptop.current, surfRig = r.surf.current
+    if (!wrap || !svg || !waveEl || !brows || !zzzG || !cg || !breath || !eyes || !legsG || !nubL || !nubR || !flag || !dbL || !dbR || !confG || !mug || !book || !heart || !board || !dream || !laptop || !surfRig) return
     const legs = Array.from(legsG.children)
     const conf = Array.from(confG.children)
     const zzz = Array.from(zzzG.children)
+    const spray = Array.from(waveEl.querySelectorAll('[data-spray]'))
     if (prefersReduced()) { gsap.set(svg, { x: Math.max(0, (wrap.offsetWidth - RUNNER_W) / 2) }); return }
     const rand = (a: number, b: number) => a + Math.random() * (b - a)
     const maxX = () => Math.max(16, wrap.offsetWidth - RUNNER_W)
@@ -485,6 +500,81 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
         .to(cg, { rotation: 0, y: 0, transformOrigin: '50% 100%', duration: 0.25, ease: 'power2.inOut' }, t + 1.25)
         .set(board, { display: 'none' }, t + 1.55)
       return t + 1.55
+    }
+
+    // surf set-piece — every so often a swell rolls in from a corner, Claude is
+    // startled, then hops onto a surfboard and rides ABOVE the crest to the far
+    // corner, where the wave breaks and recedes off-screen. The wave is its own
+    // full-rail element animated in the same px space as the figure's svg.x, so
+    // the two stay locked: the rider sits on the crest the whole way. `dir` (the
+    // travel direction) flips the breaking curl, so it reads the same whether the
+    // wave comes from the left corner or the right.
+    const SURF_OFFSET = (WAVE_W - RUNNER_W) / 2 // centres the rider on the crest peak
+    const SURF_LIFT = WAVE_H - 3                 // how far up the figure rides to sit on the crest
+    const surfWave = (tl: gsap.core.Timeline) => {
+      const railW = wrap.offsetWidth
+      const cur = curX()
+      const fromLeft = cur < maxX() / 2          // the swell enters from the nearer corner…
+      const dir = fromLeft ? 1 : -1              // …and carries Claude to the far one
+      const entryWaveX = fromLeft ? -WAVE_W : railW
+      const exitWaveX = fromLeft ? railW : -WAVE_W
+      const farX = fromLeft ? maxX() : 0
+      const mountWaveX = cur - SURF_OFFSET       // wave peak meets Claude where he stands
+      const ENTER = 0.8, RIDE = 1.7
+
+      // --- swell rolls in from the corner ---
+      tl.set(waveEl, { x: entryWaveX, scaleX: dir, opacity: 0, transformOrigin: '50% 100%' }, 0)
+        .to(waveEl, { opacity: 1, duration: 0.25 }, 0)
+        .to(waveEl, { x: mountWaveX, duration: ENTER, ease: 'power1.out' }, 0)
+        // Claude clocks it coming — glance toward the incoming side
+        .to(eyes, { x: dir * 2.4, transformOrigin: '50% 50%', duration: 0.3, ease: 'sine.out' }, 0.15)
+        .to(cg, { rotation: dir * 4, transformOrigin: '50% 100%', duration: 0.3, ease: 'sine.out' }, 0.2)
+        // SURPRISE as it arrives — eyes pop, arms fly up, a startled recoil hop
+        .to(eyes, { scaleY: 1.5, scaleX: 1.15, x: 0, transformOrigin: '50% 50%', duration: 0.12, ease: 'power2.out' }, ENTER - 0.2)
+        .to(nubL, { rotation: -60, y: -6, transformOrigin: '100% 100%', duration: 0.16, ease: 'back.out(2)' }, ENTER - 0.2)
+        .to(nubR, { rotation: 60, y: -6, transformOrigin: '0% 100%', duration: 0.16, ease: 'back.out(2)' }, ENTER - 0.2)
+        .to(cg, { y: -7, rotation: -dir * 6, transformOrigin: '50% 100%', duration: 0.16, ease: 'power2.out' }, ENTER - 0.2)
+        .to(legs, { scaleY: 0.82, transformOrigin: '50% 100%', duration: 0.12 }, ENTER - 0.2)
+
+      // --- mount: board out, climb on, ride lifts him up onto the crest ---
+      const mt = ENTER
+      tl.set(surfRig, { display: 'inline', scaleX: dir, opacity: 1, transformOrigin: '50% 50%' }, mt)
+        .to(legs, { scaleY: 1, rotation: 0, transformOrigin: '50% 100%', duration: 0.18 }, mt)
+        .to(svg, { y: -SURF_LIFT, duration: 0.3, ease: 'power2.out' }, mt)        // up onto the crest
+        .to(cg, { y: 0, rotation: dir * 8, transformOrigin: '50% 100%', duration: 0.3, ease: 'power2.out' }, mt)
+        .to(nubL, { rotation: -22, y: -2, transformOrigin: '100% 100%', duration: 0.26, ease: 'sine.out' }, mt)
+        .to(nubR, { rotation: 22, y: -2, transformOrigin: '0% 100%', duration: 0.26, ease: 'sine.out' }, mt)
+        .to(eyes, { scaleY: 1, scaleX: 1, transformOrigin: '50% 50%', duration: 0.25 }, mt + 0.1)
+
+      // --- ride: wave + rider sweep to the far corner together, locked in step ---
+      const rd = mt + 0.2
+      tl.to(waveEl, { x: farX - SURF_OFFSET, duration: RIDE, ease: 'sine.inOut' }, rd)
+        .to(svg, { x: farX, duration: RIDE, ease: 'sine.inOut' }, rd)
+        // bob along the crest + carve the lean
+        .to(svg, { y: -SURF_LIFT - 3, duration: 0.42, ease: 'sine.inOut', yoyo: true, repeat: 2 }, rd + 0.1)
+        .to(cg, { rotation: dir * 4, transformOrigin: '50% 100%', duration: 0.5, ease: 'sine.inOut', yoyo: true, repeat: 1 }, rd + 0.2)
+        .to(eyes, { scaleY: 0.6, transformOrigin: '50% 50%', duration: 0.18, yoyo: true, repeat: 1 }, rd + 0.7)
+      // spray flicks off the crest (local coords; the wave's scaleX mirrors the side)
+      spray.forEach((s, i) =>
+        tl.fromTo(s,
+          { opacity: 0, x: 0, y: 0, scale: 0.5 },
+          { opacity: 0.9, x: -(4 + i * 3), y: -(4 + i * 2), scale: 1, transformOrigin: '50% 50%', duration: 0.4, ease: 'power2.out', yoyo: true, repeat: 4 },
+          rd + 0.2 + i * 0.06))
+
+      // --- dismount at the corner: hop down, board away, wave breaks & recedes ---
+      const ds = rd + RIDE
+      tl.to(cg, { rotation: 0, transformOrigin: '50% 100%', duration: 0.2 }, ds)
+        .to([nubL, nubR], { rotation: 0, y: 0, duration: 0.22, ease: 'power2.inOut' }, ds)
+        .to(svg, { y: 0, duration: 0.32, ease: 'bounce.out' }, ds)                // hop back down to the line
+        .to(spray, { opacity: 0, duration: 0.15 }, ds)
+        .to(surfRig, { opacity: 0, duration: 0.18, ease: 'power2.in' }, ds + 0.1)
+        .set(surfRig, { display: 'none', scaleX: 1, clearProps: 'transform,opacity' }, ds + 0.34)
+        .set(spray, { clearProps: 'transform,opacity' }, ds + 0.34)
+        .to(waveEl, { x: exitWaveX, duration: 0.6, ease: 'power1.in' }, ds)        // wave rolls on past the corner
+        .to(waveEl, { opacity: 0, duration: 0.4 }, ds + 0.3)
+        .set(waveEl, { display: 'inline', scaleX: 1, opacity: 0, x: 0, clearProps: 'transform' }, ds + 0.75)
+        .to(eyes, { scaleY: 1, transformOrigin: '50% 50%', duration: 0.2 }, ds + 0.3)
+      return ds + 0.9
     }
 
     // ---- activities (figure-only) ----
@@ -536,13 +626,21 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
         .to(cg, { rotation: 0, transformOrigin: '50% 100%', duration: 0.25, ease: 'sine.inOut' }, t + 1.0)
       return t + 1.35
     }
+    // sit on the ledge — scoot the whole figure DOWN so the body's base rests on
+    // the divider line and the legs fall BELOW it (rendered via the rail's open
+    // bottom clip), then idly kick the dangling feet. The hips now sit right on
+    // the line, so each leg swings from the ledge edge — a little 3D perch.
     const aSit = (tl: gsap.core.Timeline, t: number) => {
-      tl.to(legs, { rotation: -55, transformOrigin: '50% 0%', duration: 0.25, ease: 'power2.out' }, t)
-        .to(cg, { y: 6, transformOrigin: '50% 100%', duration: 0.25, ease: 'power2.out' }, t)
-        .to(legs, { rotation: -75, transformOrigin: '50% 0%', duration: 0.4, ease: 'sine.inOut', yoyo: true, repeat: 3 }, t + 0.3) // dangle/swing
-        .to(legs, { rotation: 0, transformOrigin: '50% 0%', duration: 0.25, ease: 'power2.inOut' }, t + 2.0)
-        .to(cg, { y: 0, transformOrigin: '50% 100%', duration: 0.25, ease: 'power2.inOut' }, t + 2.0)
-      return t + 2.3
+      const kickA = [legs[0], legs[2]], kickB = [legs[1], legs[3]] // alternate pairs out of phase
+      tl.to(cg, { y: 8, transformOrigin: '50% 100%', duration: 0.34, ease: 'power2.out' }, t) // drop down onto the ledge
+        .to(eyes, { y: 1.2, scaleY: 0.85, transformOrigin: '50% 50%', duration: 0.3 }, t)       // peer down over the edge
+        .to(kickA, { rotation: 11, transformOrigin: '50% 0%', duration: 0.55, ease: 'sine.inOut', yoyo: true, repeat: 3 }, t + 0.36)
+        .to(kickB, { rotation: -11, transformOrigin: '50% 0%', duration: 0.55, ease: 'sine.inOut', yoyo: true, repeat: 3 }, t + 0.64)
+        // climb back up onto the rail and stand
+        .to(legs, { rotation: 0, transformOrigin: '50% 0%', duration: 0.3, ease: 'power2.inOut' }, t + 2.2)
+        .to(eyes, { y: 0, scaleY: 1, transformOrigin: '50% 50%', duration: 0.25 }, t + 2.2)
+        .to(cg, { y: 0, transformOrigin: '50% 100%', duration: 0.32, ease: 'power2.inOut' }, t + 2.25)
+      return t + 2.7
     }
     const aYawn = (tl: gsap.core.Timeline, t: number) => {
       tl.to(nubL, { rotation: -55, y: -4, transformOrigin: '100% 100%', duration: 0.4, ease: 'power2.out' }, t)
@@ -632,10 +730,11 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
     const codeLines = Array.from(laptop.querySelectorAll('[data-code]'))
     const hands = Array.from(laptop.querySelectorAll('[data-hand]'))
     const aWork = (tl: gsap.core.Timeline, t: number) => {
-      // settle in — tuck legs, lean over, bring the laptop up, hands to the keys
+      // settle in — perch on the ledge (legs dangle over the edge), lean over,
+      // bring the laptop up, hands to the keys
       tl.set(laptop, { display: 'inline', opacity: 0, scale: 0.9, transformOrigin: '50% 100%' }, t)
-        .to(legs, { rotation: -48, transformOrigin: '50% 0%', duration: 0.28, ease: 'power2.out' }, t)
-        .to(cg, { y: 2, transformOrigin: '50% 100%', duration: 0.28, ease: 'power2.out' }, t)
+        .to(cg, { y: 6, transformOrigin: '50% 100%', duration: 0.28, ease: 'power2.out' }, t)
+        .to([legs[1], legs[2]], { rotation: 7, transformOrigin: '50% 0%', duration: 0.7, ease: 'sine.inOut', yoyo: true, repeat: 2 }, t + 0.4) // idle foot kick while typing
         .to(nubL, { rotation: 24, transformOrigin: '100% 100%', duration: 0.3, ease: 'power2.inOut' }, t + 0.08)
         .to(nubR, { rotation: -24, transformOrigin: '0% 100%', duration: 0.3, ease: 'power2.inOut' }, t + 0.08)
         .to(laptop, { opacity: 1, scale: 1, duration: 0.3, ease: 'back.out(1.5)' }, t + 0.2)
@@ -678,6 +777,7 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
     let zzzTl: gsap.core.Timeline | null = null
     let snoreTl: gsap.core.Tween | null = null
     let dreamTl: gsap.core.Timeline | null = null
+    let dreamWait: gsap.core.Tween | null = null
     let nudgeTimer: ReturnType<typeof setTimeout> | null = null
     let clickTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -686,14 +786,17 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
     // (pet, drag, reaction) mid-activity would otherwise leave the prop stuck on —
     // and the next activity would stack its prop on top. Call this on every interrupt.
     const neutralize = () => {
-      gsap.set([flag, dbL, dbR, mug, book, board, laptop, heart], { display: 'none', clearProps: 'transform,opacity' })
+      gsap.set([flag, dbL, dbR, mug, book, board, surfRig, laptop, heart], { display: 'none', clearProps: 'transform,opacity' })
       gsap.set(conf, { opacity: 0, clearProps: 'transform' }) // drop any stuck confetti / juggle balls off the head
+      gsap.set(spray, { opacity: 0, clearProps: 'transform' }) // and any in-flight surf spray
+      gsap.set(waveEl, { opacity: 0, x: 0, scaleX: 1 })        // send the swell away if a ride was cut short
       gsap.set(codeLines, { clearProps: 'opacity' })
       gsap.set(hands, { clearProps: 'transform' })
       gsap.set(legs, { rotation: 0, scaleY: 1, transformOrigin: '50% 0%' })
       gsap.set([nubL, nubR], { x: 0, y: 0, rotation: 0 })
       gsap.set(eyes, { x: 0, y: 0, scaleY: 1 })
       gsap.set(cg, { x: 0, y: 0, rotation: 0, scaleY: 1 })
+      gsap.set(svg, { y: 0 }) // drop back to the rail line (x preserved — stays where it was)
     }
 
     const shouldSleep = () =>
@@ -721,6 +824,7 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
       if (shouldSleep()) { goSleep(); return }
       const tl = gsap.timeline()
       if (wokeForWork) { wokeForWork = false; workBlock(tl, true) }       // just woke → coffee, then work
+      else if (maxX() > 108 && Math.random() < 0.16) surfWave(tl)         // ~1 in 6: a rogue wave rolls in (needs room)
       else if (Math.random() < 0.55) workBlock(tl, Math.random() < 0.3)   // mostly: sit at the laptop
       else wander(tl)                                                     // otherwise: roam + a random act
       tl.eventCallback('onComplete', () => schedule())
@@ -738,20 +842,26 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
     // snore — the Zzz cluster swells on a slow loop while asleep
     const startSnore = () => { snoreTl = gsap.to(zzzG, { scale: 1.18, transformOrigin: '40% 100%', duration: 1.3, ease: 'sine.inOut', yoyo: true, repeat: -1 }) }
     const stopSnore = () => { snoreTl?.kill(); snoreTl = null; gsap.set(zzzG, { clearProps: 'scale' }) }
-    // dream — a little thought bubble pops up now and then while asleep
-    const startDream = () => {
-      dreamTl = gsap.timeline({ repeat: -1, repeatDelay: 2.6 })
+    // dream — a cookie thought-bubble drifts up now and then while asleep. Each
+    // dream schedules the NEXT one after a randomized gap (not a fixed metronome),
+    // so it shows up far less often and on an irregular rhythm.
+    const playDream = () => {
+      dreamTl = gsap.timeline({
+        onComplete: () => { dreamWait = gsap.delayedCall(rand(7, 18), playDream) },
+      })
       dreamTl.set(dream, { display: 'inline', opacity: 0, scale: 0.6, transformOrigin: '40% 100%' })
         .to(dream, { opacity: 1, scale: 1, duration: 0.5, ease: 'back.out(1.6)' })
-        .to(dream, { opacity: 1, duration: 1.6 })
+        .to(dream, { opacity: 1, duration: rand(1.4, 2.6) })
         .to(dream, { opacity: 0, scale: 0.7, duration: 0.4, ease: 'power2.in' })
         .set(dream, { display: 'none' })
     }
-    const stopDream = () => { dreamTl?.kill(); dreamTl = null; gsap.set(dream, { display: 'none' }); gsap.set(dream, { clearProps: 'opacity,scale' }) }
+    const startDream = () => { dreamWait = gsap.delayedCall(rand(3, 9), playDream) }
+    const stopDream = () => { dreamWait?.kill(); dreamWait = null; dreamTl?.kill(); dreamTl = null; gsap.set(dream, { display: 'none' }); gsap.set(dream, { clearProps: 'opacity,scale' }) }
 
     const goSleep = () => {
       mode = 'sleep'; nudges = 0
       current?.kill(); wait?.kill(); current = null; wait = null
+      neutralize() // drop any prop/wave a just-finished activity left mid-frame so nothing shows while asleep
       gsap.set(brows, { display: 'none' })
       blink.pause(); breathe.timeScale(0.55)
       const tl = gsap.timeline()
@@ -964,7 +1074,7 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
 
     return () => {
       dead = true
-      breathe.kill(); blink.kill(); wait?.kill(); current?.kill(); zzzTl?.kill(); snoreTl?.kill(); dreamTl?.kill()
+      breathe.kill(); blink.kill(); wait?.kill(); current?.kill(); zzzTl?.kill(); snoreTl?.kill(); dreamTl?.kill(); dreamWait?.kill()
       if (nudgeTimer) clearTimeout(nudgeTimer)
       if (clickTimer) clearTimeout(clickTimer)
       window.removeEventListener('pointermove', onPointerMove)
@@ -972,9 +1082,9 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
       window.removeEventListener('keydown', onKey)
       document.removeEventListener('visibilitychange', onVisible)
       reactRef.current = {}
-      gsap.set([svg, cg, breath, eyes, nubL, nubR, flag, dbL, dbR, mug, book, heart, board, dream, laptop, brows, zzzG, ...legs, ...conf, ...zzz, ...codeLines, ...hands], { clearProps: 'all' })
-      gsap.set([flag, dbL, dbR, mug, book, heart, board, dream, laptop, brows], { display: 'none' })
-      gsap.set([zzzG, ...conf], { opacity: 0 })
+      gsap.set([svg, waveEl, cg, breath, eyes, nubL, nubR, flag, dbL, dbR, mug, book, heart, board, surfRig, dream, laptop, brows, zzzG, ...legs, ...conf, ...zzz, ...codeLines, ...hands, ...spray], { clearProps: 'all' })
+      gsap.set([flag, dbL, dbR, mug, book, heart, board, surfRig, dream, laptop, brows], { display: 'none' })
+      gsap.set([waveEl, zzzG, ...conf], { opacity: 0 })
     }
   }, [])
 
@@ -1006,7 +1116,30 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
 
   return (
     <div ref={wrapRef} className="rail-runner">
-      <svg ref={svgRef} width={RUNNER_W} height={RUNNER_W} viewBox="0 -20 64 64" aria-hidden="true" onPointerDown={(e) => downRef.current(e)} style={{ position: 'absolute', left: 0, bottom: 0, cursor: 'pointer', touchAction: 'none' }}>
+      {/* the swell — its own full-rail layer behind the figure (so Claude rides
+          ABOVE it). Hidden until a surf set-piece sweeps it in from a corner.
+          preserveAspectRatio="none" lets it stretch to WAVE_W×WAVE_H px. */}
+      <svg
+        ref={waveRef}
+        width={WAVE_W}
+        height={WAVE_H}
+        viewBox="0 -3 56 25"
+        preserveAspectRatio="none"
+        aria-hidden="true"
+        style={{ position: 'absolute', left: 0, bottom: 0, opacity: 0, pointerEvents: 'none' }}
+      >
+        {/* swell body — brand purple, base sunk past the line so it never floats */}
+        <path d="M0 22 C 10 22 16 3 30 2 C 42 1 48 13 56 12 L56 22 Z" fill="#645df6" />
+        {/* foam lip riding the crest */}
+        <path d="M0 20.5 C 10 20.5 16 2 30 1 C 42 0 48 12 56 11" fill="none" stroke="#cfccfd" strokeWidth="2.2" strokeLinecap="round" />
+        {/* the curl breaking over */}
+        <path d="M22 4 Q30 -3 41 3 Q31 3 27 12 Z" fill="#8b87f8" />
+        {/* spray flecks off the crest (animated during the ride) */}
+        <rect data-spray x="29" y="-1" width="3" height="3" rx="1.3" fill="#fff" opacity="0" />
+        <rect data-spray x="35" y="1" width="2.4" height="2.4" rx="1" fill="#fff" opacity="0" />
+        <rect data-spray x="25" y="-3" width="2" height="2" rx="0.8" fill="#fff" opacity="0" />
+      </svg>
+      <svg ref={svgRef} width={RUNNER_W} height={RUNNER_W} viewBox="0 -20 64 64" aria-hidden="true" onPointerDown={(e) => downRef.current(e)} style={{ position: 'absolute', left: 0, bottom: 0, cursor: 'pointer', touchAction: 'none', overflow: 'visible' }}>
         <ClaudeFigure r={r} withProps />
         <g ref={browsRef} style={{ display: 'none' }}>
           <rect x="13" y="13" width="9" height="2.6" rx="1" fill={EYE} transform="rotate(20 17.5 14.3)" />

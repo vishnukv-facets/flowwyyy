@@ -135,7 +135,13 @@
   height: 42px;
   margin: 6px 10px 0;
   border-bottom: 1px solid var(--border-faint);
-  overflow: hidden;
+  /* Open ONLY the bottom of the clip so Claude's legs can dangle below the
+     divider when it perches on the "ledge" — the border-bottom. Top/left/right
+     stay clipped at the box edges, so the surf swell can't spill into the
+     sidebar gutter. The dangle lands in .rail-foot's 10px top padding. */
+  overflow: visible;
+  clip-path: inset(0 0 -12px 0);
+  z-index: 1; /* paint the dangling legs above the foot stats below */
 }
 .rail-stat {
   display: flex;
