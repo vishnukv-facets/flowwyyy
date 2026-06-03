@@ -31,6 +31,11 @@ type settingSpec struct {
 	Default string
 	Options []string
 	Help    string
+	// Hidden keeps a setting out of the /api/settings schema (and thus the
+	// Settings form) while still persisting it in config.json and exporting
+	// it to the env at boot. Used for wizard-managed credentials the
+	// operator shouldn't hand-edit (e.g. the Slack app's client secret).
+	Hidden bool
 }
 
 // settingsRegistry intentionally excludes per-session / runtime / bootstrap env
@@ -48,6 +53,12 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_SLACK_OPEN_TARGET", Label: "Open target", Group: "Slack", Type: settingEnum, Options: []string{"ui", "iterm"}, Default: "ui", Help: "Where new Slack-reply tasks open."},
 	{Key: "FLOW_SLACK_AUTOOPEN", Label: "Auto-open on trigger", Group: "Slack", Type: settingBool, Default: "true", Help: "Open a session automatically when a Slack thread is triggered."},
 	{Key: "FLOW_SLACK_WRITES_ENABLED", Label: "Allow posting to Slack", Group: "Slack", Type: settingBool, Default: "false", Help: "Off by default. Gate for posting messages back to Slack."},
+	// Wizard-managed Slack app identity (Connect Slack flow). Hidden from the
+	// Settings form: the setup wizard writes these after apps.manifest.create
+	// and the OAuth callback reads them; hand-editing only breaks the pairing.
+	{Key: "FLOW_SLACK_APP_ID", Label: "Slack app ID", Group: "Slack", Type: settingString, Hidden: true},
+	{Key: "FLOW_SLACK_CLIENT_ID", Label: "Slack client ID", Group: "Slack", Type: settingString, Hidden: true},
+	{Key: "FLOW_SLACK_CLIENT_SECRET", Label: "Slack client secret", Group: "Slack", Type: settingSecret, Hidden: true},
 	// GitHub
 	{Key: "FLOW_GH_ENABLED", Label: "GitHub polling", Group: "GitHub", Type: settingBool, Default: "false", Help: "Poll GitHub for assigned issues/PRs and route them to task inboxes."},
 	{Key: "FLOW_GH_SELF_LOGINS", Label: "Your GitHub logins", Group: "GitHub", Type: settingString, Help: "Comma-separated. Used to detect self-authored items and assignments."},
@@ -153,6 +164,9 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 	cfg := loadConfigFile(s.configPath())
 	fields := make([]uiSettingField, 0, len(settingsRegistry))
 	for _, sp := range settingsRegistry {
+		if sp.Hidden {
+			continue
+		}
 		raw := strings.TrimSpace(os.Getenv(sp.Key))
 		source := "default"
 		if v, ok := cfg[sp.Key]; ok && strings.TrimSpace(v) != "" {

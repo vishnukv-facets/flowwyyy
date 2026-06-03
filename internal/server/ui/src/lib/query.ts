@@ -15,6 +15,7 @@ import type {
   QuoteView,
   SearchResponse,
   SettingsResponse,
+  SlackSetupStatus,
   TaskView,
   TranscriptResponse,
   UiAgent,
@@ -76,6 +77,16 @@ export function useSettings() {
   return useQuery({
     queryKey: ['settings'],
     queryFn: () => apiGet<SettingsResponse>('/api/settings'),
+  })
+}
+// Polls faster while an OAuth install is mid-flight (the callback lands on a
+// separate ephemeral listener, so the wizard learns of completion by poll +
+// the slack-setup WS event, whichever first).
+export function useSlackSetupStatus() {
+  return useQuery({
+    queryKey: ['slack-setup'],
+    queryFn: () => apiGet<SlackSetupStatus>('/api/slack/setup/status'),
+    refetchInterval: (q) => (q.state.data?.oauth_active ? 1500 : 8000),
   })
 }
 export function useHealth() {

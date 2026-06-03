@@ -43,6 +43,12 @@ type Server struct {
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
+	// slackOAuth is the in-flight Connect-Slack install attempt (the
+	// ephemeral TLS callback listener + state nonce). At most one at a time;
+	// guarded by slackSetupMu. Nil when no install is in progress.
+	slackSetupMu sync.Mutex
+	slackOAuth   *slackOAuthDance
+
 	// quote{Mu,Key,Val} cache the Mission Control anime quote per
 	// (date + greeting bucket) so the external animechan API is called at most
 	// once per greeting change — see handleQuote.

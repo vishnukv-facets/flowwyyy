@@ -4,6 +4,7 @@ import { useAction, useHealth, useSettings, useUiData } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
+import { SlackConnect } from '../components/SlackConnect'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
@@ -125,6 +126,10 @@ export function Settings() {
             <KeyValue label="Status" value={db?.exists ? 'available' : 'missing'} />
           </SettingsPanel>
         </div>
+      </SettingsSection>
+
+      <SettingsSection title="Slack" hint="Three steps, one approval — reactions become sessions.">
+        <SlackConnect />
       </SettingsSection>
 
       <SettingsSection title="Configuration" hint="Applied live — secrets stay on this machine.">

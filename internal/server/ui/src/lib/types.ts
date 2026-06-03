@@ -519,6 +519,27 @@ export interface SettingsResponse {
   fields: SettingField[]
 }
 
+/** GET /api/slack/setup/status — drives the Connect Slack wizard. */
+export interface SlackSetupStatus {
+  app_created: boolean
+  app_id?: string
+  manage_url?: string
+  app_token_url?: string
+  app_token_set: boolean
+  bot_token_set: boolean
+  user_token_set: boolean
+  self_user_ids?: string
+  redirect_url: string
+  oauth_active: boolean
+  oauth_status?: string
+  oauth_error?: string
+  oauth_authorize_url?: string
+  oauth_team?: string
+  listener_running: boolean
+  listener_connected: boolean
+  listener_suppressed: boolean
+}
+
 export interface ActionRequest {
   kind: string
   target?: string

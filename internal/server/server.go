@@ -101,6 +101,14 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/quote", s.handleQuote)
+	// Connect-Slack wizard. The OAuth callback itself is NOT here — it lives
+	// on a separate ephemeral HTTPS listener (Slack requires an https
+	// redirect URL); see slack_setup.go.
+	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
+	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)
+	mux.HandleFunc("/api/slack/setup/app-token", s.handleSlackSetupAppToken)
+	mux.HandleFunc("/api/slack/setup/oauth/start", s.handleSlackSetupOAuthStart)
+	mux.HandleFunc("/api/slack/setup/oauth/cancel", s.handleSlackSetupOAuthCancel)
 }
 
 // apiHandler lazily builds and caches the data-plane mux used by the

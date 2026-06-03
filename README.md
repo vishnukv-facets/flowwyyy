@@ -297,12 +297,45 @@ threads across restart gaps — the bot can't read the operator's DMs.
 Duplicate socket deliveries (the same event seen by both the bot and the
 user) are collapsed by `(channel, ts)` at inbox-append time.
 
-### Setting up the Slack app (Socket Mode + Events) — step by step
+### Quick setup — the Connect Slack wizard (recommended)
 
-This is the part people get stuck on. flow talks to Slack over **Socket
-Mode** (an outbound WebSocket — no public URL, no inbound webhook, works
-behind a firewall) and consumes the **Events API** over that socket. The
-walkthrough below gets you from zero to a working integration. Do it once.
+Open **Mission Control → Settings → Connect Slack** (`flow ui serve`, then
+the gear). The wizard does the whole dance in three steps and is resumable
+at any point — reload the page and it picks up where you left off:
+
+1. **Create the app.** Mint an *app configuration token* at
+   <https://api.slack.com/apps> ("Your App Configuration Tokens" →
+   Generate → copy the `xoxe.xoxp-…` access token; it lives 12 hours and
+   is only used during setup). Paste it — flow calls Slack's manifest API
+   and creates an app with every scope, event subscription, and Socket
+   Mode already wired. No YAML, no checkbox safari.
+2. **App-level token.** Slack has no API for this one, so it's a
+   deep-linked paste: the wizard links straight to your new app's
+   Basic Information page — generate a token with `connections:write`,
+   paste it back, and flow verifies it against Slack before saving.
+3. **Install.** One click opens Slack's consent screen. Approving it
+   round-trips through a local HTTPS callback and hands flow the bot
+   token, your user token (DM following), *and* your member ID in a
+   single OAuth exchange — nothing to copy, nothing to look up.
+
+> **The one rough edge:** the OAuth redirect lands on
+> `https://localhost:8790` with a locally-generated certificate, so your
+> browser shows a one-time "connection is not private" warning — click
+> **Advanced → Proceed**. Slack mandates an HTTPS redirect URL; the
+> authorization code never leaves your machine.
+
+When the wizard turns green, react to any Slack message with `:claude:`
+and a session opens. Scope changes later? Hit **Reinstall** on the same
+card. Prefer doing everything by hand instead — or want to know exactly
+what the wizard wires up? The manual walkthrough below is the same result,
+step by step.
+
+### Setting up the Slack app manually — step by step
+
+flow talks to Slack over **Socket Mode** (an outbound WebSocket — no
+public URL, no inbound webhook, works behind a firewall) and consumes the
+**Events API** over that socket. The walkthrough below gets you from zero
+to a working integration. Do it once.
 
 > **One concept first.** Slack has *three* kinds of token and flow uses all
 > three. An **app-level token** (`xapp-…`) opens the Socket Mode WebSocket.
@@ -481,6 +514,13 @@ Slack vars), but the Settings UI always reads/writes the `FLOW_SLACK_*` key.
 | `FLOW_SLACK_AUTOOPEN` | — | `true` | Open a session automatically when a thread is triggered |
 | `FLOW_SLACK_WRITES_ENABLED` | — | `false` | Gate for posting back to Slack; **off** by default |
 | `FLOW_SLACK_API_BASE_URL` | — | `https://slack.com/api` | Override the Slack API base (testing / proxies only) |
+| `FLOW_SLACK_OAUTH_PORT` | — | `8790` | Loopback port for the wizard's HTTPS OAuth callback. Must not change after app creation — the redirect URL is registered in the app manifest |
+
+Three more keys — `FLOW_SLACK_APP_ID`, `FLOW_SLACK_CLIENT_ID`,
+`FLOW_SLACK_CLIENT_SECRET` — are written by the Connect Slack wizard
+(the app it created and that app's OAuth credentials). They're persisted in
+`config.json` but deliberately hidden from the Settings form: hand-editing
+them only breaks the wizard's app pairing.
 
 The listener starts automatically when `flow ui serve` runs with the app +
 bot tokens set and `FLOW_SLACK_SOCKET_MODE` not disabled. Without tokens, the
