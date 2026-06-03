@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"flow/internal/flowdb"
 )
 
 type fakeReplies struct {
@@ -18,30 +20,20 @@ func (f *fakeReplies) Replies(_ context.Context, _, _, oldest string, _ int) ([]
 	return f.msgs, nil
 }
 
-// fakeHistory stubs the user-token DM reader: conversations.history (top-level)
-// plus conversations.replies (thread replies), since DMs can be threaded.
+// fakeHistory stubs the user-token DM replies client (conversations.replies),
+// answering by thread root ts since DM conversations are threaded.
 type fakeHistory struct {
-	msgs           []SlackMessage            // history (top-level) results
 	repliesByRoot  map[string][]SlackMessage // replies keyed by thread root ts
 	gotOldest      string
 	gotChannel     string
-	calls          int
 	replyCalls     int
 	gotThreadRoots map[string]bool
 }
 
-func (f *fakeHistory) History(_ context.Context, channel, oldest string, _ int) ([]SlackMessage, error) {
-	f.calls++
-	f.gotOldest = oldest
-	f.gotChannel = channel
-	return f.msgs, nil
-}
-
-// repliesByRoot lets a fakeHistory also answer conversations.replies, keyed by
-// thread root ts. DMs here are threaded, so the recoverable messages live under
-// replies, not history.
 func (f *fakeHistory) Replies(_ context.Context, channel, threadTS, oldest string, _ int) ([]SlackMessage, error) {
 	f.replyCalls++
+	f.gotOldest = oldest
+	f.gotChannel = channel
 	if f.gotThreadRoots == nil {
 		f.gotThreadRoots = map[string]bool{}
 	}
@@ -117,178 +109,121 @@ func TestSlackBackfillReconcile_AppendsOnlyNewerDeduped(t *testing.T) {
 	}
 }
 
-func TestSlackDMBackfill_ReconcileAppendsNewerDeduped(t *testing.T) {
-	t.Setenv("FLOW_ROOT", t.TempDir())
-	const slug, dm = "slack-dm-task", "D_ALICE"
-	// DMs aren't threaded — each message is its own root, so threadTS == ts.
-	seedInbox(t, slug, dm, "100.000000", "100.000000", "first dm")
-
-	fake := &fakeHistory{msgs: []SlackMessage{
-		{TS: "100.000000", User: "U1", Text: "first dm"},   // skipped: already seen
-		{TS: "120.000000", User: "U2", Text: "newer dm A"}, // appended
-		{TS: "150.000000", User: "U3", Text: "newer dm B"}, // appended
-		{TS: "160.000000", User: "U4", Text: "edit", SubType: "message_changed"}, // skipped subtype
-		{TS: "90.000000", User: "U5", Text: "older"},       // skipped: older than cursor
-	}}
-	bf := &SlackBackfill{limit: 200}
-	bf.SetDMHistoryClient(fake)
-
-	n, err := bf.reconcileDM(context.Background(), slug, dm)
-	if err != nil {
-		t.Fatalf("reconcileDM: %v", err)
-	}
-	if n != 2 {
-		t.Fatalf("appended = %d, want 2 (120, 150)", n)
-	}
-	if fake.gotOldest != "100.000000" {
-		t.Fatalf("oldest passed = %q, want the DM's inbox max ts 100.000000", fake.gotOldest)
-	}
-
-	// Idempotent: second pass appends nothing.
-	n2, err := bf.reconcileDM(context.Background(), slug, dm)
-	if err != nil {
-		t.Fatalf("reconcileDM 2: %v", err)
-	}
-	if n2 != 0 {
-		t.Fatalf("second pass appended = %d, want 0 (dedup)", n2)
-	}
-}
-
-func TestSlackDMBackfill_PerChannelCursorIgnoresOtherChannels(t *testing.T) {
-	// A task that monitors a thread AND a DM. The thread has a message newer
-	// than the DM's last-seen. The DM cursor must be the DM's OWN max, not the
-	// global max — otherwise a DM reply that arrived during a gap (older than
-	// the latest thread message) would be wrongly skipped.
-	t.Setenv("FLOW_ROOT", t.TempDir())
-	const slug = "slack-mixed-task"
-	seedInbox(t, slug, "C_THREAD", "10.000000", "200.000000", "latest thread msg")
-	seedInbox(t, slug, "D_ALICE", "150.000000", "150.000000", "dm baseline")
-
-	fake := &fakeHistory{msgs: []SlackMessage{
-		{TS: "160.000000", User: "U2", Text: "dm reply missed during the gap"},
-	}}
-	bf := &SlackBackfill{limit: 200}
-	bf.SetDMHistoryClient(fake)
-
-	n, err := bf.reconcileDM(context.Background(), slug, "D_ALICE")
-	if err != nil {
-		t.Fatalf("reconcileDM: %v", err)
-	}
-	if fake.gotOldest != "150.000000" {
-		t.Fatalf("DM cursor = %q, want 150.000000 (per-channel, not the global 200.000000)", fake.gotOldest)
-	}
-	if n != 1 {
-		t.Fatalf("appended = %d, want 1 (the 160 reply)", n)
-	}
-}
-
-func TestSlackDMBackfill_RecoversThreadReplies(t *testing.T) {
-	// DMs can be threaded ("also send as DM" + threaded replies). A reply
-	// missed during a socket gap is NOT in conversations.history (which returns
-	// only top-level messages) — it's only reachable via conversations.replies
-	// on the thread root. reconcileDM must consult replies for the thread roots
-	// it already knows about from the inbox, or it can never recover DM replies.
+func TestSlackBackfill_DMThreadUsesUserClient(t *testing.T) {
+	// A DM thread (slack-thread:<dm-channel>:<root>) reconciles via the USER
+	// token client — the bot can't read the operator's DMs — and recovers a
+	// reply missed during a gap. The bot client must NOT be touched for a DM.
 	t.Setenv("FLOW_ROOT", t.TempDir())
 	const slug, dm, root = "slack-dm-threaded", "D_ALICE", "1780480392.819809"
-	// Baseline is itself a thread reply under `root`.
 	if err := AppendInboxEvent(slug, InboundEvent{
 		Kind: "message", Channel: dm, ChannelType: "im",
 		TS: "1780489629.079919", ThreadTS: root, UserID: "U_me", Text: "stepping out",
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-
-	fake := &fakeHistory{
-		msgs: nil, // history sees no new top-level messages
-		repliesByRoot: map[string][]SlackMessage{
-			root: {
-				{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"}, // already seen
-				{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "why is there a new file?"}, // missed reply
-			},
+	user := &fakeHistory{repliesByRoot: map[string][]SlackMessage{
+		root: {
+			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},        // seen
+			{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "why new file?"},   // missed
 		},
-	}
-	bf := &SlackBackfill{limit: 200}
-	bf.SetDMHistoryClient(fake)
+	}}
+	bot := &fakeReplies{} // must NOT be used for a DM channel
+	bf := &SlackBackfill{client: bot, limit: 200}
+	bf.SetDMRepliesClient(user)
 
-	n, err := bf.reconcileDM(context.Background(), slug, dm)
+	n, err := bf.reconcile(context.Background(), slug, dm, root)
 	if err != nil {
-		t.Fatalf("reconcileDM: %v", err)
+		t.Fatalf("reconcile: %v", err)
 	}
 	if n != 1 {
-		t.Fatalf("appended = %d, want 1 (the missed thread reply)", n)
+		t.Fatalf("appended = %d, want 1 (the missed reply)", n)
 	}
-	if !fake.gotThreadRoots[root] {
-		t.Fatalf("reconcileDM must fetch replies for known thread root %s; roots queried = %v", root, fake.gotThreadRoots)
+	if bot.calls != 0 {
+		t.Fatalf("DM channel must use the user client, not the bot client; bot.calls=%d", bot.calls)
 	}
-	entries, _ := ReadInboxEntries(slug)
-	found := false
-	for _, e := range entries {
-		if e.Event.TS == "1780491705.662279" {
-			found = true
+	if user.replyCalls == 0 || !user.gotThreadRoots[root] {
+		t.Fatalf("expected user client Replies for root %s; replyCalls=%d roots=%v", root, user.replyCalls, user.gotThreadRoots)
+	}
+	if user.gotOldest != "1780489629.079919" {
+		t.Fatalf("per-channel cursor = %q, want the DM's max ts", user.gotOldest)
+	}
+}
+
+func TestSlackBackfill_ChannelThreadUsesBotClient(t *testing.T) {
+	// Regression guard: a normal channel thread keeps using the bot-token
+	// client and never touches the user client.
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	const slug, ch, root = "slack-chan", "C_THREAD", "50.000000"
+	seedInbox(t, slug, ch, root, "100.000000", "first")
+	bot := &fakeReplies{msgs: []SlackMessage{{TS: "120.000000", User: "U2", Text: "newer"}}}
+	user := &fakeHistory{}
+	bf := &SlackBackfill{client: bot, limit: 200}
+	bf.SetDMRepliesClient(user)
+
+	n, err := bf.reconcile(context.Background(), slug, ch, root)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("appended = %d, want 1", n)
+	}
+	if bot.calls == 0 {
+		t.Fatalf("channel thread must use the bot client")
+	}
+	if user.replyCalls != 0 {
+		t.Fatalf("channel thread must not touch the user client; replyCalls=%d", user.replyCalls)
+	}
+}
+
+func TestSlackBackfill_RunOnceReconcilesAllThreadTags(t *testing.T) {
+	// A task carries its origin channel thread AND a DM thread (both as
+	// slack-thread tags). runOnce must reconcile BOTH — origin via the bot
+	// client, DM via the user client — not just the first tag.
+	db := dispatcherTestDB(t)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
+		 VALUES ('t','t','backlog','high',?, 'default','claude',?,?,?)`,
+		t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"slack-reply", "slack-thread:C_ORIGIN:50.000000", "slack-thread:D_ALICE:1780480392.819809"} {
+		if err := flowdb.AddTaskTag(db, "t", tag); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if !found {
-		t.Errorf("missed DM thread reply not recovered into inbox; entries=%v", entries)
+	seedInbox(t, "t", "C_ORIGIN", "50.000000", "100.000000", "origin baseline")
+	if err := AppendInboxEvent("t", InboundEvent{
+		Kind: "message", Channel: "D_ALICE", ChannelType: "im",
+		TS: "1780489629.079919", ThreadTS: "1780480392.819809", UserID: "U_me", Text: "dm baseline",
+	}); err != nil {
+		t.Fatal(err)
 	}
-}
 
-func TestSlackDMBackfill_NoBaselineSkips(t *testing.T) {
-	t.Setenv("FLOW_ROOT", t.TempDir())
-	fake := &fakeHistory{msgs: []SlackMessage{{TS: "20.000000", User: "U1", Text: "dm"}}}
-	bf := &SlackBackfill{limit: 200}
-	bf.SetDMHistoryClient(fake)
-	n, err := bf.reconcileDM(context.Background(), "no-baseline-dm", "D_X")
-	if err != nil {
-		t.Fatalf("reconcileDM: %v", err)
-	}
-	if n != 0 || fake.calls != 0 {
-		t.Fatalf("no baseline → want 0 appended / 0 Slack calls; got n=%d calls=%d", n, fake.calls)
-	}
-}
-
-func TestSlackDMBackfill_RunOnceReconcilesRegisteredDMs(t *testing.T) {
-	// End-to-end through runOnce: a slack-reply task carrying a slack-dm tag
-	// has its DM reconciled against conversations.history.
-	db := dispatcherTestDB(t)
-	seedSlackDMTask(t, db, "dm-task", "D_ALICE")
-	seedInbox(t, "dm-task", "D_ALICE", "100.000000", "100.000000", "dm baseline")
-
-	fake := &fakeHistory{msgs: []SlackMessage{
-		{TS: "120.000000", User: "U2", Text: "missed dm reply"},
+	bot := &fakeReplies{msgs: []SlackMessage{{TS: "120.000000", User: "U2", Text: "origin newer"}}}
+	user := &fakeHistory{repliesByRoot: map[string][]SlackMessage{
+		"1780480392.819809": {{TS: "1780491705.662279", ThreadTS: "1780480392.819809", User: "U_ishaan", Text: "dm newer"}},
 	}}
-	bf := NewSlackBackfill(db, &fakeReplies{}, time.Hour)
-	bf.SetDMHistoryClient(fake)
+	bf := NewSlackBackfill(db, bot, time.Hour)
+	bf.SetDMRepliesClient(user)
 	bf.runOnce(context.Background())
 
-	entries, err := ReadInboxEntries("dm-task")
-	if err != nil {
-		t.Fatalf("read inbox: %v", err)
-	}
-	found := false
+	entries, _ := ReadInboxEntries("t")
+	var gotOrigin, gotDM bool
 	for _, e := range entries {
-		if e.Event.TS == "120.000000" && e.Event.Text == "missed dm reply" {
-			found = true
+		if e.Event.TS == "120.000000" {
+			gotOrigin = true
+		}
+		if e.Event.TS == "1780491705.662279" {
+			gotDM = true
 		}
 	}
-	if !found {
-		t.Fatalf("runOnce did not recover the missed DM reply; entries = %+v", entries)
+	if !gotOrigin {
+		t.Errorf("origin channel-thread reply not recovered")
 	}
-}
-
-func TestDMChannelsFromTags(t *testing.T) {
-	got := dmChannelsFromTags([]string{
-		"slack-reply",
-		"slack-thread:c123:1.01",
-		"slack-dm:d_alice",
-		"slack-dm:d_bob",
-		"priority-high",
-	})
-	if len(got) != 2 {
-		t.Fatalf("got %d dm channels, want 2: %v", len(got), got)
-	}
-	set := map[string]bool{got[0]: true, got[1]: true}
-	if !set["d_alice"] || !set["d_bob"] {
-		t.Errorf("expected d_alice and d_bob; got %v", got)
+	if !gotDM {
+		t.Errorf("DM-thread reply not recovered (multi-tag reconcile failed)")
 	}
 }
 

@@ -46,19 +46,6 @@ type TaskOpener interface {
 type Dispatcher struct {
 	DB     *sql.DB
 	Opener TaskOpener
-	// DMMembers resolves a DM/group-DM channel's member user IDs (conversations.members
-	// on the user token). Optional — when nil, DM auto-registration is disabled
-	// and DMs are only monitored if a slack-dm: tag was registered some other
-	// way (the agent's own `flow update task --tag`). Injected by the server.
-	DMMembers DMMembersResolver
-}
-
-// DMMembersResolver returns the member user IDs of a DM/group-DM channel. Used
-// by auto-registration to find the recipient of an agent-sent DM so it can be
-// matched to the task whose thread that recipient participates in. Backed by
-// the user token — the bot can't enumerate the operator's DMs.
-type DMMembersResolver interface {
-	DMMembers(ctx context.Context, channelID string) ([]string, error)
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -66,14 +53,6 @@ type DMMembersResolver interface {
 // open them manually via the UI or `flow do`).
 func NewDispatcher(db *sql.DB, opener TaskOpener) *Dispatcher {
 	return &Dispatcher{DB: db, Opener: opener}
-}
-
-// SetDMMembersResolver installs the conversations.members resolver enabling DM
-// auto-registration. Optional; a nil resolver leaves auto-registration off.
-func (d *Dispatcher) SetDMMembersResolver(r DMMembersResolver) {
-	if d != nil {
-		d.DMMembers = r
-	}
 }
 
 // Dispatch processes one InboundEvent. Returns nil for uninteresting
@@ -142,113 +121,14 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 			return AppendInboxEvent(slug, ev)
 		}
 	}
-	// DM match: direct and group-direct messages aren't threaded — each
-	// top-level message carries its own thread_ts — so they're tracked by
-	// channel ID alone via the slack-dm:<channel> tag the agent registers
-	// when it opens a DM for a task.
-	if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
-		slug, found, err := d.findTaskByDMChannel(ev.Channel)
-		if err != nil {
-			return fmt.Errorf("monitor: lookup task by dm channel: %w", err)
-		}
-		if found {
-			return AppendInboxEvent(slug, ev)
-		}
-		// Auto-registration: the agent (running as the operator) just sent a DM
-		// in a channel no task monitors yet. Detect it by the agent footer +
-		// operator authorship, attribute it to the task whose thread the
-		// recipient participates in, and register the DM so future replies route
-		// here without depending on the agent self-tagging.
-		//
-		// The branch below is heavily logged on purpose: it's the first place
-		// we can observe whether (a) the operator's own outbound DM is even
-		// delivered to our socket and (b) the agent footer survives in the
-		// event text. Each early-out says why so a live run is self-diagnosing.
-		if containsUserID(SelfUserIDs(), ev.UserID) {
-			if !hasAgentFooter(ev.Text) {
-				fmt.Fprintf(os.Stderr, "monitor: operator DM in unregistered channel %s, agent-footer=false — not auto-registering (footer is the agent-sent signal; if you DID send via the agent, the footer isn't in the event text)\n", ev.Channel)
-				return nil
-			}
-			slug, ok := d.attributeDMToTask(ctx, ev.Channel)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "monitor: agent DM in %s — no single matching thread; not auto-registering (falls back to manual/agent tag)\n", ev.Channel)
-				return nil
-			}
-			if err := tagFlowTask(ctx, slug, SlackDMTagPrefix+ev.Channel); err != nil {
-				fmt.Fprintf(os.Stderr, "monitor: auto-register dm %s -> %s: %v\n", ev.Channel, slug, err)
-				return nil
-			}
-			fmt.Fprintf(os.Stderr, "monitor: auto-registered DM %s -> %s\n", ev.Channel, slug)
-			// Record the outbound so the DM channel has a backfill baseline.
-			return AppendInboxEvent(slug, ev)
-		}
-	}
+	// DMs are monitored as threads too: when the agent opens or replies in a DM,
+	// the tool-use hook registers slack-thread:<dm-channel>:<thread_ts> on the
+	// task, so a DM message routes through the thread match above — scoped to the
+	// specific conversation, not the whole DM channel (which would pull in every
+	// unrelated topic the operator discusses with that person).
+	//
 	// Untracked conversation — we haven't been asked to handle it.
 	return nil
-}
-
-// hasAgentFooter reports whether text carries the agent attribution footer
-// ("Sent using @Claude" / "@codex"). This is the deterministic "sent via the
-// agent" signal — without it a DM is indistinguishable from one the operator
-// typed by hand, which must never be auto-monitored.
-func hasAgentFooter(text string) bool {
-	return strings.Contains(strings.ToLower(text), "sent using @")
-}
-
-// attributeDMToTask resolves the DM's recipient(s) and returns the slug of the
-// single active slack-reply task whose thread that recipient participates in.
-// Zero or multiple matches → (",", false): we refuse to guess, leaving the DM
-// for manual/agent registration. Requires the DMMembers resolver.
-func (d *Dispatcher) attributeDMToTask(ctx context.Context, channel string) (string, bool) {
-	if d.DMMembers == nil {
-		return "", false
-	}
-	operators := SelfUserIDs()
-	members, err := d.DMMembers.DMMembers(ctx, channel)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "monitor: resolve dm members %s: %v\n", channel, err)
-		return "", false
-	}
-	recipients := map[string]bool{}
-	for _, m := range members {
-		m = strings.TrimSpace(m)
-		if m == "" || containsUserID(operators, m) {
-			continue
-		}
-		recipients[m] = true
-	}
-	if len(recipients) == 0 {
-		return "", false
-	}
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: "slack-reply", ExcludeDone: true})
-	if err != nil {
-		return "", false
-	}
-	matched := ""
-	for _, t := range tasks {
-		if t == nil {
-			continue
-		}
-		parts := inboxParticipantUserIDs(t.Slug)
-		hit := false
-		for r := range recipients {
-			if parts[r] {
-				hit = true
-				break
-			}
-		}
-		if !hit {
-			continue
-		}
-		if matched != "" {
-			return "", false // ambiguous: recipient is in more than one thread
-		}
-		matched = t.Slug
-	}
-	if matched == "" {
-		return "", false
-	}
-	return matched, true
 }
 
 func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, err error) {
@@ -267,30 +147,6 @@ func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, e
 	// reaction — but if so, we want to route it to the live one, not a
 	// done one). Falls back to the first hit when all are done so we still
 	// re-thread rather than silently dropping the event.
-	for _, t := range tasks {
-		if t != nil && t.Status != "done" {
-			return t.Slug, true, nil
-		}
-	}
-	return tasks[0].Slug, true, nil
-}
-
-// findTaskByDMChannel looks up the task monitoring a DM/group-DM channel via
-// its slack-dm:<channel> tag. Mirrors findTaskByThreadKey's prefer-non-done
-// policy: a closed task might still receive a stray DM, but a live one wins.
-func (d *Dispatcher) findTaskByDMChannel(channel string) (slug string, found bool, err error) {
-	channel = strings.TrimSpace(channel)
-	if channel == "" {
-		return "", false, nil
-	}
-	tag := flowdb.NormalizeTag(SlackDMTagPrefix + channel)
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag})
-	if err != nil {
-		return "", false, err
-	}
-	if len(tasks) == 0 {
-		return "", false, nil
-	}
 	for _, t := range tasks {
 		if t != nil && t.Status != "done" {
 			return t.Slug, true, nil
@@ -376,14 +232,6 @@ var listProjectChoices = func(db *sql.DB) ([]projectChoice, error) {
 // A task tagged "slack-thread:C123:1234.0001" is the flow representation
 // of the Slack conversation rooted at that channel/ts.
 const SlackThreadTagPrefix = "slack-thread:"
-
-// SlackDMTagPrefix is the prefix for the per-DM linkage tag. A task tagged
-// "slack-dm:D0123ABCD" monitors that direct-message (or group-DM) channel:
-// every message Slack pushes for it is routed into the task's inbox. Unlike
-// SlackThreadTagPrefix the tag carries no thread_ts — DMs aren't threaded, so
-// the channel ID alone is the partition key. A task may carry several of these
-// (one per person the agent DM'd) plus its origin slack-thread tag.
-const SlackDMTagPrefix = "slack-dm:"
 
 // SlugForThread derives a deterministic, idempotent flow task slug from
 // a thread key. Same thread key → same slug, so a stray duplicate trigger
@@ -512,16 +360,12 @@ factual claims. Use mcp__claude_ai_Slack__slack_read_thread first to pull
 the full thread context if you weren't already given it.
 
 ## Replying via DM
-If the operator asks you to reply to someone **privately by DM** instead of in
-this thread, that DM is a separate channel this task isn't watching — so the
-person's DM replies won't reach you automatically. Immediately after you open or
-post the DM, register its channel so it's monitored like the thread:
-  flow update task %s --tag slack-dm:<dm-channel-id>
-where <dm-channel-id> is the channel ID the Slack MCP returns for that DM (a D…
-id, or a G…/mpim id for a group DM). You can register several — DM more than one
-person for this task and tag each channel. From then on, replies in that DM are
-streamed into the same inbox.jsonl and wake this session, exactly like thread
-replies.
+You can reply to someone **privately by DM** instead of in this thread. flow
+monitors that DM **automatically**: when you send the DM, the tool-use hook
+registers the DM thread for this task, so the person's replies in that DM thread
+stream into the same inbox.jsonl and wake this session — exactly like thread
+replies. No manual step. (Monitoring is scoped to the DM thread you started, not
+the person's whole DM channel, so unrelated topics don't leak in.)
 
 ## Done when
 The user marks this task done (flow done) — typically after the question
@@ -548,7 +392,6 @@ incoming events to inbox.jsonl as they arrive.*
 		dir, dir,
 		decision.Channel,
 		decision.ThreadTS,
-		slug,
 		decision.ThreadKey,
 	)
 }
@@ -719,6 +562,38 @@ func decisionFromSlackThreadTags(tags []string) (ReactionDecision, bool) {
 		}, true
 	}
 	return ReactionDecision{}, false
+}
+
+// threadRefsFromTags returns every slack-thread:<channel>:<thread_ts> linkage on
+// a task, not just the first. A task now carries one tag per monitored
+// conversation — its origin channel thread plus any DM threads the agent opened
+// (registered via the tool-use hook) — and the backfill must reconcile all of
+// them, not only the origin. Each ref carries Channel + ThreadTS.
+func threadRefsFromTags(tags []string) []ReactionDecision {
+	var out []ReactionDecision
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		key := strings.TrimPrefix(tag, SlackThreadTagPrefix)
+		if key == tag {
+			continue
+		}
+		parts := strings.SplitN(key, ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		channel := normalizeSlackChannelID(parts[0])
+		threadTS := strings.TrimSpace(parts[1])
+		if channel == "" || threadTS == "" {
+			continue
+		}
+		out = append(out, ReactionDecision{
+			Trigger:   true,
+			ThreadKey: ThreadKey(channel, threadTS),
+			Channel:   channel,
+			ThreadTS:  threadTS,
+		})
+	}
+	return out
 }
 
 func nonEmptyOr(s, fallback string) string {

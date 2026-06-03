@@ -57,13 +57,9 @@ func New(cfg Config) *Server {
 	// a server-managed PTY so the Claude session streams into the UI
 	// instead of an iTerm tab.
 	if cfg.DB != nil {
-		dispatcher := monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s})
-		// Enable DM auto-registration: when the agent sends a DM as the operator
-		// (footer-stamped), flow resolves the recipient and registers the DM
-		// channel against the matching thread's task — no agent self-tagging
-		// needed. No-op without a user token.
-		dispatcher.SetDMMembersResolver(monitor.NewSlackDMMembersResolver())
-		slackListener := monitor.NewSlackListener(dispatcher)
+		slackListener := monitor.NewSlackListener(
+			monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s}),
+		)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)
 		})
@@ -183,8 +179,8 @@ func (s *Server) ListenAndServe(addr string) int {
 			// DM channels the agent registered (slack-dm: tags) are reconciled
 			// via conversations.history on the user token — the bot can't read
 			// the operator's DMs. No-op when no user token is configured.
-			if dh := monitor.NewSlackDMHistoryClient(); dh != nil {
-				backfill.SetDMHistoryClient(dh)
+			if dh := monitor.NewSlackUserRepliesClient(); dh != nil {
+				backfill.SetDMRepliesClient(dh)
 			}
 			backfill.SetLogger(func(format string, args ...any) {
 				fmt.Fprintf(os.Stderr, format+"\n", args...)

@@ -273,20 +273,29 @@ scope is missing, flow falls back to the author name alone rather
 than erroring.
 
 **Following a reply into DMs.** Sometimes the agent is asked to answer
-someone *privately* rather than in the thread. A DM is a separate channel
-the task isn't watching, so the recipient's replies would normally fall off
-flow's radar. When the agent opens a DM it registers that channel on its
-task with a `slack-dm:<channel>` tag (via `flow update task … --tag`), and
-the listener then routes messages in that DM — matched by **channel ID
-alone**, since DMs aren't threaded — into the same `inbox.jsonl`. One task
-can follow its origin thread plus any number of DMs at once.
+someone *privately* rather than in the thread. flow follows that DM
+**automatically** and for **both providers**: when the agent (Claude or
+Codex) sends a DM, the `PostToolUse` agent hook sees the `slack_send_message`
+tool call, reads its channel + `thread_ts`, and registers the DM **thread**
+on the task as `slack-thread:<dm-channel>:<thread_ts>`. The recipient's
+replies in that thread then route through the same thread-matching path as a
+channel reply, into the task's `inbox.jsonl`.
+
+Monitoring is scoped to the **DM thread** the agent started — not the
+person's whole DM channel — so unrelated conversations with the same person
+never leak into the task. Registering at the tool-use hook is deterministic:
+it doesn't depend on the agent self-tagging, on a fresh brief, or on any
+"sent via Claude" marker (which Slack renders at display time and does *not*
+include in the Events API payload).
 
 This requires the Slack app to receive the user's DM events: under **Event
 Subscriptions → "Subscribe to events on behalf of users"**, add `message.im`
 (and `message.mpim` for group DMs), backed by the matching `im:history` /
-`mpim:history` user-token scopes, then reinstall the app. Duplicate socket
-deliveries (the same event seen by both the bot and the user) are collapsed
-by `(channel, ts)` at inbox-append time.
+`mpim:history` user-token scopes, then reinstall the app. A user token
+(`FLOW_SLACK_USER_TOKEN` / `SLACK_USER_TOKEN`) is also used to backfill DM
+threads across restart gaps — the bot can't read the operator's DMs.
+Duplicate socket deliveries (the same event seen by both the bot and the
+user) are collapsed by `(channel, ts)` at inbox-append time.
 
 ### Setting up the Slack app (Socket Mode + Events) — step by step
 

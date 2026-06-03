@@ -376,13 +376,18 @@ func TestSkillMentionsPlaybooks(t *testing.T) {
 func TestSkillMentionsDMMonitoring(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{
-		"slack-dm:",
-		"flow update task <your-slug> --tag slack-dm:",
-		"DM is a separate channel",
+		"Monitoring a DM reply (automatic)",
+		"PostToolUse",
+		"DM thread you started",
+		"events on behalf of users",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("skill missing DM-monitoring guidance %q", want)
 		}
+	}
+	// The removed manual-tag instruction must not linger.
+	if strings.Contains(got, "--tag slack-dm:") {
+		t.Errorf("skill still instructs the removed slack-dm manual tag")
 	}
 }
 

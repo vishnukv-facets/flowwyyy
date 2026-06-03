@@ -293,11 +293,10 @@ func TestSlackTaskBrief_AnnotatesItemAuthorWhenOperator(t *testing.T) {
 	}
 }
 
-func TestSlackTaskBrief_IncludesDMRegistrationInstruction(t *testing.T) {
-	// When the agent replies via DM instead of in-thread, the recipient's
-	// replies land in a DM channel the task isn't watching yet. The brief must
-	// tell the agent to register that channel so DM replies stream into the
-	// inbox like thread replies — the only deterministic attribution point.
+func TestSlackTaskBrief_MentionsAutomaticDMMonitoring(t *testing.T) {
+	// The brief tells the agent that DM replies are monitored automatically (the
+	// tool-use hook registers the DM thread) — no manual tagging, and scoped to
+	// the DM thread it started so unrelated topics don't leak in.
 	decision := ReactionDecision{
 		Trigger:   true,
 		ThreadKey: "C123:1.01",
@@ -311,12 +310,17 @@ func TestSlackTaskBrief_IncludesDMRegistrationInstruction(t *testing.T) {
 	brief := slackTaskBrief(decision, "slack-c123-1-01", "Slack reply", nil, []string{"U_me"})
 
 	for _, want := range []string{
-		"flow update task slack-c123-1-01 --tag slack-dm:",
-		"replies in that DM",
+		"## Replying via DM",
+		"automatically",
+		"DM thread",
 	} {
 		if !strings.Contains(brief, want) {
-			t.Errorf("brief missing DM-registration cue %q\n--- brief ---\n%s", want, brief)
+			t.Errorf("brief missing DM cue %q\n--- brief ---\n%s", want, brief)
 		}
+	}
+	// The removed manual-tag instruction must NOT reappear.
+	if strings.Contains(brief, "--tag slack-dm:") {
+		t.Errorf("brief should not instruct the removed slack-dm manual tag")
 	}
 }
 
@@ -509,291 +513,57 @@ func TestDispatcher_MessageInUntrackedThreadIgnored(t *testing.T) {
 	}
 }
 
-// seedSlackDMTask inserts a task and tags it with one or more slack-dm:
-// channel linkages so DM routing lookups can find it. Mirrors seedSlackTask
-// but for the channel-only DM monitoring tags.
-func seedSlackDMTask(t *testing.T, db *sql.DB, slug string, dmChannels ...string) {
-	t.Helper()
-	now := flowdb.NowISO()
-	_, err := db.Exec(
-		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
-		 VALUES (?, ?, 'backlog', 'high', ?, 'default', 'claude', ?, ?, ?)`,
-		slug, "seeded slack dm task", t.TempDir(), now, now, now,
-	)
-	if err != nil {
-		t.Fatalf("seed dm task %s: %v", slug, err)
-	}
-	if err := flowdb.AddTaskTag(db, slug, "slack-reply"); err != nil {
-		t.Fatalf("tag slack-reply: %v", err)
-	}
-	for _, ch := range dmChannels {
-		// Literal prefix (not the constant) so the test fails on routing
-		// behavior rather than a missing symbol during the RED step.
-		if err := flowdb.AddTaskTag(db, slug, "slack-dm:"+ch); err != nil {
-			t.Fatalf("tag slack-dm:%s: %v", ch, err)
-		}
-	}
-}
-
-func TestDispatcher_MessageInTrackedDMAppends(t *testing.T) {
-	// A DM the agent registered for this task. Unlike a thread, the DM is
-	// matched by channel ID alone — each top-level DM message carries its own
-	// thread_ts, so a thread-key match would never fire.
+// TestDispatcher_MessageInTrackedDMThreadAppends verifies a DM is monitored as
+// a THREAD: a slack-thread:<dm-channel>:<root> tag (registered by the tool-use
+// hook) routes the DM thread's replies via the same thread branch channels use.
+// Scoping to the thread keeps unrelated DM topics with the same person out.
+func TestDispatcher_MessageInTrackedDMThreadAppends(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
 	defer restore()
 
-	seedSlackDMTask(t, db, "dm-task", "D_ALICE")
+	const root = "1780480392.819809"
+	seedSlackTask(t, db, "dm-task", "D_ALICE:"+root)
 
+	// Ishaan replies in the registered DM thread.
 	msg := InboundEvent{
-		Kind:        "message",
-		Channel:     "D_ALICE",
-		ChannelType: "im",
-		TS:          "1700000100.000001",
-		ThreadTS:    "1700000100.000001", // top-level DM message: thread_ts == ts
-		UserID:      "U_alice",
-		Text:        "thanks for the DM!",
+		Kind: "message", Channel: "D_ALICE", ChannelType: "im",
+		TS: "1780491705.662279", ThreadTS: root, UserID: "U_ishaan", Text: "why a new file?",
 	}
-	d := NewDispatcher(db, nil)
-	if err := d.Dispatch(context.Background(), msg); err != nil {
+	if err := NewDispatcher(db, nil).Dispatch(context.Background(), msg); err != nil {
 		t.Fatalf("Dispatch err = %v", err)
 	}
-
 	entries, err := ReadInboxEntries("dm-task")
 	if err != nil {
 		t.Fatalf("read inbox: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("inbox len = %d, want 1", len(entries))
-	}
-	if entries[0].Event.Text != "thanks for the DM!" || entries[0].Event.ChannelType != "im" {
-		t.Errorf("inbox entry wrong: %+v", entries[0].Event)
+	if len(entries) != 1 || entries[0].Event.Text != "why a new file?" {
+		t.Fatalf("DM thread reply should route via the thread branch; entries=%+v", entries)
 	}
 }
 
-func TestDispatcher_DMMessageInUntrackedChannelIgnored(t *testing.T) {
-	// A DM channel no task registered → dropped, same firehose-suppression
-	// guarantee as untracked threads.
+// TestDispatcher_DMMessageOutsideRegisteredThreadDropped: a DM message in a
+// thread the task did NOT register is dropped — channel-scoped noise from
+// unrelated topics with the same person never reaches the task.
+func TestDispatcher_DMMessageOutsideRegisteredThreadDropped(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
 	defer restore()
 
-	d := NewDispatcher(db, nil)
+	seedSlackTask(t, db, "dm-task", "D_ALICE:1780480392.819809")
+
+	// Same DM channel, but a DIFFERENT thread (unrelated topic).
 	msg := InboundEvent{
-		Kind:        "message",
-		Channel:     "D_STRANGER",
-		ChannelType: "im",
-		TS:          "1700000200.000001",
-		ThreadTS:    "1700000200.000001",
-		UserID:      "U_stranger",
-		Text:        "unsolicited DM",
+		Kind: "message", Channel: "D_ALICE", ChannelType: "im",
+		TS: "1780600000.000001", ThreadTS: "1780599000.000000", UserID: "U_ishaan", Text: "unrelated topic",
 	}
-	if err := d.Dispatch(context.Background(), msg); err != nil {
+	if err := NewDispatcher(db, nil).Dispatch(context.Background(), msg); err != nil {
 		t.Fatalf("Dispatch err = %v", err)
 	}
-	if entries, _ := ReadInboxEntries("any-task"); len(entries) != 0 {
-		t.Errorf("untracked DM should not produce inbox: %v", entries)
+	if entries, _ := ReadInboxEntries("dm-task"); len(entries) != 0 {
+		t.Fatalf("unrelated DM thread must not route; entries=%+v", entries)
 	}
 }
-
-func TestDispatcher_MultipleDMTagsRouteIntoOneInbox(t *testing.T) {
-	// One task can monitor several DMs at once (e.g. the agent DM'd two
-	// people for the same task). Messages from each registered channel land
-	// in the single task inbox.
-	db := dispatcherTestDB(t)
-	_, _, _, restore := stubDispatcherIO(t)
-	defer restore()
-
-	seedSlackDMTask(t, db, "multi-dm-task", "D_ALICE", "D_BOB")
-
-	d := NewDispatcher(db, nil)
-	for _, m := range []InboundEvent{
-		{Kind: "message", Channel: "D_ALICE", ChannelType: "im", TS: "1700000300.000001", ThreadTS: "1700000300.000001", UserID: "U_alice", Text: "from alice"},
-		{Kind: "message", Channel: "D_BOB", ChannelType: "im", TS: "1700000400.000001", ThreadTS: "1700000400.000001", UserID: "U_bob", Text: "from bob"},
-	} {
-		if err := d.Dispatch(context.Background(), m); err != nil {
-			t.Fatalf("Dispatch err = %v", err)
-		}
-	}
-
-	entries, err := ReadInboxEntries("multi-dm-task")
-	if err != nil {
-		t.Fatalf("read inbox: %v", err)
-	}
-	if len(entries) != 2 {
-		t.Fatalf("inbox len = %d, want 2", len(entries))
-	}
-	got := map[string]bool{}
-	for _, e := range entries {
-		got[e.Event.Text] = true
-	}
-	if !got["from alice"] || !got["from bob"] {
-		t.Errorf("expected messages from both DMs; got %v", got)
-	}
-}
-
-// fakeDMMembers stubs the conversations.members resolver used by DM
-// auto-registration. Keyed by channel ID.
-type fakeDMMembers struct {
-	byChannel map[string][]string
-	calls     int
-}
-
-func (f *fakeDMMembers) DMMembers(_ context.Context, channelID string) ([]string, error) {
-	f.calls++
-	return f.byChannel[normalizeSlackChannelID(channelID)], nil
-}
-
-// seedThreadParticipant appends an inbox message authored by uid so the task's
-// participant set (scanned from inbox user_ids) includes that user.
-func seedThreadParticipant(t *testing.T, slug, channel, uid, text string) {
-	t.Helper()
-	if err := AppendInboxEvent(slug, InboundEvent{
-		Kind: "message", Channel: channel, ChannelType: "channel",
-		TS: "1700000001.000001", ThreadTS: "1700000000.000100", UserID: uid, Text: text,
-	}); err != nil {
-		t.Fatalf("seed participant: %v", err)
-	}
-}
-
-func agentOutboundDM(channel, text string) InboundEvent {
-	return InboundEvent{
-		Kind: "message", Channel: channel, ChannelType: "im",
-		TS: "1780489050.947509", ThreadTS: "1780489050.947509",
-		UserID: "U_me", Text: text,
-	}
-}
-
-func TestDispatcher_AutoRegistersAgentDMToMatchingThread(t *testing.T) {
-	// The agent (running as the operator) DMs a thread participant. flow sees
-	// the outbound DM over the socket (footer = "Sent using @Claude"), resolves
-	// the recipient, matches them to the one active thread that has them as a
-	// participant, and auto-registers the slack-dm tag — no agent cooperation.
-	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
-	db := dispatcherTestDB(t)
-	_, tags, _, restore := stubDispatcherIO(t)
-	defer restore()
-
-	seedSlackTask(t, db, "coinswitch", "C123:1700000000.000100")
-	seedThreadParticipant(t, "coinswitch", "C123", "U_ishaan", "ishaan in thread")
-
-	d := NewDispatcher(db, nil)
-	d.SetDMMembersResolver(&fakeDMMembers{byChannel: map[string][]string{
-		"D_NEW": {"U_me", "U_ishaan"},
-	}})
-
-	out := agentOutboundDM("D_NEW", "PR ready to merge from my side.\n\nSent using @Claude")
-	if err := d.Dispatch(context.Background(), out); err != nil {
-		t.Fatalf("Dispatch err = %v", err)
-	}
-
-	if !dmTagRegistered(*tags, "coinswitch", "D_NEW") {
-		t.Fatalf("expected slack-dm:D_NEW registered on coinswitch; tag calls = %v", *tags)
-	}
-	// The outbound DM is recorded so the DM channel has a backfill baseline.
-	entries, _ := ReadInboxEntries("coinswitch")
-	foundOut := false
-	for _, e := range entries {
-		if e.Event.Channel == "D_NEW" && e.Event.TS == "1780489050.947509" {
-			foundOut = true
-		}
-	}
-	if !foundOut {
-		t.Errorf("outbound DM should be appended to establish a baseline; entries=%v", entries)
-	}
-}
-
-func TestDispatcher_DoesNotAutoRegisterWithoutFooter(t *testing.T) {
-	// No agent footer → indistinguishable from a personal DM you typed → never
-	// auto-register (the privacy footgun guard).
-	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
-	db := dispatcherTestDB(t)
-	_, tags, _, restore := stubDispatcherIO(t)
-	defer restore()
-
-	seedSlackTask(t, db, "coinswitch", "C123:1700000000.000100")
-	seedThreadParticipant(t, "coinswitch", "C123", "U_ishaan", "ishaan in thread")
-
-	d := NewDispatcher(db, nil)
-	resolver := &fakeDMMembers{byChannel: map[string][]string{"D_NEW": {"U_me", "U_ishaan"}}}
-	d.SetDMMembersResolver(resolver)
-
-	out := agentOutboundDM("D_NEW", "hey, personal note, nothing to do with work")
-	if err := d.Dispatch(context.Background(), out); err != nil {
-		t.Fatalf("Dispatch err = %v", err)
-	}
-	if dmTagRegistered(*tags, "coinswitch", "D_NEW") {
-		t.Fatalf("must NOT auto-register a footer-less DM; tag calls = %v", *tags)
-	}
-	if resolver.calls != 0 {
-		t.Errorf("should not even resolve members for a footer-less DM; calls=%d", resolver.calls)
-	}
-}
-
-func TestDispatcher_DoesNotAutoRegisterNonOperatorAuthor(t *testing.T) {
-	// A footer-bearing message authored by someone who isn't the operator is
-	// not an agent-as-you send; don't auto-register.
-	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
-	db := dispatcherTestDB(t)
-	_, tags, _, restore := stubDispatcherIO(t)
-	defer restore()
-
-	seedSlackTask(t, db, "coinswitch", "C123:1700000000.000100")
-	seedThreadParticipant(t, "coinswitch", "C123", "U_ishaan", "ishaan in thread")
-
-	d := NewDispatcher(db, nil)
-	d.SetDMMembersResolver(&fakeDMMembers{byChannel: map[string][]string{"D_NEW": {"U_x", "U_ishaan"}}})
-
-	out := agentOutboundDM("D_NEW", "Sent using @Claude")
-	out.UserID = "U_someone_else"
-	if err := d.Dispatch(context.Background(), out); err != nil {
-		t.Fatalf("Dispatch err = %v", err)
-	}
-	if dmTagRegistered(*tags, "coinswitch", "D_NEW") {
-		t.Fatalf("non-operator author must not auto-register; tag calls = %v", *tags)
-	}
-}
-
-func TestDispatcher_AutoRegisterAmbiguousSkips(t *testing.T) {
-	// The recipient participates in TWO active threads → ambiguous → skip
-	// (fall back to manual/agent registration) rather than guess wrong.
-	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
-	db := dispatcherTestDB(t)
-	_, tags, _, restore := stubDispatcherIO(t)
-	defer restore()
-
-	seedSlackTask(t, db, "task-a", "C123:1700000000.000100")
-	seedThreadParticipant(t, "task-a", "C123", "U_ishaan", "ishaan in A")
-	seedSlackTask(t, db, "task-b", "C456:1700000000.000200")
-	seedThreadParticipant(t, "task-b", "C456", "U_ishaan", "ishaan in B")
-
-	d := NewDispatcher(db, nil)
-	d.SetDMMembersResolver(&fakeDMMembers{byChannel: map[string][]string{"D_NEW": {"U_me", "U_ishaan"}}})
-
-	out := agentOutboundDM("D_NEW", "Sent using @Claude")
-	if err := d.Dispatch(context.Background(), out); err != nil {
-		t.Fatalf("Dispatch err = %v", err)
-	}
-	for _, slug := range []string{"task-a", "task-b"} {
-		if dmTagRegistered(*tags, slug, "D_NEW") {
-			t.Fatalf("ambiguous recipient must not auto-register %s; tag calls = %v", slug, *tags)
-		}
-	}
-}
-
-// dmTagRegistered reports whether the dispatcher requested a slack-dm:<channel>
-// tag on slug. tagFlowTask is stubbed in tests, so registration is observed via
-// the recorded tag calls rather than the DB.
-func dmTagRegistered(calls []tagCall, slug, channel string) bool {
-	want := SlackDMTagPrefix + channel
-	for _, c := range calls {
-		if c.Slug == slug && c.Tag == want {
-			return true
-		}
-	}
-	return false
-}
-
 func TestDispatcher_BackfillSlackTaskTitlesOnlyLegacyNames(t *testing.T) {
 	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
 	db := dispatcherTestDB(t)

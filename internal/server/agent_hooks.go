@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"unicode"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 // CurrentHookVersion is bumped whenever the agent-event hook wire format
@@ -100,6 +102,12 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 		if task, err := flowdb.TaskBySessionID(s.cfg.DB, sessionID); err == nil {
 			resp.Task = task.Slug
 		}
+	}
+	// When the agent sends a DM (Claude or Codex), register that DM thread on
+	// the task so the recipient's replies stream back — deterministic, at the
+	// source, no dependence on the agent self-tagging or a fresh brief.
+	if tag, ok := maybeRegisterDMThread(s.cfg.DB, eventName, resp.Task, payload); ok {
+		fmt.Fprintf(os.Stderr, "monitor: registered DM thread %s -> %s (tool-use hook)\n", tag, resp.Task)
 	}
 	body := agentHookBody(payload)
 	// Subagent stop/start events don't represent the parent agent's state.
@@ -416,6 +424,105 @@ func agentHookProvider(r *http.Request, payload map[string]any) string {
 	default:
 		return "claude"
 	}
+}
+
+// slackDMSendFromHook inspects a PostToolUse hook payload and, when it's the
+// agent posting to a DIRECT-MESSAGE channel via a Slack send tool, returns the
+// DM channel and the thread root to monitor. Provider-agnostic: it matches by
+// the action ("send" / "post_message") plus a DM channel id, so it catches both
+// Claude's mcp__claude_ai_Slack__slack_send_message and Codex's slack
+// send-message tool without hard-coding names. Drafts, reads, non-DM channels,
+// and sends with no resolvable thread root are rejected (ok=false).
+//
+// Scoping to DMs (D-prefix) is deliberate: channel/thread posts are either the
+// task's origin thread (already monitored) or out of scope — auto-registering
+// every channel the agent posts in would over-monitor.
+func slackDMSendFromHook(eventName string, payload map[string]any) (channel, threadTS string, ok bool) {
+	if normalizeAgentHookPart(eventName) != "post_tool_use" {
+		return "", "", false
+	}
+	tool := strings.ToLower(agentHookString(payload, "tool_name", "toolName"))
+	if tool == "" || strings.Contains(tool, "draft") {
+		return "", "", false
+	}
+	if !strings.Contains(tool, "send") && !strings.Contains(tool, "post_message") && !strings.Contains(tool, "postmessage") {
+		return "", "", false
+	}
+	input := hookSubMap(payload, "tool_input", "toolInput")
+	channel = strings.TrimSpace(hookMapString(input, "channel", "channel_id", "channelID"))
+	if !isSlackDMChannelID(channel) {
+		return "", "", false
+	}
+	threadTS = hookMapString(input, "thread_ts", "threadTs", "thread_timestamp")
+	if threadTS == "" {
+		// Fresh top-level DM: the posted message ts (in the tool response) is the
+		// thread root the recipient will reply under.
+		resp := hookSubMap(payload, "tool_response", "toolResponse", "tool_result", "toolResult")
+		threadTS = hookMapString(resp, "ts", "message_ts", "timestamp")
+		if threadTS == "" {
+			threadTS = hookMapString(hookSubMap(resp, "message"), "ts", "timestamp")
+		}
+	}
+	threadTS = strings.TrimSpace(threadTS)
+	if threadTS == "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(channel), threadTS, true
+}
+
+// maybeRegisterDMThread registers a DM thread the agent just sent into so the
+// recipient's replies route back to taskSlug. It reuses the thread model —
+// slack-thread:<dm-channel>:<root> — so the existing thread routing and backfill
+// handle it with no special-casing. Returns the tag and true when it registered,
+// ("", false) otherwise (not a DM send, no task, or DB error). Idempotent.
+func maybeRegisterDMThread(db *sql.DB, eventName, taskSlug string, payload map[string]any) (string, bool) {
+	if db == nil || strings.TrimSpace(taskSlug) == "" {
+		return "", false
+	}
+	ch, root, ok := slackDMSendFromHook(eventName, payload)
+	if !ok {
+		return "", false
+	}
+	tag := flowdb.NormalizeTag(monitor.SlackThreadTagPrefix + monitor.ThreadKey(ch, root))
+	if err := flowdb.AddTaskTag(db, taskSlug, tag); err != nil {
+		return "", false
+	}
+	return tag, true
+}
+
+// isSlackDMChannelID reports whether id is a direct-message channel (D-prefix).
+// Group DMs (mpim) and private channels share the G prefix and are excluded to
+// avoid mis-registering private-channel posts as DMs.
+func isSlackDMChannelID(id string) bool {
+	id = strings.TrimSpace(id)
+	return len(id) > 1 && (id[0] == 'D' || id[0] == 'd')
+}
+
+// hookSubMap extracts a nested map[string]any from payload under any of keys.
+func hookSubMap(payload map[string]any, keys ...string) map[string]any {
+	for _, k := range keys {
+		if v, ok := payload[k]; ok {
+			if m, ok := v.(map[string]any); ok {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+// hookMapString reads the first present, non-empty string-valued key from m.
+func hookMapString(m map[string]any, keys ...string) string {
+	if m == nil {
+		return ""
+	}
+	for _, k := range keys {
+		if v, ok := m[k]; ok {
+			if s, ok := v.(string); ok && strings.TrimSpace(s) != "" {
+				return strings.TrimSpace(s)
+			}
+		}
+	}
+	return ""
 }
 
 func agentHookKind(eventName string, payload map[string]any) string {

@@ -188,55 +188,6 @@ func inboxContainsSlackEvent(slug, channel, ts string) bool {
 	return false
 }
 
-// inboxParticipantUserIDs returns the set of distinct event author user IDs
-// recorded in a task's inbox — i.e. everyone who has spoken or reacted in the
-// monitored thread. Used by DM auto-registration to match a DM recipient
-// against the threads they participate in. A read error yields an empty set.
-func inboxParticipantUserIDs(slug string) map[string]bool {
-	out := map[string]bool{}
-	entries, err := ReadInboxEntries(slug)
-	if err != nil {
-		return out
-	}
-	for _, e := range entries {
-		if uid := strings.TrimSpace(e.Event.UserID); uid != "" {
-			out[uid] = true
-		}
-	}
-	return out
-}
-
-// inboxThreadRootsForChannel returns the distinct thread_ts values among a
-// channel's message entries in the inbox — the set of threads that channel is
-// known to use. DM backfill consults conversations.replies for each so threaded
-// DM replies (invisible to conversations.history) can be recovered. A root
-// equal to its own message ts (an unthreaded message) is still included; it's a
-// harmless single-message "thread" to query.
-func inboxThreadRootsForChannel(slug, channel string) []string {
-	entries, err := ReadInboxEntries(slug)
-	if err != nil {
-		return nil
-	}
-	want := normalizeSlackChannelID(channel)
-	seen := map[string]bool{}
-	var roots []string
-	for _, e := range entries {
-		if e.Event.Kind != "message" && e.Event.Kind != "app_mention" {
-			continue
-		}
-		if normalizeSlackChannelID(e.Event.Channel) != want {
-			continue
-		}
-		root := strings.TrimSpace(e.Event.ThreadTS)
-		if root == "" || seen[root] {
-			continue
-		}
-		seen[root] = true
-		roots = append(roots, root)
-	}
-	return roots
-}
-
 // ReadInboxEntries returns all entries currently in the task's
 // inbox.jsonl, in append order. Missing file → empty slice + nil error.
 // Malformed lines are skipped with no error; the spawned session's

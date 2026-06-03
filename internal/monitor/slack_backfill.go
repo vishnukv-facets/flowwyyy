@@ -58,100 +58,15 @@ func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS,
 	return out, nil
 }
 
-// SlackConversationHistory reads a DM/group-DM channel for backfill. DMs can be
-// flat OR threaded ("also send as DM" + threaded replies), so it exposes both
-// conversations.history (top-level messages) and conversations.replies (a
-// thread's children) — history alone is blind to thread replies. Backed by the
-// USER token: the bot can't read the operator's DMs, only the authorizing user.
-type SlackConversationHistory interface {
-	History(ctx context.Context, channelID, oldest string, limit int) ([]SlackMessage, error)
-	Replies(ctx context.Context, channelID, threadTS, oldest string, limit int) ([]SlackMessage, error)
-}
-
-type slackHistoryAPIClient struct{ api *slack.Client }
-
-// NewSlackDMHistoryClient returns a production history client backed by the
-// user token, or nil when no user token is configured — in which case DM
-// backfill is skipped (live socket events still flow; only the restart-gap
-// safety net is unavailable).
-func NewSlackDMHistoryClient() SlackConversationHistory {
+// NewSlackUserRepliesClient returns a replies client backed by the USER token,
+// or nil when no user token is configured. DM-channel threads are only readable
+// with the user token — the bot isn't a member of the operator's DMs — so the
+// backfill uses this client for slack-thread tags whose channel is a DM.
+func NewSlackUserRepliesClient() SlackThreadReplies {
 	if strings.TrimSpace(SlackUserToken()) == "" {
 		return nil
 	}
-	return slackHistoryAPIClient{api: slack.New(SlackUserToken())}
-}
-
-func (c slackHistoryAPIClient) History(ctx context.Context, channelID, oldest string, limit int) ([]SlackMessage, error) {
-	if limit <= 0 {
-		limit = 200
-	}
-	resp, err := c.api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-		ChannelID: normalizeSlackChannelID(channelID),
-		Oldest:    strings.TrimSpace(oldest),
-		Inclusive: false,
-		Limit:     limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toSlackMessages(resp.Messages), nil
-}
-
-// Replies fetches a DM thread's replies via conversations.replies on the user
-// token, so threaded DM messages missed during a gap can be recovered.
-func (c slackHistoryAPIClient) Replies(ctx context.Context, channelID, threadTS, oldest string, limit int) ([]SlackMessage, error) {
-	if limit <= 0 {
-		limit = 200
-	}
-	msgs, _, _, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
-		ChannelID: normalizeSlackChannelID(channelID),
-		Timestamp: strings.TrimSpace(threadTS),
-		Oldest:    strings.TrimSpace(oldest),
-		Inclusive: false,
-		Limit:     limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return toSlackMessages(msgs), nil
-}
-
-// toSlackMessages projects slack-go messages into the backfill's compact shape.
-func toSlackMessages(msgs []slack.Message) []SlackMessage {
-	out := make([]SlackMessage, 0, len(msgs))
-	for _, m := range msgs {
-		out = append(out, SlackMessage{
-			User:     firstNonEmpty(m.User, m.Username),
-			Text:     m.Text,
-			TS:       m.Timestamp,
-			ThreadTS: m.ThreadTimestamp,
-			SubType:  m.SubType,
-		})
-	}
-	return out
-}
-
-type slackDMMembersClient struct{ api *slack.Client }
-
-// NewSlackDMMembersResolver returns a conversations.members resolver backed by
-// the user token (the bot can't enumerate the operator's DMs), or nil when no
-// user token is configured — in which case DM auto-registration is disabled.
-func NewSlackDMMembersResolver() DMMembersResolver {
-	if strings.TrimSpace(SlackUserToken()) == "" {
-		return nil
-	}
-	return slackDMMembersClient{api: slack.New(SlackUserToken())}
-}
-
-func (c slackDMMembersClient) DMMembers(ctx context.Context, channelID string) ([]string, error) {
-	members, _, err := c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
-		ChannelID: normalizeSlackChannelID(channelID),
-		Limit:     100,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return members, nil
+	return slackRepliesAPIClient{api: slack.New(SlackUserToken())}
 }
 
 // SlackBackfill is the durable safety net behind the live Socket Mode
@@ -165,8 +80,8 @@ func (c slackDMMembersClient) DMMembers(ctx context.Context, channelID string) (
 // it works even while Socket Mode is mid-reconnect.
 type SlackBackfill struct {
 	db       *sql.DB
-	client   SlackThreadReplies
-	dmClient SlackConversationHistory // optional; nil → DM backfill skipped
+	client   SlackThreadReplies // bot token — channel threads
+	dmClient SlackThreadReplies // user token — DM-channel threads; nil → DM backfill skipped
 	interval time.Duration
 	limit    int
 	logFn    func(string, ...any)
@@ -189,11 +104,11 @@ func (b *SlackBackfill) SetLogger(fn func(string, ...any)) {
 	}
 }
 
-// SetDMHistoryClient installs the user-token conversations.history client used
-// to reconcile registered DM channels (slack-dm: tags). Optional — when unset,
-// DM channels are not backfilled. Kept a setter (not a constructor arg) so
+// SetDMRepliesClient installs the user-token replies client used to reconcile
+// DM-channel threads (slack-thread tags whose channel is a DM). Optional — when
+// unset, DM threads are not backfilled. Kept a setter (not a constructor arg) so
 // existing callers and tests don't have to thread it through.
-func (b *SlackBackfill) SetDMHistoryClient(c SlackConversationHistory) {
+func (b *SlackBackfill) SetDMRepliesClient(c SlackThreadReplies) {
 	b.dmClient = c
 }
 
@@ -237,52 +152,26 @@ func (b *SlackBackfill) runOnce(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		// Thread reconcile (origin slack-thread tag).
-		if decision, ok := decisionFromSlackThreadTags(tags); ok {
-			n, err := b.reconcile(ctx, task.Slug, decision.Channel, decision.ThreadTS)
+		// Reconcile every monitored conversation on this task: its origin channel
+		// thread plus any DM threads registered via the tool-use hook (all stored
+		// as slack-thread:<channel>:<thread_ts>). DM-channel threads are read with
+		// the user token — the bot can't see the operator's DMs.
+		for _, ref := range threadRefsFromTags(tags) {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			n, err := b.reconcile(ctx, task.Slug, ref.Channel, ref.ThreadTS)
 			if err != nil {
-				b.logFn("slack backfill %s: %v", task.Slug, err)
-			} else if n > 0 {
-				b.logFn("slack backfill %s: recovered %d missed message(s)", task.Slug, n)
+				b.logFn("slack backfill %s (%s): %v", task.Slug, ref.Channel, err)
+				continue
 			}
-		}
-		// DM reconcile (any slack-dm tags the agent registered). Independent of
-		// the thread reconcile so a DM is recovered even if the thread lookup
-		// fails or the task somehow lacks a thread tag.
-		if b.dmClient != nil {
-			for _, ch := range dmChannelsFromTags(tags) {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-				}
-				n, err := b.reconcileDM(ctx, task.Slug, ch)
-				if err != nil {
-					b.logFn("slack dm backfill %s (%s): %v", task.Slug, ch, err)
-					continue
-				}
-				if n > 0 {
-					b.logFn("slack dm backfill %s (%s): recovered %d missed message(s)", task.Slug, ch, n)
-				}
+			if n > 0 {
+				b.logFn("slack backfill %s (%s): recovered %d missed message(s)", task.Slug, ref.Channel, n)
 			}
 		}
 	}
-}
-
-// dmChannelsFromTags extracts the channel IDs from a task's slack-dm:<channel>
-// tags. Tags are stored normalized (lowercased); the History client uppercases
-// them again before calling Slack.
-func dmChannelsFromTags(tags []string) []string {
-	var out []string
-	for _, t := range tags {
-		t = strings.TrimSpace(t)
-		if ch := strings.TrimPrefix(t, SlackDMTagPrefix); ch != t {
-			if ch = strings.TrimSpace(ch); ch != "" {
-				out = append(out, ch)
-			}
-		}
-	}
-	return out
 }
 
 // reconcile appends any thread replies newer than what's already in the task's
@@ -304,7 +193,13 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	if maxTS == "" {
 		return 0, nil
 	}
-	msgs, err := b.client.Replies(ctx, channel, threadTS, maxTS, b.limit)
+	// DM channels are only readable via the user token (the bot isn't a member
+	// of the operator's DMs); channel threads use the bot-token client.
+	var client SlackThreadReplies = b.client
+	if isDMChannel(channel) && b.dmClient != nil {
+		client = b.dmClient
+	}
+	msgs, err := client.Replies(ctx, channel, threadTS, maxTS, b.limit)
 	if err != nil {
 		return 0, err
 	}
@@ -338,81 +233,6 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	return appended, nil
 }
 
-// reconcileDM appends any DM-channel messages newer than what's already in the
-// task's inbox.jsonl. DMs can be flat OR threaded, so it pulls BOTH
-// conversations.history (top-level) AND conversations.replies for every thread
-// root already seen in this DM — history alone is blind to thread replies, and
-// these DMs ("also send as DM" + threaded replies) live entirely under a thread.
-// Matched by channel alone; self-heals across restarts and never double-appends
-// (deduped by ts, with the (channel, ts) guard in AppendInboxEvent as backstop).
-func (b *SlackBackfill) reconcileDM(ctx context.Context, slug, channel string) (int, error) {
-	if b.dmClient == nil {
-		return 0, nil
-	}
-	channel = normalizeSlackChannelID(channel)
-	maxTS, seen, err := inboxSlackTSIndexForChannel(slug, channel)
-	if err != nil {
-		return 0, err
-	}
-	// No baseline in this DM yet → let the live listener establish the first
-	// entry rather than flooding the inbox with old DM history.
-	if maxTS == "" {
-		return 0, nil
-	}
-
-	// Top-level messages.
-	candidates, err := b.dmClient.History(ctx, channel, maxTS, b.limit)
-	if err != nil {
-		return 0, err
-	}
-	// Thread replies for every thread root this DM is known to use. Errors on a
-	// single thread are logged but don't abort the others.
-	for _, root := range inboxThreadRootsForChannel(slug, channel) {
-		replies, err := b.dmClient.Replies(ctx, channel, root, maxTS, b.limit)
-		if err != nil {
-			b.logFn("slack dm backfill %s (%s thread %s): %v", slug, channel, root, err)
-			continue
-		}
-		candidates = append(candidates, replies...)
-	}
-
-	chanType := "mpim"
-	if strings.HasPrefix(channel, "D") {
-		chanType = "im"
-	}
-	appended := 0
-	for _, m := range candidates {
-		ts := strings.TrimSpace(m.TS)
-		if ts == "" {
-			continue
-		}
-		if seen[ts] || !slackTSLess(maxTS, ts) {
-			continue // already recorded, or not newer than our cursor
-		}
-		if !backfillAcceptMessage(m) {
-			continue
-		}
-		threadTS := strings.TrimSpace(m.ThreadTS)
-		if threadTS == "" {
-			threadTS = ts // unthreaded DM message is its own root
-		}
-		ev := InboundEvent{
-			Kind:        "message",
-			Channel:     channel,
-			ChannelType: chanType,
-			TS:          ts,
-			ThreadTS:    threadTS,
-			UserID:      strings.TrimSpace(m.User),
-			Text:        strings.TrimSpace(m.Text),
-		}
-		if err := AppendInboxEvent(slug, ev); err != nil {
-			return appended, err
-		}
-		seen[ts] = true
-		appended++
-	}
-	return appended, nil
-}
 
 // inboxSlackTSIndexForChannel reads a task's inbox.jsonl once and returns the
 // newest Slack message ts in the given channel (the resume cursor) plus the set

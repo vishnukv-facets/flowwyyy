@@ -280,6 +280,42 @@ Note: this was diagnosed alongside two **non-code** factors that also caused
 and (b) a captured message not waking an idle/just-restarted session — a
 separate wake-path concern, not a capture or backfill bug.
 
+## Addendum (2026-06-03, final): thread-scoped DMs via the tool-use hook
+
+Live use exposed two fatal flaws in the channel-scoped + footer-auto-reg model,
+so it was **replaced** (channel-scoped code removed entirely):
+
+1. **Channel-scoping was the wrong unit.** A `slack-dm:<channel>` tag captures
+   *every* message in a person's DM — all topics — so unrelated workstreams
+   leaked into a task (the agent itself flagged this). A DM **conversation** is a
+   thread, not a channel.
+2. **"Sent via Claude" isn't in the event.** The footer is Slack UI app
+   attribution rendered at display time; the Events API payload has no
+   `app_id`/`bot_id`/footer (verified live: `agent-footer=false`). So a socket
+   listener cannot tell an agent-sent DM from a hand-typed one — footer
+   auto-detection is impossible.
+
+**Final design — register at the agent's `PostToolUse` hook, thread-scoped:**
+- `slackDMSendFromHook` (server/agent_hooks.go) detects a Slack *send* to a **DM
+  channel** (provider-agnostic: matches `send`/`post_message` in the tool name +
+  a `D…` channel, excluding drafts/reads — covers Claude's
+  `slack_send_message` and Codex's send-message), reading `channel` + `thread_ts`
+  from `tool_input` (or the posted ts from `tool_response` for a fresh DM).
+- `maybeRegisterDMThread` tags the hook's task `slack-thread:<dm-channel>:<root>`
+  — reusing the thread model. Deterministic, automatic, both providers, no
+  footer, no footgun (only real agent sends fire it), no dependence on fresh
+  briefs or agent self-tagging.
+- **Routing**: unchanged — the existing thread branch routes
+  `slack-thread:<dm-channel>:<root>` by `(channel, thread_ts)`. Only the DM
+  thread the agent started routes in; unrelated DM topics are excluded.
+- **Backfill**: `runOnce` reconciles *all* `slack-thread` tags per task (via
+  `threadRefsFromTags`), and `reconcile` uses the **user-token** replies client
+  (`NewSlackUserRepliesClient`) for DM-channel threads — the bot can't read the
+  operator's DMs.
+- **Removed**: `slack-dm:` tag/routing, `findTaskByDMChannel`, footer
+  auto-registration, `attributeDMToTask`, `DMMembersResolver`, `reconcileDM`,
+  the `conversations.history` DM path. DMs are now *only* thread-scoped.
+
 ## Out of scope
 
 - Auto-detecting DMs without agent registration.

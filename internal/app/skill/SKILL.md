@@ -2342,24 +2342,18 @@ under the `tags:` line), follow this bootstrap:
 
    Save a progress note after each meaningful exchange so the thread's
    history is captured in flow even if the inbox file rotates.
-7. **Monitoring a DM reply.** If the operator asks you to reply to someone
-   **privately by DM** rather than in this thread, the DM is a separate channel
-   this task isn't watching — so the person's DM replies won't reach you on
-   their own. Right after you open or post the DM, register its channel so its
-   replies stream into this task's inbox like thread replies:
+7. **Monitoring a DM reply (automatic).** You can reply to someone **privately
+   by DM** rather than in this thread. flow monitors that DM for you
+   **automatically** — when you send the DM (Claude or Codex), the `PostToolUse`
+   hook registers the DM **thread** for this task. The recipient's replies in
+   that DM thread then appear in `inbox.jsonl` and wake this session, classified
+   by `event.user_id` exactly like thread events (step 3). No manual tagging.
 
-   ```bash
-   flow update task <your-slug> --tag slack-dm:<dm-channel-id>
-   ```
-
-   `<dm-channel-id>` is the channel ID the Slack MCP returns for that DM (a
-   `D…` id, or a `G…`/mpim id for a group DM). You can register several — DM
-   more than one person for this task and tag each channel. Replies in those
-   DMs then appear in `inbox.jsonl` and wake this session, classified by
-   `event.user_id` exactly like thread events (step 3). (This requires the
-   workspace's Slack app to subscribe to `message.im` / `message.mpim` under
-   "events on behalf of users"; if a DM reply never arrives, that subscription
-   is likely missing.)
+   Monitoring is scoped to the **DM thread you started**, not the person's whole
+   DM channel — so other, unrelated conversations you have with the same person
+   don't leak into this task. (Requires the workspace Slack app to subscribe to
+   `message.im` / `message.mpim` under "events on behalf of users", and a user
+   token configured for backfill; if a DM reply never arrives, check those.)
 8. **Close out.** When the thread is resolved (`:white_check_mark:` from
    the user, "thanks", explicit "done"), run `flow done` — the close-out
    sweep distills the Slack conversation into KB facts and a project
