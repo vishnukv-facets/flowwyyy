@@ -277,21 +277,35 @@ func TestCmdShowTaskWaitingOn(t *testing.T) {
 }
 
 func TestCmdShowTaskParentAndChildren(t *testing.T) {
-	root, db := showListEditDB(t)
+	// Use setupFlowRoot so cmdInit runs and stamps the hierarchy/dependency
+	// split marker before any parent_slug is written. This prevents the
+	// migrateTaskDependencies backfill from treating hierarchy parents as
+	// blocking dependencies on subsequent DB opens.
+	root := setupFlowRoot(t)
+	db := openFlowDB(t)
 	insertTask(t, db, "parent-task", "Parent Task", "backlog", "high", filepath.Join(root, "x"), nil)
 	insertTask(t, db, "child-one", "Child One", "backlog", "medium", filepath.Join(root, "x"), nil)
 	insertTask(t, db, "child-two", "Child Two", "in-progress", "medium", filepath.Join(root, "x"), nil)
-	if _, err := db.Exec(`UPDATE tasks SET parent_slug = ? WHERE slug IN (?, ?)`, "parent-task", "child-one", "child-two"); err != nil {
-		t.Fatal(err)
+	db.Close()
+	// Use the proper API to set hierarchy parents; direct SQL before the
+	// split marker is stamped would be nulled by migrateSplitHierarchyDependency.
+	if rc := cmdUpdate([]string{"task", "child-one", "--subtask-of", "parent-task"}); rc != 0 {
+		t.Fatalf("subtask-of child-one rc=%d", rc)
 	}
+	if rc := cmdUpdate([]string{"task", "child-two", "--subtask-of", "parent-task"}); rc != 0 {
+		t.Fatalf("subtask-of child-two rc=%d", rc)
+	}
+	// Re-open for any post-setup reads.
+	db = openFlowDB(t)
+	_ = db
 
 	childOut := captureStdout(t, func() {
 		if rc := cmdShow([]string{"task", "child-one"}); rc != 0 {
 			t.Errorf("rc=%d", rc)
 		}
 	})
-	if !strings.Contains(childOut, "parent:        parent-task (backlog) Parent Task") {
-		t.Errorf("missing parent line; out=%q", childOut)
+	if !strings.Contains(childOut, "subtask of:    parent-task (backlog) Parent Task") {
+		t.Errorf("missing subtask of line; out=%q", childOut)
 	}
 
 	parentOut := captureStdout(t, func() {
@@ -299,8 +313,8 @@ func TestCmdShowTaskParentAndChildren(t *testing.T) {
 			t.Errorf("rc=%d", rc)
 		}
 	})
-	if !strings.Contains(parentOut, "children:") {
-		t.Errorf("missing children section; out=%q", parentOut)
+	if !strings.Contains(parentOut, "subtasks:") {
+		t.Errorf("missing subtasks section; out=%q", parentOut)
 	}
 	for _, want := range []string{
 		"- child-one (backlog) Child One",
@@ -658,6 +672,34 @@ func TestCmdShowPlaybookListsRecentRuns(t *testing.T) {
 	})
 	if !strings.Contains(out, "p--2026-04-30-10-30") || !strings.Contains(out, "p--2026-04-30-11-00") {
 		t.Errorf("expected both runs in output, got:\n%s", out)
+	}
+}
+
+func mustNoErrApp(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestShowTaskSeparatesHierarchyAndDependencies(t *testing.T) {
+	root, db := showListEditDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "epic", "Epic", "backlog", "medium", wd, nil)
+	insertTask(t, db, "setup", "Setup", "done", "medium", wd, nil)
+	insertTask(t, db, "feat", "Feat", "backlog", "medium", wd, nil)
+	mustNoErrApp(t, flowdb.SetTaskHierarchyParent(db, "feat", "epic"))
+	mustNoErrApp(t, flowdb.AddTaskDependency(db, "feat", "setup"))
+
+	out := captureStdout(t, func() {
+		feat, _ := flowdb.GetTask(db, "feat")
+		printTaskMetadata(db, feat, root)
+	})
+	if !strings.Contains(out, "subtask of:") || !strings.Contains(out, "epic") {
+		t.Fatalf("expected hierarchy 'subtask of: epic' in output:\n%s", out)
+	}
+	if !strings.Contains(out, "depends on:") || !strings.Contains(out, "setup") {
+		t.Fatalf("expected 'depends on: setup' in output:\n%s", out)
 	}
 }
 

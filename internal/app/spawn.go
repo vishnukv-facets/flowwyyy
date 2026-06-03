@@ -29,7 +29,7 @@ import (
 // do later is still possible by slug.
 func cmdSpawn(args []string) int {
 	fs := flagSet("spawn")
-	parent := fs.String("parent", "", "slug of the parent task (this spawn becomes its child)")
+	parent := fs.String("parent", "", "slug of the parent task in the hierarchy (this spawn becomes its subtask; non-blocking)")
 	prompt := fs.String("prompt", "", "initial instruction for the spawned agent (replaces brief.md What section)")
 	project := fs.String("project", "", "project slug to attach the new task to")
 	slugFlag := fs.String("slug", "", "short user-chosen slug (default: derived from name)")
@@ -42,6 +42,8 @@ func cmdSpawn(args []string) int {
 	permission := fs.String("permission-mode", flowdb.DefaultPermissionMode, "default|auto|bypass")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass low-friction permissions flag through to the agent")
 	noOpen := fs.Bool("no-open", false, "create the task but don't spawn a session yet")
+	var dependsOn stringSliceFlag
+	fs.Var(&dependsOn, "depends-on", "slug of a task this spawn is blocked by (repeatable)")
 	if leadingHelpArg(args) {
 		fs.Usage()
 		return 0
@@ -116,19 +118,21 @@ func cmdSpawn(args []string) int {
 		return 1
 	}
 
-	// Record parent linkage. cmdAdd doesn't write it because parent linkage
-	// is spawn-specific. AddTaskParent inserts the row into task_dependencies
-	// and mirrors the first parent into tasks.parent_slug for backwards
-	// compat. updated_at is bumped separately.
+	// Record parent linkage and blocking dependencies.
+	// --parent sets the organizational hierarchy (non-blocking).
+	// --depends-on adds blocking dependency edges.
 	if parentSlug != "" {
-		if err := flowdb.AddTaskParent(db, createdSlug, parentSlug); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: set parent: %v\n", err)
+		if err := flowdb.SetTaskHierarchyParent(db, createdSlug, parentSlug); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: set hierarchy parent: %v\n", err)
 		}
-		if _, err := db.Exec(
-			`UPDATE tasks SET updated_at = ? WHERE slug = ?`,
-			flowdb.NowISO(), createdSlug,
-		); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: bump updated_at: %v\n", err)
+	}
+	for _, dep := range dependsOn {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if err := flowdb.AddTaskDependency(db, createdSlug, dep); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: add dependency %q: %v\n", dep, err)
 		}
 	}
 

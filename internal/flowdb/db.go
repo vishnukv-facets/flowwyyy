@@ -125,6 +125,12 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     CHECK (child_slug <> parent_slug)
 );
 
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    applied_at  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS search_docs (
     id            INTEGER PRIMARY KEY,
     doc_key       TEXT NOT NULL UNIQUE,
@@ -339,7 +345,8 @@ func (b *TaskStartBlocker) Error() string {
 // TaskStartBlockerFor returns the reason a task should not start, if any.
 // waiting_on is an explicit blocker. task_dependencies rows are formal
 // dependencies: the child cannot start until every non-deleted parent is
-// done.
+// done. Dependencies are read exclusively from the task_dependencies table;
+// the tasks.parent_slug hierarchy column is non-blocking and is ignored here.
 //
 // Special case: when waiting_on text was written at intake describing a
 // dependency (e.g. "depends on notif-autospawn - …") and the parent later
@@ -357,29 +364,6 @@ func TaskStartBlockerFor(db *sql.DB, task *Task) (*TaskStartBlocker, error) {
 	parents, err := loadParentsForBlocker(db, task.Slug)
 	if err != nil {
 		return nil, err
-	}
-	// Fall back to the legacy parent_slug column when the dependency table
-	// has no row for this child (e.g. a code path inserted parent_slug
-	// without calling AddTaskParent). The migration backfills existing
-	// rows, so this should be rare in practice.
-	if len(parents) == 0 && task.ParentSlug.Valid {
-		if legacy := strings.TrimSpace(task.ParentSlug.String); legacy != "" {
-			var p PendingParent
-			p.Slug = legacy
-			var del sql.NullString
-			scanErr := db.QueryRow(
-				`SELECT name, status, deleted_at FROM tasks WHERE slug = ?`,
-				legacy,
-			).Scan(&p.Name, &p.Status, &del)
-			if errors.Is(scanErr, sql.ErrNoRows) {
-				p.Missing = true
-			} else if scanErr != nil {
-				return nil, scanErr
-			} else {
-				p.Deleted = del.Valid
-			}
-			parents = []PendingParent{p}
-		}
 	}
 
 	pendingParents := make([]PendingParent, 0, len(parents))
@@ -480,10 +464,51 @@ func ListParentSlugs(db *sql.DB, childSlug string) ([]string, error) {
 	return out, rows.Err()
 }
 
-// AddTaskParent declares childSlug as depending on parentSlug. Idempotent
-// (INSERT OR IGNORE on the composite PK). Also mirrors the first remaining
-// parent into tasks.parent_slug for the legacy single-parent reads.
-func AddTaskParent(db *sql.DB, childSlug, parentSlug string) error {
+// wouldCycleDependency reports whether adding the edge "child depends on parent"
+// would create a cycle, i.e. `parent` can already reach `child` by following
+// depends-on edges. Bounded as a runaway guard.
+func wouldCycleDependency(db *sql.DB, child, parent string) (bool, error) {
+	if child == parent {
+		return true, nil
+	}
+	visited := make(map[string]bool)
+	stack := []string{parent}
+	for len(stack) > 0 && len(visited) < 100000 {
+		cur := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if cur == child {
+			return true, nil
+		}
+		if visited[cur] {
+			continue
+		}
+		visited[cur] = true
+		rows, err := db.Query(`SELECT parent_slug FROM task_dependencies WHERE child_slug = ?`, cur)
+		if err != nil {
+			return false, err
+		}
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				rows.Close()
+				return false, err
+			}
+			stack = append(stack, p)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return false, err
+		}
+		rows.Close()
+	}
+	return false, nil
+}
+
+// AddTaskDependency declares childSlug as blocked by parentSlug. The child
+// cannot start until the parent is done (enforced by TaskStartBlockerFor).
+// Idempotent (INSERT OR IGNORE). Does NOT touch tasks.parent_slug (that column
+// is hierarchy, a separate concept). Rejects self-loops and cycles.
+func AddTaskDependency(db *sql.DB, childSlug, parentSlug string) error {
 	childSlug = strings.TrimSpace(childSlug)
 	parentSlug = strings.TrimSpace(parentSlug)
 	if childSlug == "" || parentSlug == "" {
@@ -492,67 +517,111 @@ func AddTaskParent(db *sql.DB, childSlug, parentSlug string) error {
 	if childSlug == parentSlug {
 		return errors.New("a task cannot depend on itself")
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := db.Exec(
-		`INSERT OR IGNORE INTO task_dependencies (child_slug, parent_slug, created_at) VALUES (?, ?, ?)`,
-		childSlug, parentSlug, now,
-	); err != nil {
+	cyc, err := wouldCycleDependency(db, childSlug, parentSlug)
+	if err != nil {
 		return err
 	}
-	return syncLegacyParentSlug(db, childSlug)
+	if cyc {
+		return fmt.Errorf("adding dependency %q → %q would create a cycle", childSlug, parentSlug)
+	}
+	_, err = db.Exec(
+		`INSERT OR IGNORE INTO task_dependencies (child_slug, parent_slug, created_at) VALUES (?, ?, ?)`,
+		childSlug, parentSlug, NowISO(),
+	)
+	return err
 }
 
-// RemoveTaskParent drops the (child, parent) edge if present. Mirrors the
-// new first parent (if any) back into tasks.parent_slug.
-func RemoveTaskParent(db *sql.DB, childSlug, parentSlug string) error {
+// RemoveTaskDependency drops the (child, parent) blocking edge if present.
+func RemoveTaskDependency(db *sql.DB, childSlug, parentSlug string) error {
 	childSlug = strings.TrimSpace(childSlug)
 	parentSlug = strings.TrimSpace(parentSlug)
 	if childSlug == "" || parentSlug == "" {
 		return errors.New("child and parent slugs are required")
 	}
-	if _, err := db.Exec(
+	_, err := db.Exec(
 		`DELETE FROM task_dependencies WHERE child_slug = ? AND parent_slug = ?`,
 		childSlug, parentSlug,
-	); err != nil {
-		return err
-	}
-	return syncLegacyParentSlug(db, childSlug)
+	)
+	return err
 }
 
-// ClearTaskParents removes every dependency edge for the child and clears
-// the legacy tasks.parent_slug mirror.
-func ClearTaskParents(db *sql.DB, childSlug string) error {
+// ClearTaskDependencies removes every blocking dependency for the child.
+func ClearTaskDependencies(db *sql.DB, childSlug string) error {
 	childSlug = strings.TrimSpace(childSlug)
 	if childSlug == "" {
 		return errors.New("child slug is required")
 	}
-	if _, err := db.Exec(`DELETE FROM task_dependencies WHERE child_slug = ?`, childSlug); err != nil {
-		return err
-	}
-	return syncLegacyParentSlug(db, childSlug)
+	_, err := db.Exec(`DELETE FROM task_dependencies WHERE child_slug = ?`, childSlug)
+	return err
 }
 
-// syncLegacyParentSlug rewrites tasks.parent_slug to the first remaining
-// parent in task_dependencies (NULL if there are none). Called after any
-// add/remove/clear so the denormalized mirror stays consistent.
-func syncLegacyParentSlug(db *sql.DB, childSlug string) error {
-	var first sql.NullString
-	err := db.QueryRow(`
-		SELECT parent_slug FROM task_dependencies
-		WHERE child_slug = ?
-		ORDER BY created_at ASC, parent_slug ASC
-		LIMIT 1
-	`, childSlug).Scan(&first)
-	if errors.Is(err, sql.ErrNoRows) {
-		first = sql.NullString{}
-	} else if err != nil {
+// wouldCycleHierarchy reports whether making `child` a subtask of `parent`
+// would create a cycle in the parent_slug chain (child already an ancestor of
+// parent, or child == parent). Depth-bounded as a runaway guard.
+func wouldCycleHierarchy(db *sql.DB, child, parent string) (bool, error) {
+	if child == parent {
+		return true, nil
+	}
+	cur := parent
+	for i := 0; i < 1000 && cur != ""; i++ {
+		if cur == child {
+			return true, nil
+		}
+		var next sql.NullString
+		err := db.QueryRow(`SELECT parent_slug FROM tasks WHERE slug = ?`, cur).Scan(&next)
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if !next.Valid {
+			return false, nil
+		}
+		cur = next.String
+	}
+	return false, nil
+}
+
+// SetTaskHierarchyParent sets childSlug's organizational parent (subtask-of).
+// Hierarchy is non-blocking — it never gates task start. Validates existence,
+// self-loop, and cycle-freedom.
+func SetTaskHierarchyParent(db *sql.DB, childSlug, parentSlug string) error {
+	childSlug = strings.TrimSpace(childSlug)
+	parentSlug = strings.TrimSpace(parentSlug)
+	if childSlug == "" || parentSlug == "" {
+		return errors.New("child and parent slugs are required")
+	}
+	if childSlug == parentSlug {
+		return errors.New("a task cannot be a subtask of itself")
+	}
+	var exists string
+	if err := db.QueryRow(`SELECT slug FROM tasks WHERE slug = ?`, parentSlug).Scan(&exists); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("parent task %q not found", parentSlug)
+		}
 		return err
 	}
-	if first.Valid {
-		_, err = db.Exec(`UPDATE tasks SET parent_slug = ? WHERE slug = ?`, first.String, childSlug)
-	} else {
-		_, err = db.Exec(`UPDATE tasks SET parent_slug = NULL WHERE slug = ?`, childSlug)
+	cyc, err := wouldCycleHierarchy(db, childSlug, parentSlug)
+	if err != nil {
+		return err
 	}
+	if cyc {
+		return fmt.Errorf("making %q a subtask of %q would create a hierarchy cycle", childSlug, parentSlug)
+	}
+	_, err = db.Exec(`UPDATE tasks SET parent_slug = ?, updated_at = ? WHERE slug = ?`,
+		parentSlug, NowISO(), childSlug)
+	return err
+}
+
+// ClearTaskHierarchyParent removes childSlug's organizational parent.
+func ClearTaskHierarchyParent(db *sql.DB, childSlug string) error {
+	childSlug = strings.TrimSpace(childSlug)
+	if childSlug == "" {
+		return errors.New("child slug is required")
+	}
+	_, err := db.Exec(`UPDATE tasks SET parent_slug = NULL, updated_at = ? WHERE slug = ?`,
+		NowISO(), childSlug)
 	return err
 }
 
@@ -954,6 +1023,9 @@ func runMigrations(db *sql.DB) error {
 	if err := migrateTaskDependencies(db); err != nil {
 		return fmt.Errorf("migrate task_dependencies: %w", err)
 	}
+	if err := migrateSplitHierarchyDependency(db); err != nil {
+		return fmt.Errorf("migrate split hierarchy/dependency: %w", err)
+	}
 	if err := migrateSearchDocsMemoryScope(db); err != nil {
 		return fmt.Errorf("migrate search docs memory scope: %w", err)
 	}
@@ -1132,6 +1204,17 @@ func migrateTaskDependencies(db *sql.DB) error {
 	if !has {
 		return nil
 	}
+	// Once the hierarchy/dependency split migration has run, tasks.parent_slug
+	// means pure organizational hierarchy (non-blocking) and must NOT be
+	// backfilled into task_dependencies. Backfilling after the split would
+	// turn hierarchy parents into blocking dependencies, defeating the split.
+	split, err := schemaMetaHas(db, "hierarchy_dependency_split")
+	if err != nil {
+		return err
+	}
+	if split {
+		return nil
+	}
 	if _, err := db.Exec(`
 		INSERT OR IGNORE INTO task_dependencies (child_slug, parent_slug, created_at)
 		SELECT slug, parent_slug, COALESCE(created_at, datetime('now'))
@@ -1142,6 +1225,41 @@ func migrateTaskDependencies(db *sql.DB) error {
 		return fmt.Errorf("backfill task_dependencies: %w", err)
 	}
 	return nil
+}
+
+// migrateSplitHierarchyDependency runs once per DB. It nulls tasks.parent_slug
+// values that merely mirror an existing task_dependencies edge — the artifact
+// of the pre-split era when "parent" meant both hierarchy and blocking
+// dependency. After this, parent_slug means hierarchy only and task_dependencies
+// means blocking only. Gated by a schema_meta marker so a legitimately-set
+// hierarchy edge that later happens to coincide with a dependency is never
+// clobbered on a subsequent open.
+func migrateSplitHierarchyDependency(db *sql.DB) error {
+	done, err := schemaMetaHas(db, "hierarchy_dependency_split")
+	if err != nil {
+		return err
+	}
+	if done {
+		return nil
+	}
+	// Null only the legacy mirrors: parent_slug values that duplicate an
+	// existing task_dependencies edge (the pre-split artifact). A fresh DB has
+	// none, so this UPDATE is a no-op there. We then stamp the marker
+	// UNCONDITIONALLY — even on an empty DB — so the window in which
+	// migrateTaskDependencies could backfill a newly-written hierarchy
+	// parent_slug into a blocking dependency is closed by construction on the
+	// very first open, rather than relying on a task happening to exist yet.
+	if _, err := db.Exec(`
+		UPDATE tasks SET parent_slug = NULL
+		WHERE parent_slug IS NOT NULL
+		  AND EXISTS (
+		      SELECT 1 FROM task_dependencies d
+		      WHERE d.child_slug = tasks.slug AND d.parent_slug = tasks.parent_slug
+		  )
+	`); err != nil {
+		return fmt.Errorf("null legacy parent_slug mirrors: %w", err)
+	}
+	return schemaMetaSet(db, "hierarchy_dependency_split")
 }
 
 // migrateTasksSessionIDUnique creates the partial unique index on
@@ -1516,6 +1634,29 @@ func columnExists(db *sql.DB, table, column string) (bool, error) {
 		}
 	}
 	return false, rows.Err()
+}
+
+// schemaMetaHas reports whether a one-shot migration marker has been recorded.
+// Used to gate data migrations that cannot be inferred from schema structure.
+func schemaMetaHas(db *sql.DB, key string) (bool, error) {
+	var v string
+	err := db.QueryRow(`SELECT value FROM schema_meta WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// schemaMetaSet records a one-shot migration marker. Idempotent.
+func schemaMetaSet(db *sql.DB, key string) error {
+	_, err := db.Exec(
+		`INSERT OR IGNORE INTO schema_meta (key, value, applied_at) VALUES (?, '1', ?)`,
+		key, NowISO(),
+	)
+	return err
 }
 
 // ---------- project queries ----------

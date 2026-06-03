@@ -124,6 +124,13 @@ func cmdUpdateTask(args []string) int {
 	var removeParents stringSliceFlag
 	fs.Var(&removeParents, "remove-parent", "remove a parent task slug (repeatable)")
 	clearParent := fs.Bool("clear-parent", false, "clear ALL parent task links")
+	var dependsOn stringSliceFlag
+	fs.Var(&dependsOn, "depends-on", "add a blocking dependency slug (repeatable)")
+	var removeDeps stringSliceFlag
+	fs.Var(&removeDeps, "remove-dep", "remove a blocking dependency slug (repeatable)")
+	clearDeps := fs.Bool("clear-deps", false, "clear ALL blocking dependencies")
+	subtaskOf := fs.String("subtask-of", "", "set the hierarchy parent (organizational, non-blocking)")
+	unparent := fs.Bool("unparent", false, "clear the hierarchy parent")
 	waiting := fs.String("waiting", "", "set waiting_on freeform note (\"<who or what>\")")
 	clearWaiting := fs.Bool("clear-waiting", false, "clear waiting_on")
 	project := fs.String("project", "", "attach this task to a project (slug)")
@@ -139,17 +146,24 @@ func cmdUpdateTask(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
+	if len(addParents) > 0 || len(removeParents) > 0 || *clearParent {
+		fmt.Fprintln(os.Stderr, "note: --parent/--remove-parent/--clear-parent are deprecated aliases for --depends-on/--remove-dep/--clear-deps (blocking dependencies)")
+	}
+	dependsOn = append(dependsOn, addParents...)
+	removeDeps = append(removeDeps, removeParents...)
+	clearDepsEff := *clearDeps || *clearParent
 	agentRequested := *agentFlag != "" || *codexAgent || *claudeAgent
 	anyField := *newSlug != "" || *newName != "" ||
 		*workDir != "" || *status != "" || *priority != "" ||
 		*assignee != "" || *clearAssignee || *dueDate != "" || *clearDue ||
-		len(addParents) > 0 || len(removeParents) > 0 || *clearParent ||
+		len(dependsOn) > 0 || len(removeDeps) > 0 || clearDepsEff ||
+		*subtaskOf != "" || *unparent ||
 		*waiting != "" || *clearWaiting ||
 		*project != "" || *clearProject ||
 		len(addTags) > 0 || len(removeTags) > 0 || *clearTags ||
 		agentRequested
 	if !anyField {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --assignee, --clear-assignee, --due-date, --clear-due, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags")
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags")
 		return 2
 	}
 
@@ -196,6 +210,14 @@ func cmdUpdateTask(args []string) int {
 	}
 	if *clearParent && (len(addParents) > 0 || len(removeParents) > 0) {
 		fmt.Fprintln(os.Stderr, "error: --clear-parent and --parent/--remove-parent are mutually exclusive (clear-parent removes everything)")
+		return 2
+	}
+	if clearDepsEff && (len(dependsOn) > 0 || len(removeDeps) > 0) {
+		fmt.Fprintln(os.Stderr, "error: clearing all dependencies is mutually exclusive with --depends-on/--remove-dep")
+		return 2
+	}
+	if *unparent && *subtaskOf != "" {
+		fmt.Fprintln(os.Stderr, "error: --subtask-of and --unparent are mutually exclusive")
 		return 2
 	}
 	if *clearWaiting && *waiting != "" {
@@ -354,51 +376,72 @@ func cmdUpdateTask(args []string) int {
 			fmt.Printf("agent → %s\n", newProvider)
 		}
 	}
-	for _, p := range addParents {
+	for _, p := range dependsOn {
 		parentTask, err := ResolveTask(db, p, true)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
-				fmt.Fprintf(os.Stderr, "error: parent task %q not found\n", p)
+				fmt.Fprintf(os.Stderr, "error: dependency task %q not found\n", p)
 				return 1
 			}
-			fmt.Fprintf(os.Stderr, "error: resolve parent %q: %v\n", p, err)
+			fmt.Fprintf(os.Stderr, "error: resolve dependency %q: %v\n", p, err)
 			return 1
 		}
 		if parentTask.Slug == task.Slug {
 			fmt.Fprintln(os.Stderr, "error: task cannot depend on itself")
 			return 2
 		}
-		if err := flowdb.AddTaskParent(db, task.Slug, parentTask.Slug); err != nil {
-			fmt.Fprintf(os.Stderr, "error: add parent %q: %v\n", parentTask.Slug, err)
+		if err := flowdb.AddTaskDependency(db, task.Slug, parentTask.Slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: add dependency %q: %v\n", parentTask.Slug, err)
 			return 1
 		}
-		fmt.Printf("parent + %s\n", parentTask.Slug)
+		fmt.Printf("depends-on + %s\n", parentTask.Slug)
 	}
-	for _, p := range removeParents {
+	for _, p := range removeDeps {
 		parentTask, err := ResolveTask(db, p, true)
 		if err != nil {
-			// Removal targets may have been deleted/renamed — fall through to
-			// the raw slug so the user can still clear stale rows.
 			if !errors.Is(err, sql.ErrNoRows) {
-				fmt.Fprintf(os.Stderr, "error: resolve parent %q: %v\n", p, err)
+				fmt.Fprintf(os.Stderr, "error: resolve dependency %q: %v\n", p, err)
 				return 1
 			}
 			parentTask = &flowdb.Task{Slug: p}
 		}
-		if err := flowdb.RemoveTaskParent(db, task.Slug, parentTask.Slug); err != nil {
-			fmt.Fprintf(os.Stderr, "error: remove parent %q: %v\n", parentTask.Slug, err)
+		if err := flowdb.RemoveTaskDependency(db, task.Slug, parentTask.Slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: remove dependency %q: %v\n", parentTask.Slug, err)
 			return 1
 		}
-		fmt.Printf("parent − %s\n", parentTask.Slug)
+		fmt.Printf("depends-on - %s\n", parentTask.Slug)
 	}
-	if *clearParent {
-		if err := flowdb.ClearTaskParents(db, task.Slug); err != nil {
-			fmt.Fprintf(os.Stderr, "error: clear parents: %v\n", err)
+	if clearDepsEff {
+		if err := flowdb.ClearTaskDependencies(db, task.Slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: clear dependencies: %v\n", err)
 			return 1
 		}
-		fmt.Println("parents cleared")
+		fmt.Println("dependencies cleared")
 	}
-	if len(addParents) > 0 || len(removeParents) > 0 || *clearParent {
+	if *subtaskOf != "" {
+		parentTask, err := ResolveTask(db, *subtaskOf, true)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				fmt.Fprintf(os.Stderr, "error: hierarchy parent %q not found\n", *subtaskOf)
+				return 1
+			}
+			fmt.Fprintf(os.Stderr, "error: resolve hierarchy parent %q: %v\n", *subtaskOf, err)
+			return 1
+		}
+		if err := flowdb.SetTaskHierarchyParent(db, task.Slug, parentTask.Slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: --subtask-of: %v\n", err)
+			return 1
+		}
+		fmt.Printf("subtask-of → %s\n", parentTask.Slug)
+	}
+	if *unparent {
+		if err := flowdb.ClearTaskHierarchyParent(db, task.Slug); err != nil {
+			fmt.Fprintf(os.Stderr, "error: --unparent: %v\n", err)
+			return 1
+		}
+		fmt.Println("hierarchy parent cleared")
+	}
+	if len(dependsOn) > 0 || len(removeDeps) > 0 || clearDepsEff {
 		if _, err := db.Exec(`UPDATE tasks SET updated_at=? WHERE slug=?`, now, task.Slug); err != nil {
 			fmt.Fprintf(os.Stderr, "error: bump updated_at: %v\n", err)
 			return 1

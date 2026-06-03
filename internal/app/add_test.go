@@ -439,3 +439,38 @@ func TestCmdAddTaskWithoutDueDate(t *testing.T) {
 		t.Errorf("expected NULL due_date, got %+v", task.DueDate)
 	}
 }
+
+func TestAddTaskWithDependsOnAndSubtaskOf(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root)
+	t.Setenv("HOME", t.TempDir())
+	if rc := cmdInit(nil); rc != 0 {
+		t.Fatalf("cmdInit rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "epic", "Epic", "backlog", "medium", wd, nil)
+	insertTask(t, db, "setup", "Setup", "backlog", "medium", wd, nil)
+	db.Close()
+
+	rc := cmdAdd([]string{"task", "Build feature", "--agent", "claude",
+		"--subtask-of", "epic", "--depends-on", "setup", "--work-dir", wd})
+	if rc != 0 {
+		t.Fatalf("cmdAdd rc = %d, want 0", rc)
+	}
+
+	db = openFlowDB(t)
+	defer db.Close()
+	created, err := resolveJustCreatedTaskSlug(db, "Build feature", "")
+	if err != nil {
+		t.Fatalf("locate created: %v", err)
+	}
+	task, _ := flowdb.GetTask(db, created)
+	if !task.ParentSlug.Valid || task.ParentSlug.String != "epic" {
+		t.Fatalf("subtask-of not set: %v", task.ParentSlug)
+	}
+	parents, _ := flowdb.ListParentSlugs(db, created)
+	if len(parents) != 1 || parents[0] != "setup" {
+		t.Fatalf("depends-on not set: %v", parents)
+	}
+}

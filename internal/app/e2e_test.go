@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // TestE2EFullRoundtrip exercises the full command surface in the order a
@@ -237,4 +238,174 @@ func TestE2EFullRoundtrip(t *testing.T) {
 	if wd == nil {
 		t.Fatal("GetWorkdir returned nil for auto-registered path")
 	}
+}
+
+// TestE2EDependencyVsHierarchySplit proves that the dependency/hierarchy split
+// works end-to-end through real CLI commands.
+//
+// Scenario:
+//   - epic   — standalone task (hierarchy parent, non-blocking)
+//   - setup  — standalone task (blocking dependency)
+//   - feat   — subtask-of epic (hierarchy) AND depends-on setup (blocking)
+//
+// Expected behaviour:
+//   - While setup is not done, feat is blocked; the blocker Kind is
+//     "dependency" and the pending parent is setup, not epic.
+//   - After marking setup done, feat is no longer blocked.
+//   - epic's status never contributes to the blocker regardless.
+func TestE2EDependencyVsHierarchySplit(t *testing.T) {
+	// --- environment isolation (same pattern as TestE2EFullRoundtrip) ---
+	tmp := t.TempDir()
+	flowRoot := filepath.Join(tmp, "flow")
+	t.Setenv("FLOW_ROOT", flowRoot)
+	t.Setenv("HOME", tmp)
+	t.Setenv("CODEX_HOME", filepath.Join(tmp, ".codex"))
+
+	// Pin the spawner backend so a kitty/zellij/Terminal.app host doesn't
+	// open a real tab during the test.
+	oldOverride := spawner.Override
+	spawner.Override = spawner.BackendITerm
+	t.Cleanup(func() { spawner.Override = oldOverride })
+
+	oldOsa := iterm.Runner
+	iterm.Runner = func(args []string) error { return nil }
+	t.Cleanup(func() { iterm.Runner = oldOsa })
+
+	oldClaude := claudeRunner
+	claudeRunner = func(slug, prompt string) error { return nil }
+	t.Cleanup(func() { claudeRunner = oldClaude })
+
+	step := func(name string, rc int) {
+		t.Helper()
+		if rc != 0 {
+			t.Fatalf("%s: rc=%d", name, rc)
+		}
+	}
+
+	// 1. init
+	step("init", cmdInit(nil))
+
+	// Shared work-dir for all tasks (they are floating — no project needed).
+	wd := filepath.Join(tmp, "code", "shared")
+	if err := os.MkdirAll(wd, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Create epic and setup as plain claude tasks.
+	step("add epic", cmdAdd([]string{"task", "Epic", "--agent", "claude", "--work-dir", wd}))
+	step("add setup", cmdAdd([]string{"task", "Setup", "--agent", "claude", "--work-dir", wd}))
+
+	// 3. Create feat: subtask of epic (hierarchy) + depends on setup (blocking).
+	step("add feat", cmdAdd([]string{
+		"task", "Feat",
+		"--agent", "claude",
+		"--work-dir", wd,
+		"--subtask-of", "epic",
+		"--depends-on", "setup",
+	}))
+
+	// Open the DB to inspect state directly (Direct assertion approach).
+	dbPath := filepath.Join(flowRoot, "flow.db")
+	db, err := flowdb.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	// 4. Assert that feat has the correct hierarchy parent (epic) and
+	//    the correct dependency (setup).
+	feat, err := flowdb.GetTask(db, "feat")
+	if err != nil {
+		t.Fatalf("GetTask(feat): %v", err)
+	}
+	if !feat.ParentSlug.Valid || feat.ParentSlug.String != "epic" {
+		t.Errorf("hierarchy parent: got %+v, want epic", feat.ParentSlug)
+	}
+	parents, err := flowdb.ListParentSlugs(db, "feat")
+	if err != nil {
+		t.Fatalf("ListParentSlugs(feat): %v", err)
+	}
+	if len(parents) != 1 || parents[0] != "setup" {
+		t.Errorf("dependency parents: got %v, want [setup]", parents)
+	}
+
+	// 5. While setup is not done, feat must be blocked by a DEPENDENCY blocker
+	//    whose pending parent is setup — NOT epic.
+	blocker, err := flowdb.TaskStartBlockerFor(db, feat)
+	if err != nil {
+		t.Fatalf("TaskStartBlockerFor(feat) before setup done: %v", err)
+	}
+	if blocker == nil {
+		t.Fatal("expected a blocker while setup is not done, got nil")
+	}
+	if blocker.Kind != "dependency" {
+		t.Errorf("blocker.Kind = %q, want dependency", blocker.Kind)
+	}
+	if len(blocker.Parents) != 1 || blocker.Parents[0].Slug != "setup" {
+		t.Errorf("blocker.Parents = %+v, want [{Slug:setup}]", blocker.Parents)
+	}
+	// Confirm epic is not among the pending parents.
+	for _, p := range blocker.Parents {
+		if p.Slug == "epic" {
+			t.Errorf("epic should not appear in dependency blocker parents, but it did: %+v", blocker.Parents)
+		}
+	}
+
+	// 6. Explicitly confirm epic is not blocking feat even when epic is
+	//    in-progress (requires a session_id for the DB invariant).
+	now := time.Now().UTC().Format(time.RFC3339)
+	const epicSessionID = "e2e-epic-session-uuid"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status='in-progress', session_id=?, updated_at=? WHERE slug='epic'`,
+		epicSessionID, now,
+	); err != nil {
+		t.Fatalf("set epic in-progress: %v", err)
+	}
+	feat, _ = flowdb.GetTask(db, "feat")
+	blockerAfterEpicInProgress, err := flowdb.TaskStartBlockerFor(db, feat)
+	if err != nil {
+		t.Fatalf("TaskStartBlockerFor after epic in-progress: %v", err)
+	}
+	// Must still be blocked — but ONLY by setup.
+	if blockerAfterEpicInProgress == nil {
+		t.Fatal("feat must still be blocked after epic goes in-progress")
+	}
+	for _, p := range blockerAfterEpicInProgress.Parents {
+		if p.Slug == "epic" {
+			t.Errorf("epic (in-progress) should not block feat: %+v", blockerAfterEpicInProgress.Parents)
+		}
+	}
+
+	// 7. Mark setup done directly via SQL (done rows may have NULL session_id
+	//    per the schema CHECK: status IN ('backlog','done') OR session_id IS NOT NULL).
+	if _, err := db.Exec(
+		`UPDATE tasks SET status='done', status_changed_at=?, updated_at=? WHERE slug='setup'`,
+		now, now,
+	); err != nil {
+		t.Fatalf("mark setup done: %v", err)
+	}
+
+	// 8. After setup is done, feat should be startable (no blocker).
+	feat, err = flowdb.GetTask(db, "feat")
+	if err != nil {
+		t.Fatalf("GetTask(feat) after setup done: %v", err)
+	}
+	blockerAfterSetupDone, err := flowdb.TaskStartBlockerFor(db, feat)
+	if err != nil {
+		t.Fatalf("TaskStartBlockerFor after setup done: %v", err)
+	}
+	if blockerAfterSetupDone != nil {
+		t.Errorf("feat should be startable after setup is done, but got blocker: %v", blockerAfterSetupDone)
+	}
+
+	// 9. Confirm epic (still in-progress) still does not block feat.
+	epic, err := flowdb.GetTask(db, "epic")
+	if err != nil {
+		t.Fatalf("GetTask(epic): %v", err)
+	}
+	if epic.Status != "in-progress" {
+		t.Errorf("epic.Status = %q, want in-progress (test setup invariant)", epic.Status)
+	}
+	// Blocker is nil (verified above) even though epic is in-progress — the
+	// hierarchy parent is never a blocker.
 }

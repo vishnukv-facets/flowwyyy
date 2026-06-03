@@ -844,7 +844,7 @@ func TestPrepareTerminalLaunchRefusesBlockedTask(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(`UPDATE tasks SET parent_slug = ? WHERE slug = ?`, "parent-task", "build-ui"); err != nil {
+	if err := flowdb.AddTaskDependency(db, "build-ui", "parent-task"); err != nil {
 		t.Fatal(err)
 	}
 

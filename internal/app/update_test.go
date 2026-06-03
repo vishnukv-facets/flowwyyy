@@ -359,21 +359,28 @@ func TestCmdUpdateTaskParent(t *testing.T) {
 	seedTask(t, "ut-parent")
 	seedTask(t, "ut-child")
 
+	// --parent is a deprecated alias for --depends-on (blocking dependency).
+	// It does NOT set the hierarchy parent_slug.
 	if rc := cmdUpdate([]string{"task", "ut-child", "--parent", "ut-parent"}); rc != 0 {
 		t.Fatalf("set rc=%d", rc)
 	}
 	db := openFlowDB(t)
 	task, _ := flowdb.GetTask(db, "ut-child")
-	if !task.ParentSlug.Valid || task.ParentSlug.String != "ut-parent" {
-		t.Errorf("parent_slug = %+v, want ut-parent", task.ParentSlug)
+	if task.ParentSlug.Valid {
+		t.Errorf("--parent must not set hierarchy parent_slug; got %+v", task.ParentSlug)
+	}
+	parents, _ := flowdb.ListParentSlugs(db, "ut-child")
+	if len(parents) != 1 || parents[0] != "ut-parent" {
+		t.Errorf("--parent should add blocking dep; got %v", parents)
 	}
 
+	// --clear-parent is a deprecated alias for --clear-deps (clears blocking deps).
 	if rc := cmdUpdate([]string{"task", "ut-child", "--clear-parent"}); rc != 0 {
 		t.Fatalf("clear rc=%d", rc)
 	}
-	task, _ = flowdb.GetTask(db, "ut-child")
-	if task.ParentSlug.Valid {
-		t.Errorf("parent_slug should be NULL after clear, got %q", task.ParentSlug.String)
+	parents, _ = flowdb.ListParentSlugs(db, "ut-child")
+	if len(parents) != 0 {
+		t.Errorf("--clear-parent should clear blocking deps; got %v", parents)
 	}
 }
 
@@ -989,5 +996,64 @@ func TestUpdateTaskAgentBacklogOnly(t *testing.T) {
 	}
 	if task.SessionProvider != "codex" {
 		t.Fatalf("provider after rejected switch = %q, want codex (unchanged)", task.SessionProvider)
+	}
+}
+
+func TestUpdateTaskDependsOnAndSubtaskOf(t *testing.T) {
+	setupFlowRoot(t)
+	db := openFlowDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "epic", "Epic", "backlog", "medium", wd, nil)
+	insertTask(t, db, "setup", "Setup", "backlog", "medium", wd, nil)
+	insertTask(t, db, "feat", "Feat", "backlog", "medium", wd, nil)
+	db.Close()
+
+	if rc := cmdUpdateTask([]string{"feat", "--subtask-of", "epic", "--depends-on", "setup"}); rc != 0 {
+		t.Fatalf("update rc = %d", rc)
+	}
+	db = openFlowDB(t)
+	defer db.Close()
+	task, _ := flowdb.GetTask(db, "feat")
+	if task.ParentSlug.String != "epic" {
+		t.Fatalf("subtask-of: %v", task.ParentSlug)
+	}
+	parents, _ := flowdb.ListParentSlugs(db, "feat")
+	if len(parents) != 1 || parents[0] != "setup" {
+		t.Fatalf("depends-on: %v", parents)
+	}
+	if rc := cmdUpdateTask([]string{"feat", "--unparent", "--clear-deps"}); rc != 0 {
+		t.Fatalf("clear rc = %d", rc)
+	}
+	db2 := openFlowDB(t)
+	defer db2.Close()
+	task, _ = flowdb.GetTask(db2, "feat")
+	if task.ParentSlug.Valid {
+		t.Fatalf("hierarchy not cleared: %v", task.ParentSlug)
+	}
+	parents, _ = flowdb.ListParentSlugs(db2, "feat")
+	if len(parents) != 0 {
+		t.Fatalf("deps not cleared: %v", parents)
+	}
+}
+
+func TestUpdateTaskParentAliasIsDependency(t *testing.T) {
+	setupFlowRoot(t)
+	db := openFlowDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "setup", "Setup", "backlog", "medium", wd, nil)
+	insertTask(t, db, "feat", "Feat", "backlog", "medium", wd, nil)
+	db.Close()
+	if rc := cmdUpdateTask([]string{"feat", "--parent", "setup"}); rc != 0 {
+		t.Fatalf("update rc = %d", rc)
+	}
+	db = openFlowDB(t)
+	defer db.Close()
+	task, _ := flowdb.GetTask(db, "feat")
+	if task.ParentSlug.Valid {
+		t.Fatalf("--parent must not set hierarchy; got %v", task.ParentSlug)
+	}
+	parents, _ := flowdb.ListParentSlugs(db, "feat")
+	if len(parents) != 1 || parents[0] != "setup" {
+		t.Fatalf("--parent should add dependency; got %v", parents)
 	}
 }

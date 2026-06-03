@@ -703,6 +703,77 @@ func TestMigrationDeduplicatesSessionIDs(t *testing.T) {
 	db2.Close()
 }
 
+func TestSchemaMetaMarker(t *testing.T) {
+	db := openTempDB(t)
+	has, err := schemaMetaHas(db, "demo-marker")
+	if err != nil {
+		t.Fatalf("schemaMetaHas: %v", err)
+	}
+	if has {
+		t.Fatal("marker should be absent on a fresh DB")
+	}
+	if err := schemaMetaSet(db, "demo-marker"); err != nil {
+		t.Fatalf("schemaMetaSet: %v", err)
+	}
+	has, err = schemaMetaHas(db, "demo-marker")
+	if err != nil {
+		t.Fatalf("schemaMetaHas after set: %v", err)
+	}
+	if !has {
+		t.Fatal("marker should be present after set")
+	}
+	// Idempotent: second set must not error (INSERT OR IGNORE).
+	if err := schemaMetaSet(db, "demo-marker"); err != nil {
+		t.Fatalf("schemaMetaSet second: %v", err)
+	}
+}
+
+func TestStartBlockerIgnoresHierarchyParent(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "epic", "Epic", "backlog", "medium", wd, nil)
+	insertTask(t, db, "sub", "Subtask", "backlog", "medium", wd, nil)
+	// Hierarchy only: sub is a subtask of epic, NO dependency row.
+	if _, err := db.Exec(`UPDATE tasks SET parent_slug = 'epic' WHERE slug = 'sub'`); err != nil {
+		t.Fatalf("set parent_slug: %v", err)
+	}
+	sub, err := GetTask(db, "sub")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	blocker, err := TaskStartBlockerFor(db, sub)
+	if err != nil {
+		t.Fatalf("TaskStartBlockerFor: %v", err)
+	}
+	if blocker != nil {
+		t.Fatalf("hierarchy parent must NOT block; got %v", blocker)
+	}
+}
+
+func TestStartBlockerHonorsDependency(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "setup", "Setup", "backlog", "medium", wd, nil)
+	insertTask(t, db, "deploy", "Deploy", "backlog", "medium", wd, nil)
+	now := NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO task_dependencies (child_slug, parent_slug, created_at) VALUES ('deploy','setup',?)`, now,
+	); err != nil {
+		t.Fatalf("insert dep: %v", err)
+	}
+	deploy, err := GetTask(db, "deploy")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	blocker, err := TaskStartBlockerFor(db, deploy)
+	if err != nil {
+		t.Fatalf("TaskStartBlockerFor: %v", err)
+	}
+	if blocker == nil || blocker.Kind != "dependency" {
+		t.Fatalf("dependency on non-done task must block; got %v", blocker)
+	}
+}
+
 func TestTaskDoneAllowsNoSessionID(t *testing.T) {
 	db := openTempDB(t)
 	now := NowISO()
@@ -722,5 +793,153 @@ func TestTaskDoneAllowsNoSessionID(t *testing.T) {
 	}
 	if task.SessionID.Valid {
 		t.Fatalf("session_id = %q, want NULL", task.SessionID.String)
+	}
+}
+
+func mustNoErr(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSetTaskHierarchyParent(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "epic", "Epic", "backlog", "medium", wd, nil)
+	insertTask(t, db, "sub", "Sub", "backlog", "medium", wd, nil)
+	if err := SetTaskHierarchyParent(db, "sub", "epic"); err != nil {
+		t.Fatalf("SetTaskHierarchyParent: %v", err)
+	}
+	got, err := GetTask(db, "sub")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !got.ParentSlug.Valid || got.ParentSlug.String != "epic" {
+		t.Fatalf("parent_slug = %v, want epic", got.ParentSlug)
+	}
+	if err := ClearTaskHierarchyParent(db, "sub"); err != nil {
+		t.Fatalf("ClearTaskHierarchyParent: %v", err)
+	}
+	got, _ = GetTask(db, "sub")
+	if got.ParentSlug.Valid {
+		t.Fatalf("parent_slug should be NULL after clear, got %v", got.ParentSlug)
+	}
+}
+
+func TestSetTaskHierarchyParentRejectsCycle(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "a", "A", "backlog", "medium", wd, nil)
+	insertTask(t, db, "b", "B", "backlog", "medium", wd, nil)
+	insertTask(t, db, "c", "C", "backlog", "medium", wd, nil)
+	mustNoErr(t, SetTaskHierarchyParent(db, "b", "a")) // b ⊂ a
+	mustNoErr(t, SetTaskHierarchyParent(db, "c", "b")) // c ⊂ b
+	// a ⊂ c would close the cycle a→c→b→a.
+	if err := SetTaskHierarchyParent(db, "a", "c"); err == nil {
+		t.Fatal("expected hierarchy cycle to be rejected")
+	}
+	// self-parent rejected too
+	if err := SetTaskHierarchyParent(db, "a", "a"); err == nil {
+		t.Fatal("expected self-parent to be rejected")
+	}
+}
+
+func TestAddTaskDependencyDoesNotMirrorParentSlug(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "setup", "Setup", "backlog", "medium", wd, nil)
+	insertTask(t, db, "deploy", "Deploy", "backlog", "medium", wd, nil)
+	if err := AddTaskDependency(db, "deploy", "setup"); err != nil {
+		t.Fatalf("AddTaskDependency: %v", err)
+	}
+	got, _ := GetTask(db, "deploy")
+	if got.ParentSlug.Valid {
+		t.Fatalf("dependency must NOT set parent_slug (hierarchy); got %v", got.ParentSlug)
+	}
+	parents, err := ListParentSlugs(db, "deploy")
+	if err != nil {
+		t.Fatalf("ListParentSlugs: %v", err)
+	}
+	if len(parents) != 1 || parents[0] != "setup" {
+		t.Fatalf("dependency parents = %v, want [setup]", parents)
+	}
+}
+
+func TestAddTaskDependencyRejectsCycle(t *testing.T) {
+	db := openTempDB(t)
+	wd := t.TempDir()
+	insertTask(t, db, "a", "A", "backlog", "medium", wd, nil)
+	insertTask(t, db, "b", "B", "backlog", "medium", wd, nil)
+	insertTask(t, db, "c", "C", "backlog", "medium", wd, nil)
+	mustNoErr(t, AddTaskDependency(db, "b", "a")) // b depends on a
+	mustNoErr(t, AddTaskDependency(db, "c", "b")) // c depends on b
+	// a depends on c would close a→c→b→a.
+	if err := AddTaskDependency(db, "a", "c"); err == nil {
+		t.Fatal("expected dependency cycle to be rejected")
+	}
+	if err := AddTaskDependency(db, "a", "a"); err == nil {
+		t.Fatal("expected self-dependency to be rejected")
+	}
+}
+
+func TestMigrateSplitHierarchyDependency(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flow.db")
+	db, err := OpenDB(path)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	wd := t.TempDir()
+	insertTask(t, db, "parent", "Parent", "done", "medium", wd, nil)
+	insertTask(t, db, "child", "Child", "backlog", "medium", wd, nil)
+	// Simulate a legacy mirror: a dependency row PLUS the parent_slug mirror
+	// pointing at the same edge (what the old AddTaskParent produced).
+	now := NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO task_dependencies (child_slug, parent_slug, created_at) VALUES ('child','parent',?)`, now,
+	); err != nil {
+		t.Fatalf("seed dep: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET parent_slug = 'parent' WHERE slug = 'child'`); err != nil {
+		t.Fatalf("seed mirror: %v", err)
+	}
+	// Simulate a pre-split (legacy) DB: the first OpenDB unconditionally stamps
+	// the split marker, so clear it here so the next open actually runs the
+	// split migration against the seeded legacy mirror.
+	if _, err := db.Exec(`DELETE FROM schema_meta WHERE key = 'hierarchy_dependency_split'`); err != nil {
+		t.Fatalf("clear split marker: %v", err)
+	}
+	db.Close()
+
+	// Reopen → migration runs.
+	db, err = OpenDB(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+
+	// The dependency edge is preserved (still blocking).
+	parents, _ := ListParentSlugs(db, "child")
+	if len(parents) != 1 || parents[0] != "parent" {
+		t.Fatalf("dependency must survive migration; got %v", parents)
+	}
+	// The mirror is nulled (hierarchy starts clean).
+	got, _ := GetTask(db, "child")
+	if got.ParentSlug.Valid {
+		t.Fatalf("legacy parent_slug mirror should be nulled; got %v", got.ParentSlug)
+	}
+	// Idempotent + non-destructive to NEW hierarchy: set a real hierarchy
+	// parent that coincides with the dep, reopen, and confirm it survives
+	// (the marker must gate the migration on subsequent opens).
+	mustNoErr(t, SetTaskHierarchyParent(db, "child", "parent"))
+	db.Close()
+	db2, err := OpenDB(path)
+	if err != nil {
+		t.Fatalf("reopen 2: %v", err)
+	}
+	defer db2.Close()
+	got, _ = GetTask(db2, "child")
+	if !got.ParentSlug.Valid || got.ParentSlug.String != "parent" {
+		t.Fatalf("new hierarchy edge must survive re-open (marker should gate the migration); got %v", got.ParentSlug)
 	}
 }

@@ -325,7 +325,7 @@ func TestCmdDoRefusesBlockedTasks(t *testing.T) {
 	seedTask(t, "child-task")
 	seedTask(t, "waiting-task")
 	db := openFlowDB(t)
-	if _, err := db.Exec(`UPDATE tasks SET parent_slug = ? WHERE slug = ?`, "parent-task", "child-task"); err != nil {
+	if err := flowdb.AddTaskDependency(db, "child-task", "parent-task"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`UPDATE tasks SET waiting_on = ? WHERE slug = ?`, "external approval", "waiting-task"); err != nil {

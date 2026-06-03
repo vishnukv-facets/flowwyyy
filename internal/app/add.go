@@ -155,6 +155,9 @@ func addTask(args []string) int {
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
 	mkdir := fs.Bool("mkdir", false, "create --work-dir if it does not exist")
+	var dependsOn stringSliceFlag
+	fs.Var(&dependsOn, "depends-on", "slug of a task this one is blocked by (repeatable)")
+	subtaskOf := fs.String("subtask-of", "", "slug of the parent task in the hierarchy (organizational, non-blocking)")
 	if leadingHelpArg(args) {
 		fs.Usage()
 		return 0
@@ -306,6 +309,23 @@ func addTask(args []string) int {
 	if err := workdirreg.Register(db, absWorkDir, "", ""); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+
+	if s := strings.TrimSpace(*subtaskOf); s != "" {
+		if err := flowdb.SetTaskHierarchyParent(db, slug, s); err != nil {
+			fmt.Fprintf(os.Stderr, "error: --subtask-of: %v\n", err)
+			return 1
+		}
+	}
+	for _, dep := range dependsOn {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if err := flowdb.AddTaskDependency(db, slug, dep); err != nil {
+			fmt.Fprintf(os.Stderr, "error: --depends-on %q: %v\n", dep, err)
+			return 1
+		}
 	}
 
 	if projectSlug == nil {

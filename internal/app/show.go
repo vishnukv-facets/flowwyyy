@@ -241,22 +241,40 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 	}
 	fmt.Printf("project:       %s\n", projName)
 	fmt.Printf("status:        %s\n", t.Status)
+	// Hierarchy (organizational, non-blocking).
 	if t.ParentSlug.Valid && t.ParentSlug.String != "" {
-		parentLabel := t.ParentSlug.String
-		parent, err := loadTaskRelationSummary(db, t.ParentSlug.String)
-		if err == nil {
-			parentLabel = fmt.Sprintf("%s (%s) %s", parent.Slug, parent.Status, parent.Name)
+		label := t.ParentSlug.String
+		if parent, err := loadTaskRelationSummary(db, t.ParentSlug.String); err == nil {
+			label = fmt.Sprintf("%s (%s) %s", parent.Slug, parent.Status, parent.Name)
 		} else if err != sql.ErrNoRows {
-			fmt.Fprintf(os.Stderr, "warning: load parent task: %v\n", err)
+			fmt.Fprintf(os.Stderr, "warning: load hierarchy parent: %v\n", err)
 		}
-		fmt.Printf("parent:        %s\n", parentLabel)
+		fmt.Printf("subtask of:    %s\n", label)
 	}
-	if children, err := loadTaskChildren(db, t.Slug); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: load child tasks: %v\n", err)
-	} else if len(children) > 0 {
-		fmt.Println("children:")
-		for _, child := range children {
-			fmt.Printf("  - %s (%s) %s\n", child.Slug, child.Status, child.Name)
+	if subs, err := loadTaskChildren(db, t.Slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load subtasks: %v\n", err)
+	} else if len(subs) > 0 {
+		fmt.Println("subtasks:")
+		for _, s := range subs {
+			fmt.Printf("  - %s (%s) %s\n", s.Slug, s.Status, s.Name)
+		}
+	}
+
+	// Dependencies (blocking).
+	if deps, err := loadTaskDependencyParents(db, t.Slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load dependencies: %v\n", err)
+	} else if len(deps) > 0 {
+		fmt.Println("depends on:")
+		for _, d := range deps {
+			fmt.Printf("  - %s (%s) %s\n", d.Slug, d.Status, d.Name)
+		}
+	}
+	if blocks, err := loadTaskDependents(db, t.Slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load dependents: %v\n", err)
+	} else if len(blocks) > 0 {
+		fmt.Println("blocks:")
+		for _, b := range blocks {
+			fmt.Printf("  - %s (%s) %s\n", b.Slug, b.Status, b.Name)
 		}
 	}
 
@@ -437,6 +455,42 @@ func loadTaskChildren(db *sql.DB, slug string) ([]taskRelationSummary, error) {
 		return nil, err
 	}
 	return children, nil
+}
+
+// loadTaskDependencyParents returns the blocking dependencies of a task
+// (the tasks it depends on), with status for at-a-glance blocked detection.
+func loadTaskDependencyParents(db *sql.DB, slug string) ([]taskRelationSummary, error) {
+	return queryRelationSummaries(db, `
+		SELECT t.slug, t.name, t.status
+		FROM task_dependencies d JOIN tasks t ON t.slug = d.parent_slug
+		WHERE d.child_slug = ? AND t.deleted_at IS NULL
+		ORDER BY d.created_at ASC, t.slug ASC`, slug)
+}
+
+// loadTaskDependents returns the tasks blocked by this task.
+func loadTaskDependents(db *sql.DB, slug string) ([]taskRelationSummary, error) {
+	return queryRelationSummaries(db, `
+		SELECT t.slug, t.name, t.status
+		FROM task_dependencies d JOIN tasks t ON t.slug = d.child_slug
+		WHERE d.parent_slug = ? AND t.deleted_at IS NULL
+		ORDER BY d.created_at ASC, t.slug ASC`, slug)
+}
+
+func queryRelationSummaries(db *sql.DB, query, arg string) ([]taskRelationSummary, error) {
+	rows, err := db.Query(query, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []taskRelationSummary
+	for rows.Next() {
+		var s taskRelationSummary
+		if err := rows.Scan(&s.Slug, &s.Name, &s.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
 }
 
 // printProjectMetadata writes the human-readable view of a project row.
