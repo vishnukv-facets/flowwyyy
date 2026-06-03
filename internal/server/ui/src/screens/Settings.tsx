@@ -5,6 +5,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import type { SettingField, ToolCapability } from '../lib/types'
+import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
 
@@ -19,6 +20,7 @@ export function Settings() {
   const { data: health } = useHealth()
   const [theme, setTheme] = useState<Theme>(() => getTheme())
   const [permission, setPermission] = useState<BrowserNotificationPermission>(() => notificationPermission())
+  const mascot = useMascotPrefs()
 
   useEffect(() => onThemeChange(setTheme), [])
 
@@ -93,6 +95,28 @@ export function Settings() {
                   <Bell size={15} /> Enable
                 </button>
               )}
+            </div>
+          </SettingsPanel>
+          <SettingsPanel title="Mascot" icon={<SlidersHorizontal size={17} />}>
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Sidebar mascot</div>
+                <div className="setting-value">{mascot.enabled ? 'on' : 'off'}</div>
+              </div>
+              <button type="button" className="btn" onClick={() => setMascotPrefs({ enabled: !mascot.enabled })}>
+                {mascot.enabled ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            <div className="setting-row">
+              <div>
+                <div className="setting-label">Naps when idle for</div>
+                <div className="setting-value">no activity this long → it sleeps</div>
+              </div>
+              <select className="input" value={mascot.napSec} onChange={(e) => setMascotPrefs({ napSec: Number(e.target.value) })}>
+                {NAP_OPTIONS.map((o) => (
+                  <option key={o.sec} value={o.sec}>{o.label}</option>
+                ))}
+              </select>
             </div>
           </SettingsPanel>
           <SettingsPanel title="Database" icon={<Database size={17} />}>

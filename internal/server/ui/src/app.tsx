@@ -15,6 +15,7 @@ import { Workdirs } from './screens/Workdirs'
 import { Trash } from './screens/Trash'
 import { Settings } from './screens/Settings'
 import { EmptyState } from './components/ui'
+import { ClaudeFlowScene } from './components/ClaudeMascot'
 import { FloatingTerminalsProvider } from './lib/floatingTerminals'
 
 export function App() {
@@ -38,7 +39,7 @@ export function App() {
         <Route path="/trash" component={Trash} />
           <Route>
             <div className="page">
-              <EmptyState title="Not found" hint="That route doesn't exist." />
+              <EmptyState icon={<ClaudeFlowScene />} title="Not found" hint="That route doesn't exist." />
             </div>
           </Route>
         </Switch>

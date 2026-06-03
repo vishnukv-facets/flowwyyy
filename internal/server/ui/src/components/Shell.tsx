@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
+import { FlowMark } from './FlowMark'
+import { ClaudeRunner } from './ClaudeMascot'
+import { useMascotPrefs } from '../lib/mascot'
 import {
   Bell,
   BookText,
@@ -125,6 +128,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const monitored = (ui?.AGENTS ?? []).filter((a) => a.monitored).length
   const backlog = ui?.BACKLOG?.length ?? 0
   const unread = inbox?.unread_count ?? 0
+  const mascotPrefs = useMascotPrefs()
 
   const groups: { label: string; items: NavDef[] }[] = [
     {
@@ -176,7 +180,7 @@ export function Shell({ children }: { children: ReactNode }) {
     <div className="shell">
       <aside className="rail">
         <Link href="/" className="rail-brand">
-          <img src="/flow-mark.svg" width={23} height={23} alt="flow" />
+          <FlowMark size={23} />
           <span className="rail-wordmark">
             flow<span className="accent">.</span>
           </span>
@@ -199,6 +203,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
           ))}
         </nav>
+        {mascotPrefs.enabled && <ClaudeRunner conn={conn} running={running} monitored={monitored} inbox={unread} />}
         <div className="rail-foot">
           {waiting > 0 && (
             <Link href="/sessions" className="rail-stat warn">

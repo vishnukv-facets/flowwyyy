@@ -127,9 +127,15 @@
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 12px 10px 2px;
-  border-top: 1px solid var(--border-faint);
-  margin-top: 6px;
+  padding: 10px 10px 2px;
+}
+/* the little Claude runs along this line, above the foot stats */
+.rail-runner {
+  position: relative;
+  height: 42px;
+  margin: 6px 10px 0;
+  border-bottom: 1px solid var(--border-faint);
+  overflow: hidden;
 }
 .rail-stat {
   display: flex;
@@ -1590,7 +1596,8 @@ select.input {
   .rail-brand-text,
   .rail-item-label,
   .rail-badge,
-  .rail-foot {
+  .rail-foot,
+  .rail-runner {
     display: none;
   }
   .rail-item {

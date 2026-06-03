@@ -28,6 +28,7 @@ const STATUSES = [
   { v: 'backlog', label: 'Backlog' },
   { v: 'in-progress', label: 'In progress' },
   { v: 'done', label: 'Done' },
+  { v: 'archived', label: 'Archived' },
 ]
 const PRIOS = [
   { v: '', label: 'Any' },
@@ -110,18 +111,32 @@ export function Tasks() {
     }
   }
 
+  // "Archived" is an orthogonal axis to status, surfaced as its own segment:
+  // when active we ask the server to include archived rows (and done, since an
+  // archived task may also be done) and drop the status filter, then narrow to
+  // archived-only client-side in `base` below.
+  const archivedView = status === 'archived'
   const filters: TaskFilters = {
-    status: status || undefined,
+    status: archivedView ? undefined : status || undefined,
     priority: priority || undefined,
-    include_done: status === 'done',
+    include_done: status === 'done' || archivedView,
+    include_archived: archivedView || undefined,
   }
   const { data, isLoading, error } = useTasks(filters)
 
   // Status/priority filter the server query; project/tag/text + sort run
   // client-side so the chip options stay visible regardless of the active one.
   const base = useMemo(
-    () => (data ?? []).filter((t) => t.kind !== 'playbook_run' || status === 'done'),
-    [data, status],
+    () =>
+      (data ?? []).filter((t) => {
+        // Archived view: show only archived rows (any status). Other views:
+        // never show archived (the server already excludes them; this guards
+        // against any leaking through), and hide playbook_run unless on Done.
+        if (archivedView) return !!t.archived_at
+        if (t.archived_at) return false
+        return t.kind !== 'playbook_run' || status === 'done'
+      }),
+    [data, status, archivedView],
   )
   const projectOpts = useMemo(
     () => Array.from(new Set(base.map((t) => t.project_slug || '').filter(Boolean))).sort(),

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useLocation } from 'wouter'
-import { Inbox as InboxIcon, CheckCheck, ExternalLink, Play } from 'lucide-react'
+import { CheckCheck, ExternalLink, Play } from 'lucide-react'
 import { useAction, useInbox, useInboxConversation } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { NudgeComposer } from '../components/NudgeComposer'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, StatusDot } from '../components/ui'
 import { Md } from '../components/Markdown'
+import { ClaudeFlowScene } from '../components/ClaudeMascot'
 import { ago, dateTime } from '../lib/format'
 import { clickable } from '../lib/a11y'
 import type { InboxFeedEntry } from '../lib/types'
@@ -100,8 +101,8 @@ export function InboxScreen() {
     return (
       <div className="page">
         <EmptyState
-          icon={<InboxIcon size={30} />}
-          title="Inbox is empty"
+          icon={<ClaudeFlowScene />}
+          title="Inbox zero"
           hint="Slack reactions and GitHub mentions routed to flow tasks land here."
         />
       </div>

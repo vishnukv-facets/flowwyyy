@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from 'react'
+import { FlowMark } from './FlowMark'
 
 // Lightweight modal: scrim + centered panel, Esc / scrim-click to close.
 export function Modal({
@@ -37,7 +38,7 @@ export function Modal({
       >
         <div className="modal-head">
           <div className="modal-title">
-            <img src="/flow-mark.svg" width={22} height={22} alt="flow" className="modal-mark" />
+            <FlowMark size={22} className="modal-mark" animated={false} />
             <span className="h-lg">{title}</span>
           </div>
           <button className="btn icon ghost sm" onClick={onClose} aria-label="Close">

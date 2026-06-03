@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { Minus, X } from 'lucide-react'
+import { Maximize2, Minus, X } from 'lucide-react'
+import { useLocation } from 'wouter'
 import { TaskTerminal } from './Terminal'
 import { ProviderIcon } from './ui'
 import type { FloatingWindow } from '../lib/floatingTerminals'
@@ -42,6 +43,7 @@ function clampSize(w: number, h: number): { w: number; h: number } {
 }
 
 export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, onMinimize, onClose }: Props) {
+  const [, navigate] = useLocation()
   const [status, setStatus] = useState('connecting')
   // Drag is tracked locally and committed to the owner on release, so a drag
   // doesn't re-render every other window/tray chip on each pointer move.
@@ -130,6 +132,17 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
           </span>
           <span className="mono">{status}</span>
         </div>
+        {win.kind === 'task' && (
+          <button
+            type="button"
+            className="btn icon sm"
+            title="Open full session page"
+            aria-label="Open full session page"
+            onClick={() => navigate(`/session/${win.id}`)}
+          >
+            <Maximize2 size={14} />
+          </button>
+        )}
         <button type="button" className="btn icon sm" title="Minimize to tray" onClick={onMinimize}>
           <Minus size={15} />
         </button>
