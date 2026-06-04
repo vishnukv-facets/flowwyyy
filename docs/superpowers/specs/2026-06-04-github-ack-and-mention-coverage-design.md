@@ -1,7 +1,8 @@
 # GitHub autonomous-agent acknowledgement + tag-coverage — design
 
 **Date:** 2026-06-04
-**Status:** Approved (design); pending implementation plan
+**Status:** Implemented (commits 50fc860 ack, fc7adfa discovery). Requires a
+`flow ui serve` restart to take effect.
 
 ## Problem
 
