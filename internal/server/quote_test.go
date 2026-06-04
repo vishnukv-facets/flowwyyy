@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -26,6 +28,89 @@ func decodeQuote(t *testing.T, body []byte) QuoteView {
 	return q
 }
 
+const sampleStoicJSON = `{"data":{"author":"Rumi","quote":"Don’t grieve. Anything you lose comes round in another form."}}`
+
+// pinQuoteSources restricts the greeting-quote sources for a test (and restores
+// them after), so source selection is deterministic and tests never touch a
+// real network for a source they didn't stub.
+func pinQuoteSources(t *testing.T, sources ...func(context.Context) (QuoteView, error)) {
+	t.Helper()
+	orig := quoteSources
+	quoteSources = sources
+	t.Cleanup(func() { quoteSources = orig })
+}
+
+func TestFetchStoicQuoteParsesAuthor(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(sampleStoicJSON))
+	}))
+	defer upstream.Close()
+
+	origEndpoint, origClient := stoicQuoteEndpoint, stoicQuoteClient
+	stoicQuoteEndpoint = upstream.URL
+	stoicQuoteClient = upstream.Client()
+	defer func() { stoicQuoteEndpoint, stoicQuoteClient = origEndpoint, origClient }()
+
+	q, err := fetchStoicQuote(context.Background())
+	if err != nil {
+		t.Fatalf("fetchStoicQuote: %v", err)
+	}
+	if q.Author != "Rumi" {
+		t.Fatalf("author = %q, want Rumi", q.Author)
+	}
+	if !strings.HasPrefix(q.Quote, "Don’t grieve") {
+		t.Fatalf("quote = %q", q.Quote)
+	}
+	if q.Anime != "" || q.Character != "" {
+		t.Fatalf("stoic quote must not set anime/character: %#v", q)
+	}
+}
+
+func TestHandleQuoteServesStoicWhenSelected(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(sampleStoicJSON))
+	}))
+	defer upstream.Close()
+
+	origEndpoint, origClient := stoicQuoteEndpoint, stoicQuoteClient
+	stoicQuoteEndpoint = upstream.URL
+	stoicQuoteClient = upstream.Client()
+	defer func() { stoicQuoteEndpoint, stoicQuoteClient = origEndpoint, origClient }()
+	pinQuoteSources(t, fetchStoicQuote)
+
+	s := &Server{}
+	req := httptest.NewRequest(http.MethodGet, "/api/quote?bucket=stoic-hour", nil)
+	rec := httptest.NewRecorder()
+	s.handleQuote(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	got := decodeQuote(t, rec.Body.Bytes())
+	if got.Author != "Rumi" || got.Quote == "" {
+		t.Fatalf("expected stoic quote, got %#v", got)
+	}
+}
+
+func TestFetchGreetingQuoteFallsBackWhenSourceFails(t *testing.T) {
+	failing := func(context.Context) (QuoteView, error) {
+		return QuoteView{}, http.ErrServerClosed
+	}
+	ok := func(context.Context) (QuoteView, error) {
+		return QuoteView{Quote: "kept calm", Author: "Marcus"}, nil
+	}
+	pinQuoteSources(t, failing, ok)
+	// Regardless of the randomized order, a flaky source must fall through to a
+	// working one so the greeting still gets a quote.
+	for i := range 20 {
+		q, err := fetchGreetingQuote(context.Background())
+		if err != nil || q.Quote != "kept calm" {
+			t.Fatalf("fallback failed on iter %d: q=%#v err=%v", i, q, err)
+		}
+	}
+}
+
 func TestHandleQuoteCachesPerBucket(t *testing.T) {
 	var hits int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +124,7 @@ func TestHandleQuoteCachesPerBucket(t *testing.T) {
 	animeQuoteEndpoint = upstream.URL
 	animeQuoteClient = upstream.Client()
 	defer func() { animeQuoteEndpoint, animeQuoteClient = origEndpoint, origClient }()
+	pinQuoteSources(t, fetchAnimeQuote) // this test asserts anime content
 
 	s := &Server{}
 	get := func(bucket string) QuoteView {
@@ -77,6 +163,7 @@ func TestHandleQuoteServesEmptyWhenUpstreamFails(t *testing.T) {
 	animeQuoteEndpoint = upstream.URL
 	animeQuoteClient = upstream.Client()
 	defer func() { animeQuoteEndpoint, animeQuoteClient = origEndpoint, origClient }()
+	pinQuoteSources(t, fetchAnimeQuote) // failure path tested against the anime source
 
 	s := &Server{}
 	req := httptest.NewRequest(http.MethodGet, "/api/quote?bucket=night", nil)

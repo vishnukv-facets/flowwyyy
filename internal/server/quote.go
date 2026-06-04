@@ -3,17 +3,20 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"math/rand"
 	"net/http"
 	"strings"
 	"time"
 )
 
-// QuoteView is the trimmed anime-quote payload the Mission Control greeting
-// reads. Empty Quote means "none available" — the UI then hides the line.
+// QuoteView is the trimmed quote payload the Mission Control greeting reads.
+// It backs both sources: anime quotes set Anime+Character, stoic quotes set
+// Author. Empty Quote means "none available" — the UI then hides the line.
 type QuoteView struct {
 	Quote     string `json:"quote"`
 	Anime     string `json:"anime"`
 	Character string `json:"character"`
+	Author    string `json:"author"`
 }
 
 // animechanResponse mirrors https://api.animechan.io/v1/quotes/random.
@@ -64,7 +67,7 @@ func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	q, err := fetchAnimeQuote(r.Context())
+	q, err := fetchGreetingQuote(r.Context())
 	if err != nil || q.Quote == "" {
 		// Don't fail the dashboard over a flaky third-party API — serve the last
 		// good quote if we have one, else an empty payload the UI quietly hides.
@@ -106,4 +109,68 @@ func fetchAnimeQuote(ctx context.Context) (QuoteView, error) {
 		Anime:     strings.TrimSpace(ar.Data.Anime.Name),
 		Character: strings.TrimSpace(ar.Data.Character.Name),
 	}, nil
+}
+
+// stoicResponse mirrors https://stoic.tekloon.net/stoic-quote:
+//   {"data":{"author":"Rumi","quote":"Don't grieve. ..."}}
+type stoicResponse struct {
+	Data struct {
+		Author string `json:"author"`
+		Quote  string `json:"quote"`
+	} `json:"data"`
+}
+
+var stoicQuoteEndpoint = "https://stoic.tekloon.net/stoic-quote"
+
+// stoicQuoteClient is a package var so tests can stub the transport.
+var stoicQuoteClient = &http.Client{Timeout: 6 * time.Second}
+
+func fetchStoicQuote(ctx context.Context) (QuoteView, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, stoicQuoteEndpoint, nil)
+	if err != nil {
+		return QuoteView{}, err
+	}
+	resp, err := stoicQuoteClient.Do(req)
+	if err != nil {
+		return QuoteView{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return QuoteView{}, nil
+	}
+	var sr stoicResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return QuoteView{}, err
+	}
+	return QuoteView{
+		Quote:  strings.TrimSpace(sr.Data.Quote),
+		Author: strings.TrimSpace(sr.Data.Author),
+	}, nil
+}
+
+// quoteSources lists the greeting-quote fetchers. fetchGreetingQuote tries them
+// in a per-call randomized order, so the hourly greeting alternates between
+// anime and stoic quotes and falls through to the next source when one is
+// empty/flaky. Package var so tests can pin the set for determinism.
+var quoteSources = []func(context.Context) (QuoteView, error){
+	fetchAnimeQuote,
+	fetchStoicQuote,
+}
+
+// fetchGreetingQuote returns one quote from a randomly-ordered source, skipping
+// sources that error or return empty. The first non-empty wins; the random
+// order is what mixes anime and stoic across hours. Returns the first error
+// only if every source failed (so handleQuote can fall back to its cache).
+func fetchGreetingQuote(ctx context.Context) (QuoteView, error) {
+	var firstErr error
+	for _, i := range rand.Perm(len(quoteSources)) {
+		q, err := quoteSources[i](ctx)
+		if err == nil && q.Quote != "" {
+			return q, nil
+		}
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return QuoteView{}, firstErr
 }

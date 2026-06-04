@@ -542,9 +542,9 @@ export function Overview() {
           {quote?.quote ? (
             <div className="mc-quote">
               <span className="mc-quote-text">“{quote.quote}”</span>
-              {(quote.character || quote.anime) && (
+              {(quote.character || quote.anime || quote.author) && (
                 <span className="mc-quote-attr">
-                  — {[quote.character, quote.anime].filter(Boolean).join(' · ')}
+                  — {[quote.character, quote.anime, quote.author].filter(Boolean).join(' · ')}
                 </span>
               )}
             </div>

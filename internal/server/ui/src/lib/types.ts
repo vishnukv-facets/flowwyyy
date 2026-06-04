@@ -342,6 +342,7 @@ export interface QuoteView {
   quote: string
   anime: string
   character: string
+  author: string
 }
 
 export interface TrashItem {
