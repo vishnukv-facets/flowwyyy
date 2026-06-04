@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"time"
 )
@@ -40,7 +41,14 @@ func (m *InboxMonitor) Run(ctx context.Context) error {
 	defer ticker.Stop()
 	for {
 		if err := m.ScanOnce(ctx); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
+			// A scan/delivery error is transient and RESERVED for retry by design
+			// (deliverInboxEvents returns errors only for momentary live-inject
+			// failures so the un-advanced cursor re-delivers). Don't kill the
+			// monitor goroutine — that used to stop monitoring entirely until the
+			// reconciler happened to restart it, flapping the running set and
+			// delaying the retry. Log and retry on the next tick instead; the
+			// cursor stays put, so nothing is skipped and nothing double-advances.
+			log.Printf("flow inbox monitor %s: scan error (will retry next tick): %v", m.slug, err)
 		}
 		select {
 		case <-ctx.Done():

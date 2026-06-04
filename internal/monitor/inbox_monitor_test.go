@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync"
 	"testing"
+	"time"
 )
 
 type recordingWakeTarget struct {
@@ -73,6 +75,60 @@ func TestInboxMonitorScanOnce_DoesNotAdvanceCursorWhenWakeFails(t *testing.T) {
 	if offset != 0 {
 		t.Fatalf("cursor = %d, want 0", offset)
 	}
+}
+
+// flakyWakeTarget fails its first okAfter calls, then succeeds — modelling a
+// transient inject failure (the live path RESERVES errors for retry).
+type flakyWakeTarget struct {
+	mu      sync.Mutex
+	calls   int
+	okAfter int
+	woken   chan struct{}
+}
+
+func (f *flakyWakeTarget) WakeTask(_ context.Context, _ string, _ []InboxEntry) error {
+	f.mu.Lock()
+	f.calls++
+	n := f.calls
+	f.mu.Unlock()
+	if n <= f.okAfter {
+		return errors.New("transient inject failure")
+	}
+	select {
+	case f.woken <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func TestInboxMonitorRun_SurvivesTransientWakeError(t *testing.T) {
+	slug := inboxTestSlug(t)
+	if err := AppendInboxEvent(slug, InboundEvent{Kind: "message", ChannelType: "slack", Text: "reply"}); err != nil {
+		t.Fatalf("AppendInboxEvent() error = %v", err)
+	}
+	// First wake fails; the monitor must NOT die — it should retry on the next
+	// tick (cursor wasn't advanced) and deliver successfully.
+	target := &flakyWakeTarget{okAfter: 1, woken: make(chan struct{}, 1)}
+	m := NewInboxMonitor(slug, target, InboxMonitorOptions{PollInterval: 10 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	select {
+	case <-target.woken:
+		// Monitor survived the first error and delivered on retry. Good.
+	case err := <-done:
+		cancel()
+		t.Fatalf("monitor exited before retrying after a transient wake error: %v", err)
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("monitor did not retry within 2s after a transient wake error")
+	}
+	// Stop the goroutine and wait for it to fully exit before the test's TempDir
+	// cleanup runs — otherwise the still-ticking monitor races the rmdir.
+	cancel()
+	<-done
 }
 
 func TestInboxMonitorScanOnce_IgnoresAlreadyProcessedBytes(t *testing.T) {
