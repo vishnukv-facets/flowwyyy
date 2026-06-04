@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation } from 'wouter'
-import { ArrowLeft, Check, FileText, Loader2, Pencil, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronLeft, ChevronRight, FileText, Loader2, Pencil, X } from 'lucide-react'
 import { useAction, useMarkdown, useProject, useProjectTasks } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
@@ -9,7 +9,7 @@ import { PriorityPicker } from '../components/pickers'
 import { ErrorNote, Loading, ProviderIcon, StatusDot } from '../components/ui'
 import { ago, dateTime } from '../lib/format'
 import { clickable } from '../lib/a11y'
-import type { FileRef, ProjectView } from '../lib/types'
+import type { FileRef, ProjectView, TaskView } from '../lib/types'
 
 export function ProjectDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
@@ -53,20 +53,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
             <span className="eyebrow">Tasks</span>
             <span className="section-count">{tasks?.length ?? 0}</span>
           </div>
-          <div className="rows">
-            {(tasks ?? []).map((t) => (
-              <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => navigate(`/session/${t.slug}`))}>
-                <StatusDot status={t.live ? 'running' : t.status} />
-                <ProviderIcon provider={t.session_provider} size={14} />
-                <div className="lrow-main">
-                  <div className="lrow-title clip">{t.name}</div>
-                  <div className="lrow-sub clip">{t.status} · {ago(t.updated_at)}</div>
-                </div>
-                <span className={`prio ${t.priority}`} />
-              </div>
-            ))}
-            {(!tasks || tasks.length === 0) && <div className="lrow"><span className="faint">No tasks in this project yet.</span></div>}
-          </div>
+          <ProjectTaskList tasks={tasks ?? []} onOpen={(s) => navigate(`/session/${s}`)} />
         </section>
       </div>
 
@@ -88,6 +75,72 @@ export function ProjectDetail({ slug }: { slug: string }) {
         )}
       </section>
     </div>
+  )
+}
+
+// Paginated task list for the project detail right column. A project can carry
+// 100+ tasks; rendering them all turns the page into an endless scroll, so we
+// show one page at a time. Client-side paging is fine here — useProjectTasks
+// already loads the full list, and this just windows it for display.
+const PROJECT_TASKS_PAGE_SIZE = 10
+
+function ProjectTaskList({ tasks, onOpen }: { tasks: TaskView[]; onOpen: (slug: string) => void }) {
+  const [page, setPage] = useState(0)
+
+  if (tasks.length === 0) {
+    return (
+      <div className="rows">
+        <div className="lrow"><span className="faint">No tasks in this project yet.</span></div>
+      </div>
+    )
+  }
+
+  const pageCount = Math.ceil(tasks.length / PROJECT_TASKS_PAGE_SIZE)
+  // Clamp on render so a shrinking list (tasks finished/deleted) never leaves us
+  // stranded on an empty page; the buttons drive `page` from this safe value.
+  const safePage = Math.min(page, pageCount - 1)
+  const start = safePage * PROJECT_TASKS_PAGE_SIZE
+  const visible = tasks.slice(start, start + PROJECT_TASKS_PAGE_SIZE)
+
+  return (
+    <>
+      <div className="rows">
+        {visible.map((t) => (
+          <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => onOpen(t.slug))}>
+            <StatusDot status={t.live ? 'running' : t.status} />
+            <ProviderIcon provider={t.session_provider} size={14} />
+            <div className="lrow-main">
+              <div className="lrow-title clip">{t.name}</div>
+              <div className="lrow-sub clip">{t.status} · {ago(t.updated_at)}</div>
+            </div>
+            <span className={`prio ${t.priority}`} />
+          </div>
+        ))}
+      </div>
+      {pageCount > 1 && (
+        <div className="row gap" style={{ justifyContent: 'space-between', alignItems: 'center', marginTop: 10 }}>
+          <button
+            className="btn icon ghost sm"
+            aria-label="Previous tasks"
+            disabled={safePage === 0}
+            onClick={() => setPage(safePage - 1)}
+          >
+            <ChevronLeft size={14} />
+          </button>
+          <span className="faint" style={{ fontSize: 11 }}>
+            {start + 1}–{Math.min(start + PROJECT_TASKS_PAGE_SIZE, tasks.length)} of {tasks.length}
+          </span>
+          <button
+            className="btn icon ghost sm"
+            aria-label="Next tasks"
+            disabled={safePage >= pageCount - 1}
+            onClick={() => setPage(safePage + 1)}
+          >
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      )}
+    </>
   )
 }
 
