@@ -683,16 +683,18 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
         .set(book, { display: 'none' }, t + 2.3)
       return t + 2.4
     }
-    // a real 3-ball cascade: balls start held at the hands, then get thrown in a
-    // staggered rhythm — each arcs up to a peak at centre and lands in the other
-    // hand (x sweeps hand-to-hand, y parabolas with an apex each crossing). The
-    // confetti rects double as the balls (rounded via rx), repositioned onto the
-    // hands so it plays in front of the body, not off to the side of the head.
+    // a real 3-ball cascade: the balls launch from and return to the HANDS —
+    // the arms swing up from the sides (pivoting at the shoulders) so the nubs
+    // lift to the throw points, and each ball arcs over the head to the opposite
+    // hand (x sweeps hand-to-hand, y parabolas with an apex at centre each
+    // crossing). The confetti rects double as the balls (rounded via rx), set
+    // onto the raised hands so they play off the hands, not the head.
     const aJuggle = (tl: gsap.core.Timeline, t: number) => {
       const balls = [conf[0], conf[1], conf[2]]
-      // arc band sits above the head (Hy low-catch, Ay apex) so the balls never
-      // rest on the face; arms raise to meet them.
-      const Lx = 17, Rx = 47, Hy = 3, Ay = -15, SEG = 0.4, loops = 4, gap = 0.26
+      // Lx/Rx/Hy track where the raised hands sit (the arms rotate ~96–108° up
+      // from the sides about the shoulders to reach these points); Ay is the
+      // apex of the arc, well above the head.
+      const Lx = 12, Rx = 52, Hy = 14.5, Ay = -10, SEG = 0.4, loops = 4, gap = 0.26
       tl.set(balls, { opacity: 1, scale: 1.5, rotation: 0, attr: { rx: 1.6, ry: 1.6 } }, t)
       balls.forEach((b, i) => {
         const bx = CONF[i].x, by = CONF[i].y
@@ -706,9 +708,14 @@ export function ClaudeRunner({ conn, running, monitored, inbox }: { conn?: strin
           .to(b, { x: otherTX, duration: SEG, ease: 'none', yoyo: true, repeat: loops - 1 }, t0)
           .fromTo(b, { y: handTY }, { y: apexTY, duration: SEG / 2, ease: 'power2.out', yoyo: true, repeat: loops * 2 - 1 }, t0)
       })
-      // arms reach up and bob in the throw/catch rhythm
-      tl.fromTo(nubL, { rotation: -22, y: -3 }, { rotation: -38, y: -6, transformOrigin: '100% 100%', duration: SEG, ease: 'sine.inOut', yoyo: true, repeat: loops + 1 }, t)
-        .fromTo(nubR, { rotation: 22, y: -3 }, { rotation: 38, y: -6, transformOrigin: '0% 100%', duration: SEG, ease: 'sine.inOut', yoyo: true, repeat: loops + 1 }, t)
+      // arms swing up to the throw points, bob in the throw/catch rhythm, then
+      // lower back to the sides — all pivoting at the shoulders (right-mid edge)
+      tl.to(nubL, { rotation: 96, transformOrigin: '100% 50%', duration: 0.28, ease: 'power2.out' }, t)
+        .to(nubR, { rotation: -96, transformOrigin: '0% 50%', duration: 0.28, ease: 'power2.out' }, t)
+        .to(nubL, { rotation: 108, transformOrigin: '100% 50%', duration: SEG, ease: 'sine.inOut', yoyo: true, repeat: loops - 1 }, t + 0.28)
+        .to(nubR, { rotation: -108, transformOrigin: '0% 50%', duration: SEG, ease: 'sine.inOut', yoyo: true, repeat: loops - 1 }, t + 0.28)
+        .to(nubL, { rotation: 0, transformOrigin: '100% 50%', duration: 0.3, ease: 'power2.inOut' }, t + 1.9)
+        .to(nubR, { rotation: 0, transformOrigin: '0% 50%', duration: 0.3, ease: 'power2.inOut' }, t + 1.9)
       const end = t + 2 * gap + SEG * loops
       tl.to(balls, { opacity: 0, duration: 0.22 }, end)
         .set(balls, { clearProps: 'x,y,scale,rotation', attr: { rx: 0, ry: 0 } }, end + 0.22)
