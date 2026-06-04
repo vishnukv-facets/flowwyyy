@@ -83,6 +83,11 @@ func (p GitHubPoller) Poll(ctx context.Context) ([]GitHubEvent, error) {
 	// its branch since the last cycle — so a PR raised mid-task is tagged and
 	// its comments/reviews start flowing the same cycle (not only at flow done).
 	linkInProgressTaskPRs(ctx, p.DB)
+	// Also link PRs opened to resolve a tracked issue. The branch linker above
+	// only catches a PR whose head equals the worktree's branch; PRs split off
+	// onto sub-branches (the multi-PR-per-issue case) are found here via the
+	// issue's GitHub cross-references instead.
+	linkInProgressIssuePRs(ctx, p.DB, p.SelfLogins)
 	var events []GitHubEvent
 	seen := map[string]bool{}
 	add := func(ev GitHubEvent) {

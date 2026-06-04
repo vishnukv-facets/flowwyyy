@@ -2254,6 +2254,17 @@ For GitHub PR work, make sure the task carries a
 current branch PR automatically, and you can add the tag manually with
 `flow update task <slug> --tag gh-pr:<owner>/<repo>#<number>`.
 
+A task spawned from a GitHub **issue** keeps its `gh-issue:` tag AND
+auto-gains a `gh-pr:` tag for each open PR you open to resolve it, as long
+as the PR references the issue (e.g. `Fixes #<number>`) and is authored by
+one of the configured self logins — the monitor links them via the issue's
+GitHub cross-references each poll. This works even when the PR is opened
+from a sub-branch that differs from the task's worktree branch (the common
+"split one issue into several PRs" case), which the branch-based linker
+alone cannot catch. One issue task can therefore carry several `gh-pr:`
+tags. If a PR still isn't linked (e.g. it doesn't reference the issue), add
+the tag manually with the command above.
+
 ## 10b. Slack-reply tasks (reaction-trigger pipeline)
 
 `flow ui serve` hosts a Slack Socket Mode listener that watches every

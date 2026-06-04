@@ -40,6 +40,83 @@ func TestLinkInProgressTaskPRsTagsWorktreePR(t *testing.T) {
 	}
 }
 
+func TestLinkInProgressIssuePRsTagsLinkedPRs(t *testing.T) {
+	db := dispatcherTestDB(t)
+	now := flowdb.NowISO()
+	// Task created by self-assigning an issue: tracks the issue, no worktree
+	// branch that matches the PR head (the PRs are opened from sub-branches).
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, session_id, status_changed_at, created_at, updated_at)
+		 VALUES ('issue-task', 'issue task', 'in-progress', 'high', ?, 'default', 'claude', 'sess-issue', ?, ?, ?)`,
+		t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "issue-task", "gh-issue:facets-cloud/raptor#139"); err != nil {
+		t.Fatalf("seed issue tag: %v", err)
+	}
+
+	orig := ghOpenPRsForIssue
+	defer func() { ghOpenPRsForIssue = orig }()
+	var gotOwner, gotRepo string
+	var gotNumber int
+	ghOpenPRsForIssue = func(_ context.Context, owner, repo string, number int, _ []string) ([]int, error) {
+		gotOwner, gotRepo, gotNumber = owner, repo, number
+		return []int{156, 158}, nil // one issue, several PRs
+	}
+
+	linkInProgressIssuePRs(context.Background(), db, []string{"vishnukv-facets"})
+
+	if gotOwner != "facets-cloud" || gotRepo != "raptor" || gotNumber != 139 {
+		t.Fatalf("queried wrong issue: %s/%s#%d", gotOwner, gotRepo, gotNumber)
+	}
+	tags, err := flowdb.GetTaskTags(db, "issue-task")
+	if err != nil {
+		t.Fatalf("tags: %v", err)
+	}
+	want := map[string]bool{
+		"gh-issue:facets-cloud/raptor#139": false, // still tracked
+		"gh-pr:facets-cloud/raptor#156":    false,
+		"gh-pr:facets-cloud/raptor#158":    false,
+	}
+	for _, tag := range tags {
+		if _, ok := want[tag]; ok {
+			want[tag] = true
+		}
+	}
+	for tag, found := range want {
+		if !found {
+			t.Fatalf("expected tag %q after linking, got %v", tag, tags)
+		}
+	}
+}
+
+func TestLinkInProgressIssuePRsSkipsTasksWithoutIssueTag(t *testing.T) {
+	db := dispatcherTestDB(t)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, session_id, status_changed_at, created_at, updated_at)
+		 VALUES ('plain', 'plain', 'in-progress', 'high', ?, 'default', 'claude', 'sess-plain', ?, ?, ?)`,
+		t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	orig := ghOpenPRsForIssue
+	defer func() { ghOpenPRsForIssue = orig }()
+	calls := 0
+	ghOpenPRsForIssue = func(_ context.Context, _, _ string, _ int, _ []string) ([]int, error) {
+		calls++
+		return nil, nil
+	}
+
+	linkInProgressIssuePRs(context.Background(), db, []string{"vishnukv-facets"})
+
+	if calls != 0 {
+		t.Fatalf("ghOpenPRsForIssue called %d times; want 0 (no gh-issue tag)", calls)
+	}
+}
+
 func TestLinkInProgressTaskPRsSkipsNoWorktreeAndAlreadyTagged(t *testing.T) {
 	db := dispatcherTestDB(t)
 	now := flowdb.NowISO()
