@@ -34,6 +34,8 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	view.PlaybookSlug = nullStringPtr(t.PlaybookSlug)
 	view.WorktreePath = nullStringPtr(t.WorktreePath)
 	view.ParentSlug = nullStringPtr(t.ParentSlug)
+	view.ForkedFromSlug = nullStringPtr(t.ForkedFromSlug)
+	view.ForkReason = nullStringPtr(t.ForkReason)
 	view.WaitingOn = nullStringPtr(t.WaitingOn)
 	view.DueDate = nullStringPtr(t.DueDate)
 	view.Assignee = nullStringPtr(t.Assignee)
@@ -119,6 +121,10 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	// pointing here. The dep table is authoritative; the column read is a
 	// defensive fallback for the same reasons as above.
 	view.Children = loadChildren(db, t.Slug)
+	if t.ForkedFromSlug.Valid && strings.TrimSpace(t.ForkedFromSlug.String) != "" {
+		view.ForkedFrom = loadParent(db, t.ForkedFromSlug.String)
+	}
+	view.Forks = loadForks(db, t.Slug)
 
 	// Runtime status: latest agent_runtime_states row for this session.
 	// Surfaces in UI as the chip next to the task status.
@@ -180,6 +186,29 @@ func loadChildren(db *sql.DB, parentSlug string) []TaskSummary {
 		 WHERE parent_slug = ? AND deleted_at IS NULL
 		 ORDER BY created_at ASC`,
 		parentSlug,
+	)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var out []TaskSummary
+	for rows.Next() {
+		s, err := scanTaskSummary(rows)
+		if err != nil {
+			return out
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func loadForks(db *sql.DB, sourceSlug string) []TaskSummary {
+	rows, err := db.Query(
+		`SELECT slug, name, status, priority, project_slug, updated_at
+		 FROM tasks
+		 WHERE forked_from_slug = ? AND deleted_at IS NULL
+		 ORDER BY created_at ASC, slug ASC`,
+		sourceSlug,
 	)
 	if err != nil {
 		return nil

@@ -219,10 +219,12 @@ type transcriptUsageStats struct {
 	// TokensByDay attributes each turn's freshTotal() (work tokens) to the
 	// local calendar day (YYYY-MM-DD) of its timestamp — the basis for the
 	// token-cost-over-time trend. Claude reports per-turn fresh input+output in
-	// message.usage, which maps cleanly to a day. Codex reports running totals
-	// via payload.Info rather than per-turn deltas, so Codex sessions contribute
-	// little here; that's a known limitation of the per-day breakdown.
+	// message.usage. Codex reports running totals via payload.Info, so the
+	// accumulator buckets the delta between successive totals.
 	TokensByDay map[string]int
+	// lastCodexFreshTotal is internal accumulator state for deriving per-event
+	// Codex deltas from cumulative total_token_usage records.
+	lastCodexFreshTotal int
 }
 
 type transcriptUsageRecord struct {
@@ -261,42 +263,7 @@ func sessionTranscriptUsageStats(path string) transcriptUsageStats {
 		if len(line) == 0 {
 			continue
 		}
-		var rec transcriptUsageRecord
-		if err := json.Unmarshal(line, &rec); err != nil {
-			continue
-		}
-		stats.LastTimestamp = laterTimestamp(stats.LastTimestamp, rec.Timestamp)
-		if m := strings.TrimSpace(rec.Message.Model); m != "" {
-			stats.Model = m
-		}
-		if used := rec.Message.Usage.total(); used > 0 {
-			stats.TokensUsed = used // context occupancy = latest turn's full total
-		}
-		// Session usage = cumulative NEW work, EXCLUDING cache re-reads.
-		stats.TokensSession += rec.Message.Usage.freshTotal()
-		if rec.Payload != nil {
-			var payload struct {
-				Type string `json:"type"`
-				Info struct {
-					LastTokenUsage     transcriptTokenUsage `json:"last_token_usage"`
-					TotalTokenUsage    transcriptTokenUsage `json:"total_token_usage"`
-					ModelContextWindow int                  `json:"model_context_window"`
-				} `json:"info"`
-			}
-			if err := json.Unmarshal(rec.Payload, &payload); err == nil && payload.Type == "token_count" {
-				if used := payload.Info.LastTokenUsage.total(); used > 0 {
-					stats.TokensUsed = used
-				} else if used := payload.Info.TotalTokenUsage.total(); used > 0 {
-					stats.TokensUsed = used
-				}
-				if fresh := payload.Info.TotalTokenUsage.freshTotal(); fresh > 0 {
-					stats.TokensSession = fresh // Codex: running total, cache-excluded
-				}
-				if payload.Info.ModelContextWindow > 0 {
-					stats.TokensMax = payload.Info.ModelContextWindow
-				}
-			}
-		}
+		accumulateTranscriptUsage(&stats, line)
 	}
 	return stats
 }

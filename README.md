@@ -781,6 +781,13 @@ handles the rest.
   Provider is per-task — switching is a per-task decision, not a
   global one. The knowledge base, briefs, and close-out sweep
   work the same way either way.
+- **Provider handoff forks.** Mission Control can fork an existing
+  task to another provider when one provider is out of credits or
+  otherwise blocked. The fork records which task it came from, copies
+  the source brief, updates, sidecar notes, and readable transcript
+  into the new task, and marks the lineage in both directions: forked
+  tasks link back to their source, while source tasks show backlinks
+  to the forked tasks in task/session lists and detail views.
 - **Worktrees by default.** `flow do` creates a per-task git
   worktree at `<repo>/.<agent>/worktrees/<slug>` on branch
   `flow/<slug>`, so two parallel tasks on the same repo never

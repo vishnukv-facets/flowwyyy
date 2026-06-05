@@ -880,6 +880,17 @@
 .tok-pill svg {
   opacity: 0.85;
 }
+.fork-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-hi);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.fork-tag svg {
+  flex: none;
+}
 
 /* --------------------------- empty / error ------------------------------ */
 .empty {
@@ -2016,6 +2027,71 @@ select.input {
   font-size: 11.5px;
   color: var(--text-2);
 }
+.term-waiting-note {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 13px;
+  border-bottom: 1px solid color-mix(in srgb, var(--warn) 28%, var(--border));
+  background: color-mix(in srgb, var(--warn) 9%, var(--bg));
+  color: var(--text-2);
+}
+.term-waiting-note > svg {
+  color: var(--warn);
+}
+.term-waiting-copy {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.term-waiting-title {
+  flex: none;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+}
+.term-waiting-why {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.term-waiting-cmd {
+  flex: none;
+  max-width: min(360px, 40vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, var(--border));
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--warn) 7%, var(--bg-1));
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+@media (max-width: 760px) {
+  .term-waiting-note {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .term-waiting-note .btn {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .term-waiting-copy {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  .term-waiting-title,
+  .term-waiting-why,
+  .term-waiting-cmd {
+    max-width: 100%;
+  }
+}
 .term-dots {
   display: flex;
   gap: 6px;
@@ -2387,6 +2463,50 @@ select.input {
 }
 .badge.mon svg {
   animation: l-glow 2.2s ease-in-out infinite;
+}
+.fork-detail-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 8px;
+}
+.fork-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(100%, 560px);
+  height: 24px;
+  gap: 5px;
+  padding: 0 8px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--accent-soft) 68%, var(--bg-2));
+  border: 1px solid color-mix(in srgb, var(--accent-line) 72%, var(--border));
+  border-radius: var(--r-pill);
+  font-size: 11.5px;
+  line-height: 1;
+  cursor: pointer;
+}
+.fork-pill:hover,
+.fork-pill:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.fork-pill svg {
+  flex: none;
+  color: var(--accent-hi);
+}
+.fork-pill-label {
+  color: var(--text-3);
+}
+.fork-pill-main {
+  max-width: 240px;
+  color: var(--accent-hi);
+}
+.fork-pill-detail {
+  max-width: 260px;
+  padding-left: 6px;
+  border-left: 1px solid var(--accent-line);
+  color: var(--text-3);
 }
 .acard-mon {
   display: inline-grid;
@@ -3465,6 +3585,10 @@ summary.detail-branch.as-button:hover {
   background: var(--danger);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 20%, transparent);
 }
+.term-conn.waiting {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent);
+}
 
 /* full-width activity strip on agent cards */
 .acard-spark {
@@ -3715,6 +3839,11 @@ summary.detail-branch.as-button:hover {
 }
 .dep-chip.blocks {
   color: var(--accent-hi);
+  border-color: var(--accent-line);
+}
+.dep-chip.fork {
+  color: var(--accent-hi);
+  background: var(--accent-soft);
   border-color: var(--accent-line);
 }
 

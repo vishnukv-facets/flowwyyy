@@ -62,7 +62,7 @@ type floatingSessionInfo struct {
 // uiUser carries the operator's display name so the dashboard can greet
 // them. Derived from the OS account; falls back gracefully when unknown.
 type uiUser struct {
-	Name     string `json:"name"`      // first name, for greetings
+	Name     string `json:"name"` // first name, for greetings
 	FullName string `json:"full_name"`
 	Username string `json:"username"`
 }
@@ -179,6 +179,10 @@ type uiAgent struct {
 	Parent          *TaskSummary   `json:"parent,omitempty"`
 	Parents         []TaskSummary  `json:"parents,omitempty"`
 	Children        []TaskSummary  `json:"children,omitempty"`
+	ForkedFromSlug  *string        `json:"forked_from_slug,omitempty"`
+	ForkedFrom      *TaskSummary   `json:"forked_from,omitempty"`
+	ForkReason      *string        `json:"fork_reason,omitempty"`
+	Forks           []TaskSummary  `json:"forks,omitempty"`
 	Branch          string         `json:"branch"`
 	Branches        []string       `json:"branches,omitempty"`
 	WorkDir         string         `json:"work_dir"`
@@ -791,6 +795,10 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		Parent:          tv.Parent,
 		Parents:         tv.Parents,
 		Children:        tv.Children,
+		ForkedFromSlug:  tv.ForkedFromSlug,
+		ForkedFrom:      tv.ForkedFrom,
+		ForkReason:      tv.ForkReason,
+		Forks:           tv.Forks,
 		Branch:          branch,
 		Branches:        branches,
 		WorkDir:         workDir,

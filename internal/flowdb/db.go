@@ -55,6 +55,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     kind                  TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular','playbook_run')),
     playbook_slug         TEXT REFERENCES playbooks(slug),
     parent_slug           TEXT REFERENCES tasks(slug),
+    forked_from_slug      TEXT REFERENCES tasks(slug),
+    fork_reason           TEXT,
     priority              TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
     work_dir              TEXT NOT NULL,
     waiting_on            TEXT,
@@ -298,6 +300,7 @@ CREATE INDEX IF NOT EXISTS idx_playbooks_project   ON playbooks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_projects_deleted_at ON projects(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_playbooks_deleted_at ON playbooks(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_deleted_at ON tasks(deleted_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_forked_from ON tasks(forked_from_slug);
 `
 
 // (idx_tasks_session_id is a partial UNIQUE index that requires a
@@ -330,6 +333,8 @@ type Task struct {
 	Kind               string         // 'regular' | 'playbook_run'
 	PlaybookSlug       sql.NullString // set when Kind='playbook_run'
 	ParentSlug         sql.NullString // set by `flow spawn --parent`
+	ForkedFromSlug     sql.NullString
+	ForkReason         sql.NullString
 	Priority           string
 	WorkDir            string
 	WaitingOn          sql.NullString
@@ -1161,6 +1166,24 @@ func runMigrations(db *sql.DB) error {
 			return fmt.Errorf("add tasks.parent_slug: %w", err)
 		}
 	}
+	has, err = columnExists(db, "tasks", "forked_from_slug")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN forked_from_slug TEXT REFERENCES tasks(slug)`); err != nil {
+			return fmt.Errorf("add tasks.forked_from_slug: %w", err)
+		}
+	}
+	has, err = columnExists(db, "tasks", "fork_reason")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN fork_reason TEXT`); err != nil {
+			return fmt.Errorf("add tasks.fork_reason: %w", err)
+		}
+	}
 	has, err = columnExists(db, "tasks", "inbox_seen_at")
 	if err != nil {
 		return err
@@ -1667,6 +1690,8 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 			kind                  TEXT NOT NULL DEFAULT 'regular' CHECK (kind IN ('regular','playbook_run')),
 			playbook_slug         TEXT REFERENCES playbooks(slug),
 			parent_slug           TEXT REFERENCES tasks(slug),
+			forked_from_slug      TEXT REFERENCES tasks(slug),
+			fork_reason           TEXT,
 			priority              TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
 			work_dir              TEXT NOT NULL,
 			waiting_on            TEXT,
@@ -1692,13 +1717,13 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 
 	if _, err := tx.Exec(`
 		INSERT INTO tasks_new (
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, priority,
+			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
 			work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at,
 			session_provider, session_id, session_started, session_last_resumed,
 			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
 		)
 		SELECT
-			slug, name, project_slug, status, kind, playbook_slug, parent_slug, priority,
+			slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
 			work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at,
 			COALESCE(NULLIF(session_provider, ''), 'claude'), session_id, session_started, session_last_resumed,
 			session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
@@ -1718,6 +1743,7 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 		`CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_forked_from ON tasks(forked_from_slug)`,
 	} {
 		if _, err := tx.Exec(idx); err != nil {
 			return fmt.Errorf("recreate index: %w", err)
@@ -1943,12 +1969,12 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, priority, work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, status_changed_at, session_provider, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
 	err := row.Scan(
-		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug,
+		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
 		&t.Priority, &t.WorkDir,
 		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.StatusChangedAt, &t.SessionProvider, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
@@ -2467,6 +2493,9 @@ func RenameTask(db *sql.DB, oldSlug, newSlug string) error {
 	}
 	if _, err := tx.Exec(`UPDATE tasks SET parent_slug=? WHERE parent_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade tasks.parent_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE tasks SET forked_from_slug=? WHERE forked_from_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade tasks.forked_from_slug: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE task_dependencies SET child_slug=? WHERE child_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade task_dependencies.child_slug: %w", err)

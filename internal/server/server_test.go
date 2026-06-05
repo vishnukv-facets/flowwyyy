@@ -762,6 +762,9 @@ func TestClearWaitingActionClearsWaitingOnAndReturnsAgent(t *testing.T) {
 	if !resp.OK || resp.Agent == nil {
 		t.Fatalf("expected agent response, got %+v", resp)
 	}
+	if !resp.Bridge {
+		t.Fatalf("clear waiting should reopen the browser terminal bridge, got %+v", resp)
+	}
 	if resp.Agent.WaitingFor != nil {
 		t.Fatalf("waiting_for still present: %+v", resp.Agent.WaitingFor)
 	}
@@ -1316,6 +1319,131 @@ func TestCreateFlowDefaultsPermissionModeAuto(t *testing.T) {
 	}
 	if task.PermissionMode != "auto" {
 		t.Fatalf("permission mode = %q, want auto", task.PermissionMode)
+	}
+}
+
+func TestForkTaskCopiesContextAndRecordsLineage(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+	insertProjectTask(t, db, root)
+	sourceDir := filepath.Join(root, "tasks", "build-ui")
+	transcriptPath := filepath.Join(root, "source-session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"user","message":{"content":"source transcript marker"}}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sourceDir, "decisions.md"), []byte("# Source decision\nKeep provider handoff explicit.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_provider = 'claude', session_id = '11111111-1111-4111-8111-111111111111', session_path = ?, worktree_path = ? WHERE slug = 'build-ui'`,
+		transcriptPath,
+		filepath.Join(root, ".claude", "worktrees", "build-ui"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
+	resp, status := srv.runAction(actionRequest{
+		Kind:        "fork",
+		Target:      "build-ui",
+		Provider:    availableTestProvider(t),
+		Description: "Claude credits exhausted; continue with the other provider.",
+	})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("fork status=%d resp=%+v", status, resp)
+	}
+
+	var forkedFrom, forkReason sql.NullString
+	if err := db.QueryRow(`SELECT forked_from_slug, fork_reason FROM tasks WHERE slug = 'build-ui-fork'`).Scan(&forkedFrom, &forkReason); err != nil {
+		t.Fatal(err)
+	}
+	if !forkedFrom.Valid || forkedFrom.String != "build-ui" {
+		t.Fatalf("forked_from_slug = %#v, want build-ui", forkedFrom)
+	}
+	if !forkReason.Valid || !strings.Contains(forkReason.String, "credits exhausted") {
+		t.Fatalf("fork_reason = %#v", forkReason)
+	}
+	var parent sql.NullString
+	if err := db.QueryRow(`SELECT parent_slug FROM tasks WHERE slug = 'build-ui-fork'`).Scan(&parent); err != nil {
+		t.Fatal(err)
+	}
+	if parent.Valid {
+		t.Fatalf("fork should not set hierarchy parent_slug, got %q", parent.String)
+	}
+
+	forkDir := filepath.Join(root, "tasks", "build-ui-fork")
+	brief, err := os.ReadFile(filepath.Join(forkDir, "brief.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"Forked from: build-ui",
+		"Source work_dir:",
+		"source-brief.md",
+		"source-transcript.md",
+		"source-decisions.md",
+	} {
+		if !strings.Contains(string(brief), want) {
+			t.Fatalf("brief missing %q:\n%s", want, brief)
+		}
+	}
+	for _, rel := range []string{
+		"source-brief.md",
+		"source-decisions.md",
+		filepath.Join("updates", "source-2026-05-12-progress.md"),
+		"source-transcript.md",
+	} {
+		if _, err := os.Stat(filepath.Join(forkDir, rel)); err != nil {
+			t.Fatalf("expected copied context %s: %v", rel, err)
+		}
+	}
+}
+
+func TestTaskAPISurfacesForkLineage(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	now := "2026-05-12T10:05:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, project_slug, status, kind, priority, work_dir, forked_from_slug, fork_reason, created_at, updated_at)
+		 VALUES ('build-ui-fork', 'Build dashboard UI fork', 'flow', 'backlog', 'regular', 'high', ?, 'build-ui', 'Provider handoff', ?, ?)`,
+		root, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui-fork", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var task TaskView
+	if err := json.Unmarshal(rec.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	if task.ForkedFromSlug == nil || *task.ForkedFromSlug != "build-ui" {
+		t.Fatalf("forked_from_slug = %#v", task.ForkedFromSlug)
+	}
+	if task.ForkedFrom == nil || task.ForkedFrom.Name != "Build dashboard UI" {
+		t.Fatalf("forked_from = %#v", task.ForkedFrom)
+	}
+	if task.ForkReason == nil || *task.ForkReason != "Provider handoff" {
+		t.Fatalf("fork_reason = %#v", task.ForkReason)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("source status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var source TaskView
+	if err := json.Unmarshal(rec.Body.Bytes(), &source); err != nil {
+		t.Fatal(err)
+	}
+	if len(source.Forks) != 1 || source.Forks[0].Slug != "build-ui-fork" {
+		t.Fatalf("source forks = %#v", source.Forks)
 	}
 }
 
@@ -2959,6 +3087,18 @@ func testFlowBinary(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return script
+}
+
+func availableTestProvider(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("codex"); err == nil {
+		return "codex"
+	}
+	if _, err := exec.LookPath("claude"); err == nil {
+		return "claude"
+	}
+	t.Skip("no Claude Code or Codex binary on PATH")
+	return ""
 }
 
 func shellQuote(s string) string {

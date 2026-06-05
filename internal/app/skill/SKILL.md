@@ -2058,6 +2058,16 @@ proposing any plan:
    lazy-load principle for KB files (§5.10 in the skill, §4.10 in the
    section numbering).
 
+   **If the task is a forked provider-handoff task:** its brief will include a
+   "Fork lineage" section and copied source-context files such as
+   `source-brief.md`, `source-transcript.md`, and `source-*.md` sidecars.
+   Read those copied source files eagerly after the task brief and updates.
+   They are not optional references; they are the historical context that lets
+   Claude or Codex continue from the source task without the user re-explaining
+   the work. Copied source updates live under this task's own `updates/`
+   directory with `source-` prefixes, so they are already covered by the normal
+   update-read step above.
+
    After bootstrap, if you need cross-task or memory context and do not
    know the exact file/entity to open, use `flow search "<terms>"` as the
    locator. Default search covers briefs, updates, and memories; add

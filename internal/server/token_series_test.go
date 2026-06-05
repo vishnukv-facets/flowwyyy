@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 // Claude assistant transcript line with the given timestamp and token usage.
@@ -45,6 +46,39 @@ func TestAccumulateTranscriptUsageBucketsTokensByDay(t *testing.T) {
 	// Sanity: the per-day total reconciles with the cumulative session total.
 	if stats.TokensSession != 270 {
 		t.Errorf("TokensSession: got %d, want 270 (180+90)", stats.TokensSession)
+	}
+}
+
+func codexUsageLine(ts string, input, cached, output, reasoning int) []byte {
+	return fmt.Appendf(nil,
+		`{"type":"event_msg","timestamp":%q,"payload":{"type":"token_count",`+
+			`"info":{"total_token_usage":{"input_tokens":%d,"cached_input_tokens":%d,`+
+			`"output_tokens":%d,"reasoning_output_tokens":%d}}}}`,
+		ts, input, cached, output, reasoning)
+}
+
+func TestAccumulateTranscriptUsageBucketsCodexTokenDeltasByLocalDay(t *testing.T) {
+	oldLocal := time.Local
+	time.Local = time.FixedZone("IST", 5*60*60+30*60)
+	defer func() { time.Local = oldLocal }()
+
+	var stats transcriptUsageStats
+	// 18:00Z is 23:30 on Jun 5 IST; fresh total = (200-100)+20 = 120.
+	accumulateTranscriptUsage(&stats, codexUsageLine("2026-06-05T18:00:00Z", 200, 100, 20, 0))
+	// 18:35Z is 00:05 on Jun 6 IST; fresh total = (500-250)+100+10 = 360,
+	// so only the +240 delta belongs to Jun 6.
+	accumulateTranscriptUsage(&stats, codexUsageLine("2026-06-05T18:35:00Z", 500, 250, 100, 10))
+	// Another Jun 6 event; fresh total = (900-500)+150+10 = 560, delta +200.
+	accumulateTranscriptUsage(&stats, codexUsageLine("2026-06-05T19:00:00Z", 900, 500, 150, 10))
+
+	if got := stats.TokensSession; got != 560 {
+		t.Fatalf("TokensSession = %d, want latest Codex fresh total 560", got)
+	}
+	if got := stats.TokensByDay["2026-06-05"]; got != 120 {
+		t.Errorf("Jun 5 local tokens = %d, want 120", got)
+	}
+	if got := stats.TokensByDay["2026-06-06"]; got != 440 {
+		t.Errorf("Jun 6 local tokens = %d, want 440", got)
 	}
 }
 

@@ -33,6 +33,10 @@ export interface TaskView {
   parent?: TaskSummary
   parents?: TaskSummary[]
   children?: TaskSummary[]
+  forked_from_slug?: string | null
+  forked_from?: TaskSummary
+  fork_reason?: string | null
+  forks?: TaskSummary[]
   priority: string
   work_dir: string
   worktree_path?: string
@@ -207,6 +211,10 @@ export interface UiAgent {
   parent?: TaskSummary
   parents?: TaskSummary[]
   children?: TaskSummary[]
+  forked_from_slug?: string | null
+  forked_from?: TaskSummary
+  fork_reason?: string | null
+  forks?: TaskSummary[]
   branch: string
   branches?: string[]
   work_dir: string

@@ -37,7 +37,7 @@ type Server struct {
 	// cascade via ObserveBatch. Nil when no DB is configured.
 	cascade       *steering.Cascade
 	inboxMonitors *inboxMonitorManager
-	dbWatcher      *dbWatcher
+	dbWatcher     *dbWatcher
 	// nameResolver maps Slack user/channel IDs to display names for the
 	// Inbox UI, caching lookups across requests. Nil when no Slack token is
 	// configured; all of its methods are nil-safe.
@@ -139,6 +139,10 @@ type TaskView struct {
 	Parent              *TaskSummary  `json:"parent,omitempty"`
 	Parents             []TaskSummary `json:"parents,omitempty"`
 	Children            []TaskSummary `json:"children,omitempty"`
+	ForkedFromSlug      *string       `json:"forked_from_slug,omitempty"`
+	ForkedFrom          *TaskSummary  `json:"forked_from,omitempty"`
+	ForkReason          *string       `json:"fork_reason,omitempty"`
+	Forks               []TaskSummary `json:"forks,omitempty"`
 	Priority            string        `json:"priority"`
 	WorkDir             string        `json:"work_dir"`
 	WorktreePath        *string       `json:"worktree_path,omitempty"`

@@ -188,6 +188,18 @@ export function SessionDetail({ slug }: { slug: string }) {
   const provider = agent?.provider || task.session_provider || 'claude'
   const status = agent?.status || task.status
   const monitored = !!agent?.monitored
+  const waitingWhy = agent?.waiting_for?.why || task.waiting_on || ''
+  const waitingCmd =
+    agent?.waiting_for?.cmd || (task.waiting_on ? `flow update task ${task.slug} --clear-waiting` : '')
+  const isWaiting = status === 'waiting' || !!waitingWhy
+  const canClearWaiting = !!task.waiting_on
+  const termConnClass = isWaiting ? 'waiting' : termConn === 'open' ? 'on' : 'off'
+  const termConnTitle = isWaiting
+    ? 'Session is waiting for input'
+    : termConn === 'open'
+      ? 'Terminal connected'
+      : 'Terminal disconnected'
+  const termDisplayStatus = isWaiting ? 'waiting for input' : termConn === 'open' ? 'connected' : termStatus || 'disconnected'
 
   // The agent is locked once a session exists (running, idle, or done all carry
   // a session) — the backend rejects the change. Only a never-started backlog
@@ -196,6 +208,8 @@ export function SessionDetail({ slug }: { slug: string }) {
   // the picker last persisted.
   const providers = ui?.CAPABILITIES?.providers ?? []
   const canChooseAgent = task.status === 'backlog' && !task.session_id && !task.session_started
+  const forkProviderOptions = providers.filter((p) => p.id !== provider)
+  const forkedFrom = task.forked_from?.name || task.forked_from_slug
 
   return (
     <div className="page flush">
@@ -239,6 +253,7 @@ export function SessionDetail({ slug }: { slug: string }) {
               <div className="detail-ref">
                 {task.slug}
                 {task.project_slug ? ` · ${task.project_slug}` : ''}
+                {task.forked_from_slug ? ` · forked from ${task.forked_from_slug}` : ''}
               </div>
               {(agent?.branch || task.worktree_path) && (
                 <BranchPicker
@@ -264,6 +279,37 @@ export function SessionDetail({ slug }: { slug: string }) {
             )}
             <StatusBadge status={status} />
           </div>
+
+          {(task.forked_from_slug || (task.forks?.length ?? 0) > 0) && (
+            <div className="fork-detail-pills" aria-label="Fork lineage">
+              {task.forked_from_slug && (
+                <button
+                  type="button"
+                  className="fork-pill"
+                  onClick={() => navigate(`/session/${task.forked_from_slug}`)}
+                  title={`Forked from ${forkedFrom}${task.fork_reason ? ` · ${task.fork_reason}` : ''}`}
+                >
+                  <GitFork size={12} />
+                  <span className="fork-pill-label">from</span>
+                  <span className="fork-pill-main clip">{forkedFrom}</span>
+                  {task.fork_reason && <span className="fork-pill-detail clip">{task.fork_reason}</span>}
+                </button>
+              )}
+              {task.forks?.map((fork) => (
+                <button
+                  key={fork.slug}
+                  type="button"
+                  className="fork-pill"
+                  onClick={() => navigate(`/session/${fork.slug}`)}
+                  title={`Forked into ${fork.name}`}
+                >
+                  <GitFork size={12} />
+                  <span className="fork-pill-label">fork</span>
+                  <span className="fork-pill-main clip">{fork.slug}</span>
+                </button>
+              ))}
+            </div>
+          )}
 
           <div className="toolbar" style={{ marginBottom: 4 }}>
             {!done && !open && (
@@ -358,13 +404,34 @@ export function SessionDetail({ slug }: { slug: string }) {
                     <span className="menu-item-note clip" style={{ maxWidth: 130 }}>{task.waiting_on}</span>
                   </button>
                 )}
-                <button
-                  className="menu-item"
-                  disabled={busy === 'fork'}
-                  onClick={(e) => { closeMenu(e); run('fork') }}
-                >
-                  <GitFork size={14} /> Fork task
-                </button>
+                {forkProviderOptions.length > 0 ? (
+                  forkProviderOptions.map((p) => (
+                    <button
+                      key={p.id}
+                      className="menu-item"
+                      disabled={busy === 'fork' || !p.available}
+                      title={p.available ? `Fork to ${p.label}` : p.reason || `${p.label} unavailable`}
+                      onClick={(e) => {
+                        closeMenu(e)
+                        run('fork', {
+                          provider: p.id,
+                          description: `Provider handoff from ${provider} to ${p.id}.`,
+                        })
+                      }}
+                    >
+                      <GitFork size={14} /> Fork to {p.label}
+                      {!p.available && <span className="menu-item-note">unavailable</span>}
+                    </button>
+                  ))
+                ) : (
+                  <button
+                    className="menu-item"
+                    disabled={busy === 'fork'}
+                    onClick={(e) => { closeMenu(e); run('fork') }}
+                  >
+                    <GitFork size={14} /> Fork task
+                  </button>
+                )}
                 {agent?.status === 'running' && (agent?.session_id || task.session_id) && (
                   <button
                     className="menu-item danger"
@@ -427,8 +494,8 @@ export function SessionDetail({ slug }: { slug: string }) {
           <div className={`term-shell${full ? ' fullscreen' : ''}`}>
             <div className="term-bar">
               <span
-                className={`term-conn ${termConn === 'open' ? 'on' : 'off'}`}
-                title={termConn === 'open' ? 'Terminal connected' : 'Terminal disconnected'}
+                className={`term-conn ${termConnClass}`}
+                title={termConnTitle}
               />
               <span className="mono clip">
                 {provider} · {agent?.session_id || task.session_id || 'no session'}
@@ -438,7 +505,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 {/* When open the verbose status just repeats "connected …" + the
                     session id (already shown on the left), so collapse to one
                     word; surface termStatus only for errors/close reasons. */}
-                {termConn === 'open' ? 'connected' : termStatus || 'disconnected'}
+                {termDisplayStatus}
               </span>
               {canTerminal && (
                 <button
@@ -451,6 +518,27 @@ export function SessionDetail({ slug }: { slug: string }) {
               )}
             </div>
             {doneRunning && <DoneProgress slug={slug} onClose={() => setDoneRunning(false)} />}
+            {isWaiting && (
+              <div className="term-waiting-note" aria-live="polite" aria-atomic="true">
+                <AlertTriangle size={15} />
+                <div className="term-waiting-copy">
+                  <div className="term-waiting-title">Waiting for input</div>
+                  <div className="term-waiting-why" title={waitingWhy || undefined}>
+                    {waitingWhy || 'This session is paused until its blocker is resolved.'}
+                  </div>
+                  {waitingCmd && <code className="term-waiting-cmd" title={waitingCmd}>{waitingCmd}</code>}
+                </div>
+                {canClearWaiting && (
+                  <button
+                    className="btn ghost sm"
+                    disabled={busy === 'clear-waiting'}
+                    onClick={() => run('clear-waiting')}
+                  >
+                    <BellOff size={14} /> Clear waiting
+                  </button>
+                )}
+              </div>
+            )}
             {canTerminal ? (
               <TaskTerminal
                 key={`${slug}#${restartKey}`}
@@ -710,6 +798,7 @@ function BranchPicker({
       <div className="menu-pop branch-pop">
         {others.map((b) => (
           <button
+            type="button"
             key={b}
             className="menu-item"
             onClick={(e) => {
@@ -869,7 +958,7 @@ function DiffTab({
           <ChevronsDownUp size={13} /> {allCollapsed ? 'Expand all' : 'Collapse all'}
         </button>
         {onExpand && (
-          <button className="btn ghost sm" onClick={onExpand}>
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
         )}
@@ -1003,6 +1092,7 @@ function UpdatesTab({
       {updates.map((u) => (
         <div key={u.filename} className="card" style={{ overflow: 'hidden' }}>
           <button
+            type="button"
             className="row gap"
             style={{ width: '100%', padding: '9px 12px', justifyContent: 'flex-start' }}
             onClick={() => setOpenFile(openFile === u.filename ? null : u.filename)}

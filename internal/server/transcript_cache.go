@@ -184,6 +184,22 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 	}
 	if fresh := payload.Info.TotalTokenUsage.freshTotal(); fresh > 0 {
 		stats.TokensSession = fresh // Codex: running total, cache-excluded
+		delta := fresh
+		if stats.lastCodexFreshTotal > 0 {
+			delta = fresh - stats.lastCodexFreshTotal
+			if delta < 0 {
+				delta = fresh
+			}
+		}
+		stats.lastCodexFreshTotal = fresh
+		if delta > 0 {
+			if day := localDay(rec.Timestamp); day != "" {
+				if stats.TokensByDay == nil {
+					stats.TokensByDay = map[string]int{}
+				}
+				stats.TokensByDay[day] += delta
+			}
+		}
 	}
 	if payload.Info.ModelContextWindow > 0 {
 		stats.TokensMax = payload.Info.ModelContextWindow

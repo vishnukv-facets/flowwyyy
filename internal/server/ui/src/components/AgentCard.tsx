@@ -1,5 +1,5 @@
 import { useLocation } from 'wouter'
-import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2 } from 'lucide-react'
+import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2, GitFork } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
@@ -112,6 +112,16 @@ export function AgentCard({
 
       <div className="acard-meta">
         {agent.project && <span className="tag">{agent.project}</span>}
+        {agent.forked_from_slug && (
+          <span className="tag fork-tag" title={`Forked from ${agent.forked_from?.name || agent.forked_from_slug}${agent.fork_reason ? ` · ${agent.fork_reason}` : ''}`}>
+            <GitFork size={11} /> {agent.forked_from_slug}
+          </span>
+        )}
+        {(agent.forks?.length ?? 0) > 0 && (
+          <span className="tag fork-tag" title={`Forked into ${agent.forks?.map((f) => f.name).join(', ')}`}>
+            <GitFork size={11} /> forks {agent.forks?.length}
+          </span>
+        )}
         <span className="row" style={{ gap: 5 }}>
           <GitBranch size={12} /> <span className="mono clip" style={{ maxWidth: 150 }}>{agent.branch}</span>
         </span>

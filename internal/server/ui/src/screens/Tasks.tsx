@@ -463,6 +463,8 @@ function TaskRow({
 
   const childCount = task.children?.length ?? 0
   const parentName = task.parent?.name || task.parent_slug
+  const forkedFrom = task.forked_from?.name || task.forked_from_slug
+  const forkCount = task.forks?.length ?? 0
 
   return (
     <tr className={selected ? 'row-selected' : ''} {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
@@ -519,8 +521,18 @@ function TaskRow({
         </div>
       </td>
       <td>
-        {parentName || childCount > 0 ? (
+        {parentName || childCount > 0 || forkedFrom || forkCount > 0 ? (
           <div className="cell-deps">
+            {forkedFrom && (
+              <span className="dep-chip fork" title={`Forked from ${forkedFrom}${task.fork_reason ? ` · ${task.fork_reason}` : ''}`}>
+                <GitFork size={11} /> <span className="clip">{forkedFrom}</span>
+              </span>
+            )}
+            {forkCount > 0 && (
+              <span className="dep-chip fork" title={`Forked into ${task.forks?.map((f) => f.name).join(', ')}`}>
+                <GitFork size={11} /> forks {forkCount}
+              </span>
+            )}
             {parentName && (
               <span className="dep-chip depends" title={`Depends on ${parentName}`}>
                 <CornerLeftUp size={11} /> <span className="clip">{parentName}</span>
