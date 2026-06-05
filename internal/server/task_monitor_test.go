@@ -2,6 +2,8 @@ package server
 
 import (
 	"database/sql"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +62,75 @@ func TestRespawnGate(t *testing.T) {
 	var nilGate *respawnGate
 	if !nilGate.allow("x") {
 		t.Fatal("nil gate should allow")
+	}
+}
+
+// TestWakeSharedTaskInjectsIntoTmux covers the restart-gap wake fix: when no
+// browser PTY is attached (e.g. right after a `flow ui serve` restart) but the
+// agent is still alive in its detached tmux session, the wake must be injected
+// straight into tmux via send-keys — bracketed paste then a delayed Enter,
+// mirroring wakeTask. An unknown slug (no tmux session) must NOT claim a wake.
+func TestWakeSharedTaskInjectsIntoTmux(t *testing.T) {
+	oldLook, oldCmd := sharedTerminalLookPath, sharedTerminalCommand
+	resetSharedTerminalAvailable()
+	t.Cleanup(func() {
+		sharedTerminalLookPath = oldLook
+		sharedTerminalCommand = oldCmd
+		resetSharedTerminalAvailable()
+	})
+	sharedTerminalLookPath = func(string) (string, error) { return "/usr/bin/tmux", nil }
+
+	live := sharedTerminalSessionName("my-task") // the only session that "exists"
+	var mu sync.Mutex
+	var cmds [][]string
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		mu.Lock()
+		cmds = append(cmds, append([]string(nil), args...))
+		mu.Unlock()
+		if len(args) > 0 && args[0] == "has-session" {
+			if args[len(args)-1] == live {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		return nil, nil
+	}
+
+	h := &terminalHub{}
+
+	if !h.wakeSharedTask("my-task", "wake up: 2 new events") {
+		t.Fatal("wakeSharedTask should return true when the tmux session exists")
+	}
+
+	wantPaste := "\x1b[200~wake up: 2 new events\x1b[201~"
+	pasteSeen, enterSeen := false, false
+	deadline := time.Now().Add(2 * time.Second) // wait for the delayed (250ms) Enter
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		for _, c := range cmds {
+			if len(c) == 5 && c[0] == "send-keys" && c[2] == live && c[3] == "-l" && c[4] == wantPaste {
+				pasteSeen = true
+			}
+			if len(c) == 4 && c[0] == "send-keys" && c[2] == live && c[3] == "Enter" {
+				enterSeen = true
+			}
+		}
+		done := pasteSeen && enterSeen
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !pasteSeen {
+		t.Error("expected a bracketed-paste send-keys carrying the wake prompt")
+	}
+	if !enterSeen {
+		t.Error("expected a delayed Enter send-keys to submit the prompt")
+	}
+
+	if h.wakeSharedTask("ghost-task", "nope") {
+		t.Error("wakeSharedTask should return false when no tmux session exists for the slug")
 	}
 }
 

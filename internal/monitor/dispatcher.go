@@ -36,6 +36,15 @@ type TaskOpener interface {
 	OpenInUI(slug string) error
 }
 
+// MessageObserver observes messages the reaction pipeline does not own
+// (untracked threads). The steering cascade implements it. It lives in this
+// package — not steering — so Dispatcher can hold one without an import
+// cycle (steering already imports monitor). *steering.Cascade satisfies it
+// structurally.
+type MessageObserver interface {
+	Observe(ctx context.Context, ev InboundEvent) error
+}
+
 // Dispatcher routes parsed InboundEvents into flow tasks. It is the
 // integration layer between the side-effect-free DecideReaction and the
 // actual filesystem / database / process effects (flow spawn, inbox
@@ -44,8 +53,9 @@ type TaskOpener interface {
 // All side-effect operations live behind package-level function vars or
 // the Opener interface so tests can swap in pure-Go fakes.
 type Dispatcher struct {
-	DB     *sql.DB
-	Opener TaskOpener
+	DB      *sql.DB
+	Opener  TaskOpener
+	Steerer MessageObserver // optional: routes untracked messages into the steering cascade
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -118,17 +128,95 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 			return fmt.Errorf("monitor: lookup task by thread key: %w", err)
 		}
 		if found {
-			return AppendInboxEvent(slug, ev)
+			if err := AppendInboxEvent(slug, ev); err != nil {
+				return err
+			}
+			if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
+				fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (reply from %s)\n", slug, ev.UserID)
+			}
+			return nil
+		}
+	}
+	// Cross-conversation correlation: the message arrived somewhere untracked,
+	// but it forwards/shares (or unfurls) a message from a thread a task DOES
+	// track. The classic case — a teammate answers a #channel-thread question by
+	// forwarding it into a DM. The shared-message attachment points back at the
+	// original thread, so route this reply as activity on the tracked thread:
+	// wake the session and clear its waiting_on, exactly like an in-thread reply.
+	if ref, ok := ev.SharedRef(); ok {
+		if d.routeViaSharedRef(ev, ref) {
+			return nil
 		}
 	}
 	// DMs are monitored as threads too: when the agent opens or replies in a DM,
 	// the tool-use hook registers slack-thread:<dm-channel>:<thread_ts> on the
 	// task, so a DM message routes through the thread match above — scoped to the
-	// specific conversation, not the whole DM channel (which would pull in every
-	// unrelated topic the operator discusses with that person).
+	// specific conversation, not the whole DM channel.
 	//
-	// Untracked conversation — we haven't been asked to handle it.
+	// Untracked conversation — not owned by the reaction pipeline. Hand it to the
+	// steerer (if wired) to triage; Stage 0 inside the cascade decides whether
+	// it's even in scope. A nil steerer (CLI contexts) drops it as before.
+	if d.Steerer != nil {
+		return d.Steerer.Observe(ctx, ev)
+	}
 	return nil
+}
+
+// routeViaSharedRef tries to deliver a forwarded/shared message to the task that
+// tracks the *original* thread. It probes the ref's candidate thread keys (parent
+// first, then the exact shared message) and, on the first task hit, appends the
+// carrier event to that task's inbox (waking it with the new context) and clears
+// any waiting_on the external reply resolves. Returns whether it routed. Pure
+// tag lookups — a miss is a safe no-op (the caller falls through to the steerer).
+func (d *Dispatcher) routeViaSharedRef(ev InboundEvent, ref SharedRef) bool {
+	for _, key := range ref.ThreadKeys() {
+		slug, found, err := d.findTaskByThreadKey(key)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: shared-ref lookup %s: %v\n", key, err)
+			continue
+		}
+		if !found {
+			continue
+		}
+		if err := AppendInboxEvent(slug, ev); err != nil {
+			fmt.Fprintf(os.Stderr, "monitor: shared-ref inbox append %s: %v\n", slug, err)
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "monitor: routed forwarded message to %s via shared-ref thread %s (from %s)\n", slug, key, ev.Channel)
+		if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
+			fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (forwarded reply from %s)\n", slug, ev.UserID)
+		}
+		return true
+	}
+	return false
+}
+
+// autoResolveWaitingOn clears a tracked task's waiting_on when an external reply
+// arrives — the thing the operator was blocked on has activity, so the wait is
+// resolved (Phase 2 loop-closing). No-op when: the DB is nil, the gate
+// FLOW_STEERING_AUTO_RESOLVE_WAITING is off, the reply is from a bot/system (no
+// author) or from the operator themselves, or the task has no waiting note.
+// Returns whether a note was actually cleared. selfIDs is the operator's
+// identity on this connector (Slack user IDs / GitHub logins).
+func autoResolveWaitingOn(db *sql.DB, slug, authorID string, selfIDs []string) bool {
+	if db == nil || !envBoolDefault("FLOW_STEERING_AUTO_RESOLVE_WAITING", true) {
+		return false
+	}
+	authorID = strings.TrimSpace(authorID)
+	if authorID == "" {
+		return false
+	}
+	for _, s := range selfIDs {
+		if strings.EqualFold(strings.TrimSpace(s), authorID) {
+			return false // the operator's own message doesn't resolve their wait
+		}
+	}
+	cleared, err := flowdb.ClearTaskWaitingOn(db, slug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: auto-resolve waiting_on %s: %v\n", slug, err)
+		return false
+	}
+	return cleared
 }
 
 func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, err error) {
@@ -136,7 +224,10 @@ func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, e
 		return "", false, nil
 	}
 	tag := flowdb.NormalizeTag(SlackThreadTagPrefix + key)
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag})
+	// IncludeArchived: an archived task still tracks its thread — route replies
+	// (incl. forwarded ones) to it rather than spawning a duplicate. Archive is
+	// an active-list declutter, not a stop-tracking signal.
+	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}
@@ -343,7 +434,7 @@ notifications. The first line of each inbox entry is the parsed event;
 fetch full thread history via the Slack MCP if you need more context
 than the event payload carries.
 
-**Classifying inbox events.** For each inbox entry, compare ` + "`event.user_id`" + ` against
+**Classifying inbox events.** For each inbox entry, compare `+"`event.user_id`"+` against
 the operator IDs listed above. Events authored by the operator are
 coordination signals from the human you work with — read them, let them
 adjust your plan, but **do not treat them as external follow-ups that

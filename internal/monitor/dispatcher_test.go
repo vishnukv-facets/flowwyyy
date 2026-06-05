@@ -655,3 +655,55 @@ func getenv(t *testing.T, name string) string {
 	t.Helper()
 	return strings.TrimSpace(os.Getenv(name))
 }
+
+// fakeSteerer records the events handed to it, for asserting routing.
+type fakeSteerer struct{ events []InboundEvent }
+
+func (f *fakeSteerer) Observe(_ context.Context, ev InboundEvent) error {
+	f.events = append(f.events, ev)
+	return nil
+}
+
+func TestDispatcher_UntrackedMessageRoutesToSteerer(t *testing.T) {
+	db := dispatcherTestDB(t)
+	d := NewDispatcher(db, nil)
+	fs := &fakeSteerer{}
+	d.Steerer = fs
+
+	msg := InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_new", TS: "1.1", ThreadTS: "1.1", UserID: "U_other", Text: "anyone around?"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(fs.events) != 1 {
+		t.Fatalf("steerer Observe should be called once for an untracked message, got %d", len(fs.events))
+	}
+}
+
+func TestDispatcher_TrackedMessageNotSteered(t *testing.T) {
+	db := dispatcherTestDB(t)
+	seedSlackTask(t, db, "live-thread", "C_live:5.0")
+	d := NewDispatcher(db, nil)
+	fs := &fakeSteerer{}
+	d.Steerer = fs
+
+	msg := InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_live", TS: "5.1", ThreadTS: "5.0", UserID: "U_other", Text: "reply in tracked thread"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(fs.events) != 0 {
+		t.Errorf("tracked-thread message must NOT be steered (it goes to inbox), steerer got %d", len(fs.events))
+	}
+	entries, _ := ReadInboxEntries("live-thread")
+	if len(entries) != 1 {
+		t.Errorf("tracked message should append to the task inbox, got %d entries", len(entries))
+	}
+}
+
+func TestDispatcher_NilSteererDropsUntracked(t *testing.T) {
+	db := dispatcherTestDB(t)
+	d := NewDispatcher(db, nil) // Steerer left nil (CLI context)
+	msg := InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_x", TS: "2.1", ThreadTS: "2.1", UserID: "U_other", Text: "hi"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch with nil steerer must be a no-op, got %v", err)
+	}
+}

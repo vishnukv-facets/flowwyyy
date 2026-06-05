@@ -81,6 +81,8 @@ func Run(args []string) int {
 		return cmdTell(rest)
 	case "wait":
 		return cmdWait(rest)
+	case "attention":
+		return cmdAttention(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
@@ -118,6 +120,8 @@ Read:
   flow list tasks    [--status ...] [--project ...] [--priority ...] [--tag <t>] [--since ...] [--include-archived] [--include-deleted|--deleted]
   flow list projects [--status ...] [--include-archived] [--include-deleted|--deleted]
   flow list tags                                            (every tag in use, with per-tag task counts)
+  flow attention list  [--status new|acted|dismissed|all]   (review the attention-router feed)
+  flow attention act   <id> <make-task|forward|dismiss>
 
 Edit / mutate:
   flow edit        <ref>

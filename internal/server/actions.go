@@ -44,6 +44,20 @@ type actionRequest struct {
 	PermissionMode string `json:"permission_mode"`
 	Mkdir          bool   `json:"mkdir"`
 
+	// AttentionAction is the verb for the attention-act action kind:
+	// make-task | forward | dismiss | send-reply. Target carries the feed item id.
+	AttentionAction string `json:"attention_action,omitempty"`
+
+	// ReplyText is the operator's edited draft for the send-reply attention
+	// action. Empty falls back to the feed item's stored Draft.
+	ReplyText string `json:"reply_text,omitempty"`
+
+	// ReplyInstructions is optional extra guidance for the sending agent on the
+	// send-reply action ("make it shorter", "also ask about the timeline"). When
+	// present, the agent revises the draft per these instructions before posting;
+	// empty means post the draft as-is.
+	ReplyInstructions string `json:"reply_instructions,omitempty"`
+
 	// Settings carries key→value pairs for the update-settings action.
 	Settings map[string]string `json:"settings,omitempty"`
 
@@ -189,6 +203,15 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "archived " + target, Output: out}, http.StatusOK
+	case "unarchive":
+		if err := validateSlug(target); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		out, err := s.runFlowCommand("unarchive", target)
+		if err != nil {
+			return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "unarchived " + target, Output: out}, http.StatusOK
 	case "done":
 		if err := validateSlug(target); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
@@ -269,6 +292,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.closeFloatingTerminal(req)
 	case "update-settings":
 		return s.updateSettings(req)
+	case "attention-act":
+		return s.attentionAct(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}

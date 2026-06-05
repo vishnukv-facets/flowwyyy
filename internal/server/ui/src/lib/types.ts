@@ -336,6 +336,13 @@ export interface ActivityDay {
 export interface TokenDay {
   date: string
   tokens: number
+  task_count?: number
+  tasks?: TokenTask[]
+}
+
+export interface TokenTask {
+  name: string
+  tokens: number
 }
 
 export interface QuoteView {
@@ -558,4 +565,89 @@ export interface ActionRequest {
   provider?: string
   permission_mode?: string
   mkdir?: boolean
+  attention_action?: string
+  reply_text?: string
+  reply_instructions?: string
+}
+
+export interface AttentionItem {
+  id: string
+  source: string
+  thread_key: string
+  summary: string
+  suggested_action: string
+  matched_task?: string
+  suggested_project?: string
+  suggested_priority?: string
+  urgency?: string
+  is_vip: boolean
+  confidence: number
+  draft?: string
+  reason?: string
+  status: string
+  retriaging?: boolean
+  created_at: string
+  acted_at?: string
+  linked_task?: string
+  // Resolved origin fields (no raw IDs) — where the message came from + a link.
+  channel?: string
+  channel_type?: string
+  channel_name?: string // "#general" (slack), "owner/repo" (github), or "DM · Name" / "Direct message"
+  author?: string
+  author_name?: string // resolved display name / GitHub login
+  permalink?: string // slack:// deep link OR https GitHub URL
+}
+
+export interface SteeringFunnel {
+  observed: number
+  dropped_stage0: number
+  dropped_cache: number
+  dropped_stage1: number
+  dropped_stage2: number
+  surfaced: number
+  errors: number
+}
+export interface SteeringTrace {
+  id: string
+  created_at: string
+  origin: string
+  source: string
+  channel?: string
+  channel_type?: string
+  author?: string
+  thread_key?: string
+  text_preview?: string
+  // Resolved, human-readable fields from the server (no raw IDs):
+  channel_name?: string // "#general" (slack) or "owner/repo" (github)
+  author_name?: string // display name (slack) or login (github)
+  text?: string // full message text, @mentions resolved to names
+  permalink?: string // slack:// deep link, or the GitHub URL
+  ts?: string
+  team_id?: string
+  url?: string
+  disposition: string
+  stage_reached: string
+  drop_reason?: string
+  stage1_relevant?: boolean
+  stage2_action?: string
+  stage2_confidence?: number
+  stage3_action?: string
+  stage3_confidence?: number
+  final_action?: string
+  final_confidence?: number
+  feed_item_id?: string
+  error?: string
+  latency_ms: number
+  model?: string
+}
+export interface AttentionTraceResponse {
+  funnel: SteeringFunnel
+  items: SteeringTrace[]
+}
+
+export interface SlackChannel {
+  id: string
+  name: string
+  is_private: boolean
+  is_member: boolean
 }

@@ -195,6 +195,16 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	if s.terminals != nil && s.terminals.running(slug) {
 		return s.terminals.wakeTask(slug, formatInboxWakePrompt(slug, entries))
 	}
+	// No browser PTY is attached in this server process, but the agent may still
+	// be alive in its detached tmux session — the common case right after a
+	// `flow ui serve` restart, since the tmux session outlives the server. Wake
+	// it straight through tmux so it fires even with no UI client attached.
+	// Without this, a still-live flow session is indistinguishable from a native
+	// (user-owned) one below and the wake is silently dropped while the cursor
+	// advances past the event.
+	if s.terminals != nil && s.terminals.wakeSharedTask(slug, formatInboxWakePrompt(slug, entries)) {
+		return nil
+	}
 	task, err := flowdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return nil // task gone — nothing to deliver to

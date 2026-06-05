@@ -118,8 +118,20 @@ type uiActivityDay struct {
 // uiTokenDay is one day of the token-cost-over-time trend: fresh "work" tokens
 // (cache-excluded, same basis as TokensSession) summed across every tracked
 // session active that day. Aligned to the same 12-week window as the heatmap.
+// Tasks carries the per-task breakdown (top contributors by tokens) so the
+// activity bar tooltip can show which task burned how many tokens; TaskCount is
+// the total number of tasks that contributed, so the tooltip can render
+// "+N more" when the list is truncated.
 type uiTokenDay struct {
-	Date   string `json:"date"`
+	Date      string        `json:"date"`
+	Tokens    int           `json:"tokens"`
+	TaskCount int           `json:"task_count,omitempty"`
+	Tasks     []uiTokenTask `json:"tasks,omitempty"`
+}
+
+// uiTokenTask is one task's token contribution on a single day.
+type uiTokenTask struct {
+	Name   string `json:"name"`
 	Tokens int    `json:"tokens"`
 }
 
@@ -1385,6 +1397,9 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 	start := thisWeekSunday.AddDate(0, 0, -77) // 11 prior weeks + this week = 12
 	days := make([]uiTokenDay, 84)
 	index := make(map[string]int, len(days))
+	// perTask[dayIndex][taskLabel] = fresh work tokens that task burned that day,
+	// for the activity bar's per-task tooltip breakdown.
+	perTask := make([]map[string]int, 84)
 	for i := range days {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		days[i] = uiTokenDay{Date: date}
@@ -1418,11 +1433,46 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 		if err != nil {
 			continue
 		}
-		for day, tok := range entry.usage.TokensByDay {
-			if i, ok := index[day]; ok {
-				days[i].Tokens += tok
-			}
+		label := strings.TrimSpace(tv.Name)
+		if label == "" {
+			label = tv.Slug
 		}
+		for day, tok := range entry.usage.TokensByDay {
+			i, ok := index[day]
+			if !ok || tok <= 0 {
+				continue
+			}
+			days[i].Tokens += tok
+			if perTask[i] == nil {
+				perTask[i] = map[string]int{}
+			}
+			perTask[i][label] += tok
+		}
+	}
+	// Finalize each day's per-task breakdown: total contributing tasks plus the
+	// top contributors (by tokens) for the tooltip. Cap matches the heatmap's
+	// 5-task tooltip list; TaskCount drives the "+N more" affordance.
+	const topN = 5
+	for i := range days {
+		byTask := perTask[i]
+		if len(byTask) == 0 {
+			continue
+		}
+		ranked := make([]uiTokenTask, 0, len(byTask))
+		for name, tok := range byTask {
+			ranked = append(ranked, uiTokenTask{Name: name, Tokens: tok})
+		}
+		sort.Slice(ranked, func(a, b int) bool {
+			if ranked[a].Tokens != ranked[b].Tokens {
+				return ranked[a].Tokens > ranked[b].Tokens
+			}
+			return ranked[a].Name < ranked[b].Name
+		})
+		days[i].TaskCount = len(ranked)
+		if len(ranked) > topN {
+			ranked = ranked[:topN]
+		}
+		days[i].Tasks = ranked
 	}
 	return days
 }

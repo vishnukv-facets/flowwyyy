@@ -108,6 +108,15 @@ an intent, follow the matching recipe instead of re-asking via §1a.
   skill) via the `Write` tool when the user asks you to save a note. They
   are not in the database. They are permanent — archiving a task never
   deletes them.
+- **Brief vs current state.** A task's `brief.md` keeps the *original ask*
+  (What / Why / Done when) at the top — never churn that. But once work is
+  under way the brief goes stale unless you refresh its **Current state**: a
+  terse 1–3 line snapshot of where things actually stand right now. Two
+  distinct surfaces: `updates/` is append-only **history** (the full notes);
+  the brief's Current state is the latest **snapshot**, overwritten in place.
+  Refresh it with `flow update task <slug> --brief-status "<1–3 lines>"` (see
+  §4.5) so a resumed session or a human reading the brief alone sees reality,
+  not the day-one ask.
 - **Status is 3 values.** `backlog`, `in-progress`, `done`. There is no
   `blocked` state anymore. If the user is waiting on something or
   someone, set `waiting_on` (see §5.6).
@@ -217,6 +226,7 @@ Edit / mutate
                             [--parent <task>] [--clear-parent]
                             [--waiting "<who or what>"] [--clear-waiting]
                             [--project <slug>] [--clear-project]
+                            [--brief-status "<1–3 lines>"]   (refresh brief Current state; "-" = stdin)
   flow update project <ref> [--priority high|medium|low]
   flow update playbook <ref> [--slug <s>] [--name <n>] [--work-dir <path>] [--mkdir]
                              [--project <slug>] [--clear-project]
@@ -734,7 +744,21 @@ that…", "record that I…", "document that I just…".
    `~/.flow/projects/<slug>/updates/` instead.
 6. Confirm to the user: "saved: <absolute path>".
 
-Do NOT run any `flow` command for this — updates are just files.
+Do NOT run any `flow` command to write the note itself — updates are just files.
+
+**Then refresh the brief's Current state** when the situation actually
+changed (scope shifted, a blocker appeared or cleared, a milestone landed):
+
+```bash
+flow update task <slug> --brief-status "Blocked on deploy-role perms; selective release retried, awaiting Omendra."
+```
+
+This overwrites the brief's machine-maintained Current state block (a terse
+1–3 line snapshot — NOT a copy of the note). Keep it to a few lines; if it
+needs more, that belongs in the `updates/` note, not the brief. Always
+refresh it before going idle, when handing the task off, and on `flow done`,
+so the brief never goes stale. Skip it for notes that don't change the
+overall state. (Runs are tasks — same command works for a run slug.)
 
 ### 4.6 Waiting on someone
 

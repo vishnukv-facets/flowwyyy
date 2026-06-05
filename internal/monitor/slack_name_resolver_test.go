@@ -58,6 +58,46 @@ func (c *countingNameClient) UserInfo(_ context.Context, userID string) (SlackUs
 	return u, nil
 }
 
+func TestSlackNameResolverWarmDedupesAndCaches(t *testing.T) {
+	client := newCountingNameClient()
+	client.users["U1"] = SlackUser{ID: "U1", DisplayName: "Vishnu"}
+	client.chans["C1"] = SlackConversation{ID: "C1", Name: "general", IsChannel: true}
+	r := NewSlackNameResolverWithClient(client)
+
+	// Duplicate IDs in the warm set must each resolve exactly once.
+	r.Warm(context.Background(), []string{"U1", "U1", ""}, []string{"C1", "C1", ""})
+
+	if client.userCalls["U1"] != 1 {
+		t.Fatalf("U1 user calls = %d, want 1 (deduped)", client.userCalls["U1"])
+	}
+	if client.chanCalls["C1"] != 1 {
+		t.Fatalf("C1 chan calls = %d, want 1 (deduped)", client.chanCalls["C1"])
+	}
+	// After warming, name lookups are cache hits — no further API calls.
+	if got := r.UserName(context.Background(), "U1"); got != "Vishnu" {
+		t.Fatalf("UserName = %q, want Vishnu", got)
+	}
+	if got := r.ChannelName(context.Background(), "C1"); got != "#general" {
+		t.Fatalf("ChannelName = %q, want #general", got)
+	}
+	if client.userCalls["U1"] != 1 || client.chanCalls["C1"] != 1 {
+		t.Fatalf("post-warm lookups hit the API: userCalls=%d chanCalls=%d, want 1/1",
+			client.userCalls["U1"], client.chanCalls["C1"])
+	}
+	// Warming an already-cached set is a no-op (no extra calls).
+	r.Warm(context.Background(), []string{"U1"}, []string{"C1"})
+	if client.userCalls["U1"] != 1 || client.chanCalls["C1"] != 1 {
+		t.Fatalf("re-warm hit the API: userCalls=%d chanCalls=%d, want 1/1",
+			client.userCalls["U1"], client.chanCalls["C1"])
+	}
+}
+
+// TestSlackNameResolverWarmNil ensures Warm is nil-safe (no token → nil resolver).
+func TestSlackNameResolverWarmNil(t *testing.T) {
+	var r *SlackNameResolver
+	r.Warm(context.Background(), []string{"U1"}, []string{"C1"}) // must not panic
+}
+
 func TestSlackNameResolverUserNameResolvesAndCaches(t *testing.T) {
 	client := newCountingNameClient()
 	client.users["U1"] = SlackUser{ID: "U1", DisplayName: "Vishnu", RealName: "Vishnu KV"}
@@ -163,5 +203,21 @@ func TestSlackNameResolverTTLExpiry(t *testing.T) {
 	_ = r.UserName(context.Background(), "U1")
 	if client.userCalls["U1"] != 2 {
 		t.Fatalf("UserInfo called %d times, want 2 (cache should expire past TTL)", client.userCalls["U1"])
+	}
+}
+
+func TestMentionedUserIDs(t *testing.T) {
+	got := MentionedUserIDs("hi <@U123> and <@U456|alice>, ping <@U123> again")
+	want := []string{"U123", "U456"} // distinct, order-preserving
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d]=%q, want %q", i, got[i], want[i])
+		}
+	}
+	if MentionedUserIDs("no mentions here") != nil {
+		t.Error("text with no mentions should return nil")
 	}
 }

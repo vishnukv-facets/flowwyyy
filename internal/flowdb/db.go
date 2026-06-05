@@ -144,6 +144,81 @@ CREATE TABLE IF NOT EXISTS search_docs (
     updated_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS attention_feed (
+    id                 TEXT PRIMARY KEY,
+    source             TEXT NOT NULL,
+    thread_key         TEXT NOT NULL,
+    summary            TEXT NOT NULL DEFAULT '',
+    suggested_action   TEXT NOT NULL,
+    matched_task       TEXT,
+    suggested_project  TEXT,
+    suggested_priority TEXT,
+    urgency            TEXT,
+    is_vip             INTEGER NOT NULL DEFAULT 0,
+    confidence         REAL NOT NULL DEFAULT 0,
+    draft              TEXT,
+    reason             TEXT,
+    context_json       TEXT,
+    channel            TEXT,
+    channel_type       TEXT,
+    author             TEXT,
+    ts                 TEXT,
+    team_id            TEXT,
+    url                TEXT,
+    status             TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acted','dismissed','snoozed','deferred')),
+    snooze_until       TEXT,
+    linked_task        TEXT,
+    retriaging_at      TEXT,
+    created_at         TEXT NOT NULL,
+    acted_at           TEXT
+);
+
+CREATE TABLE IF NOT EXISTS steering_trace (
+    id                TEXT PRIMARY KEY,
+    created_at        TEXT NOT NULL,
+    origin            TEXT NOT NULL DEFAULT 'live',
+    source            TEXT NOT NULL DEFAULT '',
+    channel           TEXT,
+    channel_type      TEXT,
+    author            TEXT,
+    thread_key        TEXT,
+    text_preview      TEXT,
+    disposition       TEXT NOT NULL,
+    stage_reached     TEXT NOT NULL,
+    drop_reason       TEXT,
+    stage1_relevant   INTEGER,
+    stage2_action     TEXT,
+    stage2_confidence REAL,
+    stage3_action     TEXT,
+    stage3_confidence REAL,
+    final_action      TEXT,
+    final_confidence  REAL,
+    feed_item_id      TEXT,
+    error             TEXT,
+    latency_ms        INTEGER NOT NULL DEFAULT 0,
+    model             TEXT,
+    ts                TEXT,
+    team_id           TEXT,
+    url               TEXT
+);
+
+-- Operator-set permanent suppressions for the attention router. scope is
+-- 'channel' (Slack channel id / owner/repo), 'author' (Slack user id / GitHub
+-- login), or 'thread' (a thread key). Stage 0 drops any event matching a row
+-- here, so "perma drop" from a feed card takes effect on the next event.
+CREATE TABLE IF NOT EXISTS steering_mutes (
+    scope      TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (scope, value)
+);
+
+CREATE TABLE IF NOT EXISTS steering_watermark (
+    channel    TEXT PRIMARY KEY,
+    last_ts    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
 -- enormous (whole-session JSONL — ~100x the size of all briefs/updates/memories
 -- combined) and searched only on demand, so they live in their own index:
@@ -202,8 +277,14 @@ CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
+CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
+CREATE INDEX IF NOT EXISTS idx_attention_feed_thread ON attention_feed(thread_key);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
 `
 
 // indexesPostMigrate are indexes that depend on columns added by
@@ -703,6 +784,22 @@ func NowISO() string {
 	return time.Now().Format(time.RFC3339)
 }
 
+// ClearTaskWaitingOn clears a task's waiting_on note (Phase 2 loop-closing: a
+// reply arrived on a task you were blocked on, so the wait is resolved). Returns
+// true only when a non-empty note was actually cleared, so callers can log/notify
+// just on a real transition.
+func ClearTaskWaitingOn(db *sql.DB, slug string) (bool, error) {
+	res, err := db.Exec(
+		`UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE slug=? AND waiting_on IS NOT NULL AND TRIM(waiting_on) != ''`,
+		NowISO(), slug,
+	)
+	if err != nil {
+		return false, fmt.Errorf("flowdb: clear waiting_on %q: %w", slug, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // NullIfEmpty returns a *string pointing to s, or nil if s is empty.
 func NullIfEmpty(s string) any {
 	if s == "" {
@@ -851,6 +948,109 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN status_changed_at TEXT`); err != nil {
 			return fmt.Errorf("add tasks.status_changed_at: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "steering_trace", "ts")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN ts TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.ts: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "team_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN team_id TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.team_id: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "url")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN url TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.url: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "attention_feed", "linked_task")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN linked_task TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.linked_task: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "attention_feed", "channel")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.channel: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "channel_type")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel_type TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.channel_type: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "author")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN author TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.author: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "ts")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN ts TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.ts: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "team_id")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN team_id TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.team_id: %w", err)
+		}
+	}
+	has, err = columnExists(db, "attention_feed", "url")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN url TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.url: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "attention_feed", "retriaging_at")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN retriaging_at TEXT`); err != nil {
+			return fmt.Errorf("add attention_feed.retriaging_at: %w", err)
 		}
 	}
 

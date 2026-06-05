@@ -357,7 +357,7 @@ func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmod
 			return
 		}
 		l.logFn("events_api: type=%s inner=%T", payload.Type, payload.InnerEvent.Data)
-		l.handleEventsAPI(ctx, payload)
+		l.handleEventsAPI(ctx, payload, rawPayloadOf(evt))
 		// Ack AFTER dispatch — if we crash before this line, Slack will
 		// redeliver the event within its retry window.
 		if evt.Request != nil {
@@ -370,7 +370,7 @@ func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmod
 	}
 }
 
-func (l *SlackListener) handleEventsAPI(ctx context.Context, event slackevents.EventsAPIEvent) {
+func (l *SlackListener) handleEventsAPI(ctx context.Context, event slackevents.EventsAPIEvent, raw []byte) {
 	mentionUsers := SlackMentionUserIDs()
 	events := ParseEventsAPIEvent(event, mentionUsers)
 	if len(events) == 0 {
@@ -380,7 +380,16 @@ func (l *SlackListener) handleEventsAPI(ctx context.Context, event slackevents.E
 		l.logFn("parser produced no InboundEvent for inner type %T (subtype check or missing fields?)", event.InnerEvent.Data)
 		return
 	}
+	// A forwarded/shared message carries a pointer to the original message in
+	// attachments[] — data slack-go's typed event drops. Recover it from the raw
+	// payload and stamp it onto the parsed message events so the dispatcher can
+	// correlate a cross-conversation reply back to the thread a task tracks.
+	ref, hasRef := parseSharedRef(raw)
 	for _, ev := range events {
+		if hasRef && (ev.Kind == "message" || ev.Kind == "app_mention") {
+			ev.RefChannel, ev.RefThreadTS, ev.RefTS = ref.Channel, ref.ThreadTS, ref.TS
+			l.logFn("inbound carries shared-ref → channel=%s thread_ts=%s ts=%s", ref.Channel, ref.ThreadTS, ref.TS)
+		}
 		// One concise summary per parsed event — channel/ts/thread_ts/reactor/reaction —
 		// so we can correlate Slack-side state with what our pipeline saw.
 		l.logFn("inbound kind=%s channel=%s ts=%s thread_ts=%s user=%s reaction=%s item_ts=%s",
@@ -437,9 +446,19 @@ func (l *SlackListener) handleSocketEventMock(ctx context.Context, ack func(sock
 			}
 			return
 		}
-		l.handleEventsAPI(ctx, payload)
+		l.handleEventsAPI(ctx, payload, rawPayloadOf(evt))
 		if evt.Request != nil {
 			ack(*evt.Request)
 		}
 	}
+}
+
+// rawPayloadOf returns the raw Socket Mode payload bytes for an event, or nil
+// when none are attached (e.g. synthetic test events with no Request). These
+// bytes carry attachment data that slack-go's typed structs drop.
+func rawPayloadOf(evt socketmode.Event) []byte {
+	if evt.Request == nil {
+		return nil
+	}
+	return evt.Request.Payload
 }

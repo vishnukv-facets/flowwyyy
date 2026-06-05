@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -159,6 +160,39 @@ func TestGitHubDispatcher_ReviewCommentAppendsToTrackedPR(t *testing.T) {
 	}
 	if entries[0].Event.Kind != string(GitHubEventPRReviewComment) || entries[0].Event.Text != ev.Body {
 		t.Fatalf("entry event = %+v", entries[0].Event)
+	}
+}
+
+// Regression: a new comment on an ARCHIVED but still-open PR must route to the
+// existing task (append to its inbox), NOT spawn a duplicate. Archiving only
+// declutters the active list; routing still tracks the thread.
+func TestGitHubDispatcher_ReviewCommentRoutesToArchivedPR(t *testing.T) {
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "archived-pr", db, "gh-pr:Facets-cloud/flow-manager#77")
+	if _, err := db.Exec(`UPDATE tasks SET archived_at=?, updated_at=? WHERE slug='archived-pr'`, flowdb.NowISO(), flowdb.NowISO()); err != nil {
+		t.Fatalf("archive task: %v", err)
+	}
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewComment, Owner: "Facets-cloud", Repo: "flow-manager", Number: 77,
+		CommentID: "PRRC_arch", Author: "reviewer", Body: "feedback addressed; re-review please",
+		URL: "https://github.com/Facets-cloud/flow-manager/pull/77#discussion_r9", EventKey: "review-comment:PRRC_arch",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 0 {
+		t.Errorf("must NOT spawn a duplicate task for an archived PR, spawned %d", len(*spawns))
+	}
+	entries, err := ReadInboxEntries("archived-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("archived PR inbox entries = %d, want 1 (routed to existing task)", len(entries))
 	}
 }
 
@@ -568,5 +602,120 @@ func TestGitHubDispatcher_MergedPRMarksTrackedTaskDone(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Event.Kind != string(GitHubEventPRMerged) {
 		t.Fatalf("entries = %#v", entries)
+	}
+}
+
+// recordingObserver captures every InboundEvent handed to it (the steering
+// cascade implements MessageObserver in production).
+type recordingObserver struct {
+	events []InboundEvent
+	err    error
+}
+
+func (o *recordingObserver) Observe(_ context.Context, ev InboundEvent) error {
+	o.events = append(o.events, ev)
+	return o.err
+}
+
+// TestGitHubDispatcher_RoutesNewEventToSteerer asserts a NEW github event is
+// also handed to the steerer (trace-only parallel) AND that the existing task
+// pipeline still runs. The steerer sees the github-shaped InboundEvent.
+func TestGitHubDispatcher_RoutesNewEventToSteerer(t *testing.T) {
+	t.Setenv("FLOW_GH_AUTOOPEN", "0")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	obs := &recordingObserver{}
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = obs
+	ev := GitHubEvent{
+		Kind:     GitHubEventPRReviewRequested,
+		Owner:    "Facets-cloud",
+		Repo:     "flow-manager",
+		Number:   42,
+		Title:    "Add GitHub integration",
+		Body:     "Please review.",
+		URL:      "https://github.com/Facets-cloud/flow-manager/pull/42",
+		Author:   "octo",
+		EventKey: "pr:Facets-cloud/flow-manager#42:review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	// Existing pipeline still ran (a task was spawned).
+	if len(*spawns) != 1 {
+		t.Fatalf("spawn count = %d, want 1 (pipeline must still run)", len(*spawns))
+	}
+	// Steerer observed exactly one github-shaped event.
+	if len(obs.events) != 1 {
+		t.Fatalf("steerer observed %d events, want 1", len(obs.events))
+	}
+	got := obs.events[0]
+	if got.ChannelType != "github" || got.Channel != "Facets-cloud/flow-manager" {
+		t.Errorf("observed event = %+v, want github o/r shape", got)
+	}
+	if got.URL != "https://github.com/Facets-cloud/flow-manager/pull/42" {
+		t.Errorf("observed URL = %q", got.URL)
+	}
+}
+
+// TestGitHubDispatcher_SteererErrorDoesNotBreakPipeline confirms the steerer
+// call is best-effort: a steerer error is logged, never returned, and the task
+// pipeline still completes.
+func TestGitHubDispatcher_SteererErrorDoesNotBreakPipeline(t *testing.T) {
+	t.Setenv("FLOW_GH_AUTOOPEN", "0")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	obs := &recordingObserver{err: errors.New("steerer down")}
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = obs
+	ev := GitHubEvent{
+		Kind:     GitHubEventPRReviewRequested,
+		Owner:    "Facets-cloud",
+		Repo:     "flow-manager",
+		Number:   42,
+		URL:      "https://github.com/Facets-cloud/flow-manager/pull/42",
+		Author:   "octo",
+		EventKey: "pr:Facets-cloud/flow-manager#42:review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch must not return the steerer error: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("spawn count = %d, want 1 (pipeline must run despite steerer error)", len(*spawns))
+	}
+}
+
+// TestGitHubDispatcher_DedupSuppressesSteerer confirms an event suppressed by
+// the HasGitHubEvent dedup is NOT re-observed by the steerer (observe-once).
+func TestGitHubDispatcher_DedupSuppressesSteerer(t *testing.T) {
+	t.Setenv("FLOW_GH_AUTOOPEN", "0")
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	obs := &recordingObserver{}
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = obs
+	ev := GitHubEvent{
+		Kind:     GitHubEventPRReviewRequested,
+		Owner:    "Facets-cloud",
+		Repo:     "flow-manager",
+		Number:   42,
+		URL:      "https://github.com/Facets-cloud/flow-manager/pull/42",
+		Author:   "octo",
+		EventKey: "pr:Facets-cloud/flow-manager#42:review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("first Dispatch: %v", err)
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil { // same event key → deduped
+		t.Fatalf("second Dispatch: %v", err)
+	}
+	if len(obs.events) != 1 {
+		t.Errorf("steerer observed %d events, want 1 (dedup must suppress the repeat)", len(obs.events))
 	}
 }

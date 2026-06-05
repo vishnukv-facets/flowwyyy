@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"flow/internal/monitor"
+	"flow/internal/steering"
 )
 
 type Config struct {
@@ -30,12 +31,22 @@ type Server struct {
 	caches         *uiCaches
 	slackListener  *monitor.SlackListener
 	githubListener *monitor.GitHubListener
-	inboxMonitors  *inboxMonitorManager
+	// cascade is the steering (attention-router) triage brain the dispatcher
+	// routes untracked messages into. Held on the server so the steerer
+	// backfill (ListenAndServe) can replay catch-up messages through the SAME
+	// cascade via ObserveBatch. Nil when no DB is configured.
+	cascade       *steering.Cascade
+	inboxMonitors *inboxMonitorManager
 	dbWatcher      *dbWatcher
 	// nameResolver maps Slack user/channel IDs to display names for the
 	// Inbox UI, caching lookups across requests. Nil when no Slack token is
 	// configured; all of its methods are nil-safe.
 	nameResolver *monitor.SlackNameResolver
+	// slackPermalinker resolves (channel, message-ts) → canonical https Slack
+	// permalink via chat.getPermalink (needs only channel+ts, no team_id), so a
+	// real "Open in Slack" link works even for items captured before the
+	// channel/ts/team_id columns existed. Nil when no token; methods nil-safe.
+	slackPermalinker *monitor.SlackPermalinker
 	// monitorReconcile keeps persistent background monitors converged with the
 	// set of tasks that need one (origin/branch-linked + active), restoring
 	// them on boot and recreating any that die.
@@ -345,6 +356,85 @@ type KBFileView struct {
 	Entries  int    `json:"entries"`
 	Preview  string `json:"preview"`
 	Content  string `json:"content"`
+}
+
+// SteeringTraceView is the UI shape of a steering_trace row.
+type SteeringTraceView struct {
+	ID               string  `json:"id"`
+	CreatedAt        string  `json:"created_at"`
+	Origin           string  `json:"origin"`
+	Source           string  `json:"source"`
+	Channel          string  `json:"channel,omitempty"`
+	ChannelType      string  `json:"channel_type,omitempty"`
+	Author           string  `json:"author,omitempty"`
+	ThreadKey        string  `json:"thread_key,omitempty"`
+	TextPreview      string  `json:"text_preview,omitempty"`
+	Disposition      string  `json:"disposition"`
+	StageReached     string  `json:"stage_reached"`
+	DropReason       string  `json:"drop_reason,omitempty"`
+	Stage1Relevant   *bool   `json:"stage1_relevant,omitempty"`
+	Stage2Action     string  `json:"stage2_action,omitempty"`
+	Stage2Confidence float64 `json:"stage2_confidence,omitempty"`
+	Stage3Action     string  `json:"stage3_action,omitempty"`
+	Stage3Confidence float64 `json:"stage3_confidence,omitempty"`
+	FinalAction      string  `json:"final_action,omitempty"`
+	FinalConfidence  float64 `json:"final_confidence,omitempty"`
+	FeedItemID       string  `json:"feed_item_id,omitempty"`
+	Error            string  `json:"error,omitempty"`
+	LatencyMS        int64   `json:"latency_ms"`
+	Model            string  `json:"model,omitempty"`
+	ChannelName      string  `json:"channel_name,omitempty"`
+	AuthorName       string  `json:"author_name,omitempty"`
+	Text             string  `json:"text,omitempty"` // mentions resolved, full (not just preview)
+	Permalink        string  `json:"permalink,omitempty"`
+	TS               string  `json:"ts,omitempty"`
+	TeamID           string  `json:"team_id,omitempty"`
+	URL              string  `json:"url,omitempty"` // connector permalink (GitHub item URL, etc.)
+}
+
+// SteeringFunnelView is the funnel aggregate for the trace panel.
+type SteeringFunnelView struct {
+	Observed      int `json:"observed"`
+	DroppedStage0 int `json:"dropped_stage0"`
+	DroppedCache  int `json:"dropped_cache"`
+	DroppedStage1 int `json:"dropped_stage1"`
+	DroppedStage2 int `json:"dropped_stage2"`
+	Surfaced      int `json:"surfaced"`
+	Errors        int `json:"errors"`
+}
+
+// AttentionTraceResponse is the /api/attention/trace payload.
+type AttentionTraceResponse struct {
+	Funnel SteeringFunnelView  `json:"funnel"`
+	Items  []SteeringTraceView `json:"items"`
+}
+
+// AttentionItemView is the UI shape of an attention_feed row.
+type AttentionItemView struct {
+	ID                string  `json:"id"`
+	Source            string  `json:"source"`
+	ThreadKey         string  `json:"thread_key"`
+	Summary           string  `json:"summary"`
+	SuggestedAction   string  `json:"suggested_action"`
+	MatchedTask       string  `json:"matched_task,omitempty"`
+	SuggestedProject  string  `json:"suggested_project,omitempty"`
+	SuggestedPriority string  `json:"suggested_priority,omitempty"`
+	Urgency           string  `json:"urgency,omitempty"`
+	IsVIP             bool    `json:"is_vip"`
+	Confidence        float64 `json:"confidence"`
+	Draft             string  `json:"draft,omitempty"`
+	Reason            string  `json:"reason,omitempty"`
+	Status            string  `json:"status"`
+	LinkedTask        string  `json:"linked_task,omitempty"`
+	Retriaging        bool    `json:"retriaging,omitempty"`
+	CreatedAt         string  `json:"created_at"`
+	ActedAt           string  `json:"acted_at,omitempty"`
+	Channel           string  `json:"channel,omitempty"`
+	ChannelType       string  `json:"channel_type,omitempty"`
+	ChannelName       string  `json:"channel_name,omitempty"`
+	Author            string  `json:"author,omitempty"`
+	AuthorName        string  `json:"author_name,omitempty"`
+	Permalink         string  `json:"permalink,omitempty"`
 }
 
 type WorkdirView struct {

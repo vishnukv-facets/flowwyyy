@@ -1,0 +1,812 @@
+import { useEffect, useState, type ReactNode } from 'react'
+import { useLocation } from 'wouter'
+import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
+import { useDocumentTitle } from '../lib/useDocumentTitle'
+import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
+import { Modal } from '../components/Modal'
+import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
+import type { AttentionItem, SteeringFunnel, SteeringTrace } from '../lib/types'
+
+const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
+const VIEWS = ['feed', 'trace'] as const
+type View = (typeof VIEWS)[number]
+
+export function Attention() {
+  useDocumentTitle('Attention')
+  const [view, setView] = useState<View>('feed')
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <div className="eyebrow">attention</div>
+          <h1 className="h-xl">Attention Feed</h1>
+        </div>
+        <div className="spacer" />
+        <div className="row gap">
+          {VIEWS.map((v) => (
+            <button
+              key={v}
+              type="button"
+              className={`btn sm ${view === v ? 'primary' : 'ghost'}`}
+              onClick={() => setView(v)}
+            >
+              {v}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {view === 'feed' ? <FeedView /> : <TraceView />}
+    </div>
+  )
+}
+
+// signature of the fields a re-triage can change — used to detect when a
+// re-triaged card has actually been refreshed (so we can stop its spinner).
+const cardSig = (it: AttentionItem) =>
+  `${it.suggested_action}|${it.matched_task ?? ''}|${it.confidence}|${it.reason ?? ''}|${it.summary ?? ''}`
+
+function FeedView() {
+  const [status, setStatus] = useState<string>('new')
+  const [detail, setDetail] = useState<AttentionItem | null>(null)
+  const { data, isLoading, error } = useAttention(status)
+  const action = useAction()
+  // Cards with an in-flight re-triage → id mapped to the card signature at click
+  // time. Deep triage is async (~a minute), so we hold a spinner until the card's
+  // content actually changes (SSE refetch) or a safety timeout fires.
+  const [retriaging, setRetriaging] = useState<Record<string, string>>({})
+
+  // Stop the spinner once a re-triaged card's content has changed.
+  useEffect(() => {
+    if (Object.keys(retriaging).length === 0) return
+    setRetriaging((prev) => {
+      let changed = false
+      const next = { ...prev }
+      for (const it of data ?? []) {
+        if (next[it.id] !== undefined && next[it.id] !== cardSig(it)) {
+          delete next[it.id]
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [data]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const act = (item: AttentionItem, verb: string) => {
+    if (verb === 'retriage') {
+      if (retriaging[item.id]) return // already re-running for this card
+      setRetriaging((r) => ({ ...r, [item.id]: cardSig(item) }))
+      action.mutate({ kind: 'attention-act', target: item.id, attention_action: verb })
+      // Safety net: clear the spinner even if the verdict comes back identical.
+      window.setTimeout(
+        () => setRetriaging((r) => { const n = { ...r }; delete n[item.id]; return n }),
+        120000,
+      )
+      return
+    }
+    if (action.isPending) return
+    action.mutate({ kind: 'attention-act', target: item.id, attention_action: verb })
+  }
+
+  return (
+    <>
+      <div className="row gap" style={{ marginBottom: 16 }}>
+        {STATUSES.map((s) => (
+          <button
+            key={s}
+            type="button"
+            className={`btn sm ${status === s ? 'primary' : 'ghost'}`}
+            onClick={() => setStatus(s)}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <Loading label="loading attention feed" />
+      ) : error ? (
+        <ErrorNote error={error} />
+      ) : (data ?? []).length === 0 ? (
+        <EmptyState
+          title="Nothing needs you"
+          hint="The steerer surfaces messages worth your attention here — from watched channels, DMs, and mentions."
+        />
+      ) : (
+        <div className="att-list">
+          {(data ?? []).map((it) => (
+            <AttentionCard
+              key={it.id}
+              item={it}
+              disabled={action.isPending}
+              retriaging={!!retriaging[it.id]}
+              onAct={act}
+              onOpen={() => setDetail(it)}
+            />
+          ))}
+        </div>
+      )}
+
+      <FeedDetail item={detail} onClose={() => setDetail(null)} />
+    </>
+  )
+}
+
+// Small glyph for the origin line: a Slack channel (#) vs DM (lock/@) vs GitHub
+// repo. `channel_type` carries slack's im/mpim/channel hint when present.
+function OriginIcon({ source, channelType }: { source?: string; channelType?: string }) {
+  if (source === 'github') return <Github size={12} />
+  const isDM = channelType === 'im' || channelType === 'mpim' || channelType === 'dm'
+  if (source === 'slack') {
+    if (channelType === 'mpim') return <AtSign size={12} />
+    if (isDM) return <Lock size={12} />
+    return <Hash size={12} />
+  }
+  return <MessageSquare size={12} />
+}
+
+function AttentionCard({
+  item,
+  disabled,
+  retriaging,
+  onAct,
+  onOpen,
+}: {
+  item: AttentionItem
+  disabled: boolean
+  retriaging?: boolean
+  onAct: (item: AttentionItem, verb: string) => void
+  onOpen: () => void
+}) {
+  const urgent = item.urgency === 'urgent'
+  // Re-triage is in flight if the client just fired it OR the server says so
+  // (the server flag survives a page refresh and blocks double-firing).
+  const busy = !!retriaging || !!item.retriaging
+  const [, navigate] = useLocation()
+  const channelLabel = item.channel_name || item.channel || ''
+  const linkLabel =
+    item.source === 'slack' ? 'View in Slack' : item.source === 'github' ? 'View on GitHub' : 'Open source'
+  // Clicking the card body opens the decision detail; the origin link and the
+  // action rows stop propagation so their own onClicks don't also open it.
+  const stop = (e: { stopPropagation: () => void }) => e.stopPropagation()
+  return (
+    <div
+      className={`card att-card clickable${urgent ? ' att-urgent' : ''}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+    >
+      <div className="att-head row gap">
+        <SourceIcon source={item.source} />
+        <span className="badge accent">{item.suggested_action.replace(/_/g, ' ')}</span>
+        {item.urgency ? <span className={`badge ${urgent ? 'warn' : ''}`}>{item.urgency}</span> : null}
+        {item.is_vip ? <span className="badge info">vip</span> : null}
+        <span className="spacer" />
+        <span className="num faint" title="confidence">{Math.round(item.confidence * 100)}%</span>
+      </div>
+
+      {channelLabel || item.permalink || item.author_name ? (
+        <div className="att-origin row gap" onClick={stop}>
+          <span className="att-origin-where faint" title={channelLabel || undefined}>
+            <OriginIcon source={item.source} channelType={item.channel_type} />
+            <span>{channelLabel || '—'}</span>
+          </span>
+          {item.author_name ? <span className="att-origin-from faint">from {item.author_name}</span> : null}
+          {item.permalink ? (
+            <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+              <ExternalLink size={13} /> {linkLabel}
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="att-summary">{item.summary || <span className="faint">(no summary)</span>}</div>
+      {item.reason ? <div className="att-reason dim">{item.reason}</div> : null}
+      {item.matched_task ? <div className="att-meta mono faint">→ {item.matched_task}</div> : null}
+
+      {item.draft ? (
+        <div className="att-draft">
+          <div className="eyebrow">drafted reply</div>
+          <div className="att-draft-body">{item.draft}</div>
+        </div>
+      ) : null}
+
+      {item.status === 'new' ? (
+        <div className="att-actions row gap" onClick={stop}>
+          <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
+            <ListPlus size={13} /> Make task
+          </button>
+          <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
+            <Play size={13} /> Make task & start
+          </button>
+          {item.matched_task ? (
+            <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
+              <Share2 size={13} /> Forward
+            </button>
+          ) : null}
+          {item.draft ? (
+            // Opens the detail modal (review/edit before sending) rather than
+            // blind-sending — the action row already stopPropagation's the
+            // card-body open, so call onOpen explicitly here.
+            <button type="button" className="btn sm" disabled={disabled} onClick={onOpen}>
+              <Send size={13} /> Send reply
+            </button>
+          ) : null}
+          <button type="button" className="btn ghost sm" disabled={disabled} onClick={() => onAct(item, 'dismiss')}>
+            <Check size={13} /> Dismiss
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost sm"
+            title={busy ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
+            aria-label="Re-run triage"
+            disabled={disabled || busy}
+            onClick={() => onAct(item, 'retriage')}
+          >
+            <RefreshCw size={13} className={busy ? 'spin' : undefined} />
+          </button>
+          {busy ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
+          <MuteMenu item={item} disabled={disabled} onAct={onAct} />
+        </div>
+      ) : (
+        <div className="att-resolved row gap faint mono" onClick={stop}>
+          <span>
+            {item.status}
+            {item.acted_at ? ` · ${item.acted_at.slice(0, 10)}` : ''}
+          </span>
+          {item.linked_task ? (
+            <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${item.linked_task}`)}>
+              <ArrowRight size={13} /> Go to session
+            </button>
+          ) : null}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// MuteMenu is the "perma drop" control: a small dropdown that permanently
+// suppresses future messages by channel, sender, or just this thread. The mute
+// is recorded server-side (steering_mutes) and Stage 0 drops matching events on
+// the next message — and any open cards matching it are cleared immediately.
+function MuteMenu({
+  item,
+  disabled,
+  onAct,
+  align = 'right',
+}: {
+  item: AttentionItem
+  disabled?: boolean
+  onAct: (item: AttentionItem, verb: string) => void
+  align?: 'left' | 'right'
+}) {
+  const [open, setOpen] = useState(false)
+  const choose = (verb: string) => {
+    setOpen(false)
+    onAct(item, verb)
+  }
+  const chanLabel = item.channel_name || 'this channel'
+  const senderLabel = item.author_name || 'this sender'
+  return (
+    <div className={`mute-menu ${align}`}>
+      <button
+        type="button"
+        className="btn ghost sm"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <BellOff size={13} /> Mute <ChevronDown size={11} />
+      </button>
+      {open ? (
+        <>
+          <div className="mute-backdrop" onClick={() => setOpen(false)} />
+          <div className="mute-pop" role="menu">
+            {item.channel ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-channel')}>
+                <Hash size={12} className="faint" /> Mute channel <span className="clip">{chanLabel}</span>
+              </button>
+            ) : null}
+            {item.author ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-sender')}>
+                <AtSign size={12} className="faint" /> Mute sender <span className="clip">{senderLabel}</span>
+              </button>
+            ) : null}
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-thread')}>
+              <BellOff size={12} className="faint" /> Never show this thread
+            </button>
+          </div>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+// ----- Feed detail modal --------------------------------------------------
+// Clicking a feed card opens this: the message context taken straight from the
+// item, plus the SAME cascade-decision grid the Trace view shows — fetched by
+// feed id — so the operator can audit "why was this surfaced / chosen". Reuses
+// the TraceDetail layout (.meta-grid + KV, .td-section, .att-draft).
+function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: () => void }) {
+  // Hooks must run unconditionally; pass null while closed so the query stays idle.
+  const { data: trace, isLoading, isError } = useAttentionDecision(item?.id ?? null)
+  const action = useAction()
+  // Editable draft, controlled. Reset to the item's draft whenever the open
+  // item changes (keyed by id), so reopening a different card doesn't keep the
+  // previous edit. `item.draft ?? ''` covers items with no draft.
+  const [replyText, setReplyText] = useState('')
+  const [replyInstructions, setReplyInstructions] = useState('')
+  const itemId = item?.id ?? null
+  useEffect(() => {
+    setReplyText(item?.draft ?? '')
+    setReplyInstructions('')
+  }, [itemId, item?.draft])
+  // Keep the modal mounted (empty) while closed so content doesn't blank mid-anim.
+  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+
+  const sendReply = () => {
+    if (action.isPending || !replyText.trim()) return
+    action.mutate(
+      {
+        kind: 'attention-act',
+        target: item.id,
+        attention_action: 'send-reply',
+        reply_text: replyText,
+        reply_instructions: replyInstructions.trim() || undefined,
+      },
+      // Slack sends spin an ephemeral floating session that posts via the Slack
+      // MCP in the background — DON'T pop it open; it appears as a tray chip the
+      // operator can click to watch. It self-closes on success, stays on failure.
+      { onSuccess: onClose },
+    )
+  }
+
+  const muteAct = (_it: AttentionItem, verb: string) => {
+    if (action.isPending) return
+    action.mutate(
+      { kind: 'attention-act', target: item.id, attention_action: verb },
+      { onSuccess: onClose },
+    )
+  }
+
+  const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
+  const title = `${sourceLabel} · ${titleCase(item.suggested_action || '—')}`
+  const channel = item.channel_name || item.channel || '—'
+  const from = item.author_name || '—'
+  const linkLabel = item.source === 'github' ? 'Open on GitHub' : 'Open in Slack'
+
+  return (
+    <Modal open onClose={onClose} title={title} width={620}>
+      <div className="trace-detail-view">
+        <div className="meta-grid">
+          <KV k="when" v={dateTimeFull(item.created_at)} />
+          <KV k="channel" v={channel} />
+          <KV k="from" v={from} />
+          <KV k="confidence" v={`${Math.round(item.confidence * 100)}%`} />
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">summary</div>
+          <div className="att-draft-body td-message">{item.summary || '(no summary)'}</div>
+        </div>
+
+        {item.draft ? (
+          item.status === 'new' ? (
+            // Editable before sending — the agent posts the (possibly edited)
+            // text from its own session (Slack/GitHub).
+            <div className="td-section">
+              <div className="eyebrow">drafted reply</div>
+              <textarea
+                className="input"
+                rows={4}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                style={{ marginTop: 5 }}
+              />
+              <div className="eyebrow" style={{ marginTop: 10 }}>instructions for the agent (optional)</div>
+              <textarea
+                className="input"
+                rows={2}
+                value={replyInstructions}
+                placeholder="e.g. make it shorter · keep it formal · also ask when the data was last refreshed"
+                onChange={(e) => setReplyInstructions(e.target.value)}
+                style={{ marginTop: 5 }}
+              />
+              <div className="row gap between" style={{ marginTop: 8 }}>
+                <span className="config-help" style={{ margin: 0 }}>
+                  {replyInstructions.trim()
+                    ? 'The agent will revise the draft per your instructions, then post.'
+                    : 'Sends the draft as-is. Add instructions above to have the agent revise first.'}
+                </span>
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={action.isPending || !replyText.trim()}
+                  onClick={sendReply}
+                >
+                  <Send size={13} /> {replyInstructions.trim() ? 'Revise & send' : 'Send reply'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="td-section">
+              <div className="eyebrow">drafted reply</div>
+              <div className="att-draft-body td-message">{item.draft}</div>
+            </div>
+          )
+        ) : null}
+
+        <div className="td-section">
+          <div className="eyebrow">thread</div>
+          <div className="row gap" style={{ marginTop: 5 }}>
+            <span className="mono dim td-thread" title={item.thread_key || ''}>
+              {item.thread_key || '—'}
+            </span>
+            {item.permalink ? (
+              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} /> {linkLabel}
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">suppress</div>
+          <div className="row gap between" style={{ marginTop: 5 }}>
+            <span className="config-help" style={{ margin: 0 }}>
+              Permanently drop messages like this — by channel, sender, or just this thread.
+            </span>
+            <MuteMenu item={item} disabled={action.isPending} onAct={muteAct} align="right" />
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">why · cascade decision</div>
+          {isLoading ? (
+            <div style={{ marginTop: 6 }}>
+              <Loading label="loading decision trace" />
+            </div>
+          ) : isError || !trace ? (
+            <>
+              <div className="faint" style={{ marginTop: 6 }}>
+                No cascade trace recorded for this item (it predates decision logging).
+              </div>
+              {item.reason ? <div className="att-reason dim" style={{ marginTop: 6 }}>{item.reason}</div> : null}
+            </>
+          ) : (
+            <div className="meta-grid" style={{ marginTop: 6 }}>
+              <KV k="disposition" v={<span className={DISPOSITION_TONE[trace.disposition] ?? 'badge'}>{trace.disposition}</span>} />
+              <KV k="stage reached" v={trace.stage_reached || '—'} />
+              <KV k="stage 1 relevant" v={relevantLabel(trace.stage1_relevant)} />
+              <KV k="stage 2 action" v={trace.stage2_action ? `${trace.stage2_action} · ${pctConf(trace.stage2_confidence)}` : '—'} />
+              <KV k="stage 3 action" v={trace.stage3_action ? `${trace.stage3_action} · ${pctConf(trace.stage3_confidence)}` : '—'} />
+              <KV k="final action" v={trace.final_action ? `${trace.final_action} · ${pctConf(trace.final_confidence)}` : '—'} />
+              <KV k="drop reason" v={trace.drop_reason || '—'} />
+              <KV k="latency" v={trace.latency_ms != null ? `${trace.latency_ms} ms` : '—'} />
+              <KV k="model" v={trace.model || '—'} />
+              {trace.error ? <KV k="error" v={<span className="dim">{trace.error}</span>} /> : null}
+            </div>
+          )}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ----- Trace (decision-log) view -----------------------------------------
+const WINDOWS = [
+  { id: '1h', label: '1h', ms: 60 * 60 * 1000 },
+  { id: '24h', label: '24h', ms: 24 * 60 * 60 * 1000 },
+  { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
+] as const
+
+const DISPOSITIONS = ['all', 'surfaced', 'dropped', 'error'] as const
+const SOURCES = ['all', 'slack', 'github'] as const
+
+// A labeled segmented control reusing the same .btn sm primary/ghost pattern as
+// the window buttons. Used for the disposition + source row filters.
+function SegFilter({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: readonly string[]
+  value: string
+  onChange: (v: string) => void
+}) {
+  return (
+    <div className="row gap trace-filter">
+      <span className="eyebrow trace-filter-label">{label}</span>
+      {options.map((o) => (
+        <button
+          key={o}
+          type="button"
+          className={`btn sm ${value === o ? 'primary' : 'ghost'}`}
+          onClick={() => onChange(o)}
+        >
+          {o}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function TraceView() {
+  const [windowId, setWindowId] = useState<string>('24h')
+  const [disposition, setDisposition] = useState<string>('all')
+  const [source, setSource] = useState<string>('all')
+  const [selected, setSelected] = useState<SteeringTrace | null>(null)
+  const win = WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]
+  const since = new Date(Date.now() - win.ms).toISOString()
+  const { data, isLoading, error } = useAttentionTrace(since, disposition, source)
+  const items = data?.items ?? []
+
+  return (
+    <>
+      <div className="trace-controls">
+        <div className="row gap">
+          {WINDOWS.map((w) => (
+            <button
+              key={w.id}
+              type="button"
+              className={`btn sm ${windowId === w.id ? 'primary' : 'ghost'}`}
+              onClick={() => setWindowId(w.id)}
+            >
+              {w.label}
+            </button>
+          ))}
+        </div>
+        <SegFilter label="disposition" options={DISPOSITIONS} value={disposition} onChange={setDisposition} />
+        <SegFilter label="source" options={SOURCES} value={source} onChange={setSource} />
+      </div>
+
+      {/* Funnel stays full-window: the backend leaves it unfiltered so the row
+          filters above only narrow the list, not the totals. */}
+      {data ? <FunnelStrip funnel={data.funnel} /> : null}
+
+      {isLoading ? (
+        <Loading label="loading triage decisions" />
+      ) : error ? (
+        <ErrorNote error={error} />
+      ) : items.length === 0 ? (
+        <EmptyState
+          title="No decisions yet"
+          hint="No triage decisions in this window. The steerer logs every message it sees here."
+        />
+      ) : (
+        <div className="trace-list">
+          <div className="trace-row trace-head faint mono">
+            <span>time</span>
+            <span>source</span>
+            <span>disposition</span>
+            <span>stage</span>
+            <span className="trace-conf">conf</span>
+            <span>channel</span>
+            <span>from</span>
+            <span>detail</span>
+          </div>
+          {items.map((it) => (
+            <TraceRow key={it.id} item={it} onOpen={() => setSelected(it)} />
+          ))}
+        </div>
+      )}
+
+      <TraceDetail item={selected} onClose={() => setSelected(null)} />
+    </>
+  )
+}
+
+function FunnelStrip({ funnel }: { funnel: SteeringFunnel }) {
+  const cells: { key: keyof SteeringFunnel; label: string; mark?: string; tone?: string }[] = [
+    { key: 'observed', label: 'Observed' },
+    { key: 'dropped_stage0', label: 'Stage 0', mark: '✕' },
+    { key: 'dropped_cache', label: 'Cache', mark: '✕' },
+    { key: 'dropped_stage1', label: 'Stage 1', mark: '✕' },
+    { key: 'dropped_stage2', label: 'Stage 2', mark: '✕' },
+    { key: 'surfaced', label: 'Surfaced', mark: '✓', tone: 'accent' },
+    { key: 'errors', label: 'Errors', mark: '⚠', tone: 'warn' },
+  ]
+  return (
+    <div className="funnel-strip row gap">
+      {cells.map((c, i) => {
+        const n = funnel[c.key]
+        // Only emphasize the error chip when there's actually something to flag.
+        const tone = c.tone === 'warn' ? (n > 0 ? 'warn' : '') : c.tone ?? ''
+        const icon =
+          c.key === 'observed' ? (
+            <Inbox size={12} />
+          ) : c.key === 'errors' ? (
+            <AlertTriangle size={12} />
+          ) : c.key === 'surfaced' ? (
+            <Check size={12} />
+          ) : (
+            <Filter size={12} />
+          )
+        return (
+          <div key={c.key} className={`funnel-cell card${tone ? ` funnel-${tone}` : ''}`}>
+            <div className="funnel-top row">
+              <span className="funnel-icon faint">{icon}</span>
+              <span className="num funnel-count">{n}</span>
+            </div>
+            <div className="funnel-label faint">
+              {c.mark ? <span className="funnel-mark">{c.mark} </span> : null}
+              {c.label}
+            </div>
+            {i < cells.length - 1 ? <span className="funnel-arrow faint">→</span> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const DISPOSITION_TONE: Record<string, string> = {
+  surfaced: 'badge accent',
+  dropped: 'badge',
+  error: 'badge warn',
+}
+
+function TraceRow({ item, onOpen }: { item: SteeringTrace; onOpen: () => void }) {
+  const conf =
+    item.final_confidence ?? item.stage2_confidence ?? item.stage3_confidence ?? undefined
+  const detail =
+    item.disposition === 'error'
+      ? item.error
+      : item.drop_reason || item.text || item.text_preview || ''
+  const dispClass = DISPOSITION_TONE[item.disposition] ?? 'badge'
+  const dimDetail = item.disposition === 'dropped' && !item.drop_reason
+  // Prefer the resolved channel name; never show a raw ID when a name exists.
+  const where = item.channel_name || item.channel || item.channel_type || '—'
+  const from = item.author_name || '(system/bot)'
+  return (
+    <div
+      className={`trace-row trace-clickable trace-${item.disposition}`}
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onOpen()
+        }
+      }}
+    >
+      <span className="mono faint trace-time">{dateTimeSec(item.created_at)}</span>
+      <span className="row gap trace-src">
+        <span className="badge">{item.origin}</span>
+        <span className="badge">{item.source}</span>
+      </span>
+      <span>
+        <span className={dispClass}>{item.disposition}</span>
+      </span>
+      <span className="mono dim trace-stage">{item.stage_reached || '—'}</span>
+      <span className="num faint trace-conf">
+        {conf != null ? `${Math.round(conf * 100)}%` : ''}
+      </span>
+      <span className="trace-channel" title={item.channel_name || item.channel || ''}>
+        {where}
+      </span>
+      <span className="dim trace-from" title={from}>
+        {from}
+      </span>
+      <span className={`trace-detail ${dimDetail ? 'faint' : 'dim'}`} title={detail}>
+        {detail || <span className="faint">—</span>}
+      </span>
+    </div>
+  )
+}
+
+// ----- Trace detail modal -------------------------------------------------
+// One row of the cascade key/value list. Reuses the .meta-grid cell styling so
+// the modal matches the session/project detail look.
+function KV({ k, v }: { k: string; v: ReactNode }) {
+  return (
+    <div className="meta-cell">
+      <div className="meta-k">{k}</div>
+      <div className="meta-v">{v ?? '—'}</div>
+    </div>
+  )
+}
+
+function pctConf(c: number | null | undefined): string {
+  return c != null ? `${Math.round(c * 100)}%` : '—'
+}
+
+function relevantLabel(b: boolean | null | undefined): string {
+  if (b === true) return 'yes'
+  if (b === false) return 'no'
+  return '—'
+}
+
+function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: () => void }) {
+  // Keep the last item around so content doesn't blank during the close anim.
+  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+
+  const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
+  const title = `${sourceLabel} · ${item.disposition}`
+  const channel = item.channel_name || item.channel || '—'
+  const from = item.author_name || '(system/bot — no user)'
+  const message = item.text || item.text_preview || '(no text)'
+  const linkLabel = item.source === 'github' ? 'Open in GitHub' : 'Open in Slack'
+
+  return (
+    <Modal open onClose={onClose} title={title} width={620}>
+      <div className="trace-detail-view">
+        <div className="meta-grid">
+          <KV k="when" v={dateTimeFull(item.created_at)} />
+          <KV
+            k="source"
+            v={
+              <span className="row gap">
+                <span className="badge">{item.origin}</span>
+                <span className="badge">{item.source || '—'}</span>
+              </span>
+            }
+          />
+          <KV k="channel" v={channel} />
+          <KV k="from" v={from} />
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">message</div>
+          <div className="att-draft-body td-message">{message}</div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">thread</div>
+          <div className="row gap" style={{ marginTop: 5 }}>
+            <span className="mono dim td-thread" title={item.thread_key || ''}>
+              {item.thread_key || '—'}
+            </span>
+            {item.permalink ? (
+              <a className="btn ghost sm" href={item.permalink} target="_blank" rel="noreferrer">
+                <ExternalLink size={13} /> {linkLabel}
+              </a>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">why · cascade decision</div>
+          <div className="meta-grid" style={{ marginTop: 6 }}>
+            <KV k="disposition" v={<span className={DISPOSITION_TONE[item.disposition] ?? 'badge'}>{item.disposition}</span>} />
+            <KV k="stage reached" v={item.stage_reached || '—'} />
+            <KV k="stage 1 relevant" v={relevantLabel(item.stage1_relevant)} />
+            <KV k="stage 2 action" v={item.stage2_action ? `${item.stage2_action} · ${pctConf(item.stage2_confidence)}` : '—'} />
+            <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
+            <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />
+            <KV k="drop reason" v={item.drop_reason || '—'} />
+            <KV k="latency" v={item.latency_ms != null ? `${item.latency_ms} ms` : '—'} />
+            <KV k="model" v={item.model || '—'} />
+            {item.error ? <KV k="error" v={<span className="dim">{item.error}</span>} /> : null}
+          </div>
+        </div>
+
+        {item.feed_item_id ? (
+          <div className="td-section">
+            <div className="dim">
+              <Check size={13} /> Surfaced to the Attention feed.{' '}
+              <span className="faint">Find it under the Feed tab.</span>
+            </div>
+          </div>
+        ) : null}
+
+        <div className="td-tech faint mono">
+          channel={item.channel || '—'} · author={item.author || '—'} · thread={item.thread_key || '—'}
+          {item.ts ? ` · ts=${item.ts}` : ''}
+        </div>
+      </div>
+    </Modal>
+  )
+}

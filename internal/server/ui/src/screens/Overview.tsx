@@ -26,7 +26,7 @@ function fmtDay(iso: string): string {
   return `${WEEKDAYS[dt.getDay()]}, ${MONTHS[m - 1]} ${d}`
 }
 
-// Themed tooltip body shared by the bar chart and the 12-week calendar.
+// Themed tooltip body for the daily task-activity bar chart.
 function dayTip(d: ActivityDay): ReactNode {
   const head = (
     <div className="ftip-head">
@@ -45,6 +45,35 @@ function dayTip(d: ActivityDay): ReactNode {
           <span key={t} className="ftip-task clip">{t}</span>
         ))}
         {d.count > d.tasks.length && <span className="ftip-more">+{d.count - d.tasks.length} more</span>}
+      </div>
+    </>
+  )
+}
+
+// Themed tooltip body for the 12-week token-usage heatmap: the day's total
+// fresh "work" tokens plus which task burned how many.
+function tokenDayTip(d: TokenDay): ReactNode {
+  const head = (
+    <div className="ftip-head">
+      <span className="ftip-count">
+        {d.tokens ? `${compactTokens(d.tokens)} tokens` : 'No tokens'}
+      </span>
+      <span className="ftip-date">{fmtDay(d.date)}</span>
+    </div>
+  )
+  if (!d.tasks?.length) return head
+  const more = (d.task_count ?? d.tasks.length) - d.tasks.length
+  return (
+    <>
+      {head}
+      <div className="ftip-tasks">
+        {d.tasks.map((t) => (
+          <span key={t.name} className="ftip-task ftip-task-tok">
+            <span className="ftip-task-name clip">{t.name}</span>
+            <span className="ftip-task-val mono">{compactTokens(t.tokens)}</span>
+          </span>
+        ))}
+        {more > 0 && <span className="ftip-more">+{more} more</span>}
       </div>
     </>
   )
@@ -150,11 +179,13 @@ function heatLevel(count: number, max: number): number {
   return 1
 }
 
-function MiniCalendar({ days }: { days: ActivityDay[] }) {
+// GitHub-style contribution heatmap, coloured by daily token usage. Hovering a
+// cell shows the day's total tokens and which task burned how many.
+function MiniCalendar({ days }: { days: TokenDay[] }) {
   const today = todayISO()
   const { show, hide, portal } = useFloatTip()
-  const max = Math.max(1, ...days.map((d) => d.count))
-  const weeks: ActivityDay[][] = []
+  const max = Math.max(1, ...days.map((d) => d.tokens))
+  const weeks: TokenDay[][] = []
   for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7))
   const monthLabels = weeks.map((w, i) => {
     const first = w[0]
@@ -194,8 +225,8 @@ function MiniCalendar({ days }: { days: ActivityDay[] }) {
                 ) : (
                   <div
                     key={d.date}
-                    className={`cal-cell l${heatLevel(d.count, max)}`}
-                    onMouseEnter={(e) => show(e.currentTarget, dayTip(d))}
+                    className={`cal-cell l${heatLevel(d.tokens, max)}`}
+                    onMouseEnter={(e) => show(e.currentTarget, tokenDayTip(d))}
                     onMouseLeave={hide}
                   />
                 ),
@@ -217,7 +248,8 @@ function MiniCalendar({ days }: { days: ActivityDay[] }) {
   )
 }
 
-// Daily activity trend — a compact bar chart of the last 28 days' action counts.
+// Daily activity trend — a compact bar chart of the last 28 days' action counts
+// (distinct tasks touched per day). The 12-week calendar below is token-based.
 function ActivityBars({ days }: { days: ActivityDay[] }) {
   const today = todayISO()
   const { show, hide, portal } = useFloatTip()
@@ -730,13 +762,13 @@ export function Overview() {
             <div className="bento-head">
               <span className="eyebrow"><Activity size={13} /> Activity</span>
               <div className="spacer" />
-              <span className="faint mono" style={{ fontSize: 10 }}>last 28d</span>
+              <span className="faint mono" style={{ fontSize: 10 }}>tasks · 28d</span>
             </div>
             <ActivityBars days={ui.ACTIVITY_HEATMAP} />
             <div className="hairline" style={{ margin: '14px 0' }} />
-            <div className="eyebrow" style={{ marginBottom: 8 }}>12 weeks</div>
+            <div className="eyebrow" style={{ marginBottom: 8 }}>tokens · 12 weeks</div>
             <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <MiniCalendar days={ui.ACTIVITY_HEATMAP} />
+              <MiniCalendar days={ui.TOKEN_SERIES ?? []} />
             </div>
             <div className="hairline" style={{ margin: '14px 0' }} />
             <StatsPanel stats={ui.STATS} />

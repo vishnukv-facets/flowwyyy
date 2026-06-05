@@ -44,6 +44,30 @@ export function dateTime(iso: string | null | undefined): string {
   })
 }
 
+// Local date+time WITH seconds, e.g. "Jun 5, 08:17:45". Browser timezone.
+export function dateTimeSec(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  })
+}
+
+// Full local date+time WITH timezone name, for the detail view, e.g.
+// "Jun 5, 2026, 08:17:45 GMT+5:30".
+export function dateTimeFull(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false, timeZoneName: 'short',
+  })
+}
+
 export function pct(used: number, max: number): number {
   if (!max) return 0
   return Math.min(100, Math.round((used / max) * 100))

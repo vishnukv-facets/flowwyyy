@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flow/internal/flowdb"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -143,6 +144,7 @@ func cmdUpdateTask(args []string) int {
 	agentFlag := fs.String("agent", "", "change session agent: claude or codex (backlog tasks only)")
 	codexAgent := fs.Bool("codex", false, "shortcut for --agent codex")
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
+	briefStatus := fs.String("brief-status", "", "refresh the brief's \"Current state\" snapshot (terse 1–3 lines; pass \"-\" to read the body from stdin)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
@@ -161,9 +163,9 @@ func cmdUpdateTask(args []string) int {
 		*waiting != "" || *clearWaiting ||
 		*project != "" || *clearProject ||
 		len(addTags) > 0 || len(removeTags) > 0 || *clearTags ||
-		agentRequested
+		agentRequested || *briefStatus != ""
 	if !anyField {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags")
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags, --brief-status")
 		return 2
 	}
 
@@ -466,6 +468,38 @@ func cmdUpdateTask(args []string) int {
 			return 1
 		}
 		fmt.Println("waiting_on cleared")
+	}
+	if *briefStatus != "" {
+		body := *briefStatus
+		if body == "-" {
+			b, rerr := io.ReadAll(os.Stdin)
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: read brief status from stdin: %v\n", rerr)
+				return 1
+			}
+			body = string(b)
+		}
+		if strings.TrimSpace(body) == "" {
+			// Empty body is a no-op rather than writing an empty state block —
+			// the brief keeps its previous "Current state".
+			fmt.Println("brief status empty — nothing to update")
+		} else {
+			root, rerr := flowRoot()
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", rerr)
+				return 1
+			}
+			briefPath := filepath.Join(root, "tasks", task.Slug, "brief.md")
+			if err := writeBriefCurrentState(briefPath, body, time.Now().Format("2006-01-02")); err != nil {
+				fmt.Fprintf(os.Stderr, "error: update brief status: %v\n", err)
+				return 1
+			}
+			if _, err := db.Exec(`UPDATE tasks SET updated_at=? WHERE slug=?`, now, task.Slug); err != nil {
+				fmt.Fprintf(os.Stderr, "error: bump updated_at: %v\n", err)
+				return 1
+			}
+			fmt.Printf("brief current state updated → %s\n", briefPath)
+		}
 	}
 	if *project != "" {
 		// Reject archived/deleted projects via ResolveProject — attaching

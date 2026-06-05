@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"flow/internal/monitor"
+	"flow/internal/steering"
 )
 
 //go:embed all:static
@@ -50,6 +51,11 @@ func New(cfg Config) *Server {
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
+	// Resolves a real Slack permalink (chat.getPermalink) from channel+ts so the
+	// "Open in Slack" link works for every item — including those captured before
+	// the channel/ts/team_id columns existed (channel+ts are recoverable from
+	// thread_key). Nil when no token; all uses are nil-safe.
+	s.slackPermalinker = monitor.NewSlackPermalinker()
 	// Slack Socket Mode listener: only constructed when a DB is available
 	// (the dispatcher needs one). Start()/Stop() are no-ops when the env
 	// isn't configured for Socket Mode, so wiring is safe to leave in
@@ -57,16 +63,41 @@ func New(cfg Config) *Server {
 	// a server-managed PTY so the Claude session streams into the UI
 	// instead of an iTerm tab.
 	if cfg.DB != nil {
-		slackListener := monitor.NewSlackListener(
-			monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s}),
-		)
+		dispatcher := monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		// Attach the steering cascade so untracked messages get triaged into the
+		// Attention feed (surface-only in P1). Stage 0 inside the cascade is the
+		// real scope gate, so handing it every untracked message is cheap.
+		cascade := steering.NewCascade(cfg.DB, steering.WatchConfigFromEnv())
+		// Live re-read on settings changes, overlaying the operator's durable
+		// "perma drop" mutes (channel/sender/thread) from steering_mutes.
+		cascade.ConfigFn = steering.WatchConfigFnWithMutes(cfg.DB)
+		cascade.AutonomyFn = steering.AutonomyFromEnv // live per-action auto-act policy
+		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
+		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
+		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).
+		if s.nameResolver != nil {
+			cascade.TextClean = s.nameResolver.CleanText
+		}
+		dispatcher.Steerer = cascade
+		s.cascade = cascade
+		// Reuse a primed Haiku session across the cheap classifier stages (the
+		// heavy framing + task index sent once at session creation, only the
+		// per-message payload on each resume). No-op when
+		// FLOW_STEERING_SESSION_REUSE=0.
+		steering.EnableClassifierSessions()
+		slackListener := monitor.NewSlackListener(dispatcher)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)
 		})
 		s.slackListener = slackListener
-		s.githubListener = monitor.NewGitHubListener(
-			monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s}),
-		)
+		ghDispatcher := monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		// Trace-only parallel: route every GitHub event through the SAME cascade
+		// so it surfaces in the steering trace + attention feed. The GitHub task
+		// pipeline is untouched (the steerer call is additive + best-effort).
+		if s.cascade != nil {
+			ghDispatcher.Steerer = s.cascade
+		}
+		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}
 	return s
 }
@@ -104,6 +135,10 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// Connect-Slack wizard. The OAuth callback itself is NOT here — it lives
 	// on a separate ephemeral HTTPS listener (Slack requires an https
 	// redirect URL); see slack_setup.go.
+	mux.HandleFunc("/api/attention", s.handleAttention)
+	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
+	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
+	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)
 	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
 	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)
 	mux.HandleFunc("/api/slack/setup/app-token", s.handleSlackSetupAppToken)
@@ -198,6 +233,66 @@ func (s *Server) ListenAndServe(addr string) int {
 			go backfill.Run(bfCtx)
 		}
 	}
+	// Steerer backfill. The reaction backfill above only reconciles already-
+	// tracked threads; the steerer's continuous path (untracked firehose) has
+	// no catch-up of its own, so anything that arrives in a watched channel or
+	// DM while the socket is down — including before the steerer ever ran — is
+	// lost. This sweeps watched channels (bot token) + DMs (user token) via
+	// conversations.history since a per-channel watermark and replays them
+	// through the SAME cascade (ObserveBatch, origin=backfill). No-op when no
+	// Slack history client is configured or FLOW_STEERING_BACKFILL=0.
+	if s.cfg.DB != nil && s.cascade != nil && steeringBackfillEnabled() {
+		ch := monitor.NewSlackHistoryClient()
+		dm := monitor.NewSlackUserHistoryClient()
+		ims := monitor.NewSlackUserIMLister()
+		if ch != nil || (dm != nil && ims != nil) {
+			sbf := steering.NewSteeringBackfill(s.cfg.DB, s.cascade.ObserveBatch, ch, dm, ims, steering.WatchConfigFromEnv, 0, 0, 0)
+			sbf.SetLogger(func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[steering backfill] "+format+"\n", args...)
+			})
+			sbfCtx, sbfCancel := context.WithCancel(context.Background())
+			defer sbfCancel()
+			go sbf.Run(sbfCtx)
+		}
+	}
+	// One-shot tag backfill: re-link steerer-created tasks (make_task / send_reply)
+	// to their source thread. Tasks spawned before source-thread tagging carry no
+	// slack-thread:/gh- linkage, so replies on those threads — in-thread or
+	// forwarded into a DM — can't route home. This derives the linkage purely from
+	// stored feed rows (no network), so existing data starts routing too.
+	if s.cfg.DB != nil {
+		go func() {
+			n, err := steering.BackfillFeedTaskThreadTags(s.cfg.DB, func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] "+format+"\n", args...)
+			})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] %v\n", err)
+			} else if n > 0 {
+				fmt.Fprintf(os.Stderr, "[thread-tag backfill] linked %d existing task(s) to their source thread\n", n)
+			}
+			// Then re-check open make_task cards: any whose thread now resolves to
+			// an existing (incl. archived) task flips to forward instead of nagging
+			// to create a duplicate.
+			m, rerr := steering.ReconcileOpenFeedMatches(s.cfg.DB, func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] "+format+"\n", args...)
+			})
+			if rerr != nil {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", rerr)
+			} else if m > 0 {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] flipped %d open card(s) to forward an existing task\n", m)
+			}
+			// Clear any 'drop'-verdict cards that an earlier bug surfaced — they're
+			// cascade-classified noise and shouldn't sit in the active feed.
+			d, derr := steering.DismissSurfacedDropCards(s.cfg.DB, func(format string, args ...any) {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] "+format+"\n", args...)
+			})
+			if derr != nil {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", derr)
+			} else if d > 0 {
+				fmt.Fprintf(os.Stderr, "[feed reconcile] dismissed %d stale drop-verdict card(s)\n", d)
+			}
+		}()
+	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.
 	if s.githubListener != nil {
@@ -240,6 +335,18 @@ func (s *Server) ListenAndServe(addr string) int {
 			return 1
 		}
 		return 0
+	}
+}
+
+// steeringBackfillEnabled reports whether the steerer catch-up sweep should
+// run. Defaults on; set FLOW_STEERING_BACKFILL=0 to disable while leaving the
+// rest of the steerer wired.
+func steeringBackfillEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
 	}
 }
 

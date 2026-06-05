@@ -9,6 +9,7 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
 	"flow/internal/flowdb"
+	"flow/internal/steering"
 	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
@@ -344,6 +345,31 @@ func (h *terminalHub) stopFloating(id string) bool {
 	return known || sess != nil
 }
 
+// startFloatingDetached starts a registered floating session's PTY WITHOUT a UI
+// client attached, so its agent runs in the background whether or not the
+// operator opens the window — used for ephemeral sends, where the reply must be
+// posted regardless and the floating window is opt-in (a tray chip to watch).
+// Output buffers into scrollback and replays when they later attach. No-op if it
+// is already running. Default size matches the floating WS handler so a later
+// attach doesn't reflow.
+func (h *terminalHub) startFloatingDetached(id string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if sess := h.sessions[id]; sess != nil && sess.running() {
+		return nil
+	}
+	launch, ok := h.floatingLaunches[id]
+	if !ok {
+		return fmt.Errorf("floating terminal not found: %s", id)
+	}
+	sess, err := h.startSessionLocked(launch, 120, 32)
+	if err != nil {
+		return err
+	}
+	h.sessions[id] = sess
+	return nil
+}
+
 func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSession, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -415,6 +441,41 @@ func (h *terminalHub) wakeTask(slug, prompt string) error {
 func (h *terminalHub) submitAfterPaste(slug string) {
 	time.Sleep(250 * time.Millisecond)
 	_ = h.sendInput(slug, "\r")
+}
+
+// wakeSharedTask injects a wake prompt straight into the task's detached tmux
+// session via `tmux send-keys`, with NO browser PTY required. It returns true
+// when a live tmux session was found and the paste was sent.
+//
+// Why this exists: agents run inside a persistent tmux session (see
+// startSessionLocked) and the browser terminal is only a `tmux attach` bridge
+// living in this server process's in-memory hub. After a `flow ui serve`
+// restart the agent keeps running in tmux, but the hub is empty until the user
+// re-opens the session — so terminalHub.running(slug) is false even though the
+// agent is alive and waiting. Without this path, deliverInboxEvents would
+// mistake the still-live tmux session for a "native" (user-owned) session,
+// decline to inject, advance the inbox cursor, and silently drop the wake.
+//
+// Mirrors wakeTask: bracketed-paste the prompt (so a multi-line body lands in
+// the editor as pasted text, not submitted line-by-line), then a separate,
+// delayed Enter once the editor has left paste mode.
+func (h *terminalHub) wakeSharedTask(slug, prompt string) bool {
+	if !sharedTerminalAvailable() {
+		return false
+	}
+	name := sharedTerminalSessionName(slug)
+	if !sharedTerminalHasSession(name) {
+		return false
+	}
+	paste := "\x1b[200~" + prompt + "\x1b[201~"
+	if _, err := sharedTerminalCommand("send-keys", "-t", name, "-l", paste); err != nil {
+		return false
+	}
+	go func() {
+		time.Sleep(250 * time.Millisecond)
+		_, _ = sharedTerminalCommand("send-keys", "-t", name, "Enter")
+	}()
+	return true
 }
 
 func (h *terminalHub) scrollbackText(slug string, limit int) (string, bool) {
@@ -1310,6 +1371,58 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode)
 	return terminalLaunch{
 		Slug:           "overview-" + uuid.NewString(),
+		SessionID:      sessionID,
+		Provider:       provider,
+		PermissionMode: permissionMode,
+		WorkDir:        absRoot,
+		Args:           args,
+		FreeAgent:      true,
+		Created:        true,
+		NeedsCapture:   false,
+		StartedAt:      time.Now().Add(-2 * time.Second),
+	}, nil
+}
+
+// prepareSendReplyFloatingLaunch builds an ephemeral, watchable floating session
+// that posts an operator-approved reply via the Slack MCP. A headless
+// `claude -p` has no claude.ai connector MCPs, so it CANNOT post to Slack — only
+// a real interactive session can. This launch is therefore a normal bypass
+// Claude PTY (Slack MCP available), primed to post the approved draft and then
+// run `flow attention sent <feed-id> --close-floating <slug>` to mark the card
+// sent and close its own window. It carries no task row (FreeAgent), so nothing
+// lands in the Tasks list. On a failure the agent leaves the window open so the
+// operator can see what went wrong, and the card stays 'new' for a retry.
+func (s *Server) prepareSendReplyFloatingLaunch(item flowdb.FeedItem, text, instructions string) (terminalLaunch, error) {
+	if strings.TrimSpace(text) == "" {
+		return terminalLaunch{}, errors.New("send-reply requires non-empty text")
+	}
+	flowRoot := strings.TrimSpace(s.cfg.FlowRoot)
+	if flowRoot == "" {
+		return terminalLaunch{}, errors.New("flow root is not configured")
+	}
+	absRoot, err := filepath.Abs(flowRoot)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	// The Slack MCP is a Claude (claude.ai) connector, so the sending session
+	// must be Claude regardless of any provider hint on the item.
+	const provider = agents.ProviderClaude
+	// The operator approved the exact text via the feed — there is nothing left
+	// to gate, so bypass is correct (same rationale as SendReplyViaAgent).
+	const permissionMode = "bypass"
+	sessionID := uuid.NewString()
+	slug := "send-" + uuid.NewString()
+	doneCmd := fmt.Sprintf("flow attention sent %s --close-floating %s", item.ID, slug)
+	prompt := steering.SlackSendSessionPrompt(item, text, instructions, doneCmd)
+	// Build the Claude args directly (rather than agentTerminalArgs) so we can pin
+	// the model: posting an approved one-liner needs no frontier model, and the
+	// session would otherwise inherit the user's default (e.g. Opus 4.8). Prompt
+	// stays last (positional). Always Claude here — the Slack MCP is Claude-only.
+	args := []string{"--session-id", sessionID, "--model", steering.SendReplyModel()}
+	args = append(args, claudePermissionArgs(permissionMode)...)
+	args = append(args, prompt)
+	return terminalLaunch{
+		Slug:           slug,
 		SessionID:      sessionID,
 		Provider:       provider,
 		PermissionMode: permissionMode,

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useLocation, useSearch } from 'wouter'
 import {
   Archive,
+  ArchiveRestore,
   ChevronDown,
   ChevronUp,
   CornerLeftUp,
@@ -352,9 +353,15 @@ export function Tasks() {
             </button>
           ))}
           <div className="spacer" />
-          <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'archive', verb: 'Archive' })}>
-            <Archive size={13} /> Archive
-          </button>
+          {archivedView ? (
+            <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'unarchive', verb: 'Unarchive', danger: false })}>
+              <ArchiveRestore size={13} /> Unarchive
+            </button>
+          ) : (
+            <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'archive', verb: 'Archive' })}>
+              <Archive size={13} /> Archive
+            </button>
+          )}
           <button className="btn ghost sm" disabled={bulkPending} onClick={() => runBulk({ kind: 'delete', verb: 'Trash', entityKind: 'task' })}>
             <Trash2 size={13} /> Trash
           </button>
@@ -436,6 +443,11 @@ function TaskRow({
       danger: true,
     })
     if (ok) action.mutate({ kind: 'archive', target: task.slug })
+  }
+
+  const unarchive = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    action.mutate({ kind: 'unarchive', target: task.slug })
   }
 
   const trash = async (e: React.MouseEvent) => {
@@ -547,15 +559,27 @@ function TaskRow({
       </td>
       <td className="dim mono" style={{ textAlign: 'right', fontSize: 11.5 }}>{ago(task.updated_at)}</td>
       <td style={{ textAlign: 'right' }}>
-        <button
-          className="btn icon ghost sm row-action"
-          title="Archive task"
-          aria-label="Archive task"
-          disabled={action.isPending}
-          onClick={archive}
-        >
-          <Archive size={13} />
-        </button>
+        {task.archived_at ? (
+          <button
+            className="btn icon ghost sm row-action"
+            title="Unarchive task"
+            aria-label="Unarchive task"
+            disabled={action.isPending}
+            onClick={unarchive}
+          >
+            <ArchiveRestore size={13} />
+          </button>
+        ) : (
+          <button
+            className="btn icon ghost sm row-action"
+            title="Archive task"
+            aria-label="Archive task"
+            disabled={action.isPending}
+            onClick={archive}
+          >
+            <Archive size={13} />
+          </button>
+        )}
         <button
           className="btn icon ghost sm row-action"
           title="Move to trash"

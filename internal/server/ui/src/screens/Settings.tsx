@@ -5,6 +5,8 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { SlackConnect } from '../components/SlackConnect'
+import { WatchedChannels } from '../components/WatchedChannels'
+import { AutonomyPanel } from '../components/AutonomyPanel'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
@@ -132,6 +134,11 @@ export function Settings() {
         <SlackConnect />
       </SettingsSection>
 
+      <SettingsSection title="Steering" hint="What the attention router watches beyond DMs and mentions.">
+        <WatchedChannels />
+        <AutonomyPanel />
+      </SettingsSection>
+
       <SettingsSection title="Configuration" hint="Applied live — secrets stay on this machine.">
         <div className="settings-grid">
           <ConfigPanels />
@@ -192,7 +199,12 @@ function ConfigPanels() {
   const { data } = useSettings()
   const action = useAction()
   const [draft, setDraft] = useState<Record<string, string>>({})
-  const fields = useMemo(() => data?.fields ?? [], [data?.fields])
+  // FLOW_STEERING_WATCH_CHANNELS has a dedicated checkbox picker (WatchedChannels),
+  // so skip it in the generic string-input form to avoid two controls for one key.
+  const fields = useMemo(
+    () => (data?.fields ?? []).filter((f) => f.key !== 'FLOW_STEERING_WATCH_CHANNELS'),
+    [data?.fields],
+  )
 
   const groups = useMemo(() => {
     const order: string[] = []

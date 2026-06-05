@@ -50,8 +50,9 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 // mirrors Dispatcher for Slack but keeps GitHub-specific tags, briefs, and
 // idempotency isolated.
 type GitHubDispatcher struct {
-	DB     *sql.DB
-	Opener TaskOpener
+	DB      *sql.DB
+	Opener  TaskOpener
+	Steerer MessageObserver // optional: ALSO routes each new event through the steering cascade (trace-only parallel; never affects the task pipeline)
 }
 
 func NewGitHubDispatcher(db *sql.DB, opener TaskOpener) *GitHubDispatcher {
@@ -72,6 +73,17 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		}
 		if seen {
 			return nil
+		}
+	}
+
+	// Trace-only parallel: ALSO hand each NEW event to the steering cascade so
+	// it appears in the steering trace + attention feed with full GitHub
+	// detail. This runs once per new event (after the dedup early-returns,
+	// before the task pipeline) and is strictly additive — errors are logged,
+	// never returned, so the existing GitHub task pipeline below runs regardless.
+	if d.Steerer != nil {
+		if err := d.Steerer.Observe(ctx, gitHubEventToInboxEvent(ev)); err != nil {
+			fmt.Fprintf(os.Stderr, "github steerer observe: %v\n", err)
 		}
 	}
 
@@ -145,6 +157,13 @@ func (d *GitHubDispatcher) dispatchGitHubReview(ctx context.Context, ev GitHubEv
 	if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
 		return fmt.Errorf("github monitor: append inbox: %w", err)
 	}
+	// A comment/review on a tracked PR/issue is an external reply — resolve the
+	// task's waiting_on if it was blocked on this (Phase 2 loop-closing).
+	if found {
+		if autoResolveWaitingOn(d.DB, slug, ev.Author, GitHubSelfLogins()) {
+			fmt.Fprintf(os.Stderr, "github monitor: auto-resolved waiting_on for %s (comment from %s)\n", slug, ev.Author)
+		}
+	}
 	if ev.Kind == GitHubEventPRReviewChangesRequested {
 		if err := d.reopenTaskForGitHubReview(slug); err != nil {
 			return err
@@ -213,7 +232,10 @@ func (d *GitHubDispatcher) findTaskByGitHubTag(tag string) (string, bool, error)
 	if tag == "" {
 		return "", false, nil
 	}
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag})
+	// IncludeArchived: route new GitHub activity to the existing (possibly
+	// archived) task for this PR/issue rather than spawning a duplicate.
+	// Archiving declutters the active list; it doesn't stop tracking the thread.
+	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}

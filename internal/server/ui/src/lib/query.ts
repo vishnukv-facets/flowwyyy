@@ -1,10 +1,12 @@
-import { QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiAction, apiGet, apiGetText } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
+  AttentionItem,
+  AttentionTraceResponse,
   HealthView,
   InboxConversation,
   InboxFeed,
@@ -15,7 +17,9 @@ import type {
   QuoteView,
   SearchResponse,
   SettingsResponse,
+  SlackChannel,
   SlackSetupStatus,
+  SteeringTrace,
   TaskView,
   TranscriptResponse,
   UiAgent,
@@ -195,6 +199,43 @@ export function useWorkdirs() {
 }
 export function useInbox() {
   return useQuery({ queryKey: ['inbox'], queryFn: () => apiGet<InboxFeed>('/api/inbox') })
+}
+export function useAttention(status: string = 'new') {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  return useQuery({
+    queryKey: ['attention', status],
+    queryFn: () => apiGet<AttentionItem[]>(`/api/attention${q}`),
+    // Keep the prior status tab's results visible while the new one loads, so
+    // switching new/acted/dismissed/all feels instant instead of blanking.
+    placeholderData: keepPreviousData,
+  })
+}
+export function useAttentionTrace(since: string, disposition: string = 'all', source: string = 'all') {
+  const params = new URLSearchParams({ since })
+  if (disposition && disposition !== 'all') params.set('disposition', disposition)
+  if (source && source !== 'all') params.set('source', source)
+  return useQuery({
+    queryKey: ['attention-trace', since, disposition, source],
+    queryFn: () => apiGet<AttentionTraceResponse>(`/api/attention/trace?${params.toString()}`),
+    refetchInterval: 15000, // keep the live window fresh while watching
+    // Each 1h/24h/7d (or disposition/source) switch is a new query key; show the
+    // prior window's rows immediately rather than dropping to a spinner.
+    placeholderData: keepPreviousData,
+  })
+}
+// Fetches the cascade-decision trace behind a surfaced feed item, so the Feed
+// detail modal can show the same "why was this chosen" reasoning the Trace view
+// does. 404 = an older item logged before decision tracing; don't retry.
+export function useAttentionDecision(feedId: string | null) {
+  return useQuery({
+    queryKey: ['attention-decision', feedId],
+    enabled: !!feedId,
+    retry: false, // 404 = older item with no trace; don't hammer
+    queryFn: () => apiGet<SteeringTrace>(`/api/attention/decision?feed_id=${encodeURIComponent(feedId!)}`),
+  })
+}
+export function useSlackChannels() {
+  return useQuery({ queryKey: ['slack-channels'], queryFn: () => apiGet<SlackChannel[]>('/api/slack/channels') })
 }
 // Keyed by hour bucket ("YYYY-MM-DD-HH"): a new quote is fetched only when the
 // hour flips. staleTime Infinity means it's never refetched within the hour no
