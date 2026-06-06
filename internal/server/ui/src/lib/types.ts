@@ -168,6 +168,34 @@ export interface OverviewView {
   waiting: TaskView[]
   stale: TaskView[]
   active_playbooks: PlaybookView[]
+  briefing: Briefing
+}
+
+export interface Briefing {
+  generated_at: string
+  window_start: string
+  window_end: string
+  needs_action: BriefingItem[]
+  fyi: BriefingItem[]
+}
+
+export interface BriefingItem {
+  kind: string
+  ref: string
+  source?: string
+  project?: string
+  urgency?: string
+  title: string
+  detail?: string
+  action?: string
+  links?: BriefingLink[]
+}
+
+export interface BriefingLink {
+  kind: string
+  label?: string
+  target: string
+  url?: string
 }
 
 export interface DiffCount {

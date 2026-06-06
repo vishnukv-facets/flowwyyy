@@ -49,6 +49,8 @@ func Run(args []string) int {
 		return cmdShow(rest)
 	case "search":
 		return cmdSearch(rest)
+	case "standup":
+		return cmdStandup(rest)
 	case "ui":
 		return cmdUI(rest)
 	case "serve":
@@ -113,6 +115,7 @@ Sessions:
 
 Read:
   flow ui serve        [--host 127.0.0.1] [--port 8787] [--bg] (local web Mission Control UI)
+  flow standup         [--for today|monday|24h] [--clipboard]   (copyable daily briefing)
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow show task       [<ref>]
   flow show project    [<ref>]

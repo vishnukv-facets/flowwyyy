@@ -10,7 +10,7 @@ import { ago, compact, compactTokens, dueTone } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
 import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
 import { clickable } from '../lib/a11y'
-import type { ActivityDay, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
+import type { ActivityDay, BriefingItem, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -121,6 +121,84 @@ function useGreeting() {
     return () => clearInterval(id)
   }, [])
   return info
+}
+
+function BriefingPanel({ actionItems, fyiItems, onOpen }: { actionItems: BriefingItem[]; fyiItems: BriefingItem[]; onOpen: (href: string) => void }) {
+  if (actionItems.length === 0 && fyiItems.length === 0) return null
+  return (
+    <section className="briefing-panel">
+      <div className="section-head">
+        <span className="eyebrow"><Activity size={13} /> Morning briefing</span>
+        <span className="section-count">{actionItems.length + fyiItems.length}</span>
+        <div className="spacer" />
+        <span className="faint" style={{ fontSize: 12 }}>action first, FYI second</span>
+      </div>
+      <div className="briefing-grid">
+        <div className="briefing-column">
+          <div className="briefing-label">Needs action</div>
+          {actionItems.length === 0 ? (
+            <div className="briefing-empty">Nothing needs a decision right now.</div>
+          ) : (
+            actionItems.slice(0, 5).map((item) => <BriefingRow key={`${item.kind}:${item.ref}`} item={item} onOpen={onOpen} />)
+          )}
+        </div>
+        <div className="briefing-column muted">
+          <div className="briefing-label">FYI</div>
+          {fyiItems.length === 0 ? (
+            <div className="briefing-empty">No recent FYI activity in this window.</div>
+          ) : (
+            fyiItems.slice(0, 4).map((item) => <BriefingRow key={`${item.kind}:${item.ref}:${item.title}`} item={item} onOpen={onOpen} />)
+          )}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: string) => void }) {
+  const primary = primaryBriefingHref(item)
+  const meta = [item.project, item.source, item.urgency, item.action ? `action: ${item.action}` : ''].filter(Boolean).join(' · ')
+  return (
+    <div className="briefing-row" {...(primary ? clickable(() => onOpen(primary)) : {})}>
+      <div className="briefing-row-top">
+        <span className={`briefing-kind ${item.kind}`}>{item.kind}</span>
+        <span className="briefing-title clip">{item.title}</span>
+      </div>
+      {meta && <div className="briefing-meta clip">{meta}</div>}
+      {item.detail && <div className="briefing-detail clip">{item.detail}</div>}
+      {item.links?.length ? (
+        <div className="briefing-links">
+          {item.links.slice(0, 4).map((link) => {
+            const href = briefingLinkHref(link)
+            const label = link.kind === 'source' ? 'source' : link.kind
+            if (!href) return <span key={`${link.kind}:${link.target}`} className="briefing-link">{label}</span>
+            if (href.startsWith('http')) {
+              return <a key={`${link.kind}:${link.target}`} className="briefing-link" href={href} target="_blank" rel="noreferrer">{label}</a>
+            }
+            return <button key={`${link.kind}:${link.target}`} className="briefing-link" type="button" onClick={(e) => { e.stopPropagation(); onOpen(href) }}>{label}</button>
+          })}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function primaryBriefingHref(item: BriefingItem): string {
+  const taskLink = item.links?.find((l) => l.kind === 'task' || l.kind === 'session')
+  if (taskLink) return `/session/${taskLink.target}`
+  const attentionLink = item.links?.find((l) => l.kind === 'attention' || l.kind === 'trace')
+  if (attentionLink) return '/attention'
+  const projectLink = item.links?.find((l) => l.kind === 'project')
+  if (projectLink) return `/project/${projectLink.target}`
+  return ''
+}
+
+function briefingLinkHref(link: { kind: string; target: string; url?: string }): string {
+  if (link.kind === 'task' || link.kind === 'session') return `/session/${link.target}`
+  if (link.kind === 'project') return `/project/${link.target}`
+  if (link.kind === 'attention' || link.kind === 'trace') return '/attention'
+  if (link.kind === 'source') return link.url || link.target
+  return ''
 }
 
 // Mission Control analytics: activity-day streaks (the same active days that
@@ -638,6 +716,12 @@ export function Overview() {
           </div>
         ))}
       </div>
+
+      <BriefingPanel
+        actionItems={overview?.briefing?.needs_action ?? []}
+        fyiItems={overview?.briefing?.fyi ?? []}
+        onOpen={navigate}
+      />
 
       <div className="mc-cols">
         {/* ---- main column ---- */}

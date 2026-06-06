@@ -3172,6 +3172,114 @@ select.input {
   flex-direction: column;
   gap: 14px;
 }
+.briefing-panel {
+  margin-bottom: 22px;
+}
+.briefing-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+  gap: 12px;
+}
+.briefing-column {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.briefing-column.muted {
+  background: color-mix(in srgb, var(--bg-2) 78%, var(--bg) 22%);
+}
+.briefing-label {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-faint);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.briefing-empty {
+  padding: 13px 12px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.briefing-row {
+  padding: 11px 12px;
+  border-top: 1px solid var(--border-faint);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease);
+}
+.briefing-row:first-of-type {
+  border-top: none;
+}
+.briefing-row:hover {
+  background: var(--surface-hover);
+}
+.briefing-row-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.briefing-kind {
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 4px 7px;
+  background: var(--bg);
+}
+.briefing-kind.attention,
+.briefing-kind.waiting {
+  border-color: color-mix(in srgb, var(--warn) 52%, var(--border));
+  color: var(--warn);
+}
+.briefing-kind.stale {
+  border-color: color-mix(in srgb, var(--warn) 44%, var(--border));
+  color: var(--warn);
+}
+.briefing-kind.ready,
+.briefing-kind.shipped {
+  border-color: color-mix(in srgb, var(--ok) 48%, var(--border));
+  color: var(--ok);
+}
+.briefing-title {
+  min-width: 0;
+  font-weight: 560;
+  font-size: 13.5px;
+}
+.briefing-meta,
+.briefing-detail {
+  margin-top: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.briefing-meta {
+  font-family: var(--font-mono);
+}
+.briefing-links {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.briefing-link {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--accent-hi);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: none;
+}
+.briefing-link:hover {
+  text-decoration: underline;
+}
 .rail-card {
   padding: 14px 15px;
 }
@@ -3186,6 +3294,9 @@ select.input {
 }
 @media (max-width: 1080px) {
   .mc-cols {
+    grid-template-columns: 1fr;
+  }
+  .briefing-grid {
     grid-template-columns: 1fr;
   }
 }

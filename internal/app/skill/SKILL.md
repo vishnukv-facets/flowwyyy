@@ -209,6 +209,8 @@ Read
   flow show task    [<ref>]     (no arg → $FLOW_TASK, then current-session reverse-lookup)
   flow show project [<ref>]     (no arg → project of current/bound task)
   flow show playbook    [<ref>]
+  flow standup [--for today|monday|24h] [--clipboard]
+                     generate a copyable briefing from Attention, waiting, stale, ready, and recent activity
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
   flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
@@ -362,6 +364,27 @@ working on", "where did I leave off", "give me a status".
    new task" option if appropriate.
 
 Do not auto-run `flow do` after listing. Wait for the user to pick.
+
+### 4.1a Copyable standup / briefing
+
+**Triggers:** "daily digest", "morning briefing", "standup", "brief me",
+"copyable status", "what changed since yesterday".
+
+**Recipe:**
+
+1. Run `flow standup --for today` unless the user asks for Monday/week-start
+   or the last 24 hours.
+2. If the user asks for something they can paste elsewhere, run
+   `flow standup --for today --clipboard` and still summarize the result in
+   chat.
+3. Treat this as read-only synthesis. Do not choose a task, open a session,
+   or act on Attention cards from the briefing.
+4. Make clear that the briefing separates **needs action** from **FYI** and
+   groups items by project/source/urgency.
+
+This does not replace the interactive start-the-day picker in §4.1. If the
+user asks "what should I work on" or wants to pick next work, use §4.1 and
+AskUserQuestion instead of only dumping a briefing.
 
 ### 4.2 Add a task — INTERVIEW MODE (mandatory)
 

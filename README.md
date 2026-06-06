@@ -140,9 +140,10 @@ now will know everything every prior weekly review surfaced.
 
 `flow ui serve` boots a local web app at `127.0.0.1:8787`. Same
 SQLite, same markdown briefs, same skill — just a richer surface for
-the things terminals don't do well: side-by-side task lists, inline
-brief editing, live agent status, and a browser-attached terminal that
-streams the Claude or Codex session over WebSocket.
+the things terminals don't do well: side-by-side task lists, an
+Attention-aware briefing, inline brief editing, live agent status, and
+a browser-attached terminal that streams the Claude or Codex session
+over WebSocket.
 
 ![Mission Control overview](docs/ui/01-mission-control.png)
 
@@ -815,6 +816,10 @@ handles the rest.
   explicitly want session transcript search; transcripts stay out of
   the default scope because they are much larger. Use `--in all` to
   include every supported corpus.
+- **Copyable daily briefing.** `flow standup --for today` assembles
+  Attention cards, waiting work, stale sessions, newly ready high-priority
+  backlog, and recent activity into needs-action and FYI sections. Add
+  `--clipboard` when you want a paste-ready digest.
 - **Interview-driven task capture.** No forms. flow asks
   what / why / where / done-when, then writes a structured brief.
 - **A knowledge base that grows.** Five markdown buckets for

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flow/internal/briefing"
 	"flow/internal/flowdb"
 	"fmt"
 	"io"
@@ -292,6 +293,17 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			out.ActivePlaybooks = append(out.ActivePlaybooks, pb)
 		}
 	}
+	now := time.Now()
+	brief, err := briefing.Build(s.cfg.DB, s.cfg.FlowRoot, briefing.Options{
+		Now:   now,
+		Since: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()),
+		Limit: 20,
+	})
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	out.Briefing = brief
 	writeJSON(w, out)
 }
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"database/sql"
+	"flow/internal/briefing"
 	"net/http"
 	"sync"
 	"time"
@@ -521,12 +522,13 @@ type WorkdirView struct {
 }
 
 type OverviewView struct {
-	LiveSessions        []TaskView     `json:"live_sessions"`
-	InFlight            []TaskView     `json:"in_flight"`
-	HighPriorityBacklog []TaskView     `json:"high_priority_backlog"`
-	Waiting             []TaskView     `json:"waiting"`
-	Stale               []TaskView     `json:"stale"`
-	ActivePlaybooks     []PlaybookView `json:"active_playbooks"`
+	LiveSessions        []TaskView        `json:"live_sessions"`
+	InFlight            []TaskView        `json:"in_flight"`
+	HighPriorityBacklog []TaskView        `json:"high_priority_backlog"`
+	Waiting             []TaskView        `json:"waiting"`
+	Stale               []TaskView        `json:"stale"`
+	ActivePlaybooks     []PlaybookView    `json:"active_playbooks"`
+	Briefing            briefing.Briefing `json:"briefing"`
 }
 
 type SearchResponse struct {

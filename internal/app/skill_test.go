@@ -739,6 +739,23 @@ func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsStandupBriefing(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"flow standup [--for today|monday|24h] [--clipboard]",
+		"generate a copyable briefing from Attention, waiting, stale, ready, and recent activity",
+		"### 4.1a Copyable standup / briefing",
+		"daily digest",
+		"separates **needs action** from **FYI**",
+		"This does not replace the interactive start-the-day picker",
+		"AskUserQuestion instead of only dumping a briefing",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing standup briefing content %q", want)
+		}
+	}
+}
+
 func TestReadmeDocumentsSameSessionProviderCapability(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {
