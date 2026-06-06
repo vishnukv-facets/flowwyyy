@@ -60,6 +60,138 @@ func TestHandleAttention(t *testing.T) {
 	}
 }
 
+func TestHandleAttentionIncludesExplainabilityFields(t *testing.T) {
+	s, db := attentionTestServer(t)
+	now := "2026-06-05T10:00:00Z"
+	if _, err := db.Exec(
+		`INSERT INTO projects (slug, name, status, priority, work_dir, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"flow-manager", "Flow Manager", "active", "medium", t.TempDir(), now, now,
+	); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, project_slug, session_provider, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"deploy-followup", "Follow up on deploy thread", "in-progress", "high", t.TempDir(), "flow-manager", "codex", now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	contextJSON := `{
+		"source":"slack",
+		"thread_key":"C1:1.1",
+		"summary":"2 Slack messages from alice, bob",
+		"fetch_status":"ok",
+		"participants":["alice","bob"],
+		"parent":{"kind":"parent","author":"alice","text":"Can we ship the deploy Friday?","ts":"1.1"},
+		"messages":[{"kind":"reply","author":"bob","text":"Needs rollback note first.","ts":"1.2"}]
+	}`
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "why1", Source: "slack", ThreadKey: "C1:1.1", Summary: "Deploy follow-up",
+		SuggestedAction: "forward", MatchedTask: "deploy-followup", SuggestedProject: "flow-manager",
+		Confidence: 0.86, Reason: "existing task already owns this deploy thread", ContextJSON: contextJSON,
+		Status: "new", CreatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	relevant := true
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "why-trace", CreatedAt: now, Origin: "live", Source: "slack", Channel: "C1", Author: "alice",
+		ThreadKey: "C1:1.1", TextPreview: "Can we ship?", Disposition: "surfaced", StageReached: "stage3",
+		Stage1Relevant: &relevant, Stage2Action: "reply", Stage2Confidence: 0.74,
+		Stage3Action: "forward", Stage3Confidence: 0.92, FinalAction: "forward", FinalConfidence: 0.92,
+		FeedItemID: "why1", LatencyMS: 44, Model: "sonnet",
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleAttention(rec, httptest.NewRequest(http.MethodGet, "/api/attention?status=new", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	why, ok := rows[0]["why"].(map[string]any)
+	if !ok {
+		t.Fatalf("why field missing from response: %#v", rows[0])
+	}
+	if why["context_summary"] != "2 Slack messages from alice, bob" || why["fetch_status"] != "ok" {
+		t.Errorf("context evidence = %#v", why)
+	}
+	if why["stage_reached"] != "stage3" || why["stage_action"] != "forward" || why["stage_confidence"] != 0.92 {
+		t.Errorf("stage evidence = %#v", why)
+	}
+	if why["reason"] != "existing task already owns this deploy thread" || why["confidence"] != 0.86 {
+		t.Errorf("reason/confidence evidence = %#v", why)
+	}
+	if why["parent_preview"] != "Can we ship the deploy Friday?" || why["latest_preview"] != "Needs rollback note first." {
+		t.Errorf("message previews = %#v", why)
+	}
+	match, ok := why["matched_task"].(map[string]any)
+	if !ok {
+		t.Fatalf("matched_task missing from why field: %#v", why)
+	}
+	if match["slug"] != "deploy-followup" || match["name"] != "Follow up on deploy thread" ||
+		match["status"] != "in-progress" || match["priority"] != "high" || match["project_slug"] != "flow-manager" {
+		t.Errorf("matched task evidence = %#v", match)
+	}
+}
+
+func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
+	s, db := attentionTestServer(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "act1", Source: "slack", ThreadKey: "C1:1.1", Summary: "Needs reply",
+		SuggestedAction: "reply", MatchedTask: "deploy-followup", Draft: "On it.",
+		Channel: "C1", Author: "alice", Confidence: 0.75, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleAttention(rec, httptest.NewRequest(http.MethodGet, "/api/attention?status=new", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	previews, ok := rows[0]["action_previews"].([]any)
+	if !ok {
+		t.Fatalf("action_previews missing from response: %#v", rows[0])
+	}
+	byAction := map[string]map[string]any{}
+	for _, raw := range previews {
+		p, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("bad preview shape: %#v", raw)
+		}
+		if action, _ := p["action"].(string); action != "" {
+			byAction[action] = p
+		}
+	}
+	for _, action := range []string{"make_task", "make_task_start", "forward", "send_reply", "dismiss", "retriage", "mute_channel", "mute_sender", "mute_thread"} {
+		if byAction[action] == nil {
+			t.Fatalf("missing action preview %q in %#v", action, previews)
+		}
+	}
+	if byAction["forward"]["target"] != "deploy-followup" {
+		t.Errorf("forward target = %#v, want deploy-followup", byAction["forward"])
+	}
+	if byAction["send_reply"]["target"] != "source thread" {
+		t.Errorf("send_reply target = %#v, want source thread", byAction["send_reply"])
+	}
+	if desc, _ := byAction["make_task"]["description"].(string); desc == "" {
+		t.Errorf("make_task preview should explain the effect: %#v", byAction["make_task"])
+	}
+}
+
 func TestAttentionActDismiss(t *testing.T) {
 	s, db := attentionTestServer(t)
 	seedFeedItem(t, db, "d1", "new")

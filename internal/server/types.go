@@ -427,32 +427,72 @@ type AttentionTraceResponse struct {
 	Items  []SteeringTraceView `json:"items"`
 }
 
+type AttentionTaskMatchView struct {
+	Slug            string `json:"slug"`
+	Name            string `json:"name,omitempty"`
+	Status          string `json:"status,omitempty"`
+	Priority        string `json:"priority,omitempty"`
+	ProjectSlug     string `json:"project_slug,omitempty"`
+	SessionProvider string `json:"session_provider,omitempty"`
+}
+
+type AttentionWhyView struct {
+	Source            string                  `json:"source"`
+	ContextSummary    string                  `json:"context_summary,omitempty"`
+	FetchStatus       string                  `json:"fetch_status,omitempty"`
+	FetchError        string                  `json:"fetch_error,omitempty"`
+	EvidenceCount     int                     `json:"evidence_count,omitempty"`
+	Participants      []string                `json:"participants,omitempty"`
+	ParentPreview     string                  `json:"parent_preview,omitempty"`
+	LatestPreview     string                  `json:"latest_preview,omitempty"`
+	Reason            string                  `json:"reason,omitempty"`
+	Confidence        float64                 `json:"confidence"`
+	StageReached      string                  `json:"stage_reached,omitempty"`
+	StageAction       string                  `json:"stage_action,omitempty"`
+	StageConfidence   float64                 `json:"stage_confidence,omitempty"`
+	Stage1Relevant    *bool                   `json:"stage1_relevant,omitempty"`
+	SuggestedProject  string                  `json:"suggested_project,omitempty"`
+	SuggestedPriority string                  `json:"suggested_priority,omitempty"`
+	MatchedTask       *AttentionTaskMatchView `json:"matched_task,omitempty"`
+}
+
+type AttentionActionPreview struct {
+	Action      string `json:"action"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+	Target      string `json:"target,omitempty"`
+	Primary     bool   `json:"primary,omitempty"`
+	Destructive bool   `json:"destructive,omitempty"`
+}
+
 // AttentionItemView is the UI shape of an attention_feed row.
 type AttentionItemView struct {
-	ID                string  `json:"id"`
-	Source            string  `json:"source"`
-	ThreadKey         string  `json:"thread_key"`
-	Summary           string  `json:"summary"`
-	SuggestedAction   string  `json:"suggested_action"`
-	MatchedTask       string  `json:"matched_task,omitempty"`
-	SuggestedProject  string  `json:"suggested_project,omitempty"`
-	SuggestedPriority string  `json:"suggested_priority,omitempty"`
-	Urgency           string  `json:"urgency,omitempty"`
-	IsVIP             bool    `json:"is_vip"`
-	Confidence        float64 `json:"confidence"`
-	Draft             string  `json:"draft,omitempty"`
-	Reason            string  `json:"reason,omitempty"`
-	Status            string  `json:"status"`
-	LinkedTask        string  `json:"linked_task,omitempty"`
-	Retriaging        bool    `json:"retriaging,omitempty"`
-	CreatedAt         string  `json:"created_at"`
-	ActedAt           string  `json:"acted_at,omitempty"`
-	Channel           string  `json:"channel,omitempty"`
-	ChannelType       string  `json:"channel_type,omitempty"`
-	ChannelName       string  `json:"channel_name,omitempty"`
-	Author            string  `json:"author,omitempty"`
-	AuthorName        string  `json:"author_name,omitempty"`
-	Permalink         string  `json:"permalink,omitempty"`
+	ID                string                   `json:"id"`
+	Source            string                   `json:"source"`
+	ThreadKey         string                   `json:"thread_key"`
+	Summary           string                   `json:"summary"`
+	SuggestedAction   string                   `json:"suggested_action"`
+	MatchedTask       string                   `json:"matched_task,omitempty"`
+	SuggestedProject  string                   `json:"suggested_project,omitempty"`
+	SuggestedPriority string                   `json:"suggested_priority,omitempty"`
+	Urgency           string                   `json:"urgency,omitempty"`
+	IsVIP             bool                     `json:"is_vip"`
+	Confidence        float64                  `json:"confidence"`
+	Draft             string                   `json:"draft,omitempty"`
+	Reason            string                   `json:"reason,omitempty"`
+	Status            string                   `json:"status"`
+	LinkedTask        string                   `json:"linked_task,omitempty"`
+	Retriaging        bool                     `json:"retriaging,omitempty"`
+	CreatedAt         string                   `json:"created_at"`
+	ActedAt           string                   `json:"acted_at,omitempty"`
+	Channel           string                   `json:"channel,omitempty"`
+	ChannelType       string                   `json:"channel_type,omitempty"`
+	ChannelName       string                   `json:"channel_name,omitempty"`
+	Author            string                   `json:"author,omitempty"`
+	AuthorName        string                   `json:"author_name,omitempty"`
+	Permalink         string                   `json:"permalink,omitempty"`
+	Why               AttentionWhyView         `json:"why"`
+	ActionPreviews    []AttentionActionPreview `json:"action_previews,omitempty"`
 }
 
 type WorkdirView struct {

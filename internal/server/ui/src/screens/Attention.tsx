@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
-import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -209,8 +209,7 @@ function AttentionCard({
       ) : null}
 
       <div className="att-summary">{item.summary || <span className="faint">(no summary)</span>}</div>
-      {item.reason ? <div className="att-reason dim">{item.reason}</div> : null}
-      {item.matched_task ? <div className="att-meta mono faint">→ {item.matched_task}</div> : null}
+      <WhyThis item={item} compact onNavigate={(slug) => navigate(`/session/${slug}`)} />
 
       {item.draft ? (
         <div className="att-draft">
@@ -331,6 +330,136 @@ function MuteMenu({
   )
 }
 
+function WhyThis({
+  item,
+  compact = false,
+  onNavigate,
+}: {
+  item: AttentionItem
+  compact?: boolean
+  onNavigate?: (slug: string) => void
+}) {
+  const why = item.why ?? { source: item.source, confidence: item.confidence }
+  const match = why.matched_task
+  const stage =
+    why.stage_action
+      ? `${titleCase(why.stage_action.replace(/_/g, ' '))} · ${pctConf(why.stage_confidence)}`
+      : why.stage_reached || '—'
+  const evidence = why.context_summary || item.channel_name || item.thread_key || titleCase(why.source || item.source || 'source')
+  const confidence = pctConf(why.confidence ?? item.confidence)
+  const participants = (why.participants ?? []).slice(0, compact ? 3 : 6).join(', ')
+  const taskStatus = [match?.status, match?.priority, match?.project_slug].filter(Boolean).join(' · ')
+  return (
+    <div className={`att-why${compact ? ' compact' : ''}`}>
+      <div className="att-why-title">
+        <Info size={13} /> why this
+        <span className="spacer" />
+        <span className="mono faint">{confidence}</span>
+      </div>
+      <div className="att-why-grid">
+        <span>source</span>
+        <strong>{evidence}</strong>
+        {match || item.matched_task ? (
+          <>
+            <span>match</span>
+            <div className="att-match">
+              <div>
+                <strong>{match?.name || match?.slug || item.matched_task}</strong>
+                <div className="mono faint">
+                  {match?.slug || item.matched_task}
+                  {taskStatus ? ` · ${taskStatus}` : ''}
+                </div>
+              </div>
+              {onNavigate && (match?.slug || item.matched_task) ? (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onNavigate(match?.slug || item.matched_task || '')
+                  }}
+                >
+                  <ArrowRight size={13} /> Open
+                </button>
+              ) : null}
+            </div>
+          </>
+        ) : why.suggested_project || why.suggested_priority ? (
+          <>
+            <span>target</span>
+            <strong>{[why.suggested_project, why.suggested_priority].filter(Boolean).join(' · ')}</strong>
+          </>
+        ) : null}
+        <span>reason</span>
+        <strong>{why.reason || item.reason || 'No reason recorded.'}</strong>
+        <span>stage</span>
+        <strong>{stage}</strong>
+      </div>
+      {!compact ? (
+        <div className="att-evidence">
+          {why.parent_preview ? (
+            <div>
+              <span className="eyebrow">parent</span>
+              <div>{why.parent_preview}</div>
+            </div>
+          ) : null}
+          {why.latest_preview ? (
+            <div>
+              <span className="eyebrow">latest</span>
+              <div>{why.latest_preview}</div>
+            </div>
+          ) : null}
+          <div className="att-evidence-meta row gap faint">
+            {why.evidence_count ? <span>{why.evidence_count} evidence item{why.evidence_count === 1 ? '' : 's'}</span> : null}
+            {participants ? <span>participants: {participants}</span> : null}
+            {why.fetch_status && why.fetch_status !== 'ok' ? <span>context: {why.fetch_status}</span> : null}
+          </div>
+          {why.fetch_error ? <div className="warn-text">{why.fetch_error}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function ActionPreviewList({ item, previews }: { item: AttentionItem; previews?: AttentionItem['action_previews'] }) {
+  if (!previews || previews.length === 0) {
+    return <div className="faint" style={{ marginTop: 6 }}>No actions are available for this card.</div>
+  }
+  return (
+    <div className="att-action-preview">
+      {previews.map((p) => {
+        const target = actionPreviewTarget(item, p)
+        return (
+          <div key={p.action} className={`att-action-preview-row${p.primary ? ' primary' : ''}${p.destructive ? ' destructive' : ''}`}>
+            <div>
+              <div className="row gap">
+                <strong>{p.label}</strong>
+                {p.primary ? <span className="badge accent">suggested</span> : null}
+                {p.destructive ? <span className="badge warn">suppresses</span> : null}
+              </div>
+              <div className="dim">{p.description}</div>
+            </div>
+            {target ? <span className="mono faint">{target}</span> : null}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function actionPreviewTarget(item: AttentionItem, p: NonNullable<AttentionItem['action_previews']>[number]): string {
+  switch (p.action) {
+    case 'mute_channel':
+      return item.channel_name || p.target || ''
+    case 'mute_sender':
+      return item.author_name || p.target || ''
+    case 'forward':
+      return item.why?.matched_task?.name || item.why?.matched_task?.slug || p.target || ''
+    default:
+      return p.target || ''
+  }
+}
+
 // ----- Feed detail modal --------------------------------------------------
 // Clicking a feed card opens this: the message context taken straight from the
 // item, plus the SAME cascade-decision grid the Trace view shows — fetched by
@@ -340,6 +469,7 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
   // Hooks must run unconditionally; pass null while closed so the query stays idle.
   const { data: trace, isLoading, isError } = useAttentionDecision(item?.id ?? null)
   const action = useAction()
+  const [, navigate] = useLocation()
   // Editable draft, controlled. Reset to the item's draft whenever the open
   // item changes (keyed by id), so reopening a different card doesn't keep the
   // previous edit. `item.draft ?? ''` covers items with no draft.
@@ -397,6 +527,21 @@ function FeedDetail({ item, onClose }: { item: AttentionItem | null; onClose: ()
         <div className="td-section">
           <div className="eyebrow">summary</div>
           <div className="att-draft-body td-message">{item.summary || '(no summary)'}</div>
+        </div>
+
+        <div className="td-section">
+          <WhyThis
+            item={item}
+            onNavigate={(slug) => {
+              onClose()
+              navigate(`/session/${slug}`)
+            }}
+          />
+        </div>
+
+        <div className="td-section">
+          <div className="eyebrow">action preview</div>
+          <ActionPreviewList item={item} previews={item.action_previews} />
         </div>
 
         {item.draft ? (

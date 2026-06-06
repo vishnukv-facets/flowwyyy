@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -161,7 +162,201 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 			v.Permalink = connectorPermalink(it.Source, it.TeamID, ch, ts, it.URL)
 		}
 	}
+	v.Why = s.attentionWhyView(ctx, it)
+	v.ActionPreviews = attentionActionPreviews(it)
 	return v
+}
+
+func (s *Server) attentionWhyView(ctx context.Context, it flowdb.FeedItem) AttentionWhyView {
+	v := AttentionWhyView{
+		Source:            it.Source,
+		Reason:            it.Reason,
+		Confidence:        it.Confidence,
+		SuggestedProject:  it.SuggestedProject,
+		SuggestedPriority: it.SuggestedPriority,
+	}
+	if strings.TrimSpace(it.ContextJSON) != "" {
+		var pack steering.ThreadContext
+		if err := json.Unmarshal([]byte(it.ContextJSON), &pack); err != nil {
+			v.FetchStatus = "invalid"
+			v.FetchError = err.Error()
+		} else {
+			if pack.Source != "" {
+				v.Source = pack.Source
+			}
+			v.ContextSummary = pack.Summary
+			v.FetchStatus = pack.FetchStatus
+			v.FetchError = pack.FetchError
+			v.Participants = pack.Participants
+			v.EvidenceCount = contextEvidenceCount(pack)
+			if pack.Parent != nil {
+				v.ParentPreview = previewText(pack.Parent.Text, 180)
+			}
+			for i := len(pack.Messages) - 1; i >= 0; i-- {
+				if text := previewText(pack.Messages[i].Text, 180); text != "" {
+					v.LatestPreview = text
+					break
+				}
+			}
+		}
+	}
+	if matched := strings.TrimSpace(it.MatchedTask); matched != "" {
+		v.MatchedTask = s.attentionTaskMatch(ctx, matched)
+	}
+	if s.cfg.DB != nil {
+		if tr, err := flowdb.GetSteeringTraceByFeedItem(s.cfg.DB, it.ID); err == nil {
+			v.StageReached = tr.StageReached
+			v.Stage1Relevant = tr.Stage1Relevant
+			v.StageAction, v.StageConfidence = attentionStageOutcome(tr)
+		}
+	}
+	return v
+}
+
+func (s *Server) attentionTaskMatch(_ context.Context, slug string) *AttentionTaskMatchView {
+	v := &AttentionTaskMatchView{Slug: slug}
+	if s.cfg.DB == nil {
+		return v
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil {
+		return v
+	}
+	v.Name = task.Name
+	v.Status = task.Status
+	v.Priority = task.Priority
+	v.SessionProvider = task.SessionProvider
+	if task.ProjectSlug.Valid {
+		v.ProjectSlug = task.ProjectSlug.String
+	}
+	return v
+}
+
+func contextEvidenceCount(pack steering.ThreadContext) int {
+	n := 0
+	if pack.Parent != nil && strings.TrimSpace(pack.Parent.Text) != "" {
+		n++
+	}
+	for _, msg := range pack.Messages {
+		if strings.TrimSpace(msg.Text) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+func attentionStageOutcome(t flowdb.SteeringTrace) (string, float64) {
+	switch {
+	case t.Stage3Action != "":
+		return t.Stage3Action, t.Stage3Confidence
+	case t.FinalAction != "":
+		return t.FinalAction, t.FinalConfidence
+	case t.Stage2Action != "":
+		return t.Stage2Action, t.Stage2Confidence
+	default:
+		return "", 0
+	}
+}
+
+func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
+	if it.Status != "new" {
+		return nil
+	}
+	matched := strings.TrimSpace(it.MatchedTask)
+	source := strings.TrimSpace(it.Source)
+	if source == "" {
+		source = "source"
+	}
+	out := []AttentionActionPreview{
+		{
+			Action:      "make_task",
+			Label:       "Make task",
+			Description: "Creates a backlog task from this card and links the card to it.",
+			Primary:     attentionActionPrimary(it, "make_task"),
+		},
+		{
+			Action:      "make_task_start",
+			Label:       "Make task & start",
+			Description: "Creates the task and starts its agent session in the UI.",
+		},
+	}
+	if matched != "" {
+		out = append(out, AttentionActionPreview{
+			Action:      "forward",
+			Label:       "Forward",
+			Target:      matched,
+			Description: "Adds the context to the matched task and wakes that task's session.",
+			Primary:     attentionActionPrimary(it, "forward"),
+		})
+	}
+	if strings.TrimSpace(it.Draft) != "" {
+		desc := "Posts the approved reply to the " + source + " thread through an agent session."
+		if matched != "" {
+			desc = "Hands the approved reply to the matched task's agent session to post."
+		}
+		out = append(out, AttentionActionPreview{
+			Action:      "send_reply",
+			Label:       "Send reply",
+			Target:      "source thread",
+			Description: desc,
+			Primary:     attentionActionPrimary(it, "reply") || attentionActionPrimary(it, "send_reply"),
+		})
+	}
+	out = append(out,
+		AttentionActionPreview{
+			Action:      "dismiss",
+			Label:       "Dismiss",
+			Description: "Marks this card handled without contacting the source or creating work.",
+		},
+		AttentionActionPreview{
+			Action:      "retriage",
+			Label:       "Re-triage",
+			Description: "Re-runs the cascade with the latest source context and task evidence.",
+		},
+	)
+	if strings.TrimSpace(it.Channel) != "" {
+		out = append(out, AttentionActionPreview{
+			Action:      "mute_channel",
+			Label:       "Mute channel",
+			Target:      it.Channel,
+			Description: "Dismisses matching open cards and suppresses future cards from this channel.",
+			Destructive: true,
+		})
+	}
+	if strings.TrimSpace(it.Author) != "" {
+		out = append(out, AttentionActionPreview{
+			Action:      "mute_sender",
+			Label:       "Mute sender",
+			Target:      it.Author,
+			Description: "Dismisses matching open cards and suppresses future cards from this sender.",
+			Destructive: true,
+		})
+	}
+	out = append(out, AttentionActionPreview{
+		Action:      "mute_thread",
+		Label:       "Mute thread",
+		Target:      it.ThreadKey,
+		Description: "Dismisses this thread and suppresses future cards from the same thread.",
+		Destructive: true,
+	})
+	return out
+}
+
+func attentionActionPrimary(it flowdb.FeedItem, action string) bool {
+	got := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(it.SuggestedAction)), "-", "_")
+	want := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(action)), "-", "_")
+	return got == want
+}
+
+func previewText(text string, max int) string {
+	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	if max <= 0 || len(text) <= max {
+		return text
+	}
+	if max <= 3 {
+		return text[:max]
+	}
+	return strings.TrimSpace(text[:max-3]) + "..."
 }
 
 // splitThreadKey parses a Slack thread_key "<channel>:<thread_ts>". Slack

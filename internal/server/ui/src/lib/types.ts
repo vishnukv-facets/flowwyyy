@@ -644,6 +644,46 @@ export interface AttentionItem {
   author?: string
   author_name?: string // resolved display name / GitHub login
   permalink?: string // slack:// deep link OR https GitHub URL
+  why: AttentionWhy
+  action_previews?: AttentionActionPreview[]
+}
+
+export interface AttentionTaskMatch {
+  slug: string
+  name?: string
+  status?: string
+  priority?: string
+  project_slug?: string
+  session_provider?: string
+}
+
+export interface AttentionWhy {
+  source: string
+  context_summary?: string
+  fetch_status?: string
+  fetch_error?: string
+  evidence_count?: number
+  participants?: string[]
+  parent_preview?: string
+  latest_preview?: string
+  reason?: string
+  confidence: number
+  stage_reached?: string
+  stage_action?: string
+  stage_confidence?: number
+  stage1_relevant?: boolean
+  suggested_project?: string
+  suggested_priority?: string
+  matched_task?: AttentionTaskMatch
+}
+
+export interface AttentionActionPreview {
+  action: string
+  label: string
+  description: string
+  target?: string
+  primary?: boolean
+  destructive?: boolean
 }
 
 export interface SteeringFunnel {
