@@ -79,12 +79,26 @@ type Server struct {
 	searchSyncAt  map[string]time.Time
 	searchSyncing bool
 
+	// flowDBQuickCheck caches the last authoritative integrity check so the
+	// sidebar can report a recent compact precheck when its short live check
+	// times out on a large database.
+	flowDBQuickCheckMu      sync.Mutex
+	flowDBQuickCheck        cachedFlowDBQuickCheck
+	flowDBQuickCheckTimeout time.Duration
+
 	// apiMux is the data-plane mux (/api/* routes only), built once and
 	// reused by both the HTTP Handler and the WebSocket-RPC bridge so the
 	// UI can run every data request and mutation over a single socket
 	// (see rpc_bridge.go) without duplicating route wiring.
 	apiOnce sync.Once
 	apiMux  http.Handler
+}
+
+type cachedFlowDBQuickCheck struct {
+	Path      string
+	Result    string
+	Source    string
+	CheckedAt time.Time
 }
 
 type HealthView struct {

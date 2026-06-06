@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -102,12 +103,49 @@ func currentUIUser() uiUser {
 // uiFlowDB carries on-disk stats for flow.db (plus a display-friendly
 // path) so the UI sidebar can show how much storage flow is using.
 type uiFlowDB struct {
-	Path        string `json:"path"`
-	DisplayPath string `json:"display_path"`
-	Bytes       int64  `json:"bytes"`
-	HumanSize   string `json:"human_size"`
-	Exists      bool   `json:"exists"`
+	Path                 string            `json:"path"`
+	DisplayPath          string            `json:"display_path"`
+	Bytes                int64             `json:"bytes"`
+	HumanSize            string            `json:"human_size"`
+	Exists               bool              `json:"exists"`
+	PageSize             int64             `json:"page_size"`
+	PageCount            int64             `json:"page_count"`
+	FreePageCount        int64             `json:"free_page_count"`
+	UsedBytes            int64             `json:"used_bytes"`
+	UsedHumanSize        string            `json:"used_human_size"`
+	ReclaimableBytes     int64             `json:"reclaimable_bytes"`
+	ReclaimableHumanSize string            `json:"reclaimable_human_size"`
+	QuickCheck           string            `json:"quick_check"`
+	QuickCheckSource     string            `json:"quick_check_source"`
+	QuickCheckCheckedAt  string            `json:"quick_check_checked_at"`
+	QuickCheckNote       string            `json:"quick_check_note"`
+	CanCompact           bool              `json:"can_compact"`
+	Explanation          string            `json:"explanation"`
+	Objects              []uiFlowDBObject  `json:"objects"`
+	Documents            []uiFlowDBDocStat `json:"documents"`
+	Error                string            `json:"error,omitempty"`
 }
+
+type uiFlowDBObject struct {
+	Name      string  `json:"name"`
+	Kind      string  `json:"kind"`
+	Bytes     int64   `json:"bytes"`
+	HumanSize string  `json:"human_size"`
+	Percent   float64 `json:"percent"`
+}
+
+type uiFlowDBDocStat struct {
+	Scope        string `json:"scope"`
+	EntityType   string `json:"entity_type"`
+	Count        int    `json:"count"`
+	ContentBytes int64  `json:"content_bytes"`
+	HumanSize    string `json:"human_size"`
+}
+
+const (
+	defaultFlowDBQuickCheckTimeout = time.Second
+	flowDBQuickCheckCacheTTL       = 30 * time.Minute
+)
 
 type uiActivityDay struct {
 	Date  string   `json:"date"`
@@ -548,6 +586,208 @@ func (s *Server) uiFlowDB() uiFlowDB {
 	out.Exists = true
 	out.Bytes = info.Size()
 	out.HumanSize = humanByteSize(info.Size())
+	s.addFlowDBDiagnostics(&out)
+	return out
+}
+
+func (s *Server) addFlowDBDiagnostics(out *uiFlowDB) {
+	if out == nil || !out.Exists {
+		return
+	}
+	db, err := openFlowDBDiagnostic(out.Path)
+	if err != nil {
+		out.Error = err.Error()
+		return
+	}
+	defer db.Close()
+	pageSize, err := sqlitePragmaInt64(db, "page_size", 500*time.Millisecond)
+	if err != nil {
+		out.Error = err.Error()
+		return
+	}
+	pageCount, err := sqlitePragmaInt64(db, "page_count", 500*time.Millisecond)
+	if err != nil {
+		out.Error = err.Error()
+		return
+	}
+	freePageCount, err := sqlitePragmaInt64(db, "freelist_count", 500*time.Millisecond)
+	if err != nil {
+		out.Error = err.Error()
+		return
+	}
+	out.PageSize = pageSize
+	out.PageCount = pageCount
+	out.FreePageCount = freePageCount
+	out.ReclaimableBytes = pageSize * freePageCount
+	out.UsedBytes = pageSize * (pageCount - freePageCount)
+	if out.UsedBytes < 0 {
+		out.UsedBytes = 0
+	}
+	out.UsedHumanSize = humanByteSize(out.UsedBytes)
+	out.ReclaimableHumanSize = humanByteSize(out.ReclaimableBytes)
+	out.CanCompact = out.ReclaimableBytes > 0
+	s.addFlowDBQuickCheck(out, db)
+	out.Objects = sqliteTopObjects(db, out.Bytes, 12, 2*time.Second)
+	out.Documents = sqliteSearchDocStats(db, time.Second)
+	out.Explanation = "SQLite keeps deleted content as free pages inside flow.db until compaction; transcript full-text search can dominate storage because it stores searchable session text."
+}
+
+func (s *Server) addFlowDBQuickCheck(out *uiFlowDB, db *sql.DB) {
+	timeout := s.flowDBQuickCheckTimeout
+	if timeout == 0 {
+		timeout = defaultFlowDBQuickCheckTimeout
+	}
+	result := sqliteQuickCheck(db, timeout)
+	out.QuickCheck = result
+	now := time.Now()
+	switch result {
+	case "ok":
+		out.QuickCheckSource = "live"
+		out.QuickCheckCheckedAt = now.Format(time.RFC3339)
+		out.QuickCheckNote = "Live integrity check completed."
+		s.rememberFlowDBQuickCheck(out.Path, result, "live", now)
+	case "not checked":
+		if s.applyCachedFlowDBQuickCheck(out, now) {
+			return
+		}
+		out.QuickCheckSource = "live-timeout"
+		out.QuickCheckNote = "Live integrity check timed out; compact uses a longer safety check before VACUUM."
+	default:
+		out.QuickCheckSource = "live"
+		out.QuickCheckNote = "Live integrity check returned an error."
+	}
+}
+
+func (s *Server) rememberFlowDBQuickCheck(path, result, source string, checkedAt time.Time) {
+	if path == "" || result != "ok" || checkedAt.IsZero() {
+		return
+	}
+	s.flowDBQuickCheckMu.Lock()
+	defer s.flowDBQuickCheckMu.Unlock()
+	s.flowDBQuickCheck = cachedFlowDBQuickCheck{
+		Path:      path,
+		Result:    result,
+		Source:    source,
+		CheckedAt: checkedAt,
+	}
+}
+
+func (s *Server) applyCachedFlowDBQuickCheck(out *uiFlowDB, now time.Time) bool {
+	s.flowDBQuickCheckMu.Lock()
+	cached := s.flowDBQuickCheck
+	s.flowDBQuickCheckMu.Unlock()
+	if cached.Path != out.Path || cached.Result == "" || cached.CheckedAt.IsZero() {
+		return false
+	}
+	if now.Sub(cached.CheckedAt) > flowDBQuickCheckCacheTTL {
+		return false
+	}
+	out.QuickCheck = cached.Result
+	out.QuickCheckSource = cached.Source
+	out.QuickCheckCheckedAt = cached.CheckedAt.Format(time.RFC3339)
+	switch cached.Source {
+	case "compact-precheck":
+		out.QuickCheckNote = "Integrity was checked before compact; the live sidebar check timed out."
+	case "live":
+		out.QuickCheckNote = "Recent live integrity check completed; the latest sidebar check timed out."
+	default:
+		out.QuickCheckNote = "Recent integrity check completed; the latest sidebar check timed out."
+	}
+	return true
+}
+
+func openFlowDBDiagnostic(path string) (*sql.DB, error) {
+	q := url.Values{}
+	q.Set("mode", "ro")
+	q.Set("_pragma", "busy_timeout(100)")
+	db, err := sql.Open("sqlite", "file:"+path+"?"+q.Encode())
+	if err != nil {
+		return nil, fmt.Errorf("open diagnostics sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout = 100`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set diagnostics busy_timeout: %w", err)
+	}
+	return db, nil
+}
+
+func sqlitePragmaInt64(db *sql.DB, name string, timeout time.Duration) (int64, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var n int64
+	if err := db.QueryRowContext(ctx, `PRAGMA `+name).Scan(&n); err != nil {
+		return 0, fmt.Errorf("PRAGMA %s: %w", name, err)
+	}
+	return n, nil
+}
+
+func sqliteQuickCheck(db *sql.DB, timeout time.Duration) string {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	var result string
+	if err := db.QueryRowContext(ctx, `PRAGMA quick_check`).Scan(&result); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return "not checked"
+		}
+		return "error: " + err.Error()
+	}
+	return result
+}
+
+func sqliteTopObjects(db *sql.DB, totalBytes int64, limit int, timeout time.Duration) []uiFlowDBObject {
+	if limit <= 0 {
+		limit = 12
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `
+		SELECT d.name, COALESCE(s.type, 'internal') AS kind, COALESCE(SUM(d.pgsize), 0) AS bytes
+		FROM dbstat d
+		LEFT JOIN sqlite_schema s ON s.name = d.name
+		GROUP BY d.name, kind
+		ORDER BY bytes DESC, d.name ASC
+		LIMIT ?`, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []uiFlowDBObject{}
+	for rows.Next() {
+		var obj uiFlowDBObject
+		if err := rows.Scan(&obj.Name, &obj.Kind, &obj.Bytes); err != nil {
+			return out
+		}
+		obj.HumanSize = humanByteSize(obj.Bytes)
+		if totalBytes > 0 {
+			obj.Percent = float64(obj.Bytes) / float64(totalBytes) * 100
+		}
+		out = append(out, obj)
+	}
+	return out
+}
+
+func sqliteSearchDocStats(db *sql.DB, timeout time.Duration) []uiFlowDBDocStat {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rows, err := db.QueryContext(ctx, `
+		SELECT scope, entity_type, COUNT(*), COALESCE(SUM(LENGTH(content)), 0)
+		FROM search_docs
+		GROUP BY scope, entity_type
+		ORDER BY COALESCE(SUM(LENGTH(content)), 0) DESC, scope ASC, entity_type ASC`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := []uiFlowDBDocStat{}
+	for rows.Next() {
+		var stat uiFlowDBDocStat
+		if err := rows.Scan(&stat.Scope, &stat.EntityType, &stat.Count, &stat.ContentBytes); err != nil {
+			return out
+		}
+		stat.HumanSize = humanByteSize(stat.ContentBytes)
+		out = append(out, stat)
+	}
 	return out
 }
 

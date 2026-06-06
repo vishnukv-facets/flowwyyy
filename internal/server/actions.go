@@ -292,11 +292,48 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.closeFloatingTerminal(req)
 	case "update-settings":
 		return s.updateSettings(req)
+	case "compact-db":
+		return s.compactFlowDB()
 	case "attention-act":
 		return s.attentionAct(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}
+}
+
+func (s *Server) compactFlowDB() (actionResponse, int) {
+	before := s.uiFlowDB()
+	if !before.Exists {
+		return actionResponse{OK: false, Message: "flow database is missing"}, http.StatusNotFound
+	}
+	if before.Error != "" || before.PageSize == 0 {
+		return actionResponse{OK: false, Message: "database is busy; try compacting again when flow is idle"}, http.StatusConflict
+	}
+	quickCheck := sqliteQuickCheck(s.cfg.DB, 2*time.Minute)
+	if quickCheck != "ok" {
+		return actionResponse{OK: false, Message: "database integrity check failed: " + quickCheck}, http.StatusConflict
+	}
+	s.rememberFlowDBQuickCheck(before.Path, quickCheck, "compact-precheck", time.Now())
+	if before.ReclaimableBytes == 0 {
+		return actionResponse{OK: true, Message: "database already compact", Output: "No SQLite free-list pages to reclaim."}, http.StatusOK
+	}
+	// Best-effort WAL cleanup before VACUUM. Some installs may not use WAL; a
+	// checkpoint failure should not hide that VACUUM itself can still reclaim
+	// free-list pages from the main database file.
+	_, _ = s.cfg.DB.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+	if _, err := s.cfg.DB.Exec(`VACUUM`); err != nil {
+		return actionResponse{OK: false, Message: "compact failed: " + err.Error()}, http.StatusInternalServerError
+	}
+	after := s.uiFlowDB()
+	reclaimed := before.Bytes - after.Bytes
+	if reclaimed < 0 {
+		reclaimed = 0
+	}
+	return actionResponse{
+		OK:      true,
+		Message: "compacted database; reclaimed " + humanByteSize(reclaimed),
+		Output:  fmt.Sprintf("Before: %s on disk, %s reclaimable\nAfter: %s on disk, %s reclaimable", before.HumanSize, before.ReclaimableHumanSize, after.HumanSize, after.ReclaimableHumanSize),
+	}, http.StatusOK
 }
 
 // nudgeSession delivers a user-typed instruction into a task's agent session

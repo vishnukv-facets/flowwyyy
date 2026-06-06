@@ -3280,6 +3280,174 @@ select.input {
   align-items: center;
   gap: 6px;
 }
+.storage-menu {
+  flex: 1;
+  min-width: 0;
+}
+.storage-trigger {
+  width: 100%;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.storage-trigger:hover {
+  color: var(--text-2);
+}
+.storage-pop {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: min(380px, calc(100vw - var(--rail-w) - 28px));
+  max-height: min(620px, calc(100vh - 32px));
+  overflow: auto;
+  padding: 12px;
+  gap: 10px;
+}
+.storage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.storage-title {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.storage-path {
+  max-width: 230px;
+  margin-top: 2px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.storage-health {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  border: 1px solid currentColor;
+  border-radius: var(--r-pill);
+  padding: 3px 7px;
+}
+.storage-health.ok {
+  color: var(--ok);
+}
+.storage-health.warn {
+  color: var(--warn);
+}
+.storage-meter {
+  display: flex;
+  height: 9px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+}
+.storage-meter-used {
+  min-width: 2px;
+  background: var(--accent-hi);
+}
+.storage-meter-free {
+  min-width: 0;
+  background: var(--warn);
+}
+.storage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+.storage-metric {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: var(--bg-2);
+}
+.storage-metric span {
+  display: block;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.storage-metric strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 13px;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.storage-metric.warn strong {
+  color: var(--warn);
+}
+.storage-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 8px;
+  background: var(--bg-2);
+}
+.storage-note.warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 38%, var(--border));
+  background: var(--warn-soft);
+}
+.storage-note.ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
+  background: color-mix(in srgb, var(--ok) 9%, var(--bg-2));
+}
+.storage-empty {
+  font-size: 12px;
+  color: var(--text-3);
+  padding: 10px 2px 2px;
+}
+.storage-section {
+  border-top: 1px solid var(--border-faint);
+  padding-top: 9px;
+}
+.storage-section-title {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 6px;
+}
+.storage-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 26px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.storage-row .mono {
+  font-size: 11px;
+  color: var(--text);
+}
+.storage-compact {
+  width: 100%;
+  justify-content: center;
+}
+.spin {
+  animation: spin 800ms linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 /* Theme toggle: the sun/moon spins + scales in on each swap (the icon span is
    remounted via key={theme} so the animation replays every click). overflow

@@ -407,6 +407,118 @@ func TestUIDataJSONEndpointUsesFlowRecords(t *testing.T) {
 	}
 }
 
+func TestUIDataIncludesFlowDBDiagnostics(t *testing.T) {
+	root, db := testRootDB(t)
+	insertSearchDoc(t, db, "task:build-ui:brief", "brief", "task", "build-ui", "Build UI brief", filepath.Join(root, "tasks", "build-ui", "brief.md"), strings.Repeat("brief ", 200))
+	insertSearchDoc(t, db, "task:build-ui:transcript", "transcript", "task", "build-ui", "Build UI transcript", filepath.Join(root, "sessions", "build-ui.jsonl"), strings.Repeat("transcript ", 8000))
+	insertSearchDoc(t, db, "task:build-ui:delete-me", "transcript", "task", "build-ui", "Deleted transcript", filepath.Join(root, "sessions", "old.jsonl"), strings.Repeat("deleted ", 12000))
+	if _, err := db.Exec(`DELETE FROM search_docs WHERE doc_key = 'task:build-ui:delete-me'`); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	data, err := srv.buildUIData()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stats := data.FlowDB
+	if !stats.Exists || stats.Bytes <= 0 || stats.PageSize <= 0 || stats.PageCount <= 0 {
+		t.Fatalf("basic db stats missing: %+v", stats)
+	}
+	if stats.UsedBytes <= 0 || stats.ReclaimableBytes <= 0 || !stats.CanCompact {
+		t.Fatalf("page accounting did not expose reclaimable space: %+v", stats)
+	}
+	if stats.QuickCheck != "ok" {
+		t.Fatalf("quick_check = %q", stats.QuickCheck)
+	}
+	if len(stats.Objects) == 0 {
+		t.Fatalf("expected top objects, got none: %+v", stats)
+	}
+	var sawSearchObject bool
+	for _, obj := range stats.Objects {
+		if strings.HasPrefix(obj.Name, "search_docs") && obj.Bytes > 0 && obj.HumanSize != "" {
+			sawSearchObject = true
+			break
+		}
+	}
+	if !sawSearchObject {
+		t.Fatalf("top objects did not include search_docs storage: %+v", stats.Objects)
+	}
+	var transcriptDocs uiFlowDBDocStat
+	for _, doc := range stats.Documents {
+		if doc.Scope == "transcript" {
+			transcriptDocs = doc
+			break
+		}
+	}
+	if transcriptDocs.Count != 1 || transcriptDocs.ContentBytes <= 0 || transcriptDocs.HumanSize == "" {
+		t.Fatalf("transcript document stats missing: %+v", stats.Documents)
+	}
+	if !strings.Contains(stats.Explanation, "transcript") {
+		t.Fatalf("explanation should name transcript storage, got %q", stats.Explanation)
+	}
+}
+
+func TestCompactFlowDBActionVacuumsReclaimablePages(t *testing.T) {
+	root, db := testRootDB(t)
+	insertSearchDoc(t, db, "task:build-ui:keep", "brief", "task", "build-ui", "Keep", filepath.Join(root, "tasks", "build-ui", "brief.md"), strings.Repeat("keep ", 200))
+	insertSearchDoc(t, db, "task:build-ui:delete-me", "transcript", "task", "build-ui", "Delete", filepath.Join(root, "sessions", "old.jsonl"), strings.Repeat("deleted ", 50000))
+	if _, err := db.Exec(`DELETE FROM search_docs WHERE doc_key = 'task:build-ui:delete-me'`); err != nil {
+		t.Fatal(err)
+	}
+	before := pragmaInt64(t, db, "freelist_count")
+	if before == 0 {
+		t.Fatalf("test setup did not create free pages")
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	resp, status := srv.runAction(actionRequest{Kind: "compact-db"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("compact action status=%d resp=%+v", status, resp)
+	}
+	after := pragmaInt64(t, db, "freelist_count")
+	if after >= before {
+		t.Fatalf("freelist did not shrink: before=%d after=%d", before, after)
+	}
+	if !strings.Contains(resp.Message, "compacted") {
+		t.Fatalf("message = %q", resp.Message)
+	}
+}
+
+func TestCompactFlowDBCachesVerifiedIntegrityStatusForSidebar(t *testing.T) {
+	root, db := testRootDB(t)
+	insertSearchDoc(t, db, "task:build-ui:keep", "brief", "task", "build-ui", "Keep", filepath.Join(root, "tasks", "build-ui", "brief.md"), strings.Repeat("keep ", 200))
+	insertSearchDoc(t, db, "task:build-ui:delete-me", "transcript", "task", "build-ui", "Delete", filepath.Join(root, "sessions", "old.jsonl"), strings.Repeat("deleted ", 50000))
+	if _, err := db.Exec(`DELETE FROM search_docs WHERE doc_key = 'task:build-ui:delete-me'`); err != nil {
+		t.Fatal(err)
+	}
+	if before := pragmaInt64(t, db, "freelist_count"); before == 0 {
+		t.Fatalf("test setup did not create free pages")
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	srv.flowDBQuickCheckTimeout = -time.Nanosecond
+	resp, status := srv.runAction(actionRequest{Kind: "compact-db"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("compact action status=%d resp=%+v", status, resp)
+	}
+
+	stats := srv.uiFlowDB()
+	if stats.QuickCheck != "ok" {
+		t.Fatalf("quick_check = %q, want cached compact precheck ok", stats.QuickCheck)
+	}
+	if stats.QuickCheckSource != "compact-precheck" {
+		t.Fatalf("quick_check_source = %q", stats.QuickCheckSource)
+	}
+	if stats.QuickCheckCheckedAt == "" {
+		t.Fatalf("quick_check_checked_at was not set: %+v", stats)
+	}
+	if !strings.Contains(stats.QuickCheckNote, "checked before compact") {
+		t.Fatalf("quick_check_note = %q", stats.QuickCheckNote)
+	}
+}
+
 func TestUIDataIncludesTaskDependencies(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -3220,4 +3332,26 @@ func insertProjectTask(t *testing.T, db *sql.DB, root string) {
 	if err := os.WriteFile(filepath.Join(root, "tasks", "build-ui", "updates", "2026-05-12-progress.md"), []byte("- current-data-marker came from disk\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func insertSearchDoc(t *testing.T, db *sql.DB, key, scope, entityType, entitySlug, title, sourcePath, content string) {
+	t.Helper()
+	now := "2026-05-12T10:00:00+05:30"
+	if _, err := db.Exec(
+		`INSERT INTO search_docs
+		 (doc_key, scope, entity_type, entity_slug, title, source_path, source_mtime, content, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		key, scope, entityType, entitySlug, title, sourcePath, now, content, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func pragmaInt64(t *testing.T, db *sql.DB, name string) int64 {
+	t.Helper()
+	var n int64
+	if err := db.QueryRow(`PRAGMA ` + name).Scan(&n); err != nil {
+		t.Fatalf("PRAGMA %s: %v", name, err)
+	}
+	return n
 }

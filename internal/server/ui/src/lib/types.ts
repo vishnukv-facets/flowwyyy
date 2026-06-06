@@ -384,6 +384,46 @@ export interface UiStats {
   sessions_codex: number
 }
 
+export interface FlowDBObject {
+  name: string
+  kind: string
+  bytes: number
+  human_size: string
+  percent: number
+}
+
+export interface FlowDBDocStat {
+  scope: string
+  entity_type: string
+  count: number
+  content_bytes: number
+  human_size: string
+}
+
+export interface FlowDBInfo {
+  path: string
+  display_path: string
+  bytes: number
+  human_size: string
+  exists: boolean
+  page_size: number
+  page_count: number
+  free_page_count: number
+  used_bytes: number
+  used_human_size: string
+  reclaimable_bytes: number
+  reclaimable_human_size: string
+  quick_check: string
+  quick_check_source: string
+  quick_check_checked_at: string
+  quick_check_note: string
+  can_compact: boolean
+  explanation: string
+  objects: FlowDBObject[]
+  documents: FlowDBDocStat[]
+  error?: string
+}
+
 export interface UiData {
   AGENTS: UiAgent[]
   DEAD_AGENT: UiAgent | null
@@ -400,7 +440,7 @@ export interface UiData {
   STATS: UiStats
   CAPABILITIES: Capabilities
   TRASH: { tasks: TrashItem[]; projects: TrashItem[]; playbooks: TrashItem[]; total: number }
-  FLOWDB: { path: string; display_path: string; bytes: number; human_size: string; exists: boolean }
+  FLOWDB: FlowDBInfo
   USER: { name: string; full_name: string; username: string }
   FLOATING_SESSIONS: FloatingSession[]
 }

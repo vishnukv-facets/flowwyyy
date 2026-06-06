@@ -1,12 +1,15 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'wouter'
 import { FlowMark } from './FlowMark'
 import { ClaudeRunner } from './ClaudeMascot'
 import { useMascotPrefs } from '../lib/mascot'
 import {
+  AlertTriangle,
   Bell,
   BookText,
   Brain,
+  CheckCircle2,
   Database,
   FolderGit2,
   HardDrive,
@@ -16,6 +19,7 @@ import {
   Moon,
   Plus,
   Radar,
+  RefreshCw,
   Repeat,
   Search,
   Settings,
@@ -28,6 +32,8 @@ import { getTheme, toggleTheme, type Theme } from '../lib/theme'
 import { useAttention, useInbox, useUiData } from '../lib/query'
 import { ago } from '../lib/format'
 import { pushToast } from '../lib/toast'
+import { apiAction } from '../lib/api'
+import { confirmAction } from '../lib/confirm'
 import { SourceIcon } from './ui'
 import { CommandPalette } from './CommandPalette'
 import { AskFlow } from './AskFlow'
@@ -35,6 +41,7 @@ import { CreateTaskModal } from './modals'
 import { Toaster } from './Toaster'
 import { ConfirmHost } from './ConfirmHost'
 import { FloatingTerminalLayer } from './FloatingTerminalTray'
+import type { FlowDBDocStat, FlowDBInfo } from '../lib/types'
 
 interface NavDef {
   to: string
@@ -236,9 +243,7 @@ export function Shell({ children }: { children: ReactNode }) {
             </div>
           )}
           <div className="rail-foot-bar">
-            <div className="rail-stat faint">
-              <Database size={12} /> {ui?.FLOWDB?.exists ? ui.FLOWDB.human_size : '—'}
-            </div>
+            <StoragePopover db={ui?.FLOWDB} activeSessions={(ui?.AGENTS ?? []).length} />
             <div className="spacer" />
             <button
               type="button"
@@ -296,6 +301,152 @@ export function Shell({ children }: { children: ReactNode }) {
       <ConfirmHost />
     </div>
   )
+}
+
+function StoragePopover({ db, activeSessions }: { db?: FlowDBInfo; activeSessions: number }) {
+  const qc = useQueryClient()
+  const [busy, setBusy] = useState(false)
+  const canCompact = !!db?.exists && !!db.can_compact && !busy
+  const runCompact = async (e: { currentTarget: EventTarget & HTMLElement }) => {
+    e.currentTarget.closest('details')?.removeAttribute('open')
+    if (!db?.exists || !db.can_compact) return
+    const ok = await confirmAction({
+      title: 'Compact flow.db?',
+      body: `SQLite will rewrite flow.db with VACUUM to reclaim ${db.reclaimable_human_size}. It does not delete briefs, updates, transcript files, or search results. Compacting is safest when sessions are idle; ${activeSessions} session${activeSessions === 1 ? '' : 's'} are currently listed in Mission Control.`,
+      confirmLabel: 'Compact',
+      cancelLabel: 'Cancel',
+    })
+    if (!ok) return
+    setBusy(true)
+    try {
+      const resp = await apiAction({ kind: 'compact-db' }, 180000)
+      pushToast('ok', resp.message || 'Database compacted')
+      await qc.invalidateQueries({ queryKey: ['ui-data'] })
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'Compact failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const topDocs = (db?.documents ?? []).slice(0, 4)
+  const topObjects = (db?.objects ?? []).slice(0, 7)
+  const quickOk = db?.quick_check === 'ok'
+  const quickFromCompact = db?.quick_check_source === 'compact-precheck'
+  const quickHealthLabel = quickOk && quickFromCompact ? 'ok · compact' : db?.quick_check || 'unknown'
+  const showQuickNote = !!db?.quick_check_note && db.quick_check_source !== 'live'
+
+  return (
+    <details className="menu storage-menu">
+      <summary className="rail-stat faint storage-trigger" title="Database storage">
+        <Database size={12} />
+        <span>{db?.exists ? db.human_size : '—'}</span>
+      </summary>
+      <div className="menu-pop storage-pop">
+        <div className="storage-head">
+          <div>
+            <div className="storage-title">flow.db</div>
+            <div className="storage-path clip">{db?.display_path || db?.path || 'not initialized'}</div>
+          </div>
+          {db?.exists && (
+            <span className={`storage-health${quickOk ? ' ok' : ' warn'}`} title={db.quick_check_note || undefined}>
+              {quickOk ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+              {quickHealthLabel}
+            </span>
+          )}
+        </div>
+
+        {!db?.exists ? (
+          <div className="storage-empty">Database file is not available yet.</div>
+        ) : (
+          <>
+            <div className="storage-meter" aria-label="Database active and reclaimable storage">
+              <span
+                className="storage-meter-used"
+                style={{ flexGrow: Math.max(db.used_bytes, 1) }}
+              />
+              <span
+                className="storage-meter-free"
+                style={{ flexGrow: Math.max(db.reclaimable_bytes, 0) }}
+              />
+            </div>
+            <div className="storage-grid">
+              <StorageMetric label="On disk" value={db.human_size} />
+              <StorageMetric label="Active" value={db.used_human_size || '—'} />
+              <StorageMetric label="Reclaimable" value={db.reclaimable_human_size || '0 B'} tone={db.reclaimable_bytes > 0 ? 'warn' : undefined} />
+              <StorageMetric label="Pages free" value={`${db.free_page_count || 0}`} mono />
+            </div>
+            {activeSessions > 0 && (
+              <div className="storage-note warn">
+                <AlertTriangle size={13} />
+                Active sessions are listed; compact when idle if possible.
+              </div>
+            )}
+            {showQuickNote && (
+              <div className={`storage-note${quickOk ? ' ok' : ' warn'}`}>
+                {quickOk ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                {db.quick_check_note}
+              </div>
+            )}
+            <div className="storage-note">{db.explanation}</div>
+            {db.error && <div className="storage-note warn">{db.error}</div>}
+
+            {topDocs.length > 0 && (
+              <div className="storage-section">
+                <div className="storage-section-title">Search text</div>
+                {topDocs.map((doc) => (
+                  <div className="storage-row" key={`${doc.scope}:${doc.entity_type}`}>
+                    <span>{docLabel(doc)}</span>
+                    <span className="mono">{doc.human_size}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {topObjects.length > 0 && (
+              <div className="storage-section">
+                <div className="storage-section-title">Largest objects</div>
+                {topObjects.map((obj) => (
+                  <div className="storage-row" key={obj.name}>
+                    <span className="clip">{obj.name}</span>
+                    <span className="mono">{obj.human_size}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              className="btn storage-compact"
+              disabled={!canCompact}
+              onClick={runCompact}
+              title={db.can_compact ? 'Run SQLite VACUUM' : 'No free-list pages to reclaim'}
+            >
+              <RefreshCw size={14} className={busy ? 'spin' : ''} />
+              {busy ? 'Compacting…' : db.can_compact ? 'Compact' : 'Already compact'}
+            </button>
+          </>
+        )}
+      </div>
+    </details>
+  )
+}
+
+function StorageMetric({ label, value, tone, mono = false }: { label: string; value: string; tone?: 'warn'; mono?: boolean }) {
+  return (
+    <div className={`storage-metric${tone ? ` ${tone}` : ''}`}>
+      <span>{label}</span>
+      <strong className={mono ? 'mono' : undefined}>{value}</strong>
+    </div>
+  )
+}
+
+function docLabel(doc: FlowDBDocStat): string {
+  if (doc.scope === 'transcript') return `Transcripts · ${doc.count}`
+  if (doc.scope === 'memory') return `Memories · ${doc.count}`
+  if (doc.scope === 'update') return `Updates · ${doc.count}`
+  if (doc.scope === 'brief') return `Briefs · ${doc.count}`
+  return `${doc.scope} · ${doc.count}`
 }
 
 // Notification bell — surfaces what needs you: sessions awaiting input and
