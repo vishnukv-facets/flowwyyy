@@ -130,13 +130,7 @@ func (l liveSessionSet) has(provider, sessionID string) bool {
 	case "claude":
 		return l.claude[sessionID]
 	case "codex":
-		// Codex doesn't pass its session id on the command line; flow
-		// captures it from Codex's JSONL store after launch. The
-		// pragmatic liveness signal is "is the codex process running
-		// in any flow-managed cwd" — we treat any live codex process
-		// as keeping its session alive. If no codex process is alive,
-		// every codex session is candidate-dead.
-		return len(l.codex) > 0
+		return l.codex[sessionID]
 	}
 	return false
 }
@@ -168,10 +162,10 @@ func scanLiveSessions() (liveSessionSet, error) {
 				}
 			}
 		}
-		if strings.Contains(line, "codex") {
-			// Mark codex live; we key by a sentinel since codex's session
-			// id isn't on the argv.
-			set.codex["any"] = true
+		if strings.Contains(line, "codex") && strings.Contains(line, "resume") {
+			for _, id := range anySessionUUIDs(line) {
+				set.codex[strings.ToLower(id)] = true
+			}
 		}
 	}
 	return set, nil

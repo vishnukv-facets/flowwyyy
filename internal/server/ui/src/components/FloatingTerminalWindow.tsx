@@ -155,13 +155,16 @@ export function FloatingTerminalWindow({ win, pos, z, hidden, onMove, onFocus, o
           <X size={15} />
         </button>
       </div>
-      <div className="floating-terminal-body">
-        <TaskTerminal
-          slug={win.id}
-          kind={win.kind}
-          onStatus={(kind, message) => setStatus(kind === 'open' ? 'connected' : message || kind)}
-        />
-      </div>
+      {!hidden && (
+        <div className="floating-terminal-body">
+          <TaskTerminal
+            slug={win.id}
+            kind={win.kind}
+            provider={win.provider}
+            onStatus={(kind, message) => setStatus(kind === 'open' ? 'connected' : message || kind)}
+          />
+        </div>
+      )}
       <div
         className="floating-terminal-resize"
         title="Drag to resize"

@@ -1472,7 +1472,7 @@ func TestTerminalAddClientReplaysSanitizedScrollback(t *testing.T) {
 		scrollback: []byte("\x1b[?1049hmid-frame-output\x1b[?1049l"),
 	}
 	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
-	sess.addClient(client, true)
+	sess.addClient(client, true, 120, 32)
 
 	first := <-client.send
 	if first.Type != "status" || !strings.Contains(first.Message, "connected to codex session") {
@@ -1504,16 +1504,25 @@ func TestTerminalSessionSendHistoryReseedsFromCapturePane(t *testing.T) {
 
 	sess.sendHistory(client)
 
-	select {
-	case msg := <-client.send:
-		if msg.Type != "history" {
-			t.Fatalf("reseed message type = %q, want history", msg.Type)
+	var got strings.Builder
+	for {
+		select {
+		case msg := <-client.send:
+			switch msg.Type {
+			case "history-start":
+			case "history-chunk":
+				got.WriteString(msg.Data)
+			case "history-end":
+				if !strings.Contains(got.String(), "first message line") {
+					t.Fatalf("reseed must carry full history incl first message; got %q", got.String())
+				}
+				return
+			default:
+				t.Fatalf("unexpected reseed message type = %q", msg.Type)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("sendHistory queued no complete reseed")
 		}
-		if !strings.Contains(msg.Data, "first message line") {
-			t.Fatalf("reseed must carry full history incl first message; got %q", msg.Data)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("sendHistory queued no reseed message")
 	}
 }
 

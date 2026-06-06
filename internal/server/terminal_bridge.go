@@ -30,21 +30,42 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// terminalScrollbackBytes caps the per-session in-memory scrollback we retain
-// for replay when a browser (re)attaches. Restored to the pre-rewrite 1 GiB so
-// the browser terminal can scroll back to the start of a session, matching the
-// old xterm UI (which kept ~unlimited history). This is a cap, not a
-// preallocation — memory tracks actual output, which for normal sessions stays
-// MB-scale; only a genuinely gigabyte-chatty session approaches it. (The rewrite
-// had cut this to 2 MiB to bound RSS, which silently broke scroll-to-start.)
-const terminalScrollbackBytes = 1024 * 1024 * 1024
+// terminal scrollback defaults are intentionally bounded. tmux remains the
+// source of authoritative pane history, while this in-process buffer is a replay
+// fallback and a source for lightweight status snapshots.
+const (
+	defaultTerminalScrollbackBytes    = 128 * 1024 * 1024
+	defaultTerminalScrollbackHeadroom = 1024 * 1024
+	defaultTerminalReplayChunkBytes   = 256 * 1024
+	maxTerminalScrollbackBytes        = 1024 * 1024 * 1024
+)
 
-// terminalScrollbackHeadroom lets the buffer overshoot the cap before we trim,
-// so the O(cap) trim copy happens once per headroom-worth of output instead of
-// on every append once full. Without it, a fast-redrawing TUI (Claude/Codex
-// spinners) would recopy the whole buffer on every chunk — quadratic, and a
-// real CPU sink.
-const terminalScrollbackHeadroom = 256 * 1024
+func terminalScrollbackBytes() int {
+	return positiveIntEnv("FLOW_TERMINAL_SCROLLBACK_BYTES", defaultTerminalScrollbackBytes, 1024*1024, maxTerminalScrollbackBytes)
+}
+
+func terminalScrollbackHeadroomBytes() int {
+	return positiveIntEnv("FLOW_TERMINAL_SCROLLBACK_HEADROOM_BYTES", defaultTerminalScrollbackHeadroom, 64*1024, 16*1024*1024)
+}
+
+func terminalReplayChunkBytes() int {
+	return positiveIntEnv("FLOW_TERMINAL_REPLAY_CHUNK_BYTES", defaultTerminalReplayChunkBytes, 16*1024, 4*1024*1024)
+}
+
+func positiveIntEnv(key string, def, minValue, maxValue int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return def
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minValue {
+		return def
+	}
+	if maxValue > 0 && n > maxValue {
+		return maxValue
+	}
+	return n
+}
 
 var terminalUpgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
@@ -62,6 +83,7 @@ type terminalHub struct {
 	// for each registered adhoc floating session, so the tray can list them
 	// independently of whether their PTY is currently attached.
 	floatingMeta map[string]floatingSessionMeta
+	launchLocks  map[string]*sync.Mutex
 	// sharedRunningCache backs sharedRunning, which is invoked once per task
 	// per SSE tick (every 2s). Each raw call forks `tmux has-session` — with
 	// N tasks visible that's N forks per tick. The cache collapses repeats
@@ -109,6 +131,9 @@ type terminalSession struct {
 	closed       bool
 	exitStatus   string
 	lastOutputAt time.Time
+	resizeOwner  *terminalClient
+	cols         int
+	rows         int
 }
 
 type terminalClient struct {
@@ -116,6 +141,8 @@ type terminalClient struct {
 	send      chan terminalWSMessage
 	done      chan struct{}
 	closeOnce sync.Once
+	cols      int
+	rows      int
 }
 
 type terminalWSMessage struct {
@@ -132,6 +159,7 @@ func newTerminalHub(s *Server) *terminalHub {
 		sessions:           map[string]*terminalSession{},
 		floatingLaunches:   map[string]terminalLaunch{},
 		floatingMeta:       map[string]floatingSessionMeta{},
+		launchLocks:        map[string]*sync.Mutex{},
 		sharedRunningCache: newTTLCache[string, bool](2500 * time.Millisecond),
 	}
 }
@@ -161,7 +189,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 
 	client := &terminalClient{conn: conn, send: make(chan terminalWSMessage, 128), done: make(chan struct{})}
-	sess.addClient(client, true)
+	sess.addClient(client, true, cols, rows)
 
 	go client.writeLoop()
 	client.readLoop(sess)
@@ -193,7 +221,7 @@ func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.
 	}
 
 	client := &terminalClient{conn: conn, send: make(chan terminalWSMessage, 128), done: make(chan struct{})}
-	sess.addClient(client, true)
+	sess.addClient(client, true, cols, rows)
 
 	go client.writeLoop()
 	client.readLoop(sess)
@@ -217,11 +245,22 @@ func intQueryDefault(r *http.Request, key string, def int) int {
 
 func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if sess := h.sessions[slug]; sess != nil && sess.running() {
-		_ = sess.resize(cols, rows)
+		h.mu.Unlock()
 		return sess, nil
 	}
+	h.mu.Unlock()
+
+	unlock := h.lockLaunch(slug)
+	defer unlock()
+
+	h.mu.Lock()
+	if sess := h.sessions[slug]; sess != nil && sess.running() {
+		h.mu.Unlock()
+		return sess, nil
+	}
+	h.mu.Unlock()
+
 	launch, err := h.server.prepareTerminalLaunch(slug)
 	if err != nil {
 		return nil, err
@@ -233,11 +272,28 @@ func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, err
 		}
 		return nil, err
 	}
+	h.mu.Lock()
 	h.sessions[slug] = sess
+	h.mu.Unlock()
 	if h.server != nil && h.server.inboxMonitors != nil {
 		h.server.inboxMonitors.start(slug)
 	}
 	return sess, nil
+}
+
+func (h *terminalHub) lockLaunch(slug string) func() {
+	h.mu.Lock()
+	if h.launchLocks == nil {
+		h.launchLocks = map[string]*sync.Mutex{}
+	}
+	lock := h.launchLocks[slug]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		h.launchLocks[slug] = lock
+	}
+	h.mu.Unlock()
+	lock.Lock()
+	return lock.Unlock
 }
 
 func (h *terminalHub) registerFloatingLaunch(launch terminalLaunch, title string) floatingTerminalResponse {
@@ -354,38 +410,83 @@ func (h *terminalHub) stopFloating(id string) bool {
 // attach doesn't reflow.
 func (h *terminalHub) startFloatingDetached(id string) error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if sess := h.sessions[id]; sess != nil && sess.running() {
+		h.mu.Unlock()
 		return nil
 	}
 	launch, ok := h.floatingLaunches[id]
+	h.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("floating terminal not found: %s", id)
 	}
+
+	unlock := h.lockLaunch(id)
+	defer unlock()
+
+	h.mu.Lock()
+	if sess := h.sessions[id]; sess != nil && sess.running() {
+		h.mu.Unlock()
+		return nil
+	}
+	launch, ok = h.floatingLaunches[id]
+	h.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("floating terminal not found: %s", id)
+	}
+
 	sess, err := h.startSessionLocked(launch, 120, 32)
 	if err != nil {
 		return err
 	}
+	h.mu.Lock()
+	if _, ok := h.floatingLaunches[id]; !ok {
+		h.mu.Unlock()
+		sess.terminate()
+		return fmt.Errorf("floating terminal not found: %s", id)
+	}
 	h.sessions[id] = sess
+	h.mu.Unlock()
 	return nil
 }
 
 func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSession, error) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	if sess := h.sessions[id]; sess != nil && sess.running() {
-		_ = sess.resize(cols, rows)
+		h.mu.Unlock()
 		return sess, nil
 	}
 	launch, ok := h.floatingLaunches[id]
+	h.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("floating terminal not found: %s", id)
 	}
+
+	unlock := h.lockLaunch(id)
+	defer unlock()
+
+	h.mu.Lock()
+	if sess := h.sessions[id]; sess != nil && sess.running() {
+		h.mu.Unlock()
+		return sess, nil
+	}
+	launch, ok = h.floatingLaunches[id]
+	h.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("floating terminal not found: %s", id)
+	}
+
 	sess, err := h.startSessionLocked(launch, cols, rows)
 	if err != nil {
 		return nil, err
 	}
+	h.mu.Lock()
+	if _, ok := h.floatingLaunches[id]; !ok {
+		h.mu.Unlock()
+		sess.terminate()
+		return nil, fmt.Errorf("floating terminal not found: %s", id)
+	}
 	h.sessions[id] = sess
+	h.mu.Unlock()
 	return sess, nil
 }
 
@@ -607,6 +708,8 @@ func (h *terminalHub) startSessionLocked(launch terminalLaunch, cols, rows int) 
 		done:       make(chan struct{}),
 		clients:    map[*terminalClient]struct{}{},
 		scrollback: initialScrollback,
+		cols:       cols,
+		rows:       rows,
 	}
 	go sess.readPTY()
 	go sess.wait()
@@ -1103,7 +1206,7 @@ func (s *Server) ensureSharedTerminalSession(launch terminalLaunch, cols, rows i
 		"set-window-option",
 		"-g",
 		"history-limit",
-		sharedTerminalHistoryLimit,
+		sharedTerminalHistoryLimit(),
 		";",
 		"new-session",
 		"-d",
@@ -1684,11 +1787,37 @@ func (s *terminalSession) captureReplay() []byte {
 // scrollback naturally, so it never needs this.
 func (s *terminalSession) sendHistory(client *terminalClient) {
 	if data := s.captureReplay(); len(data) > 0 {
-		client.queue(terminalWSMessage{Type: "history", Data: string(data)})
+		client.queue(terminalWSMessage{Type: "history-start"})
+		queueTerminalDataChunks(client, "history-chunk", data, 1)
+		client.queue(terminalWSMessage{Type: "history-end"})
 	}
 }
 
-func (s *terminalSession) addClient(client *terminalClient, replay bool) {
+func queueTerminalDataChunks(client *terminalClient, typ string, data []byte, reserveSlots int) {
+	chunkSize := adaptiveTerminalChunkBytes(client, len(data), reserveSlots)
+	for len(data) > 0 {
+		n := min(len(data), chunkSize)
+		client.queue(terminalWSMessage{Type: typ, Data: string(data[:n])})
+		data = data[n:]
+	}
+}
+
+func adaptiveTerminalChunkBytes(client *terminalClient, dataLen, reserveSlots int) int {
+	chunkSize := terminalReplayChunkBytes()
+	if client == nil || client.send == nil || dataLen <= chunkSize {
+		return chunkSize
+	}
+	availableSlots := cap(client.send) - len(client.send) - max(0, reserveSlots)
+	if availableSlots <= 0 {
+		return chunkSize
+	}
+	if chunks := (dataLen + chunkSize - 1) / chunkSize; chunks > availableSlots {
+		chunkSize = (dataLen + availableSlots - 1) / availableSlots
+	}
+	return max(1, chunkSize)
+}
+
+func (s *terminalSession) addClient(client *terminalClient, replay bool, cols, rows int) {
 	// Seed the history replay BEFORE this client joins the broadcast set.
 	//
 	// captureReplay execs `tmux capture-pane` (slow, tens of ms). If the client
@@ -1712,9 +1841,9 @@ func (s *terminalSession) addClient(client *terminalClient, replay bool) {
 	if replay {
 		replayData = s.captureReplay()
 	}
+	cols, rows = normalizeTerminalClientSize(cols, rows)
 
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	provider := s.provider
 	if provider == "" {
 		provider = agents.ProviderClaude
@@ -1727,18 +1856,36 @@ func (s *terminalSession) addClient(client *terminalClient, replay bool) {
 	}
 	client.queue(terminalWSMessage{Type: "status", Message: message})
 	if len(replayData) > 0 {
-		client.queue(terminalWSMessage{Type: "output", Data: string(replayData)})
+		queueTerminalDataChunks(client, "output", replayData, 0)
 	}
+	client.cols = cols
+	client.rows = rows
 	s.clients[client] = struct{}{}
+	resizeCols, resizeRows, resizeOwner := s.resizeTargetLocked()
+	s.resizeOwner = resizeOwner
+	shouldResize := resizeCols > 0 && resizeRows > 0 && (resizeCols != s.cols || resizeRows != s.rows)
 	if s.closed {
 		client.queue(terminalWSMessage{Type: "status", Message: s.exitStatus})
+	}
+	s.mu.Unlock()
+	if shouldResize {
+		_ = s.resize(resizeCols, resizeRows)
 	}
 }
 
 func (s *terminalSession) removeClient(client *terminalClient) {
+	var resizeCols, resizeRows int
+	var shouldResize bool
 	s.mu.Lock()
 	delete(s.clients, client)
+	resizeCols, resizeRows, s.resizeOwner = s.resizeTargetLocked()
+	if len(s.clients) > 0 && resizeCols > 0 && resizeRows > 0 {
+		shouldResize = resizeCols != s.cols || resizeRows != s.rows
+	}
 	s.mu.Unlock()
+	if shouldResize {
+		_ = s.resize(resizeCols, resizeRows)
+	}
 	client.close()
 }
 
@@ -1854,8 +2001,9 @@ func (s *terminalSession) appendScrollback(data []byte) {
 	s.lastOutputAt = time.Now()
 	// Trim in bulk once we overshoot the cap by the headroom, dropping back to
 	// the cap — amortizes the copy to ~once per headroom bytes (see consts).
-	if len(s.scrollback) > terminalScrollbackBytes+terminalScrollbackHeadroom {
-		s.scrollback = trimScrollbackToLineBoundary(s.scrollback, terminalScrollbackBytes)
+	capBytes := terminalScrollbackBytes()
+	if len(s.scrollback) > capBytes+terminalScrollbackHeadroomBytes() {
+		s.scrollback = trimScrollbackToLineBoundary(s.scrollback, capBytes)
 	}
 }
 
@@ -1896,9 +2044,12 @@ func (s *terminalSession) write(data string) error {
 	return err
 }
 
-func (s *terminalSession) resize(cols, rows int) error {
-	if cols <= 0 || rows <= 0 {
-		return nil
+func normalizeTerminalClientSize(cols, rows int) (int, int) {
+	if cols <= 0 {
+		cols = 120
+	}
+	if rows <= 0 {
+		rows = 32
 	}
 	if cols > 500 {
 		cols = 500
@@ -1906,7 +2057,103 @@ func (s *terminalSession) resize(cols, rows int) error {
 	if rows > 500 {
 		rows = 500
 	}
-	return pty.Setsize(s.tty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	return cols, rows
+}
+
+func normalizeTerminalResize(cols, rows int) (int, int, bool) {
+	if cols <= 0 || rows <= 0 {
+		return 0, 0, false
+	}
+	if cols > 500 {
+		cols = 500
+	}
+	if rows > 500 {
+		rows = 500
+	}
+	return cols, rows, true
+}
+
+func betterResizeOwner(candidate, current *terminalClient) bool {
+	if candidate == nil {
+		return false
+	}
+	if current == nil {
+		return true
+	}
+	candidateArea := candidate.cols * candidate.rows
+	currentArea := current.cols * current.rows
+	if candidateArea != currentArea {
+		return candidateArea > currentArea
+	}
+	if candidate.cols != current.cols {
+		return candidate.cols > current.cols
+	}
+	return candidate.rows > current.rows
+}
+
+func (s *terminalSession) resizeTargetLocked() (int, int, *terminalClient) {
+	cols, rows := 0, 0
+	var owner *terminalClient
+	for client := range s.clients {
+		if client.cols > cols {
+			cols = client.cols
+		}
+		if client.rows > rows {
+			rows = client.rows
+		}
+		if betterResizeOwner(client, owner) {
+			owner = client
+		}
+	}
+	return cols, rows, owner
+}
+
+func (s *terminalSession) resize(cols, rows int) error {
+	cols, rows, ok := normalizeTerminalResize(cols, rows)
+	if !ok {
+		return nil
+	}
+	s.mu.Lock()
+	if cols == s.cols && rows == s.rows {
+		s.mu.Unlock()
+		return nil
+	}
+	s.cols = cols
+	s.rows = rows
+	tty := s.tty
+	s.mu.Unlock()
+	if tty == nil {
+		return nil
+	}
+	return pty.Setsize(tty, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+}
+
+func (s *terminalSession) clientOwnsResize(client *terminalClient) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resizeOwner == client
+}
+
+func (s *terminalSession) resizeFrom(client *terminalClient, cols, rows int) error {
+	cols, rows, ok := normalizeTerminalResize(cols, rows)
+	if !ok {
+		return nil
+	}
+	s.mu.Lock()
+	if _, ok := s.clients[client]; !ok {
+		s.mu.Unlock()
+		return nil
+	}
+	client.cols = cols
+	client.rows = rows
+	resizeCols, resizeRows, resizeOwner := s.resizeTargetLocked()
+	s.resizeOwner = resizeOwner
+	shouldResize := resizeCols > 0 && resizeRows > 0 && (resizeCols != s.cols || resizeRows != s.rows)
+	s.mu.Unlock()
+	if !shouldResize {
+		return nil
+	}
+	return s.resize(resizeCols, resizeRows)
 }
 
 func (c *terminalClient) readLoop(sess *terminalSession) {
@@ -1927,7 +2174,7 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 				_ = sess.write(input)
 			}
 		case "resize":
-			_ = sess.resize(msg.Cols, msg.Rows)
+			_ = sess.resizeFrom(c, msg.Cols, msg.Rows)
 		case "history":
 			// Client scrolled to the top of a repaint-style session and wants
 			// the authoritative full history to rebuild its scrollback.
@@ -1969,12 +2216,15 @@ func (c *terminalClient) queue(msg terminalWSMessage) {
 	case c.send <- msg:
 	case <-c.done:
 	default:
+		c.close()
 	}
 }
 
 func (c *terminalClient) close() {
 	c.closeOnce.Do(func() {
 		close(c.done)
-		_ = c.conn.Close()
+		if c.conn != nil {
+			_ = c.conn.Close()
+		}
 	})
 }

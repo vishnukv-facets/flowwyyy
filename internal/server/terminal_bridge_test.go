@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"testing"
+	"time"
 )
 
 func TestCompleteUTF8PrefixCarriesSplitRune(t *testing.T) {
@@ -102,6 +103,159 @@ func TestTrimScrollbackToLineBoundary(t *testing.T) {
 	// Under the cap \u2192 returned unchanged.
 	if got := trimScrollbackToLineBoundary(line, 1000); len(got) != len(line) {
 		t.Fatalf("under-cap buffer was trimmed: %d != %d", len(got), len(line))
+	}
+}
+
+func TestTerminalScrollbackDefaultsAreBoundedAndConfigurable(t *testing.T) {
+	if got := terminalScrollbackBytes(); got != 128*1024*1024 {
+		t.Fatalf("terminalScrollbackBytes default = %d, want 128MiB", got)
+	}
+	if got := terminalScrollbackHeadroomBytes(); got != 1024*1024 {
+		t.Fatalf("terminalScrollbackHeadroomBytes default = %d, want 1MiB", got)
+	}
+
+	t.Setenv("FLOW_TERMINAL_SCROLLBACK_BYTES", "2097152")
+	t.Setenv("FLOW_TERMINAL_SCROLLBACK_HEADROOM_BYTES", "65536")
+	if got := terminalScrollbackBytes(); got != 2097152 {
+		t.Fatalf("terminalScrollbackBytes env = %d, want 2097152", got)
+	}
+	if got := terminalScrollbackHeadroomBytes(); got != 65536 {
+		t.Fatalf("terminalScrollbackHeadroomBytes env = %d, want 65536", got)
+	}
+}
+
+func TestTerminalClientQueueClosesOnBackpressure(t *testing.T) {
+	client := &terminalClient{
+		send: make(chan terminalWSMessage, 1),
+		done: make(chan struct{}),
+	}
+	client.queue(terminalWSMessage{Type: "output", Data: "first"})
+	client.queue(terminalWSMessage{Type: "output", Data: "overflow"})
+
+	select {
+	case <-client.done:
+	case <-time.After(time.Second):
+		t.Fatal("overflowed terminal client was not closed")
+	}
+}
+
+func TestTerminalAddClientChunksLargeReplay(t *testing.T) {
+	replay := bytes.Repeat([]byte("x"), terminalReplayChunkBytes()+17)
+	sess := &terminalSession{
+		provider:   "codex",
+		sessionID:  "55555555-5555-4555-8555-555555555555",
+		clients:    map[*terminalClient]struct{}{},
+		scrollback: replay,
+	}
+	client := &terminalClient{send: make(chan terminalWSMessage, 8), done: make(chan struct{})}
+
+	sess.addClient(client, true, 120, 32)
+
+	status := <-client.send
+	if status.Type != "status" {
+		t.Fatalf("first message = %+v, want status", status)
+	}
+	first := <-client.send
+	second := <-client.send
+	if first.Type != "output" || len(first.Data) != terminalReplayChunkBytes() {
+		t.Fatalf("first replay chunk = type %q len %d", first.Type, len(first.Data))
+	}
+	if second.Type != "output" || len(second.Data) != 17 {
+		t.Fatalf("second replay chunk = type %q len %d", second.Type, len(second.Data))
+	}
+}
+
+func TestTerminalSessionSendHistoryChunksLargeReplay(t *testing.T) {
+	replay := bytes.Repeat([]byte("h"), terminalReplayChunkBytes()+9)
+	sess := &terminalSession{
+		provider:   "codex",
+		clients:    map[*terminalClient]struct{}{},
+		scrollback: replay,
+	}
+	client := &terminalClient{send: make(chan terminalWSMessage, 8), done: make(chan struct{})}
+
+	sess.sendHistory(client)
+
+	start := <-client.send
+	first := <-client.send
+	second := <-client.send
+	end := <-client.send
+	if start.Type != "history-start" {
+		t.Fatalf("start message = %+v, want history-start", start)
+	}
+	if first.Type != "history-chunk" || len(first.Data) != terminalReplayChunkBytes() {
+		t.Fatalf("first history chunk = type %q len %d", first.Type, len(first.Data))
+	}
+	if second.Type != "history-chunk" || len(second.Data) != 9 {
+		t.Fatalf("second history chunk = type %q len %d", second.Type, len(second.Data))
+	}
+	if end.Type != "history-end" {
+		t.Fatalf("end message = %+v, want history-end", end)
+	}
+}
+
+func TestTerminalDataChunksExpandToFitClientQueue(t *testing.T) {
+	t.Setenv("FLOW_TERMINAL_REPLAY_CHUNK_BYTES", "16384")
+	replay := bytes.Repeat([]byte("x"), 50*1024)
+	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
+
+	client.queue(terminalWSMessage{Type: "status"})
+	queueTerminalDataChunks(client, "output", replay, 0)
+
+	select {
+	case <-client.done:
+		t.Fatal("adaptive replay chunking should not overflow available queue slots")
+	default:
+	}
+	if got := len(client.send); got != 4 {
+		t.Fatalf("queued messages = %d, want 4", got)
+	}
+}
+
+func TestTerminalDataChunksReserveQueueSlotsForHistoryEnd(t *testing.T) {
+	t.Setenv("FLOW_TERMINAL_REPLAY_CHUNK_BYTES", "16384")
+	replay := bytes.Repeat([]byte("h"), 50*1024)
+	client := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
+
+	client.queue(terminalWSMessage{Type: "history-start"})
+	queueTerminalDataChunks(client, "history-chunk", replay, 1)
+	client.queue(terminalWSMessage{Type: "history-end"})
+
+	select {
+	case <-client.done:
+		t.Fatal("adaptive history chunking should preserve room for history-end")
+	default:
+	}
+	for i := 0; i < 4; i++ {
+		if msg := <-client.send; msg.Type == "history-end" {
+			return
+		}
+	}
+	t.Fatal("history-end was not queued")
+}
+
+func TestTerminalResizeOwnerUsesLargestConnectedGrid(t *testing.T) {
+	sess := &terminalSession{clients: map[*terminalClient]struct{}{}}
+	first := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
+	second := &terminalClient{send: make(chan terminalWSMessage, 4), done: make(chan struct{})}
+
+	sess.addClient(first, false, 190, 36)
+	if !sess.clientOwnsResize(first) {
+		t.Fatal("large first client should own resize after initial attach")
+	}
+	sess.addClient(second, false, 100, 25)
+	if !sess.clientOwnsResize(first) {
+		t.Fatal("smaller later client must not shrink the shared terminal")
+	}
+	if sess.clientOwnsResize(second) {
+		t.Fatal("smaller later client should not own resize")
+	}
+
+	if err := sess.resizeFrom(second, 220, 44); err != nil {
+		t.Fatal(err)
+	}
+	if !sess.clientOwnsResize(second) {
+		t.Fatal("larger resized client should become resize owner")
 	}
 }
 

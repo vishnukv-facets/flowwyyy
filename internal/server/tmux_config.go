@@ -8,7 +8,11 @@ import (
 	"sync"
 )
 
-const sharedTerminalHistoryLimit = "2147483647"
+const defaultSharedTerminalHistoryLimit = 200000
+
+func sharedTerminalHistoryLimit() string {
+	return fmt.Sprintf("%d", positiveIntEnv("FLOW_TMUX_HISTORY_LIMIT", defaultSharedTerminalHistoryLimit, 1000, 2147483647))
+}
 
 // tmuxConfigBody is the tiny tmux config flow ships so that browser /
 // shared-terminal sessions have sensible defaults — most importantly
@@ -24,7 +28,8 @@ const sharedTerminalHistoryLimit = "2147483647"
 //   - Tests stub out sharedTerminalCommand and don't exercise the
 //     filesystem write path; keeping this self-contained avoids
 //     touching app init code.
-const tmuxConfigBody = `# flow tmux defaults (auto-managed; safe to delete — flow will recreate
+func tmuxConfigBody() string {
+	return `# flow tmux defaults (auto-managed; safe to delete — flow will recreate
 # it on the next session start).
 #
 # These exist so that scrolling JUST WORKS the first time you open a
@@ -59,12 +64,13 @@ set -g status off
 # history switch; this uses the largest value accepted by tmux so
 # flow-spawned terminals can scroll back to the beginning of practical
 # interactive sessions.
-set -g history-limit ` + sharedTerminalHistoryLimit + `
+set -g history-limit ` + sharedTerminalHistoryLimit() + `
 
 # Source the user's personal config last so their settings win on
 # conflicts. -q makes this a no-op if the file doesn't exist.
 if-shell '[ -f ~/.tmux.conf ]' 'source-file -q ~/.tmux.conf'
 `
+}
 
 var (
 	tmuxConfigWriteOnce sync.Mutex
@@ -102,7 +108,7 @@ func ensureTmuxConfig(flowRoot string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return "", fmt.Errorf("mkdir for tmux config: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(tmuxConfigBody), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(tmuxConfigBody()), 0o644); err != nil {
 		return "", fmt.Errorf("write tmux config: %w", err)
 	}
 	tmuxConfigWritten = true
@@ -134,7 +140,7 @@ func ensureSharedTerminalScrollOptions(name string) error {
 	if out, err := sharedTerminalCommand("set-option", "-t", name, "set-clipboard", "on"); err != nil {
 		return fmt.Errorf("enable tmux OSC 52 clipboard for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
-	if out, err := sharedTerminalCommand("set-window-option", "-t", name+":", "history-limit", sharedTerminalHistoryLimit); err != nil {
+	if out, err := sharedTerminalCommand("set-window-option", "-t", name+":", "history-limit", sharedTerminalHistoryLimit()); err != nil {
 		return fmt.Errorf("set tmux history limit for %s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	// Clear any copy-mode a previous (mouse-on) attach left the pane stuck in, so
@@ -156,7 +162,7 @@ func ensureSharedTerminalDefaultScrollOptions() error {
 	if out, err := sharedTerminalCommand("set-option", "-g", "set-clipboard", "on"); err != nil {
 		return fmt.Errorf("enable tmux OSC 52 clipboard globally: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	if out, err := sharedTerminalCommand("set-window-option", "-g", "history-limit", sharedTerminalHistoryLimit); err != nil {
+	if out, err := sharedTerminalCommand("set-window-option", "-g", "history-limit", sharedTerminalHistoryLimit()); err != nil {
 		return fmt.Errorf("set tmux global history limit: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil

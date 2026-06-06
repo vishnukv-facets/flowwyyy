@@ -1137,6 +1137,7 @@ select.input {
   flex: 1;
   min-height: 0;
   display: flex;
+  position: relative;
   border-radius: var(--r);
   overflow: hidden;
   /* Always dark, regardless of app theme — a dark terminal panel reads as
@@ -1157,6 +1158,42 @@ select.input {
   min-width: 0;
   position: relative;
   overflow: hidden;
+}
+.terminal-bottom-jump {
+  position: absolute;
+  right: 24px;
+  bottom: 22px;
+  z-index: 4;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(215, 212, 205, 0.2);
+  border-radius: 8px;
+  background: rgba(15, 16, 22, 0.86);
+  color: #d7d4cd;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.42);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+.terminal-bottom-jump:hover {
+  transform: translateY(-1px);
+  border-color: rgba(94, 234, 212, 0.54);
+  background: rgba(22, 24, 32, 0.96);
+  color: #5eead4;
+}
+.terminal-bottom-jump:active {
+  transform: translateY(0);
+}
+.terminal-bottom-jump:focus-visible {
+  outline: 2px solid rgba(94, 234, 212, 0.8);
+  outline-offset: 2px;
 }
 .floating-terminal {
   position: fixed;
@@ -1283,8 +1320,8 @@ select.input {
     display: none;
   }
 }
-/* Minimized = kept mounted (live terminal) but hidden, so restore is instant
-   and the PTY/scrollback survive without a reconnect. */
+/* Minimized windows keep their chrome state but unmount the terminal body, so
+   hidden windows do not keep browser websocket clients attached. */
 .floating-terminal.hidden {
   display: none;
 }

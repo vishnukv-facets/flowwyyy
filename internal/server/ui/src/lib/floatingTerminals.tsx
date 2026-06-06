@@ -63,8 +63,8 @@ export interface FloatingWindow {
 //   everOpened — has the window been mounted this page-session? Reload-seeded
 //                adhoc sessions start NOT-opened (tray chip only) so we don't
 //                reconnect every PTY at once; restoring mounts the terminal.
-//   minimized  — window hidden (display:none) but kept mounted, so the live
-//                terminal survives minimize/restore without reconnecting.
+//   minimized  — window hidden (display:none); its terminal body unmounts so a
+//                minimized window does not keep a live websocket attached.
 interface WinState {
   everOpened: boolean
   minimized: boolean

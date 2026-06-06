@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm, type IDisposable, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
+import { ArrowDownToLine } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
 import { uploadTerminalAttachments } from '../lib/api'
@@ -9,24 +10,40 @@ import { uploadTerminalAttachments } from '../lib/api'
 // Live PTY terminal powered by xterm.js, bound to flow's terminal JSON
 // protocol: server pushes {type:"output"|"status"|"error"}, client sends
 // {type:"input"|"resize"}. Sessions run inside tmux, so on (re)attach the
-// server resizes the pane to our URL cols/rows and replays a fresh
-// capture-pane of the full history — which is why we FIT BEFORE CONNECTING:
-// connecting at the real measured size makes that replay render at the right
-// width (no rewrap/overlap), and xterm's effectively-unlimited scrollback
-// (TERMINAL_SCROLLBACK_LINES) keeps every replayed line so you can scroll to
-// the very start of the session.
+// server resizes the pane to our URL cols/rows and replays the full pane
+// history — which is why we FIT BEFORE CONNECTING: connecting at the real
+// measured size makes that replay render at the right width (no rewrap/overlap),
+// and xterm's large scrollback (TERMINAL_SCROLLBACK_LINES) keeps every replayed
+// line so you can scroll to the very start of the session.
+//
+// NATIVE TERMINAL MODEL. tmux owns the pane and repaints it to our PTY; xterm.js
+// is the real UI and owns scrolling with its OWN scrollback, seeded once from
+// the server's replay on attach (see tmux_config.go: `set -g mouse off` for the
+// rationale). We never clear-and-rewrite the buffer mid-session: scrolling up
+// reads the seeded scrollback, scrolling back down re-attaches to the live tail
+// — exactly like iTerm. (An earlier "reseed full history on scroll-to-top"
+// experiment swapped the live screen for a frozen capture-pane snapshot, which
+// stranded repaint-style agents' live composer/footer behind blank rows until a
+// refresh or zoom; removing it is what makes the live view stay solid.)
 //
 // This is a faithful port of flow's long-standing xterm integration (the one
-// the user described as "worked solid"): scrollback cap, FitAddon +
-// Unicode11Addon, OSC 52 → system clipboard, auto-copy on selection, a copy
-// scroll-guard, custom wheel/key scrolling, and DA-response stripping on input.
-// No wterm-era workarounds (sanitizeSGR / split-VT reassembly) are needed —
-// xterm's own VT parser buffers partial escape sequences across writes.
+// the user described as "worked solid"): FitAddon + Unicode11Addon, OSC 52 →
+// system clipboard, auto-copy on selection, a copy scroll-guard, custom
+// wheel/key scrolling, and DA-response stripping on input.
 
-// xterm caps scrollback at this many lines. The max 32-bit unsigned value is
-// effectively "unlimited" for an interactive session and is what lets the
-// browser scroll back to the first line of the replayed tmux history.
-const TERMINAL_SCROLLBACK_LINES = 4294967295
+const DEFAULT_TERMINAL_SCROLLBACK_LINES = 200_000
+const MAX_TERMINAL_SCROLLBACK_LINES = 1_000_000
+
+function terminalScrollbackLines(): number {
+  const env = (import.meta as unknown as { env?: Record<string, string | undefined> }).env
+  const raw = env?.VITE_FLOW_TERMINAL_SCROLLBACK_LINES
+  if (!raw) return DEFAULT_TERMINAL_SCROLLBACK_LINES
+  const n = Number.parseInt(raw, 10)
+  if (!Number.isFinite(n) || n < 10_000) return DEFAULT_TERMINAL_SCROLLBACK_LINES
+  return Math.min(n, MAX_TERMINAL_SCROLLBACK_LINES)
+}
+
+const TERMINAL_SCROLLBACK_LINES = terminalScrollbackLines()
 
 // Re-fit at these millisecond offsets after mount / socket-open / font load.
 // Layout (flex, fullscreen toggle, font swap) settles asynchronously; a single
@@ -77,9 +94,9 @@ interface Props {
   slug: string
   kind?: 'task' | 'floating'
   restartKey?: number
-  // Repaint-style agents (Codex) repaint their UI in place, so the live stream
-  // never accumulates their scrollback; we reseed full history on scroll-to-top
-  // for them. Claude appends inline and accumulates naturally — no reseed.
+  // Carried for callers (SessionDetail / FloatingTerminalWindow) and future use;
+  // the native scroll model treats every provider the same — xterm owns the
+  // scrollback, so no provider-specific reseed is needed.
   provider?: string
   onStatus?: (kind: 'status' | 'error' | 'closed' | 'open', message: string) => void
 }
@@ -91,16 +108,21 @@ function termWsURL(slug: string, cols: number, rows: number, kind: 'task' | 'flo
   return `${proto}//${location.host}${path}?${key}=${encodeURIComponent(slug)}&cols=${cols}&rows=${rows}`
 }
 
-export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, onStatus }: Props) {
+export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
-  // Track the latest provider without restarting the terminal effect on change.
-  const providerRef = useRef(provider)
-  providerRef.current = provider
+  const jumpToBottomRef = useRef<(() => void) | null>(null)
+  const terminalInstanceKey = `${kind}:${slug}:${restartKey}`
+  const [bottomJumpState, setBottomJumpState] = useState({ key: terminalInstanceKey, visible: false })
+  if (bottomJumpState.key !== terminalInstanceKey) {
+    setBottomJumpState({ key: terminalInstanceKey, visible: false })
+  }
+  const showBottomJump = bottomJumpState.key === terminalInstanceKey && bottomJumpState.visible
 
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
     host.innerHTML = ''
+    jumpToBottomRef.current = null
 
     const term = new XTerm({
       cols: 120,
@@ -146,16 +168,10 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     // and that stale copy replays as a DUPLICATE footer on the next attach. Only
     // connecting once the width is final means no post-open resize, no stale copy.
     let fontReadyDone = false
-    let historyInFlight = false
-    let lastHistoryReq = 0
     // Follow-tail. While true, every drained write and every (re)fit re-pins the
-    // viewport to the bottom so the live input box + footer stay visible. A
-    // one-shot scrollToBottom loses the stick: the big history replay parses
-    // ASYNCHRONOUSLY, so its tail (prompt + footer) lands AFTER the early pin,
-    // and a late cols-change fit reflows the buffer (xterm preserves the top
-    // line, not the bottom) — either way the prompt slides below the fold and
-    // stays there until a manual resize/refresh. We drop follow only when the
-    // user deliberately scrolls up, and restore it when they return to bottom.
+    // viewport to the bottom so the live input box + footer stay visible. We drop
+    // follow the moment the user scrolls up to read history, and restore it when
+    // they scroll (or jump) back to the bottom — native terminal behavior.
     let follow = true
     const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY
 
@@ -163,19 +179,16 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
     }
 
-    // Ask the server for the authoritative full pane history and rebuild
-    // scrollback from it. Needed for repaint-style agents (Codex) whose live
-    // frames repaint in place and never grow xterm's scrollback — without this
-    // you can't scroll up to the first message. Claude accumulates scrollback
-    // inline, so it's skipped. Guarded against spam (one in-flight + cooldown).
-    const requestFullHistory = () => {
-      if (providerRef.current !== 'codex') return
-      if (historyInFlight) return
-      const now = Date.now()
-      if (now - lastHistoryReq < 1500) return
-      lastHistoryReq = now
-      historyInFlight = true
-      send({ type: 'history' })
+    // ---- scroll-to-bottom affordance -----------------------------------
+    // A small button appears whenever the viewport is detached from the live
+    // tail, so there's always an obvious one-click way back to the prompt.
+    let bottomJumpVisible = false
+    const syncBottomJump = () => {
+      if (destroyed) return
+      const visible = !atBottom()
+      if (visible === bottomJumpVisible) return
+      bottomJumpVisible = visible
+      setBottomJumpState({ key: terminalInstanceKey, visible })
     }
 
     // ---- OSC 52 → system clipboard -------------------------------------
@@ -240,9 +253,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         // Scrolling up to read history detaches from the tail; scrolling back to
         // the bottom re-attaches so live output resumes auto-following.
         follow = atBottom()
-        // Reached the top scrolling up: pull the full history so the start of
-        // the session is reachable even for repaint-style agents.
-        if (lines < 0 && term.buffer.active.viewportY <= 0) requestFullHistory()
+        syncBottomJump()
       }
       event.preventDefault()
       event.stopPropagation()
@@ -256,19 +267,29 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       if (event.code === 'PageUp') {
         term.scrollPages(-1)
         follow = atBottom()
+        syncBottomJump()
       } else if (event.code === 'PageDown') {
         term.scrollPages(1)
         follow = atBottom()
+        syncBottomJump()
       } else if (event.code === 'Home') {
         term.scrollToTop()
         follow = false
-        requestFullHistory()
+        syncBottomJump()
       } else if (event.code === 'End') {
         term.scrollToBottom()
         follow = true
+        syncBottomJump()
       } else return true
       event.preventDefault()
       return false
+    })
+
+    // Keep the follow flag + bottom-jump button honest for any scroll source
+    // (drag-select snap, programmatic, etc.), not just wheel/key.
+    const scrollDisposable = term.onScroll(() => {
+      follow = atBottom()
+      syncBottomJump()
     })
 
     // ---- copy scroll-guard ---------------------------------------------
@@ -292,6 +313,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         const b = term.buffer.active
         if (b.viewportY >= b.baseY && b.viewportY > savedViewportY + 1) {
           term.scrollToLine(savedViewportY)
+          syncBottomJump()
           restored = true
           return
         }
@@ -429,6 +451,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         // Re-pinning here while following is the step the one-shot version
         // missed — it's exactly why a manual resize used to be the workaround.
         if (follow) term.scrollToBottom()
+        syncBottomJump()
         openWS()
       })
     }
@@ -472,6 +495,8 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
         term.clear()
         sawFirstOutput = false
       }
+      // A reconnect replays the full history again — land at the live tail.
+      follow = true
       const sock = new WebSocket(termWsURL(slug, term.cols, term.rows, kind))
       ws = sock
       sock.onopen = () => {
@@ -499,21 +524,8 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
             // pin, so pinning here keeps the input box glued to the bottom as the
             // stream settles. No-op once already at the bottom.
             if (follow) term.scrollToBottom()
+            else syncBottomJump()
           })
-        } else if (m.type === 'history' && m.data != null) {
-          // Authoritative full-history reseed (server sendHistory): rebuild the
-          // buffer so a repaint-style session becomes scrollable to its first
-          // message, then jump to the top the user was reaching for. Done via
-          // the write queue (clear saved lines + screen + home, then history) so
-          // it's ordered after any pending live frames — a synchronous reset()
-          // would race ahead of queued writes. Newer live frames land below the
-          // history (the bottom rows, off-screen while the user reads the top).
-          historyInFlight = false
-          // This reseed only fires because the user scrolled to the top — keep
-          // follow off so incoming live frames don't yank them back down.
-          follow = false
-          term.write('\x1b[3J\x1b[2J\x1b[H')
-          term.write(m.data, () => term.scrollToTop())
         } else if (m.type === 'status') onStatus?.('status', m.message ?? '')
         else if (m.type === 'error') onStatus?.('error', m.message ?? 'terminal error')
       }
@@ -535,6 +547,13 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
     const fitTimers: ReturnType<typeof setTimeout>[] = []
     const scheduleFits = () => {
       for (const delay of TERMINAL_FIT_DELAYS_MS) fitTimers.push(setTimeout(resize, delay))
+    }
+
+    jumpToBottomRef.current = () => {
+      follow = true
+      term.scrollToBottom()
+      syncBottomJump()
+      term.focus()
     }
 
     const observer = new ResizeObserver(resize)
@@ -596,6 +615,7 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       if (destroyed) return
       fitNow()
       if (follow) term.scrollToBottom()
+      syncBottomJump()
       scheduleFits()
     })
 
@@ -621,7 +641,9 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
       dataDisposable.dispose()
       resizeDisposable.dispose()
       selectionDisposable.dispose()
+      scrollDisposable.dispose()
       osc52?.dispose()
+      jumpToBottomRef.current = null
       try {
         ws?.close()
       } catch {
@@ -636,6 +658,17 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, provider, on
   return (
     <div className="flow-term">
       <div className="xterm-host" ref={hostRef} />
+      {showBottomJump ? (
+        <button
+          type="button"
+          className="terminal-bottom-jump"
+          aria-label="Scroll terminal to bottom"
+          title="Scroll to bottom"
+          onClick={() => jumpToBottomRef.current?.()}
+        >
+          <ArrowDownToLine size={16} strokeWidth={2.2} />
+        </button>
+      ) : null}
     </div>
   )
 }

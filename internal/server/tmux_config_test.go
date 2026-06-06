@@ -40,7 +40,7 @@ func TestEnsureTmuxConfigWritesFileWhenAbsent(t *testing.T) {
 		"set -g mouse off",
 		"set -g window-size latest",
 		"set -g set-clipboard on",
-		"set -g history-limit 2147483647",
+		"set -g history-limit 200000",
 		"~/.tmux.conf",
 	} {
 		if !strings.Contains(string(contents), want) {
@@ -125,7 +125,7 @@ func TestEnsureSharedTerminalScrollOptionsAppliesPerSession(t *testing.T) {
 		"set-option -t flow-build-ui mouse off",
 		"set-option -t flow-build-ui window-size latest",
 		"set-option -t flow-build-ui set-clipboard on",
-		"set-window-option -t flow-build-ui: history-limit 2147483647",
+		"set-window-option -t flow-build-ui: history-limit 200000",
 		"send-keys -t flow-build-ui -X cancel",
 	} {
 		if !strings.Contains(got, want) {
@@ -157,7 +157,7 @@ func TestEnsureSharedTerminalDefaultScrollOptionsAppliesBeforeNewWindows(t *test
 		"set-option -g mouse off",
 		"set-option -g window-size latest",
 		"set-option -g set-clipboard on",
-		"set-window-option -g history-limit 2147483647",
+		"set-window-option -g history-limit 200000",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing tmux command %q in:\n%s", want, got)
@@ -212,9 +212,16 @@ func TestEnsureSharedTerminalSessionSetsMaxHistoryBeforeNewWindow(t *testing.T) 
 	got := strings.TrimSpace(commandLog(commands))
 	want := "set-option -g mouse off ; set-option -g window-size latest ; set-option -g status off ; " +
 		"set-option -g set-clipboard on ; " +
-		"set-window-option -g history-limit 2147483647 ; new-session"
+		"set-window-option -g history-limit 200000 ; new-session"
 	if !strings.Contains(got, want) {
 		t.Fatalf("tmux creation command must apply mouse-off + window-size + status-off + OSC 52 clipboard + max history before new-session; missing %q in:\n%s", want, got)
+	}
+}
+
+func TestSharedTerminalHistoryLimitHonorsEnv(t *testing.T) {
+	t.Setenv("FLOW_TMUX_HISTORY_LIMIT", "5000")
+	if got := sharedTerminalHistoryLimit(); got != "5000" {
+		t.Fatalf("sharedTerminalHistoryLimit env = %q, want 5000", got)
 	}
 }
 
