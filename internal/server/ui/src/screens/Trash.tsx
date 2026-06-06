@@ -24,6 +24,24 @@ export function Trash() {
           <div className="eyebrow">soft-deleted</div>
           <h1 className="h-xl">Trash</h1>
         </div>
+        <div className="spacer" />
+        {items.length > 0 && (
+          <button
+            className="btn danger"
+            disabled={action.isPending}
+            onClick={async () => {
+              const ok = await confirmAction({
+                title: 'Empty trash?',
+                body: `Permanently delete all ${items.length} item${items.length === 1 ? '' : 's'} in trash. This cannot be undone. Items still referenced by active tasks are kept.`,
+                confirmLabel: 'Empty Trash',
+                danger: true,
+              })
+              if (ok) action.mutate({ kind: 'empty-trash' })
+            }}
+          >
+            <Trash2 size={14} /> Empty Trash
+          </button>
+        )}
       </div>
 
       {items.length === 0 ? (

@@ -243,6 +243,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 		}
 		return s.destroyDeletedEntity(req.EntityKind, target)
+	case "empty-trash":
+		return s.emptyTrash()
 	case "workdir-add", "workdir-rename", "workdir-remove":
 		return s.workdirAction(req)
 	case "spawn-run":
@@ -486,6 +488,51 @@ func (s *Server) destroyDeletedEntity(kind, slug string) (actionResponse, int) {
 		_ = os.RemoveAll(dir)
 	}
 	return actionResponse{OK: true, Message: "deleted " + kind + " " + slug}, http.StatusOK
+}
+
+// emptyTrash permanently deletes every soft-deleted task, project, and
+// playbook. It reuses destroyDeletedEntity per item (so each gets the same
+// dependency-blocker check + filesystem cleanup), looping so a trashed parent
+// is removed after its trashed children unblock it. Items still referenced by
+// ACTIVE entities (e.g. a live child) can't be destroyed and are reported as
+// kept rather than failing the whole sweep.
+func (s *Server) emptyTrash() (actionResponse, int) {
+	trash := s.uiTrash()
+	pending := make([]uiTrashItem, 0, trash.Total)
+	pending = append(pending, trash.Tasks...)
+	pending = append(pending, trash.Projects...)
+	pending = append(pending, trash.Playbooks...)
+	if len(pending) == 0 {
+		return actionResponse{OK: true, Message: "Trash is already empty"}, http.StatusOK
+	}
+
+	deleted := 0
+	for {
+		progressed := false
+		remaining := pending[:0:0]
+		for _, it := range pending {
+			if resp, _ := s.destroyDeletedEntity(it.Kind, it.Slug); resp.OK {
+				deleted++
+				progressed = true
+			} else {
+				remaining = append(remaining, it)
+			}
+		}
+		pending = remaining
+		if !progressed || len(pending) == 0 {
+			break
+		}
+	}
+
+	noun := "items"
+	if deleted == 1 {
+		noun = "item"
+	}
+	msg := fmt.Sprintf("Emptied trash — permanently deleted %d %s", deleted, noun)
+	if len(pending) > 0 {
+		msg += fmt.Sprintf("; kept %d still referenced by active items", len(pending))
+	}
+	return actionResponse{OK: true, Message: msg}, http.StatusOK
 }
 
 // entityDir resolves the ~/.flow directory that backs a trashable entity, with

@@ -551,6 +551,67 @@ func TestUIDataIncludesTaskDependencies(t *testing.T) {
 	}
 }
 
+func TestEmptyTrashDestroysSoftDeletedAndKeepsReferenced(t *testing.T) {
+	root, db := testRootDB(t)
+	now := flowdb.NowISO()
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := db.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Two independent soft-deleted tasks.
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,created_at,updated_at,deleted_at)
+	      VALUES ('gone-1','Gone 1','done','regular','high',?,?,?,?),
+	             ('gone-2','Gone 2','done','regular','high',?,?,?,?)`,
+		root, now, now, now, root, now, now, now)
+	// Trashed parent + trashed child: the parent can only be destroyed after the
+	// child is, so the loop must make a second pass.
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,created_at,updated_at,deleted_at)
+	      VALUES ('parent-trashed','PT','done','regular','high',?,?,?,?)`, root, now, now, now)
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,parent_slug,created_at,updated_at,deleted_at)
+	      VALUES ('child-trashed','CT','done','regular','high',?, 'parent-trashed', ?,?,?)`, root, now, now, now)
+	// Trashed parent with a LIVE (non-trashed) child: must be KEPT, not destroyed.
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,created_at,updated_at,deleted_at)
+	      VALUES ('parent-blocked','PB','done','regular','high',?,?,?,?)`, root, now, now, now)
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,session_id,session_started,parent_slug,created_at,updated_at)
+	      VALUES ('live-child','LC','in-progress','regular','high',?, '33333333-3333-4333-8333-333333333333', ?, 'parent-blocked', ?,?)`, root, now, now, now)
+	// A live, non-trashed task untouched by the sweep.
+	exec(`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,session_id,session_started,created_at,updated_at)
+	      VALUES ('keep-live','KL','in-progress','regular','high',?, '44444444-4444-4444-8444-444444444444', ?, ?,?)`, root, now, now, now)
+
+	exists := func(slug string) bool {
+		var n int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE slug = ?`, slug).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n > 0
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root})
+	resp, status := srv.runAction(actionRequest{Kind: "empty-trash"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("empty-trash status=%d resp=%+v", status, resp)
+	}
+
+	for _, slug := range []string{"gone-1", "gone-2", "parent-trashed", "child-trashed"} {
+		if exists(slug) {
+			t.Errorf("trashed task %s should have been destroyed", slug)
+		}
+	}
+	for _, slug := range []string{"parent-blocked", "live-child", "keep-live"} {
+		if !exists(slug) {
+			t.Errorf("task %s should still exist (referenced or not trashed)", slug)
+		}
+	}
+	if !strings.Contains(resp.Message, "deleted 4") {
+		t.Errorf("message should report 4 deleted: %q", resp.Message)
+	}
+	if !strings.Contains(resp.Message, "kept 1") {
+		t.Errorf("message should report 1 kept: %q", resp.Message)
+	}
+}
+
 func TestUIDataTrashContainsDeletedRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
