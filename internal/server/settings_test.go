@@ -70,6 +70,34 @@ func TestUpdateSettings_PersistsAppliesAndMasksSecrets(t *testing.T) {
 	}
 }
 
+func TestSeedConfigFromEnv(t *testing.T) {
+	root, db := testRootDB(t)
+	// Config already pins one GitHub key; env disagrees — config must win and
+	// stay untouched by seeding.
+	if err := saveConfigFile(root+"/config.json", map[string]string{"FLOW_GH_AUTOOPEN": "true"}); err != nil {
+		t.Fatalf("seed config: %v", err)
+	}
+	// A non-secret operator setting that lives ONLY in the env (the real-world
+	// case: FLOW_GH_* exported from a shell rc, never saved via the UI).
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat")
+	t.Setenv("FLOW_GH_AUTOOPEN", "false")
+	// A secret in the env must NOT be written to disk.
+	t.Setenv("FLOW_SLACK_APP_TOKEN", "xapp-should-not-persist")
+
+	New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"}) // boots applyConfigToEnv + seedConfigFromEnv
+
+	cfg := loadConfigFile(root + "/config.json")
+	if cfg["FLOW_GH_SELF_LOGINS"] != "octocat" {
+		t.Fatalf("env-only non-secret not persisted: %#v", cfg)
+	}
+	if cfg["FLOW_GH_AUTOOPEN"] != "true" {
+		t.Fatalf("seeding clobbered an existing config value: FLOW_GH_AUTOOPEN=%q, want true", cfg["FLOW_GH_AUTOOPEN"])
+	}
+	if _, ok := cfg["FLOW_SLACK_APP_TOKEN"]; ok {
+		t.Fatalf("secret was persisted to disk by seeding: %#v", cfg)
+	}
+}
+
 func TestApplyConfigToEnv_ConfigIsAuthoritative(t *testing.T) {
 	root, db := testRootDB(t)
 	if err := saveConfigFile(root+"/config.json", map[string]string{"FLOW_SLACK_TRIGGER_EMOJI": "fromconfig"}); err != nil {

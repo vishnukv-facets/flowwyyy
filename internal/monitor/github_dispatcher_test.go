@@ -25,6 +25,42 @@ func seedGitHubTask(t *testing.T, slug string, db *sql.DB, tag string) {
 	}
 }
 
+// TestFindTaskByGitHubTag_PrefersLiveWorkingTaskOverStub guards the inbox
+// "Open session" / routing bug: when both the real working task and an
+// auto-created gh-pr-* stub carry the same PR tag, routing must land on the
+// live, session-backed task — not the stub, which (sorting first by slug) used
+// to win the naive first-match.
+func TestFindTaskByGitHubTag_PrefersLiveWorkingTaskOverStub(t *testing.T) {
+	db := dispatcherTestDB(t)
+	const tag = "gh-pr:vishnukv-facets/flow-manager#12"
+
+	// Stub the dispatcher auto-created earlier; its slug sorts BEFORE the real
+	// task ("g" < "m"), so it would win a first-by-slug match.
+	seedGitHubTask(t, "gh-pr-vishnukv-facets-flow-manager-12", db, tag)
+
+	// Real working task: in-progress, with a captured session + worktree.
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, worktree_path, session_id, session_provider, permission_mode, status_changed_at, created_at, updated_at)
+		 VALUES (?, 'real', 'in-progress', 'high', ?, ?, 'sess-123', 'claude', 'default', ?, ?, ?)`,
+		"mc-task-tree-startability", t.TempDir(), t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatalf("seed working task: %v", err)
+	}
+	if err := flowdb.AddTaskTag(db, "mc-task-tree-startability", tag); err != nil {
+		t.Fatalf("tag working task: %v", err)
+	}
+
+	d := NewGitHubDispatcher(db, nil)
+	slug, found, err := d.findTaskByGitHubTag(tag)
+	if err != nil || !found {
+		t.Fatalf("findTaskByGitHubTag found=%v err=%v", found, err)
+	}
+	if slug != "mc-task-tree-startability" {
+		t.Fatalf("routed to %q, want the live working task (not the gh-pr-* stub)", slug)
+	}
+}
+
 func TestGitHubDispatcher_PRReviewRequestCreatesTask(t *testing.T) {
 	t.Setenv("FLOW_GH_AUTOOPEN", "0")
 	db := dispatcherTestDB(t)

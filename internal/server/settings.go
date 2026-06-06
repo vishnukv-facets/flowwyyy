@@ -153,6 +153,46 @@ func (s *Server) applyConfigToEnv() {
 	}
 }
 
+// seedConfigFromEnv persists operator configuration that was supplied via the
+// environment (e.g. exported in a shell rc) but not yet written to config.json,
+// so it survives a restart launched from a different shell or a launcher (cron,
+// launchd) that lacks those exports. Without this, a setting like
+// FLOW_GH_ENABLED that lives only in the launching shell silently reverts to
+// its default for any server started without it — quietly disabling GitHub
+// polling (and with it PR auto-linking, the inbox, etc.).
+//
+// Secrets are skipped on purpose: an operator who injects tokens via the
+// environment (from a secret manager, say) should not have them written to
+// disk behind their back. Keys already present in config.json are left alone —
+// config stays authoritative; this only fills genuine gaps. Runs at boot,
+// after applyConfigToEnv, so it captures the original inherited env for keys
+// config did not already define.
+func (s *Server) seedConfigFromEnv() {
+	path := s.configPath()
+	if path == "" {
+		return
+	}
+	cfg := loadConfigFile(path)
+	changed := false
+	for _, sp := range settingsRegistry {
+		if sp.Type == settingSecret {
+			continue
+		}
+		if v, ok := cfg[sp.Key]; ok && strings.TrimSpace(v) != "" {
+			continue // already persisted — config wins
+		}
+		raw := strings.TrimSpace(os.Getenv(sp.Key))
+		if raw == "" {
+			continue
+		}
+		cfg[sp.Key] = raw
+		changed = true
+	}
+	if changed {
+		_ = saveConfigFile(path, cfg)
+	}
+}
+
 type uiSettingField struct {
 	Key     string   `json:"key"`
 	Label   string   `json:"label"`

@@ -36,6 +36,10 @@ func New(cfg Config) *Server {
 	// Export persisted settings (config.json) into the process env before any
 	// listener reads them, so UI-managed config is authoritative.
 	s.applyConfigToEnv()
+	// Capture operator config that was set via the environment but never saved,
+	// so it survives a restart launched without those exports (otherwise e.g.
+	// GitHub polling silently reverts to off).
+	s.seedConfigFromEnv()
 	s.terminals = newTerminalHub(s)
 	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
 	// process, so the Ask Flow tray survives a flow-server restart.

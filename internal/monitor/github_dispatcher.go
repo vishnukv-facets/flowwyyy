@@ -242,12 +242,50 @@ func (d *GitHubDispatcher) findTaskByGitHubTag(tag string) (string, bool, error)
 	if len(tasks) == 0 {
 		return "", false, nil
 	}
+	// Several tasks can carry the same PR/issue tag — typically the real working
+	// task PLUS a gh-pr-* stub the dispatcher auto-created before the working
+	// task was linked. ListTasks orders by priority then SLUG, so the
+	// auto-generated "gh-pr-…" stub usually sorts ahead of a human slug and would
+	// win a naive first-match. Prefer the task that actually owns the work — a
+	// live, in-progress, session-backed checkout — so events and the inbox thread
+	// route to the session the operator is in, not the placeholder.
+	best := ""
+	bestScore := -1
 	for _, task := range tasks {
-		if task != nil && task.Status != "done" {
-			return task.Slug, true, nil
+		if task == nil {
+			continue
+		}
+		if s := githubTaskRoutingScore(task); s > bestScore {
+			bestScore = s
+			best = task.Slug
 		}
 	}
-	return tasks[0].Slug, true, nil
+	if best == "" {
+		best = tasks[0].Slug
+	}
+	return best, true, nil
+}
+
+// githubTaskRoutingScore ranks candidate tasks that share a PR/issue tag so the
+// dispatcher routes to the one most likely to be the real working task: a live
+// agent session outranks an in-progress task, which outranks any other open
+// task, which outranks a done one. Same shape as the inbox "Open session"
+// expectation — the session the operator opened the PR from.
+func githubTaskRoutingScore(t *flowdb.Task) int {
+	if t.Status == "done" {
+		return 0 // tracked but finished — still beats nothing, never a stub
+	}
+	score := 1
+	if t.Status == "in-progress" {
+		score += 2
+	}
+	if strings.TrimSpace(t.SessionID.String) != "" {
+		score += 4 // a captured agent session: this is where the work lives
+	}
+	if strings.TrimSpace(t.WorktreePath.String) != "" {
+		score++
+	}
+	return score
 }
 
 func (d *GitHubDispatcher) createGitHubTask(ctx context.Context, ev GitHubEvent) (string, error) {

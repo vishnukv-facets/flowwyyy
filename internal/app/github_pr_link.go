@@ -3,39 +3,45 @@ package app
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"os/exec"
 	"strings"
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/ghpr"
 	"flow/internal/ghref"
 )
 
-var ghPRViewOutput = func(ctx context.Context, dir string) ([]byte, error) {
-	cmd := exec.CommandContext(ctx, "gh", "pr", "view", "--json", "url")
-	cmd.Dir = dir
-	return cmd.Output()
-}
+// openPRURLForBranch is the fork-safe + worktree-safe "open PR for this dir's
+// branch" lookup, shared with the live monitor poll. Package var so tests can
+// stub it.
+var openPRURLForBranch = ghpr.OpenURLForBranch
 
+// linkTaskToCurrentBranchPR tags the task with the open PR on its branch, so
+// `flow done` leaves the task tracking its PR (reviews/merges keep flowing).
+//
+// It inspects the task's dedicated WORKTREE when it has one — that's the
+// checkout actually on the task branch. Using work_dir for a worktree task
+// would inspect the repo root, which usually sits on `main` with no PR, and
+// silently link nothing (the bug this guards against).
 func linkTaskToCurrentBranchPR(db *sql.DB, task *flowdb.Task) error {
-	if db == nil || task == nil || strings.TrimSpace(task.WorkDir) == "" {
+	if db == nil || task == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	dir := strings.TrimSpace(task.WorktreePath.String)
+	if dir == "" {
+		dir = strings.TrimSpace(task.WorkDir)
+	}
+	if dir == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 
-	out, err := ghPRViewOutput(ctx, task.WorkDir)
-	if err != nil {
-		return nil
-	}
-	var payload struct {
-		URL string `json:"url"`
-	}
-	if err := json.Unmarshal(out, &payload); err != nil {
+	url, err := openPRURLForBranch(ctx, dir)
+	if err != nil || url == "" {
 		return err
 	}
-	tag, ok := ghref.PRTagFromURL(payload.URL)
+	tag, ok := ghref.PRTagFromURL(url)
 	if !ok {
 		return nil
 	}

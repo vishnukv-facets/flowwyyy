@@ -121,5 +121,19 @@ func resolveGitConfigPath(path string) string {
 	if !filepath.IsAbs(target) {
 		target = filepath.Join(path, target)
 	}
+	// A linked worktree's gitdir holds per-worktree state only (HEAD, index,
+	// commondir); the shared config — including remotes — lives in the common
+	// dir, located via the `commondir` pointer file. Follow it so origin
+	// detection works from a worktree checkout, not just the main working
+	// tree. A plain .git-file gitdir (e.g. a submodule) has no commondir and
+	// keeps its own config, so we fall through to <target>/config there.
+	if cd, err := os.ReadFile(filepath.Join(target, "commondir")); err == nil {
+		if common := strings.TrimSpace(string(cd)); common != "" {
+			if !filepath.IsAbs(common) {
+				common = filepath.Join(target, common)
+			}
+			return filepath.Join(common, "config")
+		}
+	}
 	return filepath.Join(target, "config")
 }

@@ -179,14 +179,14 @@ func TestCmdDoneLinksCurrentBranchPR(t *testing.T) {
 	}
 	db.Close()
 
-	old := ghPRViewOutput
-	ghPRViewOutput = func(ctx context.Context, dir string) ([]byte, error) {
+	old := openPRURLForBranch
+	openPRURLForBranch = func(ctx context.Context, dir string) (string, error) {
 		if dir != workDir {
 			t.Fatalf("gh dir = %q, want %q", dir, workDir)
 		}
-		return []byte(`{"url":"https://github.com/acme/app/pull/12"}`), nil
+		return "https://github.com/acme/app/pull/12", nil
 	}
-	t.Cleanup(func() { ghPRViewOutput = old })
+	t.Cleanup(func() { openPRURLForBranch = old })
 
 	if rc := cmdDone([]string{"review-task"}); rc != 0 {
 		t.Fatalf("done rc=%d, want 0", rc)
@@ -253,6 +253,55 @@ func TestCloseTaskTmuxSessionSchedulesDeferredKill(t *testing.T) {
 		if !contains(got, want) {
 			t.Fatalf("commands missing %q:\n%s", want, got)
 		}
+	}
+}
+
+// TestCmdDoneLinksWorktreeBranchPR guards the worktree-blindness bug: a task
+// with a dedicated worktree must have its PR looked up against the WORKTREE
+// checkout (which is on the task branch), not work_dir (the repo root, usually
+// on main with no PR).
+func TestCmdDoneLinksWorktreeBranchPR(t *testing.T) {
+	setupFlowRoot(t)
+	stubClaudeRunner(t, nil)
+	workDir := t.TempDir()
+	worktree := t.TempDir()
+	if rc := cmdAdd([]string{"task", "WT Task", "--work-dir", workDir, "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_started=?, worktree_path=? WHERE slug='wt-task'`,
+		fakeSessionID("wt-task"), flowdb.NowISO(), worktree,
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	old := openPRURLForBranch
+	openPRURLForBranch = func(ctx context.Context, dir string) (string, error) {
+		if dir != worktree {
+			t.Fatalf("gh dir = %q, want worktree %q (not work_dir)", dir, worktree)
+		}
+		return "https://github.com/acme/app/pull/42", nil
+	}
+	t.Cleanup(func() { openPRURLForBranch = old })
+
+	if rc := cmdDone([]string{"wt-task"}); rc != 0 {
+		t.Fatalf("done rc=%d, want 0", rc)
+	}
+	db = openFlowDB(t)
+	tags, err := flowdb.GetTaskTags(db, "wt-task")
+	if err != nil {
+		t.Fatalf("GetTaskTags() error = %v", err)
+	}
+	found := false
+	for _, tag := range tags {
+		if tag == "gh-pr:acme/app#42" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("tags = %v, want gh-pr:acme/app#42", tags)
 	}
 }
 
