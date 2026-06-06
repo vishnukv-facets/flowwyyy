@@ -714,6 +714,31 @@ func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"flow attention list [--status new|acted|dismissed|snoozed|all]",
+		"flow attention act <id> <make-task|forward|confirm-handoff|dismiss>",
+		"flow attention sent <id> [--close-floating <floating-id>]",
+		"flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]",
+		"## 10d. Attention Router feed",
+		"Before asking \"what should I work on\"",
+		"When an inbox/monitor event wakes you",
+		"`flow attention trace` is the audit trail",
+		"Do not post a send-reply yourself",
+		"operator approved the reply",
+		"mark the card sent only after the post is confirmed",
+		"`flow attention sent <id> --close-floating <floating-id>`",
+		"Default autonomy is surface-only",
+		"learned feedback never enables an action",
+		"flow attention feedback --group",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Attention workflow content %q", want)
+		}
+	}
+}
+
 func TestReadmeDocumentsSameSessionProviderCapability(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	if err != nil {

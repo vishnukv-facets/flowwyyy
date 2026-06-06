@@ -211,17 +211,27 @@ Read
   flow show playbook    [<ref>]
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
+  flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
+                     [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
+                     [--include-archived] [--include-deleted|--deleted]
+  flow list projects [--status active|done] [--include-archived] [--include-deleted|--deleted]
+  flow list playbooks   [--project <slug>] [--include-archived] [--include-deleted|--deleted]
+
+Attention
+  flow attention list [--status new|acted|dismissed|snoozed|all]
+                     show Attention Router cards awaiting operator review
+  flow attention act <id> <make-task|forward|confirm-handoff|dismiss>
+                     perform a simple operator-approved feed action
+  flow attention sent <id> [--close-floating <floating-id>]
+                     mark an approved send-reply card sent after confirmed post
+  flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]
+                     inspect the steering decision funnel and trace rows
   flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]
                      report Attention feedback approval/dismiss rates by one dimension
   flow attention handoff accept <correlation-id> --reason "<why>"
                      accept an Attention confirmed handoff from this task's inbox
   flow attention handoff decline <correlation-id> --reason "<why>"
                      decline an Attention confirmed handoff and keep the feed card open
-  flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
-                     [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
-                     [--include-archived] [--include-deleted|--deleted]
-  flow list projects [--status active|done] [--include-archived] [--include-deleted|--deleted]
-  flow list playbooks   [--project <slug>] [--include-archived] [--include-deleted|--deleted]
 
 Edit / mutate
   flow edit           <ref>          opens brief.md in $EDITOR, bumps updated_at
@@ -325,10 +335,17 @@ working on", "where did I leave off", "give me a status".
 
 **Recipe:**
 
-1. Run `flow list projects` and `flow list tasks --status in-progress`.
+1. Run `flow attention list --status new`, `flow list projects`, and
+   `flow list tasks --status in-progress`.
 2. Run `flow list tasks --status backlog --priority high`.
-3. Read the `waiting_on` and stale markers in the tasks output.
-4. Summarize in 4 sections:
+3. Read the `waiting_on` and stale markers in the tasks output, and
+   inspect any Attention cards as operator-review items (do not act on
+   them automatically).
+4. Summarize in these sections:
+   - **Attention**: new Attention Router cards, with source, suggested
+     action, confidence, matched task, and the shortest "why this"
+     reason you can infer from the card/trace. If no cards exist, say
+     there are no new Attention cards.
    - **In flight** (`in-progress`): 1 bullet per task, include any ⚠
      stale marker and any `[waiting: ...]` note.
    - **High-priority backlog**: 1 bullet per backlog task marked high.
@@ -2599,6 +2616,79 @@ voice, before you start the substantive work:
 - **Do not edit the brief to record new GitHub events.** The brief is
   the spawn-time snapshot. New GitHub activity arrives through
   `inbox.jsonl` and durable decisions belong in normal task updates.
+
+## 10d. Attention Router feed
+
+The Attention Router is Flow's cross-source triage surface. It watches
+connector events, records steering traces, and writes promising items to
+`attention_feed` so the operator can decide what happens next. Treat it as
+an operator-review queue, not as an instruction to autonomously post, mute,
+create tasks, or change policy.
+
+**When to inspect it:**
+
+- **Before asking "what should I work on"** or running the §4.1 start-day
+  flow, run `flow attention list --status new` alongside the task lists.
+  Attention cards are often the freshest "this needs review" signal.
+- **When an inbox/monitor event wakes you**, check whether the same source,
+  channel, author, thread, PR, or issue already has an Attention card before
+  creating duplicate tasks or replying. Use the card as context, then follow
+  the Slack/GitHub task rules above for the actual source interaction.
+- **When the operator asks "why did Flow surface this?"**, start from the
+  card's "why this" fields in Mission Control. If more audit detail is
+  needed, `flow attention trace` is the audit trail for the steering funnel,
+  stage outcome, disposition, confidence, source, and matched-task evidence.
+
+**Review recipe:**
+
+1. Run `flow attention list --status new` to see unresolved cards.
+2. For a specific card, inspect its source thread/PR/issue and its trace
+   evidence before acting. Mission Control's card/detail view shows source
+   evidence, matched task/project, reason, confidence, stage outcome, and
+   action preview; CLI users can use `flow attention trace` for the broader
+   funnel and recent trace rows.
+3. Choose the narrowest operator-approved action:
+   - `flow attention act <id> dismiss` when the card is noise.
+   - `flow attention act <id> make-task` when it should become tracked work.
+   - `flow attention act <id> forward` when it belongs with an existing task.
+   Mission Control also exposes retriage, mute-channel, mute-sender,
+   mute-thread, make-task-start, open-source/open-session, and send-reply.
+4. Use `flow attention feedback --group <dimension>` when you need the
+   learning-loop summary. Common dimensions are `source`, `channel`,
+   `author`, `thread-type`, `suggested-action`, and `confidence-band`.
+   Report patterns as evidence; do not mutate autonomy policy yourself.
+
+**Send-reply safety boundary:**
+
+- Do not post a send-reply yourself unless the operator approved the reply
+  text or approved specific revision instructions in the Attention UI.
+- The server does not post Slack replies directly. Slack send-reply opens an
+  ephemeral, watchable floating Claude session with Slack MCP access; that
+  session posts the approved reply and then runs
+  `flow attention sent <id> --close-floating <floating-id>`.
+- GitHub send-reply can use the headless agent path because it posts through
+  `gh`; matched-task replies are injected into that task's inbox/session and
+  recorded as a task update so the owning agent posts from the right context.
+- In all cases, mark the card sent only after the post is confirmed. If the
+  tool call, `gh` command, or task handoff fails, leave the card unresolved so
+  the operator can retry or inspect the visible session.
+- Never run `flow attention sent` merely because a draft exists, because an
+  agent printed text, or because a send session was opened. The command is
+  bookkeeping after confirmed delivery, not the delivery itself.
+
+**Autonomy defaults and limits:**
+
+- Default autonomy is surface-only: `DefaultAutonomy()` disables every outward
+  action even though it seeds sensible thresholds for future opt-in settings.
+- `FLOW_STEERING_AUTONOMY` can enable action thresholds only when the operator
+  configured it. Do not edit env, settings, DB rows, or code to enable
+  autonomy on the operator's behalf.
+- Operator clicks/manual CLI actions are authorization for that one action.
+  They do not authorize future autonomous sends, mutes, task creation, or
+  forwarding.
+- The feedback loop may suppress noisy channels/authors or adjust thresholds,
+  but learned feedback never enables an action. Treat feedback as evidence for
+  triage quality, not as permission to take new classes of action.
 
 ## 11. When in doubt
 
