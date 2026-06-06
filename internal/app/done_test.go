@@ -30,9 +30,25 @@ func stubClaudeRunner(t *testing.T, retErr error) *[]capturedClaudeCall {
 	return calls
 }
 
+func stubTaskTmuxSessionCloser(t *testing.T, retErr error, events *[]string) *[]string {
+	t.Helper()
+	old := taskTmuxSessionCloser
+	calls := &[]string{}
+	taskTmuxSessionCloser = func(name string) error {
+		*calls = append(*calls, name)
+		if events != nil {
+			*events = append(*events, "tmux:"+name)
+		}
+		return retErr
+	}
+	t.Cleanup(func() { taskTmuxSessionCloser = old })
+	return calls
+}
+
 func TestCmdDoneHappyPath(t *testing.T) {
 	setupFlowRoot(t)
 	stubClaudeRunner(t, nil)
+	stubTaskTmuxSessionCloser(t, nil, nil)
 	if rc := cmdAdd([]string{"task", "Some Task", "--agent", "claude"}); rc != 0 {
 		t.Fatalf("add rc=%d", rc)
 	}
@@ -59,9 +75,97 @@ func TestCmdDoneHappyPath(t *testing.T) {
 	}
 }
 
+func TestCmdDoneClosesTmuxSessionAfterCloseoutSweep(t *testing.T) {
+	setupFlowRoot(t)
+	events := []string{}
+	oldClaude := claudeRunner
+	claudeRunner = func(slug, prompt string) error {
+		events = append(events, "sweep:"+slug)
+		return nil
+	}
+	t.Cleanup(func() { claudeRunner = oldClaude })
+	tmuxCalls := stubTaskTmuxSessionCloser(t, nil, &events)
+
+	if rc := cmdAdd([]string{"task", "Reap Session", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	sessionID := fakeSessionID("reap-session")
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_started=? WHERE slug='reap-session'`,
+		sessionID, flowdb.NowISO(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	if rc := cmdDone([]string{"reap-session"}); rc != 0 {
+		t.Fatalf("done rc=%d", rc)
+	}
+	wantEvents := []string{"sweep:reap-session", "tmux:flow-reap-session"}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+	if len(*tmuxCalls) != 1 || (*tmuxCalls)[0] != "flow-reap-session" {
+		t.Fatalf("tmux calls = %v, want [flow-reap-session]", *tmuxCalls)
+	}
+
+	db = openFlowDB(t)
+	task, err := flowdb.GetTask(db, "reap-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != sessionID {
+		t.Fatalf("session_id = %+v, want preserved %s", task.SessionID, sessionID)
+	}
+}
+
+func TestCmdDoneClosesTmuxAfterSweepFailure(t *testing.T) {
+	setupFlowRoot(t)
+	events := []string{}
+	oldClaude := claudeRunner
+	claudeRunner = func(slug, prompt string) error {
+		events = append(events, "sweep:"+slug)
+		return errors.New("sweep failed")
+	}
+	t.Cleanup(func() { claudeRunner = oldClaude })
+	stubTaskTmuxSessionCloser(t, nil, &events)
+
+	if rc := cmdAdd([]string{"task", "Sweep Then Reap", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_started=? WHERE slug='sweep-then-reap'`,
+		fakeSessionID("sweep-then-reap"), flowdb.NowISO(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	if rc := cmdDone([]string{"sweep-then-reap"}); rc != 0 {
+		t.Fatalf("done rc=%d, want 0 even when sweep fails", rc)
+	}
+	wantEvents := []string{"sweep:sweep-then-reap", "tmux:flow-sweep-then-reap"}
+	if len(events) != len(wantEvents) {
+		t.Fatalf("events = %v, want %v", events, wantEvents)
+	}
+	for i := range wantEvents {
+		if events[i] != wantEvents[i] {
+			t.Fatalf("events = %v, want %v", events, wantEvents)
+		}
+	}
+}
+
 func TestCmdDoneLinksCurrentBranchPR(t *testing.T) {
 	setupFlowRoot(t)
 	stubClaudeRunner(t, nil)
+	stubTaskTmuxSessionCloser(t, nil, nil)
 	workDir := t.TempDir()
 	if rc := cmdAdd([]string{"task", "Review Task", "--work-dir", workDir, "--agent", "claude"}); rc != 0 {
 		t.Fatalf("add rc=%d", rc)
@@ -104,9 +208,58 @@ func TestCmdDoneLinksCurrentBranchPR(t *testing.T) {
 	}
 }
 
+func TestCloseTaskTmuxSessionNoopsWhenNoLiveSession(t *testing.T) {
+	old := taskTmuxCommandRunner
+	defer func() { taskTmuxCommandRunner = old }()
+
+	var commands [][]string
+	taskTmuxCommandRunner = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		return []byte("can't find session"), errors.New("missing session")
+	}
+
+	if err := closeTaskTmuxSession("flow-missing-session"); err != nil {
+		t.Fatalf("closeTaskTmuxSession returned error for missing session: %v", err)
+	}
+	got := appCommandLog(commands)
+	if !contains(got, "has-session -t flow-missing-session") {
+		t.Fatalf("commands = %s, want has-session probe", got)
+	}
+	if contains(got, "run-shell") || contains(got, "kill-session") {
+		t.Fatalf("missing session should not schedule kill; commands = %s", got)
+	}
+}
+
+func TestCloseTaskTmuxSessionSchedulesDeferredKill(t *testing.T) {
+	old := taskTmuxCommandRunner
+	defer func() { taskTmuxCommandRunner = old }()
+
+	var commands [][]string
+	taskTmuxCommandRunner = func(args ...string) ([]byte, error) {
+		commands = append(commands, append([]string(nil), args...))
+		return nil, nil
+	}
+
+	if err := closeTaskTmuxSession("flow-self-session"); err != nil {
+		t.Fatalf("closeTaskTmuxSession returned error: %v", err)
+	}
+	got := appCommandLog(commands)
+	for _, want := range []string{
+		"has-session -t flow-self-session",
+		"run-shell -b",
+		"sleep",
+		"tmux kill-session -t 'flow-self-session'",
+	} {
+		if !contains(got, want) {
+			t.Fatalf("commands missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestCmdDoneUnknownRef(t *testing.T) {
 	setupFlowRoot(t)
 	stubClaudeRunner(t, nil)
+	stubTaskTmuxSessionCloser(t, nil, nil)
 	if rc := cmdDone([]string{"nope"}); rc == 0 {
 		t.Error("expected rc!=0 for unknown task")
 	}
@@ -115,6 +268,7 @@ func TestCmdDoneUnknownRef(t *testing.T) {
 func TestCmdDoneIdempotent(t *testing.T) {
 	setupFlowRoot(t)
 	stubClaudeRunner(t, nil)
+	stubTaskTmuxSessionCloser(t, nil, nil)
 	if rc := cmdAdd([]string{"task", "Idem", "--agent", "claude"}); rc != 0 {
 		t.Fatalf("add rc=%d", rc)
 	}
@@ -152,6 +306,7 @@ func TestCmdDoneNoArgs(t *testing.T) {
 func TestCmdDoneRefusesTaskWithoutSession(t *testing.T) {
 	setupFlowRoot(t)
 	calls := stubClaudeRunner(t, errors.New("should not be called"))
+	tmuxCalls := stubTaskTmuxSessionCloser(t, errors.New("should not be called"), nil)
 	if rc := cmdAdd([]string{"task", "No Session Task", "--agent", "claude"}); rc != 0 {
 		t.Fatalf("add rc=%d", rc)
 	}
@@ -160,6 +315,9 @@ func TestCmdDoneRefusesTaskWithoutSession(t *testing.T) {
 	}
 	if len(*calls) != 0 {
 		t.Errorf("expected 0 sweep calls, got %d", len(*calls))
+	}
+	if len(*tmuxCalls) != 0 {
+		t.Errorf("expected 0 tmux close calls, got %d", len(*tmuxCalls))
 	}
 	db := openFlowDB(t)
 	task, _ := flowdb.GetTask(db, "no-session-task")
@@ -416,6 +574,20 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func appCommandLog(commands [][]string) string {
+	out := ""
+	for _, cmd := range commands {
+		for i, arg := range cmd {
+			if i > 0 {
+				out += " "
+			}
+			out += arg
+		}
+		out += "\n"
+	}
+	return out
 }
 
 // capturedSlackNotice records a single PostMessage call so tests can assert

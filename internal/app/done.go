@@ -25,10 +25,9 @@ var claudeRunner = func(slug, prompt string) error {
 	return cmd.Run()
 }
 
-// cmdDone marks a task done. Per spec §5.3 this is a single UPDATE that
-// does NOT touch the iTerm tab, kill the Claude session, or clear
-// session_id — the session can still be resumed via `flow do` after
-// manually reopening the task if the user ever needs to.
+// cmdDone marks a task done. The database close-out preserves session_id
+// so the conversation remains resumable, then the command reaps the
+// flow-managed tmux session after the close-out sweep has returned.
 //
 // After the status flip, if the task has a session_id, done synchronously
 // spawns a single headless `claude -p` session that loads the flow skill,
@@ -148,6 +147,9 @@ func cmdDone(args []string) int {
 			fmt.Fprintf(os.Stderr, "warning: close-out sweep failed: %v\n", err)
 		} else {
 			fmt.Println(" done")
+		}
+		if err := taskTmuxSessionCloser(taskTmuxSessionName(task.Slug)); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: tmux session close failed: %v\n", err)
 		}
 	}
 	return 0

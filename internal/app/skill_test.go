@@ -556,6 +556,8 @@ func TestSkillEmphasizesCloseOutValue(t *testing.T) {
 		"Why closing matters",
 		"close-out sweep",
 		"that distillation never happens",
+		"flow-<slug>",
+		"schedules a delayed tmux close",
 		"silent loss of durable knowledge",
 		"Recognizing natural close-out moments",
 		// Expanded trigger list must include real-world wrap-up phrasing,

@@ -816,12 +816,15 @@ closure is a silent loss of durable knowledge.
    `AskUserQuestion` (header: "Closing note?", options:
    "Yes, save a note first" / "No, just mark done") to offer.
    On "Yes", run the §4.5 recipe first, then continue.
-3. Run `flow done <ref>`. **Do not close the terminal tab** and **do
-   not kill the agent session** — `flow done` deliberately leaves
-   both intact. The session_id stays on the task row so a future
-   reopen can still resume it. The close-out sweep runs after the
-   status flip; relay any NUDGE block `flow done` prints back to
-   the user verbatim.
+3. Run `flow done <ref>`. The session_id stays on the task row so a
+   future reopen can still resume the same conversation in a fresh
+   tab. The close-out sweep runs after the status flip and `flow done`
+   waits for it to return; only then does Flow close the task's
+   `flow-<slug>` tmux session. Do not manually kill the agent or close
+   the tab before `flow done` returns — when invoked from inside the
+   task's own tab, Flow schedules a delayed tmux close so the command
+   can print and exit cleanly. Relay any NUDGE block `flow done`
+   prints back to the user verbatim.
 
 **Recognizing natural close-out moments — passive workflow.**
 
