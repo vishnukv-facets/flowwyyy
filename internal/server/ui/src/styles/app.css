@@ -3846,6 +3846,128 @@ summary.detail-branch.as-button:hover {
   background: var(--accent-soft);
   border-color: var(--accent-line);
 }
+/* subtasks = umbrella grouping count (neutral; only shown in flat mode, since
+ * tree mode renders the children inline) */
+.dep-chip.subtasks {
+  color: var(--text-2);
+  border-color: var(--border);
+}
+
+/* ---- Tasks screen: tree / startability mode ------------------------------ */
+/* Guide rails are an absolute layer spanning the FULL cell height, so the
+ * vertical lines of adjacent rows join into continuous lines (these rows are
+ * two lines tall, so inline glyphs would break into floating ticks). The
+ * content is padded clear of the rails by depth × RAIL_W. */
+.tree-name-cell {
+  position: relative;
+}
+.tree-content {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.tree-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+.tree-guides {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  /* origin = the cell's content edge, so rails line up with the caret/name that
+   * sit inside `.tbl td`'s 12px left padding (not the border-box) */
+  left: 12px;
+  z-index: 0;
+  pointer-events: none;
+}
+.tree-guides > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 22px; /* == RAIL_W */
+}
+/* Structural lines — same faint weight as the row borders. Each column's line
+ * is centred (left: 11px == RAIL_W / 2). */
+.tg-rail::before,
+.tg-elbow::before,
+.tg-desc::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  border-left: 1px solid var(--border-strong);
+}
+.tg-rail::before { top: 0; bottom: 0; }
+/* elbow: vertical down to the centre (last child) or all the way (middle), plus
+ * a short horizontal tick that meets the task name / caret */
+.tg-elbow::before { top: 0; bottom: 0; }
+.tg-elbow.last::before { bottom: auto; height: 50%; }
+.tg-elbow::after {
+  content: '';
+  position: absolute;
+  left: 11px;
+  width: 11px;
+  top: 50%;
+  border-top: 1px solid var(--border-strong);
+}
+/* descender: an expanded parent drops a line from its centre to its first
+ * child, landing under the caret */
+.tg-desc::before { top: 50%; bottom: 0; }
+/* caret occupies exactly one rail column (no flex gap), so its centre sits on
+ * the rail and the task name lines up with its leaf siblings */
+.tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-xs);
+  color: var(--text-3);
+  flex: none;
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.tree-caret:hover {
+  color: var(--text);
+  background: var(--bg-3);
+}
+/* startable head of a chain: accent rail + brighter name, mirroring the
+ * orch-row focus treatment so it reads as "this is the one to pick up" */
+.tree-row.is-startable {
+  box-shadow: inset 2px 0 0 var(--accent-hi);
+}
+.tree-row.is-startable .cell-name > .clip {
+  color: var(--text);
+}
+.ready-pill {
+  flex: none;
+  font-size: 9.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: var(--r-xs);
+  color: var(--accent-hi);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+}
+/* blocked: de-emphasize the name so startable siblings win the eye; the amber
+ * "blocked by …" chip stays at full strength as the explanation */
+.tree-row.is-blocked .cell-name > .clip {
+  color: var(--text-3);
+  font-weight: 450;
+}
+/* done rows inside a tree: struck through, matching the orch tree */
+.tree-row.is-done .cell-name > .clip {
+  color: var(--text-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--border-faint);
+}
 
 /* ---- orchestration tree (SessionDetail "tree" tab) -------------------- */
 .orch-tree {

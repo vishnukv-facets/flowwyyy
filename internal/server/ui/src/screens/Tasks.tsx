@@ -4,10 +4,15 @@ import {
   Archive,
   ArchiveRestore,
   ChevronDown,
+  ChevronRight,
   ChevronUp,
-  CornerLeftUp,
   GitFork,
+  KeyRound,
+  Layers,
+  List,
+  ListTree,
   Loader2,
+  Lock,
   Pencil,
   Search,
   Trash2,
@@ -22,6 +27,14 @@ import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusDot } from '../comp
 import { Select } from '../components/Select'
 import { ago, dueTone } from '../lib/format'
 import { clickable } from '../lib/a11y'
+import {
+  buildForest,
+  computeStartability,
+  flattenForest,
+  pruneForest,
+  type FlatRow,
+  type Startability,
+} from '../lib/orchestration'
 import type { TaskView } from '../lib/types'
 
 const STATUSES = [
@@ -76,12 +89,24 @@ function compareTasks(a: TaskView, b: TaskView, field: SortField, dir: SortDir):
   }
 }
 
+// Actionable-first ordering for tree siblings: startable work surfaces above
+// blocked work, which surfaces above done — so "what can I pick up now" reads
+// top-down. Within a rank, the active column sort breaks ties.
+function actionRank(t: TaskView, start: Startability | undefined): number {
+  if (t.status === 'done') return 3
+  if (start && start.blockedBy.length > 0) return 2
+  return 0
+}
+
 export function Tasks() {
   useDocumentTitle('Tasks')
   const [, navigate] = useLocation()
   const search = useSearch()
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkPending, setBulkPending] = useState(false)
+  // Tree collapse state lives in component state (not the URL): it's transient
+  // view chrome, unlike the filters/sort which are shareable.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
   // URL is the source of truth for every filter/sort — so they survive a
   // refresh and are shareable. We parse on each render and write via replace.
@@ -93,6 +118,7 @@ export function Tasks() {
   const q = params.get('q') ?? ''
   const sortField = (params.get('sort') as SortField) || 'created'
   const sortDir = (params.get('dir') as SortDir) || 'desc'
+  const viewParam = params.get('view')
 
   const setParams = (patch: Record<string, string>) => {
     const next = new URLSearchParams(search)
@@ -139,6 +165,23 @@ export function Tasks() {
       }),
     [data, status, archivedView],
   )
+
+  // Startability over the whole visible universe (before project/tag/text
+  // narrowing) so "blocks N" reverse-counts stay accurate across the family.
+  const startMap = useMemo(() => computeStartability(base), [base])
+
+  // Hierarchy exists only when a parent AND its child are both present in the
+  // set — that's the condition under which tree mode has anything to show.
+  const baseSlugs = useMemo(() => new Set(base.map((t) => t.slug)), [base])
+  const hasHierarchy = useMemo(
+    () => base.some((t) => !!t.parent_slug && baseSlugs.has(t.parent_slug)),
+    [base, baseSlugs],
+  )
+  // Default to tree whenever hierarchy exists; an explicit ?view= overrides.
+  const view: 'flat' | 'tree' =
+    viewParam === 'flat' ? 'flat' : viewParam === 'tree' ? 'tree' : hasHierarchy ? 'tree' : 'flat'
+  const treeMode = view === 'tree' && hasHierarchy
+
   const projectOpts = useMemo(
     () => Array.from(new Set(base.map((t) => t.project_slug || '').filter(Boolean))).sort(),
     [base],
@@ -147,20 +190,51 @@ export function Tasks() {
     () => Array.from(new Set(base.flatMap((t) => t.tags ?? []))).sort(),
     [base],
   )
-  const tasks = useMemo(() => {
+
+  // Client-side narrowing shared by both views (project / tag / free text).
+  const matchFn = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    return base
-      .filter((t) => {
-        if (project && (t.project_slug || '') !== project) return false
-        if (tag && !(t.tags ?? []).includes(tag)) return false
-        if (!needle) return true
-        return [t.name, t.slug, t.project_slug || '', ...(t.tags ?? [])].some((s) =>
-          s.toLowerCase().includes(needle),
-        )
-      })
-      .slice()
-      .sort((a, b) => compareTasks(a, b, sortField, sortDir))
-  }, [base, project, tag, q, sortField, sortDir])
+    return (t: TaskView) => {
+      if (project && (t.project_slug || '') !== project) return false
+      if (tag && !(t.tags ?? []).includes(tag)) return false
+      if (!needle) return true
+      return [t.name, t.slug, t.project_slug || '', ...(t.tags ?? [])].some((s) =>
+        s.toLowerCase().includes(needle),
+      )
+    }
+  }, [project, tag, q])
+
+  // Flat view: filter + column sort (unchanged behavior).
+  const tasks = useMemo(
+    () => base.filter(matchFn).slice().sort((a, b) => compareTasks(a, b, sortField, sortDir)),
+    [base, matchFn, sortField, sortDir],
+  )
+
+  // Tree view: build the parent_slug forest (actionable-first sibling order),
+  // prune to filter matches keeping ancestor context, flatten honoring collapse.
+  const flatRows: FlatRow[] = useMemo(() => {
+    if (!treeMode) return []
+    const compare = (a: TaskView, b: TaskView) => {
+      const r = actionRank(a, startMap.get(a.slug)) - actionRank(b, startMap.get(b.slug))
+      return r !== 0 ? r : compareTasks(a, b, sortField, sortDir)
+    }
+    const pruned = pruneForest(buildForest(base, compare), matchFn)
+    return flattenForest(pruned, collapsed)
+  }, [treeMode, base, startMap, matchFn, sortField, sortDir, collapsed])
+
+  // Every slug with at least one child in the set — drives expand/collapse-all.
+  const parentSlugs = useMemo(
+    () => base.filter((t) => base.some((c) => c.parent_slug === t.slug)).map((t) => t.slug),
+    [base],
+  )
+  const allCollapsed = parentSlugs.length > 0 && parentSlugs.every((s) => collapsed.has(s))
+  const toggleAllCollapse = () => setCollapsed(allCollapsed ? new Set() : new Set(parentSlugs))
+  const toggleCollapse = (slug: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      next.has(slug) ? next.delete(slug) : next.add(slug)
+      return next
+    })
 
   const toggleSel = (slug: string) =>
     setSelected((prev) => {
@@ -168,7 +242,10 @@ export function Tasks() {
       next.has(slug) ? next.delete(slug) : next.add(slug)
       return next
     })
-  const visibleSlugs = useMemo(() => tasks.map((t) => t.slug), [tasks])
+  const visibleSlugs = useMemo(
+    () => (treeMode ? flatRows.map((r) => r.task.slug) : tasks.map((t) => t.slug)),
+    [treeMode, flatRows, tasks],
+  )
   const allSelected = visibleSlugs.length > 0 && visibleSlugs.every((s) => selected.has(s))
   const toggleSelectAll = () =>
     setSelected((prev) => {
@@ -212,6 +289,7 @@ export function Tasks() {
   }
 
   const filtersActive = !!(status || priority || project || tag || q)
+  const isEmpty = treeMode ? flatRows.length === 0 : tasks.length === 0
 
   return (
     <div className="page">
@@ -272,6 +350,31 @@ export function Tasks() {
             />
           </div>
         )}
+        {/* Layout toggle — only meaningful when the set actually has hierarchy. */}
+        {hasHierarchy && (
+          <div className="segmented" role="group" aria-label="Layout">
+            <button
+              className={view === 'tree' ? 'active' : ''}
+              onClick={() => setParams({ view: '' })}
+              title="Group subtasks under their parent"
+            >
+              <ListTree size={13} /> Tree
+            </button>
+            <button
+              className={view === 'flat' ? 'active' : ''}
+              onClick={() => setParams({ view: 'flat' })}
+              title="Flat list of all tasks"
+            >
+              <List size={13} /> List
+            </button>
+          </div>
+        )}
+        {treeMode && parentSlugs.length > 0 && (
+          <button className="btn ghost sm" onClick={toggleAllCollapse}>
+            {allCollapsed ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            {allCollapsed ? 'Expand all' : 'Collapse all'}
+          </button>
+        )}
         {filtersActive && (
           <button className="btn ghost sm" onClick={() => navigate('/tasks', { replace: true })}>
             <X size={13} /> Clear
@@ -283,7 +386,7 @@ export function Tasks() {
         <Loading rows={6} />
       ) : error ? (
         <ErrorNote error={error} />
-      ) : tasks.length === 0 ? (
+      ) : isEmpty ? (
         <EmptyState title="No tasks match" hint="Adjust the filters or create a new task." />
       ) : (
         <div className="card" style={{ padding: '6px 14px 4px', marginBottom: selected.size > 0 ? 72 : 0 }}>
@@ -292,7 +395,7 @@ export function Tasks() {
               <col style={{ width: 30 }} />
               <col style={{ width: 28 }} />
               <col />
-              <col style={{ width: 152 }} />
+              <col style={{ width: 168 }} />
               <col style={{ width: 100 }} />
               <col style={{ width: 64 }} />
               <col style={{ width: 108 }} />
@@ -324,15 +427,29 @@ export function Tasks() {
               </tr>
             </thead>
             <tbody>
-              {tasks.map((t) => (
-                <TaskRow
-                  key={t.slug}
-                  task={t}
-                  selected={selected.has(t.slug)}
-                  onToggleSel={() => toggleSel(t.slug)}
-                  onOpen={() => navigate(`/session/${t.slug}`)}
-                />
-              ))}
+              {treeMode
+                ? flatRows.map((r) => (
+                    <TaskRow
+                      key={r.task.slug}
+                      task={r.task}
+                      start={startMap.get(r.task.slug)}
+                      tree={r}
+                      onToggleExpand={() => toggleCollapse(r.task.slug)}
+                      selected={selected.has(r.task.slug)}
+                      onToggleSel={() => toggleSel(r.task.slug)}
+                      onOpen={() => navigate(`/session/${r.task.slug}`)}
+                    />
+                  ))
+                : tasks.map((t) => (
+                    <TaskRow
+                      key={t.slug}
+                      task={t}
+                      start={startMap.get(t.slug)}
+                      selected={selected.has(t.slug)}
+                      onToggleSel={() => toggleSel(t.slug)}
+                      onOpen={() => navigate(`/session/${t.slug}`)}
+                    />
+                  ))}
             </tbody>
           </table>
         </div>
@@ -403,16 +520,111 @@ function SortableTh({
   )
 }
 
+// Width of one indent level / guide column, in px.
+const RAIL_W = 22
+
+// CSS guide rails for a tree row, drawn as an absolute layer that spans the full
+// cell height (so consecutive rows' rails join into continuous lines — glyphs
+// can't, because these rows are two lines tall). For a node at depth d:
+//   • columns 0..d-2  → a vertical rail where that ancestor has more siblings
+//     below (root level is skipped, so there's no misleading forest-wide spine);
+//   • column d-1      → the elbow connecting this row up to its parent (a full
+//     rail for a middle child, a half rail "└" for the last child) plus a short
+//     tick reaching the task name;
+//   • column d        → on an expanded parent, a descender dropping to its first
+//     child, aligned under the caret.
+function TreeGuides({ tree }: { tree: FlatRow }) {
+  const d = tree.depth
+  const cols = []
+  for (let c = 0; c <= d - 2; c++) {
+    // column c mirrors ancestorLines[c+1] (index 0 is the skipped root)
+    if (!tree.ancestorLines[c + 1]) {
+      cols.push(<span key={`a${c}`} className="tg-rail" style={{ left: c * RAIL_W }} />)
+    }
+  }
+  if (d >= 1) {
+    cols.push(
+      <span key="elbow" className={`tg-elbow${tree.isLast ? ' last' : ''}`} style={{ left: (d - 1) * RAIL_W }} />,
+    )
+  }
+  if (tree.hasChildren && !tree.collapsed) {
+    cols.push(<span key="desc" className="tg-desc" style={{ left: d * RAIL_W }} />)
+  }
+  return (
+    <span className="tree-guides" aria-hidden>
+      {cols}
+    </span>
+  )
+}
+
+// The Dependencies cell — derived from startability (task_dependencies, with the
+// umbrella parent_slug stripped), NOT the umbrella children. `blocked by` reads
+// each blocker's live status, so a finished blocker drops off automatically.
+function DepsCell({ task, start, treeMode }: { task: TaskView; start?: Startability; treeMode: boolean }) {
+  const forkedFrom = task.forked_from?.name || task.forked_from_slug
+  const forkCount = task.forks?.length ?? 0
+  const blockedBy = start?.blockedBy ?? []
+  const blocks = start?.blocks ?? []
+  const container = start?.container ?? false
+  const childCount = task.children?.length ?? 0
+
+  const hasAny = forkedFrom || forkCount > 0 || blockedBy.length > 0 || blocks.length > 0 || (container && !treeMode)
+  if (!hasAny) return <span className="faint">—</span>
+
+  const blockNames = blockedBy.map((b) => b.name).join(', ')
+  const blocksNames = blocks.map((b) => b.name).join(', ')
+
+  return (
+    <div className="cell-deps">
+      {forkedFrom && (
+        <span className="dep-chip fork" title={`Forked from ${forkedFrom}${task.fork_reason ? ` · ${task.fork_reason}` : ''}`}>
+          <GitFork size={11} /> <span className="clip">{forkedFrom}</span>
+        </span>
+      )}
+      {forkCount > 0 && (
+        <span className="dep-chip fork" title={`Forked into ${task.forks?.map((f) => f.name).join(', ')}`}>
+          <GitFork size={11} /> forks {forkCount}
+        </span>
+      )}
+      {blockedBy.length > 0 && (
+        <span className="dep-chip depends" title={`Blocked by ${blockNames}`}>
+          <Lock size={11} />
+          <span className="clip">
+            blocked by {blockedBy[0].name}
+            {blockedBy.length > 1 ? ` +${blockedBy.length - 1}` : ''}
+          </span>
+        </span>
+      )}
+      {blocks.length > 0 && (
+        <span className="dep-chip blocks" title={`Blocks ${blocks.length} task${blocks.length === 1 ? '' : 's'}: ${blocksNames}`}>
+          <KeyRound size={11} /> blocks {blocks.length}
+        </span>
+      )}
+      {container && !treeMode && (
+        <span className="dep-chip subtasks" title={`${childCount} subtask${childCount === 1 ? '' : 's'}`}>
+          <Layers size={11} /> {childCount} subtask{childCount === 1 ? '' : 's'}
+        </span>
+      )}
+    </div>
+  )
+}
+
 function TaskRow({
   task,
   selected,
   onToggleSel,
   onOpen,
+  start,
+  tree,
+  onToggleExpand,
 }: {
   task: TaskView
   selected: boolean
   onToggleSel: () => void
   onOpen: () => void
+  start?: Startability
+  tree?: FlatRow
+  onToggleExpand?: () => void
 }) {
   const action = useAction()
   const [editing, setEditing] = useState(false)
@@ -461,13 +673,25 @@ function TaskRow({
     if (ok) action.mutate({ kind: 'delete', target: task.slug, entity_kind: 'task' })
   }
 
-  const childCount = task.children?.length ?? 0
-  const parentName = task.parent?.name || task.parent_slug
-  const forkedFrom = task.forked_from?.name || task.forked_from_slug
-  const forkCount = task.forks?.length ?? 0
+  // Row-level startability emphasis only applies in tree mode, where grouping
+  // context makes "this gates others" / "this is blocked" legible.
+  const blockedBy = start?.blockedBy ?? []
+  const isBlocked = blockedBy.length > 0
+  // The actionable head of a dependency chain: open, unblocked, and gating
+  // others. That's the "start here" the brief calls for.
+  const isStartHead = !!start && start.startable && start.blocks.length > 0
+  const rowCls = [
+    selected ? 'row-selected' : '',
+    tree ? 'tree-row' : '',
+    tree && task.status === 'done' ? 'is-done' : '',
+    tree && isBlocked ? 'is-blocked' : '',
+    tree && isStartHead ? 'is-startable' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 
   return (
-    <tr className={selected ? 'row-selected' : ''} {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
+    <tr className={rowCls} {...clickable(onOpen, { disabled: editing })} aria-label={`Open ${task.name}`}>
       <td>
         <input
           type="checkbox"
@@ -480,73 +704,75 @@ function TaskRow({
       <td>
         <StatusDot status={task.live ? 'running' : task.waiting_on ? 'waiting' : task.status} />
       </td>
-      <td>
-        {editing ? (
-          <input
-            className="input inline-rename"
-            autoFocus
-            value={name}
-            onClick={(e) => e.stopPropagation()}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                e.preventDefault()
-                save()
-              } else if (e.key === 'Escape') {
-                e.preventDefault()
-                cancel()
-              }
-            }}
-            onBlur={save}
-          />
-        ) : (
-          <div className="cell-name">
-            <span className="clip" style={{ fontWeight: 500 }}>{task.name}</span>
+      <td className={tree ? 'tree-name-cell' : undefined}>
+        {tree && <TreeGuides tree={tree} />}
+        <div
+          className={tree ? 'tree-content' : undefined}
+          style={tree ? { paddingLeft: tree.depth * RAIL_W } : undefined}
+        >
+          {tree && tree.hasChildren && (
             <button
-              className="btn icon ghost sm rename-btn"
-              title="Rename task"
-              aria-label="Rename task"
+              className="tree-caret"
+              title={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
+              aria-label={tree.collapsed ? 'Expand subtasks' : 'Collapse subtasks'}
+              aria-expanded={!tree.collapsed}
               onClick={(e) => {
                 e.stopPropagation()
-                setName(task.name)
-                setEditing(true)
+                onToggleExpand?.()
               }}
             >
-              {action.isPending ? <Loader2 size={12} className="spin" /> : <Pencil size={12} />}
+              {tree.collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
             </button>
+          )}
+          <div className={tree ? 'tree-text' : undefined}>
+            {editing ? (
+              <input
+                className="input inline-rename"
+                autoFocus
+                value={name}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault()
+                    save()
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault()
+                    cancel()
+                  }
+                }}
+                onBlur={save}
+              />
+            ) : (
+              <div className="cell-name">
+                <span className="clip" style={{ fontWeight: 500 }}>{task.name}</span>
+                {isStartHead && (
+                  <span className="ready-pill" title="Startable now — nothing blocks it">
+                    ready
+                  </span>
+                )}
+                <button
+                  className="btn icon ghost sm rename-btn"
+                  title="Rename task"
+                  aria-label="Rename task"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setName(task.name)
+                    setEditing(true)
+                  }}
+                >
+                  {action.isPending ? <Loader2 size={12} className="spin" /> : <Pencil size={12} />}
+                </button>
+              </div>
+            )}
+            <div className="mono faint clip" style={{ fontSize: 11 }}>
+              {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
+            </div>
           </div>
-        )}
-        <div className="mono faint clip" style={{ fontSize: 11 }}>
-          {task.slug}{task.assignee ? ` · @${task.assignee}` : ''}
         </div>
       </td>
       <td>
-        {parentName || childCount > 0 || forkedFrom || forkCount > 0 ? (
-          <div className="cell-deps">
-            {forkedFrom && (
-              <span className="dep-chip fork" title={`Forked from ${forkedFrom}${task.fork_reason ? ` · ${task.fork_reason}` : ''}`}>
-                <GitFork size={11} /> <span className="clip">{forkedFrom}</span>
-              </span>
-            )}
-            {forkCount > 0 && (
-              <span className="dep-chip fork" title={`Forked into ${task.forks?.map((f) => f.name).join(', ')}`}>
-                <GitFork size={11} /> forks {forkCount}
-              </span>
-            )}
-            {parentName && (
-              <span className="dep-chip depends" title={`Depends on ${parentName}`}>
-                <CornerLeftUp size={11} /> <span className="clip">{parentName}</span>
-              </span>
-            )}
-            {childCount > 0 && (
-              <span className="dep-chip blocks" title={`Blocks ${childCount} task${childCount === 1 ? '' : 's'}`}>
-                <GitFork size={11} /> blocks {childCount}
-              </span>
-            )}
-          </div>
-        ) : (
-          <span className="faint">—</span>
-        )}
+        <DepsCell task={task} start={start} treeMode={!!tree} />
       </td>
       <td className="dim clip">{task.project_slug || <span className="faint">—</span>}</td>
       <td><span className={`prio ${task.priority}`}>{task.priority}</span></td>
