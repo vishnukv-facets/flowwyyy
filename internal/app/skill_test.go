@@ -391,6 +391,27 @@ func TestSkillMentionsDMMonitoring(t *testing.T) {
 	}
 }
 
+func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, bad := range []string{
+		"Sent using @codex",
+		"Always append this footer to every Codex-sent Slack reply",
+		"you MUST append your own footer",
+	} {
+		if strings.Contains(got, bad) {
+			t.Errorf("skill still instructs manual Codex Slack attribution footer: %q", bad)
+		}
+	}
+	for _, want := range []string{
+		"Do not add a manual `Sent using ...` footer",
+		"Slack/ChatGPT app attribution",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing no-manual-footer guidance %q", want)
+		}
+	}
+}
+
 func TestSkillMentionsSoftDelete(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{

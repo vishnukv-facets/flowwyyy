@@ -2448,26 +2448,16 @@ under the `tags:` line), follow this bootstrap:
 6. **Reply.** Post into the originating thread (`channel` + `thread_ts`
    from your brief). Posts go as the user (User Token), not a bot, so
    write in their voice and avoid claims you can't back up. The send
-   tool and the attribution footer differ by provider:
+   tool differs by provider:
    - **Claude Code sessions:** use `mcp__claude_ai_Slack__slack_send_message`.
-     It appends a `Sent using @Claude` attribution footer automatically —
-     do NOT add your own; you'd double it.
+     Do not add a manual `Sent using ...` footer.
    - **Codex sessions:** use the Slack plugin's send-message tool
-     (`slack@openai-curated`). That plugin does NOT add any attribution,
-     so you MUST append your own footer as the LAST line of the message
-     body, mirroring Claude's behavior so the reader can see an agent
-     sent it. Separate it from the reply with a blank line:
+     (`slack@openai-curated`). Do not add a manual `Sent using ...`
+     footer.
 
-     ```
-     <your reply text>
-
-     Sent using @codex
-     ```
-
-     Always append this footer to every Codex-sent Slack reply. (If a
-     Codex Slack app/bot exists in the workspace, `@`-mention it so it
-     renders as a chip like `@Claude` does; otherwise the plain
-     `@codex` text is fine.)
+   Slack/ChatGPT app attribution is shown outside the message body by
+   the Slack client/tooling. Duplicating it inside the message body looks
+   like two signatures in the thread.
 
    Save a progress note after each meaningful exchange so the thread's
    history is captured in flow even if the inbox file rotates.
