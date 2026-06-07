@@ -328,9 +328,9 @@ func TestMigrationAddsDueDateAndStatusChangedAt(t *testing.T) {
 	}
 }
 
-func TestMigrationAddsSteeringTraceAutonomyAudit(t *testing.T) {
+func TestMigrationAddsSteeringTraceAuditColumns(t *testing.T) {
 	db := openTempDB(t)
-	for _, col := range []string{"autonomy_action", "autonomy_decision", "autonomy_reason"} {
+	for _, col := range []string{"stage1_reason", "autonomy_action", "autonomy_decision", "autonomy_reason"} {
 		has, err := columnExists(db, "steering_trace", col)
 		if err != nil {
 			t.Fatalf("columnExists(%s): %v", col, err)

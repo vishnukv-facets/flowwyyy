@@ -834,6 +834,7 @@ export interface SteeringTrace {
   stage_reached: string
   drop_reason?: string
   stage1_relevant?: boolean
+  stage1_reason?: string
   stage2_action?: string
   stage2_confidence?: number
   stage3_action?: string

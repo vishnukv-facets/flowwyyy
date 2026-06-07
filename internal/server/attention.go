@@ -676,7 +676,7 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		ID: t.ID, CreatedAt: t.CreatedAt, Origin: t.Origin, Source: t.Source,
 		Channel: t.Channel, ChannelType: t.ChannelType, Author: t.Author, ThreadKey: t.ThreadKey,
 		TextPreview: t.TextPreview, Disposition: t.Disposition, StageReached: t.StageReached, DropReason: t.DropReason,
-		Stage1Relevant: t.Stage1Relevant, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
+		Stage1Relevant: t.Stage1Relevant, Stage1Reason: t.Stage1Reason, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
 		Stage3Action: t.Stage3Action, Stage3Confidence: t.Stage3Confidence, FinalAction: t.FinalAction,
 		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
 		AutonomyAction: t.AutonomyAction, AutonomyDecision: t.AutonomyDecision, AutonomyReason: t.AutonomyReason,

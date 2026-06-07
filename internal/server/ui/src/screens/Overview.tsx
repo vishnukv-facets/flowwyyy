@@ -10,6 +10,7 @@ import { ago, compact, compactTokens, dueTone } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
 import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
 import { clickable } from '../lib/a11y'
+import { workEventLinkHref } from '../lib/workEventLinks'
 import type { ActivityDay, Briefing, BriefingItem, InboxFeedEntry, PlaybookRun, ProjectMC, TaskView, TokenDay, UiStats } from '../lib/types'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
@@ -189,20 +190,16 @@ function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: stri
 
 function primaryBriefingHref(item: BriefingItem): string {
   const taskLink = item.links?.find((l) => l.kind === 'task' || l.kind === 'session')
-  if (taskLink) return `/session/${taskLink.target}`
+  if (taskLink) return workEventLinkHref(taskLink)
   const attentionLink = item.links?.find((l) => l.kind === 'attention' || l.kind === 'trace')
-  if (attentionLink) return '/attention'
+  if (attentionLink) return workEventLinkHref(attentionLink)
   const projectLink = item.links?.find((l) => l.kind === 'project')
-  if (projectLink) return `/project/${projectLink.target}`
+  if (projectLink) return workEventLinkHref(projectLink)
   return ''
 }
 
 function briefingLinkHref(link: { kind: string; target: string; url?: string }): string {
-  if (link.kind === 'task' || link.kind === 'session') return `/session/${link.target}`
-  if (link.kind === 'project') return `/project/${link.target}`
-  if (link.kind === 'attention' || link.kind === 'trace') return '/attention'
-  if (link.kind === 'source') return link.url || link.target
-  return ''
+  return workEventLinkHref(link)
 }
 
 // Mission Control analytics: activity-day streaks (the same active days that

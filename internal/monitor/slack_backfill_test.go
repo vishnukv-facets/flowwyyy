@@ -58,12 +58,12 @@ func TestSlackBackfillReconcile_AppendsOnlyNewerDeduped(t *testing.T) {
 	seedInbox(t, slug, channel, root, "100.000000", "first reply")
 
 	fake := &fakeReplies{msgs: []SlackMessage{
-		{TS: root, User: "U1", Text: "thread root"},               // skipped: == threadTS
-		{TS: "100.000000", User: "U1", Text: "first reply"},       // skipped: already seen
-		{TS: "120.000000", User: "U2", Text: "newer reply A"},     // appended
-		{TS: "150.000000", User: "U3", Text: "newer reply B"},     // appended
-		{TS: "160.000000", User: "U4", Text: "edit", SubType: "message_changed"}, // skipped: subtype
-		{TS: "170.000000", User: "", Text: ""},                    // skipped: empty
+		{TS: root, User: "U1", Text: "thread root"},                                    // skipped: == threadTS
+		{TS: "100.000000", User: "U1", Text: "first reply"},                            // skipped: already seen
+		{TS: "120.000000", User: "U2", Text: "newer reply A"},                          // appended
+		{TS: "150.000000", User: "U3", Text: "newer reply B"},                          // appended
+		{TS: "160.000000", User: "U4", Text: "edit", SubType: "message_changed"},       // skipped: subtype
+		{TS: "170.000000", User: "", Text: ""},                                         // skipped: empty
 		{TS: "180.000000", User: "U5", Text: "broadcast", SubType: "thread_broadcast"}, // appended
 	}}
 
@@ -109,6 +109,52 @@ func TestSlackBackfillReconcile_AppendsOnlyNewerDeduped(t *testing.T) {
 	}
 }
 
+func TestSlackBackfillReconcile_SteererOwnedRoutingDoesNotAppendDirectly(t *testing.T) {
+	db := dispatcherTestDB(t)
+	const slug, channel, root = "slack-c1-50-000000", "C1", "50.000000"
+	seedInbox(t, slug, channel, root, "100.000000", "first reply")
+
+	fake := &fakeReplies{msgs: []SlackMessage{
+		{TS: root, User: "U1", Text: "thread root"},
+		{TS: "120.000000", User: "U2", Text: "newer reply"},
+	}}
+	observer := &fakeMessageObserver{}
+	bf := &SlackBackfill{
+		db:                 db,
+		client:             fake,
+		limit:              200,
+		Observer:           observer,
+		SteererOwnsRouting: func() bool { return true },
+	}
+
+	n, err := bf.reconcile(context.Background(), slug, channel, root)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("routed = %d, want 1", n)
+	}
+	if len(observer.events) != 1 || observer.events[0].Text != "newer reply" {
+		t.Fatalf("steerer events = %+v, want recovered reply", observer.events)
+	}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox entries = %d, want only the baseline when steerer owns routing", len(entries))
+	}
+
+	observer.events = nil
+	n2, err := bf.reconcile(context.Background(), slug, channel, root)
+	if err != nil {
+		t.Fatalf("reconcile 2: %v", err)
+	}
+	if n2 != 0 || len(observer.events) != 0 {
+		t.Fatalf("second pass should use steering watermark and not replay; routed=%d events=%+v", n2, observer.events)
+	}
+}
+
 func TestSlackBackfill_DMThreadUsesUserClient(t *testing.T) {
 	// A DM thread (slack-thread:<dm-channel>:<root>) reconciles via the USER
 	// token client — the bot can't read the operator's DMs — and recovers a
@@ -123,8 +169,8 @@ func TestSlackBackfill_DMThreadUsesUserClient(t *testing.T) {
 	}
 	user := &fakeHistory{repliesByRoot: map[string][]SlackMessage{
 		root: {
-			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},        // seen
-			{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "why new file?"},   // missed
+			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},      // seen
+			{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "why new file?"}, // missed
 		},
 	}}
 	bot := &fakeReplies{} // must NOT be used for a DM channel

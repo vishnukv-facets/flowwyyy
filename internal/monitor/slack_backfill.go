@@ -82,9 +82,14 @@ type SlackBackfill struct {
 	db       *sql.DB
 	client   SlackThreadReplies // bot token — channel threads
 	dmClient SlackThreadReplies // user token — DM-channel threads; nil → DM backfill skipped
-	interval time.Duration
-	limit    int
-	logFn    func(string, ...any)
+	// Observer receives recovered replies when the steerer owns routing. In that
+	// mode backfill must not append directly to task inboxes; it replays the
+	// normalized event through the same cascade as live traffic.
+	Observer           MessageObserver
+	SteererOwnsRouting func() bool
+	interval           time.Duration
+	limit              int
+	logFn              func(string, ...any)
 }
 
 // NewSlackBackfill builds a backfiller. A zero interval defaults to 45s — well
@@ -179,6 +184,7 @@ func (b *SlackBackfill) runOnce(ctx context.Context) {
 // ts), so reconcile self-heals across restarts and never double-appends —
 // every candidate is deduped by ts against what's already recorded.
 func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS string) (int, error) {
+	steererOwned := b.steererOwnsRouting()
 	// Per-channel cursor: a task can mix its origin thread with DM channels, so
 	// the resume point must be the newest ts in THIS channel, not a global max
 	// (a newer DM message must not advance the thread cursor past unseen thread
@@ -193,24 +199,38 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	if maxTS == "" {
 		return 0, nil
 	}
+	cursor := maxTS
+	watermarkKey := ""
+	if steererOwned {
+		watermarkKey = slackThreadSteeringWatermarkKey(slug, channel, threadTS)
+		if wm, err := flowdb.GetSteeringWatermark(b.db, watermarkKey); err != nil {
+			return 0, err
+		} else if strings.TrimSpace(wm) != "" {
+			cursor = wm
+		}
+	}
 	// DM channels are only readable via the user token (the bot isn't a member
 	// of the operator's DMs); channel threads use the bot-token client.
 	var client SlackThreadReplies = b.client
 	if isDMChannel(channel) && b.dmClient != nil {
 		client = b.dmClient
 	}
-	msgs, err := client.Replies(ctx, channel, threadTS, maxTS, b.limit)
+	msgs, err := client.Replies(ctx, channel, threadTS, cursor, b.limit)
 	if err != nil {
 		return 0, err
 	}
-	appended := 0
+	delivered := 0
+	newMax := cursor
 	for _, m := range msgs {
 		ts := strings.TrimSpace(m.TS)
 		if ts == "" || ts == threadTS {
 			continue // skip the thread root Slack always returns first
 		}
-		if seen[ts] || !slackTSLess(maxTS, ts) {
+		if seen[ts] || !slackTSLess(cursor, ts) {
 			continue // already recorded, or not newer than our cursor
+		}
+		if slackTSLess(newMax, ts) {
+			newMax = ts
 		}
 		if !backfillAcceptMessage(m) {
 			continue
@@ -224,15 +244,33 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 			UserID:      strings.TrimSpace(m.User),
 			Text:        strings.TrimSpace(m.Text),
 		}
-		if err := AppendInboxEvent(slug, ev); err != nil {
-			return appended, err
+		if steererOwned {
+			if err := b.Observer.Observe(ctx, ev); err != nil {
+				return delivered, err
+			}
+		} else {
+			if err := AppendInboxEvent(slug, ev); err != nil {
+				return delivered, err
+			}
 		}
 		seen[ts] = true
-		appended++
+		delivered++
 	}
-	return appended, nil
+	if steererOwned && newMax != cursor {
+		if err := flowdb.SetSteeringWatermark(b.db, watermarkKey, newMax, flowdb.NowISO()); err != nil {
+			return delivered, err
+		}
+	}
+	return delivered, nil
 }
 
+func (b *SlackBackfill) steererOwnsRouting() bool {
+	return b != nil && b.db != nil && b.Observer != nil && b.SteererOwnsRouting != nil && b.SteererOwnsRouting()
+}
+
+func slackThreadSteeringWatermarkKey(slug, channel, threadTS string) string {
+	return "slack-thread:" + strings.TrimSpace(slug) + ":" + normalizeSlackChannelID(channel) + ":" + strings.TrimSpace(threadTS)
+}
 
 // inboxSlackTSIndexForChannel reads a task's inbox.jsonl once and returns the
 // newest Slack message ts in the given channel (the resume cursor) plus the set

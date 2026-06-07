@@ -222,6 +222,7 @@ CREATE TABLE IF NOT EXISTS steering_trace (
     stage_reached     TEXT NOT NULL,
     drop_reason       TEXT,
     stage1_relevant   INTEGER,
+    stage1_reason     TEXT,
     stage2_action     TEXT,
     stage2_confidence REAL,
     stage3_action     TEXT,
@@ -1001,6 +1002,15 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	has, err = columnExists(db, "steering_trace", "stage1_reason")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN stage1_reason TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.stage1_reason: %w", err)
+		}
+	}
 	has, err = columnExists(db, "steering_trace", "ts")
 	if err != nil {
 		return err

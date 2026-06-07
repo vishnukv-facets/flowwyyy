@@ -89,6 +89,21 @@ func TestSettingsExposeAutonomyPolicyForDedicatedPanel(t *testing.T) {
 	}
 }
 
+func TestSteeringAutonomyRoutingEnabled(t *testing.T) {
+	t.Setenv("FLOW_STEERING_AUTONOMY", "")
+	if steeringAutonomyRoutingEnabled() {
+		t.Fatal("empty autonomy policy should not make the steerer own routing")
+	}
+	t.Setenv("FLOW_STEERING_AUTONOMY", `{"make_task":{"enabled":false,"threshold":0.8},"forward":{"enabled":false,"threshold":0.85}}`)
+	if steeringAutonomyRoutingEnabled() {
+		t.Fatal("disabled actions should not make the steerer own routing")
+	}
+	t.Setenv("FLOW_STEERING_AUTONOMY", `{"forward":{"enabled":true,"threshold":0.85}}`)
+	if !steeringAutonomyRoutingEnabled() {
+		t.Fatal("enabled forward autonomy should make the steerer own routing")
+	}
+}
+
 func TestSeedConfigFromEnv(t *testing.T) {
 	root, db := testRootDB(t)
 	// Config already pins one GitHub key; env disagrees — config must win and

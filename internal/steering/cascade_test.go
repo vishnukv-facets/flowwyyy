@@ -46,14 +46,33 @@ func msg(channel, ts, user, text string) monitor.InboundEvent {
 	return monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: channel, TS: ts, ThreadTS: ts, UserID: user, Text: text}
 }
 
+func stage1JSONForPrompt(prompt string, relevant bool, reason string) string {
+	tail := prompt
+	if marker := strings.LastIndex(prompt, "Events (JSON array):"); marker >= 0 {
+		tail = prompt[marker:]
+	}
+	jsonText, _ := extractJSON(tail)
+	var inputs []ClassifyInput
+	_ = json.Unmarshal([]byte(jsonText), &inputs)
+	out := make([]RelevanceVerdict, 0, len(inputs))
+	for _, in := range inputs {
+		out = append(out, RelevanceVerdict{ThreadKey: in.ThreadKey, Relevant: relevant, Reason: reason})
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
 func TestObserveTraceGitHubSource(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	traces := captureTraces(c)
 	stubClassifier(t, func(prompt string) (string, error) {
 		if strings.Contains(prompt, "MODE: stage1-relevance") {
-			return `[{"thread_key":"o/r:gh-pr:o/r#5","relevant":false}]`, nil // stage1 drops, cheap
+			return stage1JSONForPrompt(prompt, false, "looks like a meta note"), nil
 		}
-		return `{"suggested_action":"reply","confidence":0.8}`, nil
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"no operator action required"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"no operator action required"}`, nil
 	})
 	ev := monitor.InboundEvent{
 		Kind: "pr_comment", ChannelType: "github", Channel: "o/r",
@@ -74,9 +93,15 @@ func TestObserveTraceGitHubSource(t *testing.T) {
 	if tr.URL != "https://github.com/o/r/pull/5" {
 		t.Errorf("trace URL = %q, want the GitHub url", tr.URL)
 	}
-	// It reached stage1 (so Stage 0 did NOT drop the github event) and dropped there.
-	if tr.StageReached != "stage1" {
-		t.Errorf("StageReached = %q, want stage1 (github event must clear Stage 0)", tr.StageReached)
+	// It cleared Stage 0 and advisory Stage 1, then the deep agent made the final drop call.
+	if tr.StageReached != "stage3" {
+		t.Errorf("StageReached = %q, want stage3 (stage1 is advisory)", tr.StageReached)
+	}
+	if tr.Stage1Relevant == nil || *tr.Stage1Relevant {
+		t.Errorf("Stage1Relevant = %v, want false recorded as advisory", tr.Stage1Relevant)
+	}
+	if tr.Stage1Reason != "looks like a meta note" {
+		t.Errorf("Stage1Reason = %q", tr.Stage1Reason)
 	}
 }
 
@@ -236,16 +261,36 @@ func TestCascadeStage0DropWritesNothing(t *testing.T) {
 	}
 }
 
-func TestCascadeStage1DropWritesNothing(t *testing.T) {
+func TestCascadeStage1FalseStillReachesDeepTriage(t *testing.T) {
 	c, db := cascadeFixture(t)
+	traces := captureTraces(c)
 	stubClassifier(t, func(prompt string) (string, error) {
-		return `[{"thread_key":"C1:3.1","relevant":false}]`, nil // stage1 says no
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:3.1","relevant":false,"reason":"cheap gate thinks this is casual"}]`, nil
+		}
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"needs deeper look"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.91,"reason":"deep read found no operator action"}`, nil
 	})
 	if err := c.Observe(context.Background(), msg("C1", "3.1", "U_OTHER", "lol")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
 	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Errorf("expected no feed items, got %d", len(items))
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.StageReached != "stage3" || tr.Stage1Relevant == nil || *tr.Stage1Relevant {
+		t.Fatalf("trace = %+v, want advisory stage1=false then stage3 drop", tr)
+	}
+	if tr.Stage1Reason != "cheap gate thinks this is casual" {
+		t.Fatalf("Stage1Reason = %q", tr.Stage1Reason)
+	}
+	if !strings.Contains(tr.DropReason, "deep read found no operator action") {
+		t.Fatalf("DropReason = %q, want deep reason", tr.DropReason)
 	}
 }
 
@@ -261,7 +306,7 @@ func TestCascadeDeepDropNotSurfaced(t *testing.T) {
 		return `{"suggested_action":"reply","confidence":0.7,"summary":"q"}`, nil // stage2 passes
 	})
 	stubDeepTriage(t, func(prompt string) (string, error) {
-		return `{"suggested_action":"drop","confidence":0.85,"summary":"bot noise, not for operator"}`, nil
+		return `{"suggested_action":"drop","confidence":0.85,"summary":"bot noise, not for operator","reason":"automation status only"}`, nil
 	})
 	if err := c.Observe(context.Background(), msg("C1", "7.1", "U_OTHER", "create+close dashboard task")); err != nil {
 		t.Fatalf("Observe: %v", err)
@@ -281,6 +326,9 @@ func TestCascadeDeepDropNotSurfaced(t *testing.T) {
 	}
 	if tr.FeedItemID != "" {
 		t.Errorf("dropped trace must not record a FeedItemID, got %q", tr.FeedItemID)
+	}
+	if !strings.Contains(tr.DropReason, "automation status only") {
+		t.Errorf("DropReason = %q, want deep reason", tr.DropReason)
 	}
 }
 
@@ -416,10 +464,12 @@ func TestCascadeGitHubReviewCommentsDoNotShareThreadVerdictCache(t *testing.T) {
 	stubClassifier(t, func(prompt string) (string, error) {
 		if strings.Contains(prompt, "MODE: stage1-relevance") {
 			stage1Calls++
-			return `[{"thread_key":"o/r:gh-pr:o/r#159","relevant":false}]`, nil
+			return stage1JSONForPrompt(prompt, false, "cheap gate thinks it is informational"), nil
 		}
-		t.Fatalf("stage2 should not run when stage1 drops both review comments")
-		return `{}`, nil
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"no operator action required"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"no operator action required"}`, nil
 	})
 
 	first := monitor.InboundEvent{
@@ -448,8 +498,8 @@ func TestCascadeGitHubReviewCommentsDoNotShareThreadVerdictCache(t *testing.T) {
 	if (*traces)[1].StageReached == "cache" {
 		t.Fatalf("second GitHub review comment was dropped by thread cache: %+v", (*traces)[1])
 	}
-	if (*traces)[1].StageReached != "stage1" || (*traces)[1].DropReason != "not relevant" {
-		t.Fatalf("second trace = stage %q reason %q, want stage1/not relevant", (*traces)[1].StageReached, (*traces)[1].DropReason)
+	if (*traces)[1].StageReached != "stage3" || (*traces)[1].Stage1Relevant == nil || *(*traces)[1].Stage1Relevant {
+		t.Fatalf("second trace = %+v, want advisory stage1=false and final stage3 decision", (*traces)[1])
 	}
 }
 
@@ -460,21 +510,12 @@ func TestCascadeSlackRepliesDoNotShareThreadVerdictCache(t *testing.T) {
 	stubClassifier(t, func(prompt string) (string, error) {
 		if strings.Contains(prompt, "MODE: stage1-relevance") {
 			stage1Calls++
-			i := strings.Index(prompt, "[")
-			j := strings.LastIndex(prompt, "]")
-			var inputs []ClassifyInput
-			if i >= 0 && j > i {
-				_ = json.Unmarshal([]byte(prompt[i:j+1]), &inputs)
-			}
-			out := make([]RelevanceVerdict, 0, len(inputs))
-			for _, in := range inputs {
-				out = append(out, RelevanceVerdict{ThreadKey: in.ThreadKey, Relevant: false})
-			}
-			b, _ := json.Marshal(out)
-			return string(b), nil
+			return stage1JSONForPrompt(prompt, false, "cheap gate thinks it is casual"), nil
 		}
-		t.Fatalf("stage2 should not run when stage1 drops both Slack replies")
-		return `{}`, nil
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"no operator action required"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"no operator action required"}`, nil
 	})
 
 	first := monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C1", TS: "10.1", ThreadTS: "10.0", UserID: "U_OTHER", Text: "first ambiguous reply"}
@@ -497,8 +538,8 @@ func TestCascadeSlackRepliesDoNotShareThreadVerdictCache(t *testing.T) {
 	if (*traces)[1].StageReached == "cache" {
 		t.Fatalf("second Slack reply was dropped by thread cache: %+v", (*traces)[1])
 	}
-	if (*traces)[1].StageReached != "stage1" || (*traces)[1].DropReason != "not relevant" {
-		t.Fatalf("second trace = stage %q reason %q, want stage1/not relevant", (*traces)[1].StageReached, (*traces)[1].DropReason)
+	if (*traces)[1].StageReached != "stage3" || (*traces)[1].Stage1Relevant == nil || *(*traces)[1].Stage1Relevant {
+		t.Fatalf("second trace = %+v, want advisory stage1=false and final stage3 decision", (*traces)[1])
 	}
 }
 
@@ -638,7 +679,13 @@ func TestCascadeTextCleanNilIsIdentity(t *testing.T) {
 	c, _ := cascadeFixture(t) // TextClean unset
 	traces := captureTraces(c)
 	stubClassifier(t, func(prompt string) (string, error) {
-		return `[{"thread_key":"C1:2.1","relevant":false}]`, nil
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return stage1JSONForPrompt(prompt, false, "test advisory drop"), nil
+		}
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"test drop"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"test drop"}`, nil
 	})
 	if err := c.Observe(context.Background(), msg("C1", "2.1", "U_OTHER", "raw <@U1> stays")); err != nil {
 		t.Fatalf("Observe: %v", err)
@@ -918,6 +965,14 @@ func TestMatchExistingTaskByTag(t *testing.T) {
 		t.Errorf("matchExistingTask(slack) = (%q,%v), want (slack-thread-task,true)", slug, ok)
 	}
 
+	sharedEv := monitor.InboundEvent{
+		Kind: "message", ChannelType: "im", Channel: "D_FORWARD", ThreadTS: "12.1", UserID: "U_X",
+		RefChannel: "C9", RefThreadTS: "9.1", RefTS: "9.2",
+	}
+	if slug, ok := matchExistingTask(db, sharedEv); !ok || slug != "slack-thread-task" {
+		t.Errorf("matchExistingTask(shared-ref slack) = (%q,%v), want (slack-thread-task,true)", slug, ok)
+	}
+
 	// No tracking task → (",false).
 	if slug, ok := matchExistingTask(db, monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_NONE", ThreadTS: "1.1"}); ok || slug != "" {
 		t.Errorf("matchExistingTask(untracked) = (%q,%v), want (\"\",false)", slug, ok)
@@ -963,8 +1018,14 @@ func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 	}
 	called := false
 	stubClassifier(t, func(prompt string) (string, error) {
-		called = true
-		return `[{"thread_key":"C_LIVE:1.1","relevant":false}]`, nil // stage1 drops, cheap
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			called = true
+			return stage1JSONForPrompt(prompt, false, "test advisory drop"), nil
+		}
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"test drop"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"test drop"}`, nil
 	})
 	// Message in C_LIVE (only in ConfigFn's set, NOT the static C1 set).
 	if err := c.Observe(context.Background(), msg("C_LIVE", "1.1", "U_OTHER", "hi")); err != nil {
@@ -1012,16 +1073,22 @@ func TestCascadeConsumesLearnedSuppressionsWithoutRestart(t *testing.T) {
 	c, db := cascadeFixture(t)
 	c.ConfigFn = WatchConfigFnWithMutes(db)
 
-	classifierCalls := 0
+	stage1Calls := 0
 	stubClassifier(t, func(prompt string) (string, error) {
-		classifierCalls++
-		return `[{"thread_key":"C_NOISE:1.1","relevant":false}]`, nil
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Calls++
+			return stage1JSONForPrompt(prompt, false, "test advisory drop"), nil
+		}
+		return `{"suggested_action":"drop","confidence":0.8,"reason":"test drop"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"drop","confidence":0.9,"reason":"test drop"}`, nil
 	})
 	if err := c.Observe(context.Background(), msg("C_NOISE", "1.1", "U_OTHER", "first")); err != nil {
 		t.Fatalf("first Observe: %v", err)
 	}
-	if classifierCalls != 1 {
-		t.Fatalf("classifierCalls after first event = %d, want 1", classifierCalls)
+	if stage1Calls != 1 {
+		t.Fatalf("stage1Calls after first event = %d, want 1", stage1Calls)
 	}
 
 	for i := 0; i < 3; i++ {
@@ -1038,7 +1105,7 @@ func TestCascadeConsumesLearnedSuppressionsWithoutRestart(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C_NOISE", "2.1", "U_OTHER", "second")); err != nil {
 		t.Fatalf("second Observe: %v", err)
 	}
-	if classifierCalls != 1 {
-		t.Errorf("classifierCalls after learned suppression = %d, want still 1 (Stage 0 drop)", classifierCalls)
+	if stage1Calls != 1 {
+		t.Errorf("stage1Calls after learned suppression = %d, want still 1 (Stage 0 drop)", stage1Calls)
 	}
 }

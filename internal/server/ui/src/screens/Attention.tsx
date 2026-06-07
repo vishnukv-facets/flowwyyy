@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useLocation } from 'wouter'
+import { useLocation, useSearch } from 'wouter'
 import { AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -15,7 +15,20 @@ type View = (typeof VIEWS)[number]
 
 export function Attention() {
   useDocumentTitle('Attention')
-  const [view, setView] = useState<View>('feed')
+  const search = useSearch()
+  const [, navigate] = useLocation()
+  const params = useMemo(() => new URLSearchParams(search), [search])
+  const routedView: View = params.get('view') === 'trace' ? 'trace' : 'feed'
+  const routedItem = routedView === 'feed' ? params.get('item') : null
+  const routedTrace = routedView === 'trace' ? params.get('trace') : null
+  const view = routedView
+
+  const chooseView = (next: View) => {
+    navigate(next === 'trace' ? '/attention?view=trace' : '/attention')
+  }
+  const clearDeepLink = () => {
+    navigate(routedView === 'trace' ? '/attention?view=trace' : '/attention')
+  }
 
   return (
     <div className="page">
@@ -31,7 +44,7 @@ export function Attention() {
               key={v}
               type="button"
               className={`btn sm ${view === v ? 'primary' : 'ghost'}`}
-              onClick={() => setView(v)}
+              onClick={() => chooseView(v)}
             >
               {v}
             </button>
@@ -39,7 +52,11 @@ export function Attention() {
         </div>
       </div>
 
-      {view === 'feed' ? <FeedView /> : <TraceView />}
+      {view === 'feed' ? (
+        <FeedView selectedItemId={routedItem} onClearDeepLink={clearDeepLink} />
+      ) : (
+        <TraceView selectedTraceId={routedTrace} onClearDeepLink={clearDeepLink} />
+      )}
     </div>
   )
 }
@@ -49,7 +66,13 @@ export function Attention() {
 const cardSig = (it: AttentionItem) =>
   `${it.suggested_action}|${it.matched_task ?? ''}|${it.confidence}|${it.reason ?? ''}|${it.summary ?? ''}`
 
-function FeedView() {
+function FeedView({
+  selectedItemId,
+  onClearDeepLink,
+}: {
+  selectedItemId?: string | null
+  onClearDeepLink: () => void
+}) {
   const [status, setStatus] = useState<string>('new')
   const [detail, setDetail] = useState<AttentionItem | null>(null)
   const { data, isLoading, error } = useAttention(status)
@@ -62,6 +85,8 @@ function FeedView() {
     }
     return map
   }, [workEvents])
+  const routedDetail = selectedItemId ? (data ?? []).find((it) => it.id === selectedItemId) ?? null : null
+  const activeDetail = detail ?? routedDetail
   // Cards with an in-flight re-triage → id mapped to the card signature at click
   // time. Deep triage is async (~a minute), so we hold a spinner until the card's
   // content actually changes (SSE refetch) or a safety timeout fires.
@@ -139,7 +164,14 @@ function FeedView() {
         </div>
       )}
 
-      <FeedDetail item={detail} workEvent={detail ? eventByAttentionId.get(detail.id) : undefined} onClose={() => setDetail(null)} />
+      <FeedDetail
+        item={activeDetail}
+        workEvent={activeDetail ? eventByAttentionId.get(activeDetail.id) : undefined}
+        onClose={() => {
+          if (selectedItemId) onClearDeepLink()
+          setDetail(null)
+        }}
+      />
     </>
   )
 }
@@ -718,6 +750,7 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
               <KV k="disposition" v={<span className={DISPOSITION_TONE[trace.disposition] ?? 'badge'}>{trace.disposition}</span>} />
               <KV k="stage reached" v={trace.stage_reached || '—'} />
               <KV k="stage 1 relevant" v={relevantLabel(trace.stage1_relevant)} />
+              <KV k="stage 1 reason" v={trace.stage1_reason || '—'} />
               <KV k="stage 2 action" v={trace.stage2_action ? `${trace.stage2_action} · ${pctConf(trace.stage2_confidence)}` : '—'} />
               <KV k="stage 3 action" v={trace.stage3_action ? `${trace.stage3_action} · ${pctConf(trace.stage3_confidence)}` : '—'} />
               <KV k="final action" v={trace.final_action ? `${trace.final_action} · ${pctConf(trace.final_confidence)}` : '—'} />
@@ -773,7 +806,13 @@ function SegFilter({
   )
 }
 
-function TraceView() {
+function TraceView({
+  selectedTraceId,
+  onClearDeepLink,
+}: {
+  selectedTraceId?: string | null
+  onClearDeepLink: () => void
+}) {
   const [windowId, setWindowId] = useState<string>('24h')
   const [disposition, setDisposition] = useState<string>('all')
   const [source, setSource] = useState<string>('all')
@@ -782,6 +821,8 @@ function TraceView() {
   const since = new Date(Date.now() - win.ms).toISOString()
   const { data, isLoading, error } = useAttentionTrace(since, disposition, source)
   const items = data?.items ?? []
+  const routedSelected = selectedTraceId ? items.find((it) => it.id === selectedTraceId) ?? null : null
+  const activeSelected = selected ?? routedSelected
 
   return (
     <>
@@ -833,7 +874,13 @@ function TraceView() {
         </div>
       )}
 
-      <TraceDetail item={selected} onClose={() => setSelected(null)} />
+      <TraceDetail
+        item={activeSelected}
+        onClose={() => {
+          if (selectedTraceId) onClearDeepLink()
+          setSelected(null)
+        }}
+      />
     </>
   )
 }
@@ -1014,6 +1061,7 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             <KV k="disposition" v={<span className={DISPOSITION_TONE[item.disposition] ?? 'badge'}>{item.disposition}</span>} />
             <KV k="stage reached" v={item.stage_reached || '—'} />
             <KV k="stage 1 relevant" v={relevantLabel(item.stage1_relevant)} />
+            <KV k="stage 1 reason" v={item.stage1_reason || '—'} />
             <KV k="stage 2 action" v={item.stage2_action ? `${item.stage2_action} · ${pctConf(item.stage2_confidence)}` : '—'} />
             <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
             <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />

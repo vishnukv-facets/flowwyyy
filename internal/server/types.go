@@ -392,6 +392,7 @@ type SteeringTraceView struct {
 	StageReached     string  `json:"stage_reached"`
 	DropReason       string  `json:"drop_reason,omitempty"`
 	Stage1Relevant   *bool   `json:"stage1_relevant,omitempty"`
+	Stage1Reason     string  `json:"stage1_reason,omitempty"`
 	Stage2Action     string  `json:"stage2_action,omitempty"`
 	Stage2Confidence float64 `json:"stage2_confidence,omitempty"`
 	Stage3Action     string  `json:"stage3_action,omitempty"`

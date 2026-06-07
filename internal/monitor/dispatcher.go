@@ -62,9 +62,13 @@ type ScopedMessageObserver interface {
 // All side-effect operations live behind package-level function vars or
 // the Opener interface so tests can swap in pure-Go fakes.
 type Dispatcher struct {
-	DB      *sql.DB
-	Opener  TaskOpener
-	Steerer MessageObserver // optional: routes untracked messages into the steering cascade
+	DB     *sql.DB
+	Opener TaskOpener
+	// Steerer routes messages into the steering cascade. By default only
+	// untracked messages use it; when SteererOwnsRouting returns true, tracked
+	// thread messages also go through it instead of direct inbox append.
+	Steerer            MessageObserver
+	SteererOwnsRouting func() bool
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -129,6 +133,9 @@ func (d *Dispatcher) dispatchReaction(ctx context.Context, ev InboundEvent) erro
 }
 
 func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error {
+	if d.steererOwnsRouting() {
+		return d.observeWithSteerer(ctx, ev)
+	}
 	// Thread match: a message inside a tracked channel thread, keyed by
 	// (channel, thread_ts).
 	if key := ThreadKey(ev.Channel, ev.ThreadTS); key != "" {
@@ -167,12 +174,23 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 	// kinds that can never be relevant; Stage 0 still owns deterministic drops
 	// and the classifier owns ambiguous relevance.
 	if d.Steerer != nil {
-		if scoped, ok := d.Steerer.(ScopedMessageObserver); ok && !scoped.ShouldObserve(ev) {
-			return nil
-		}
-		return d.Steerer.Observe(ctx, ev)
+		return d.observeWithSteerer(ctx, ev)
 	}
 	return nil
+}
+
+func (d *Dispatcher) steererOwnsRouting() bool {
+	return d != nil && d.Steerer != nil && d.SteererOwnsRouting != nil && d.SteererOwnsRouting()
+}
+
+func (d *Dispatcher) observeWithSteerer(ctx context.Context, ev InboundEvent) error {
+	if d == nil || d.Steerer == nil {
+		return nil
+	}
+	if scoped, ok := d.Steerer.(ScopedMessageObserver); ok && !scoped.ShouldObserve(ev) {
+		return nil
+	}
+	return d.Steerer.Observe(ctx, ev)
 }
 
 // routeViaSharedRef tries to deliver a forwarded/shared message to the task that

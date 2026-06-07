@@ -219,6 +219,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	if githubActionableSignal(ev, cleaned) {
 		t := true
 		tr.Stage1Relevant = &t
+		tr.Stage1Reason = "deterministic GitHub review signal marked actionable"
 		return c.finishItem(ctx, in, tr, start, ev, cacheKey)
 	}
 
@@ -226,20 +227,12 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	stage1In.ThreadKey = cacheKey
 	rel, err := Stage1Relevance(ctx, []ClassifyInput{stage1In})
 	if err != nil {
-		tr.Disposition, tr.StageReached, tr.Error = "error", "stage1", err.Error()
-		c.emitTrace(tr, start)
-		return fmt.Errorf("steering: stage1: %w", err)
+		tr.Error = "stage1 advisory failed: " + err.Error()
+	} else if len(rel) > 0 {
+		r := rel[0]
+		tr.Stage1Relevant = &r.Relevant
+		tr.Stage1Reason = stage1Reason(r)
 	}
-	if len(rel) == 0 || !rel[0].Relevant {
-		c.cache.mark(cacheKey, c.now())
-		f := false
-		tr.Stage1Relevant = &f
-		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage1", "not relevant"
-		c.emitTrace(tr, start)
-		return nil
-	}
-	t := true
-	tr.Stage1Relevant = &t
 	return c.finishItem(ctx, in, tr, start, ev, cacheKey)
 }
 
@@ -263,12 +256,6 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	}
 	tr.Stage2Action = string(v2.SuggestedAction)
 	tr.Stage2Confidence = v2.Confidence
-	if v2.SuggestedAction == ActionDrop {
-		c.cache.mark(cacheKey, c.now())
-		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage2", "stage2 action=drop"
-		c.emitTrace(tr, start)
-		return nil
-	}
 	pack := c.contextPack(ctx, ev)
 
 	// Backpressure: when the deep-triage budget is exhausted, surface the cheap
@@ -276,6 +263,13 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	if !c.budget.allow(c.now()) {
 		c.log("deep-triage budget exhausted; surfacing stage2 verdict for %s", in.ThreadKey)
 		c.cache.mark(cacheKey, c.now())
+		if v2.SuggestedAction == ActionDrop {
+			tr.Disposition, tr.StageReached = "dropped", "stage2"
+			tr.DropReason = dropReasonFromVerdict("deep budget exhausted; stage2 action=drop", v2)
+			tr.FinalAction, tr.FinalConfidence = string(v2.SuggestedAction), v2.Confidence
+			c.emitTrace(tr, start)
+			return nil
+		}
 		c.applyExistingTaskMatch(&v2, ev)
 		id, werr := c.writeFeed(v2, ev, pack)
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
@@ -301,10 +295,11 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	c.applyExistingTaskMatch(&v3, ev)
 	// A deep-triage 'drop' verdict is noise the cascade itself rejected — it
 	// belongs in the trace (for transparency), never as a feed card nagging the
-	// operator. Stage 2 already drops early; this is the same guard for the
-	// deeper verdict (and the stage2 fallback when deep triage errored).
+	// operator. Stage 2 is advisory while budget is available; it only becomes
+	// final on the budget-exhausted fallback path.
 	if v3.SuggestedAction == ActionDrop {
-		tr.Disposition, tr.DropReason = "dropped", "deep-triage verdict: drop"
+		tr.Disposition = "dropped"
+		tr.DropReason = dropReasonFromVerdict("deep-triage verdict: drop", v3)
 		tr.FinalAction, tr.FinalConfidence = string(v3.SuggestedAction), v3.Confidence
 		c.emitTrace(tr, start)
 		return nil
@@ -326,29 +321,45 @@ var matchExistingTask = func(db *sql.DB, ev monitor.InboundEvent) (string, bool)
 	if db == nil {
 		return "", false
 	}
-	var tag string
+	var tags []string
 	if connectorOf(ev) == "github" {
-		tag = strings.TrimSpace(ev.ThreadTS) // the LinkTag, e.g. gh-pr:owner/repo#550
-	} else if key := monitor.ThreadKey(ev.Channel, ev.ThreadTS); key != "" {
-		tag = monitor.SlackThreadTagPrefix + key
-	}
-	if tag == "" {
-		return "", false
-	}
-	// IncludeArchived: an archived task is still the canonical tracker for its
-	// thread/PR — archiving only declutters the active list, it doesn't stop
-	// tracking. Without this, a new comment on an archived-but-open PR matches
-	// nothing and the cascade suggests make_task instead of forwarding.
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
-	if err != nil || len(tasks) == 0 {
-		return "", false
-	}
-	for _, t := range tasks {
-		if t != nil && t.Status != "done" {
-			return t.Slug, true
+		tags = append(tags, strings.TrimSpace(ev.ThreadTS)) // the LinkTag, e.g. gh-pr:owner/repo#550
+	} else {
+		for _, key := range slackTaskKeys(ev) {
+			tags = append(tags, monitor.SlackThreadTagPrefix+key)
 		}
 	}
-	return tasks[0].Slug, true
+	for _, tag := range tags {
+		if strings.TrimSpace(tag) == "" {
+			continue
+		}
+		// IncludeArchived: an archived task is still the canonical tracker for its
+		// thread/PR — archiving only declutters the active list, it doesn't stop
+		// tracking. Without this, a new comment on an archived-but-open PR matches
+		// nothing and the cascade suggests make_task instead of forwarding.
+		tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
+		if err != nil || len(tasks) == 0 {
+			continue
+		}
+		for _, t := range tasks {
+			if t != nil && t.Status != "done" {
+				return t.Slug, true
+			}
+		}
+		return tasks[0].Slug, true
+	}
+	return "", false
+}
+
+func slackTaskKeys(ev monitor.InboundEvent) []string {
+	keys := []string{}
+	if key := monitor.ThreadKey(ev.Channel, ev.ThreadTS); key != "" {
+		keys = append(keys, key)
+	}
+	if ref, ok := ev.SharedRef(); ok {
+		keys = append(keys, ref.ThreadKeys()...)
+	}
+	return keys
 }
 
 // applyExistingTaskMatch sets MatchedTask when a task already tracks this
@@ -405,6 +416,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		if githubActionableSignal(ev, cleaned) {
 			t := true
 			tr.Stage1Relevant = &t
+			tr.Stage1Reason = "deterministic GitHub review signal marked actionable"
 			if e := c.finishItem(ctx, in, tr, start, ev, cacheKey); e != nil && firstErr == nil {
 				firstErr = e
 			}
@@ -421,26 +433,22 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 	rel, err := Stage1Relevance(ctx, inputs)
 	if err != nil {
 		for _, p := range survivors {
-			p.tr.Disposition, p.tr.StageReached, p.tr.Error = "error", "stage1", err.Error()
-			c.emitTrace(p.tr, p.start)
+			p.tr.Error = "stage1 advisory failed: " + err.Error()
+			if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev, p.cacheKey); e != nil && firstErr == nil {
+				firstErr = e
+			}
 		}
-		return fmt.Errorf("steering: stage1 batch: %w", err)
+		return firstErr
 	}
-	relByKey := make(map[string]bool, len(rel))
+	relByKey := make(map[string]RelevanceVerdict, len(rel))
 	for _, v := range rel {
-		relByKey[v.ThreadKey] = v.Relevant
+		relByKey[v.ThreadKey] = v
 	}
 	for _, p := range survivors {
-		if !relByKey[p.stage1In.ThreadKey] {
-			c.cache.mark(p.cacheKey, c.now())
-			f := false
-			p.tr.Stage1Relevant = &f
-			p.tr.Disposition, p.tr.StageReached, p.tr.DropReason = "dropped", "stage1", "not relevant"
-			c.emitTrace(p.tr, p.start)
-			continue
+		if r, ok := relByKey[p.stage1In.ThreadKey]; ok {
+			p.tr.Stage1Relevant = &r.Relevant
+			p.tr.Stage1Reason = stage1Reason(r)
 		}
-		t := true
-		p.tr.Stage1Relevant = &t
 		if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev, p.cacheKey); e != nil && firstErr == nil {
 			firstErr = e
 		}
@@ -527,6 +535,28 @@ func githubActionableSignal(ev monitor.InboundEvent, text string) bool {
 		}
 	}
 	return false
+}
+
+func stage1Reason(v RelevanceVerdict) string {
+	if reason := strings.TrimSpace(v.Reason); reason != "" {
+		return reason
+	}
+	parts := []string{}
+	if v.Category != "" {
+		parts = append(parts, "category="+strings.TrimSpace(v.Category))
+	}
+	if v.UrgencyHint != "" {
+		parts = append(parts, "urgency="+strings.TrimSpace(v.UrgencyHint))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func dropReasonFromVerdict(prefix string, v Verdict) string {
+	reason := strings.TrimSpace(v.Reason)
+	if reason == "" {
+		return prefix
+	}
+	return prefix + ": " + reason
 }
 
 // cleanText rewrites connector markup (Slack <@U…> mentions, etc.) to human

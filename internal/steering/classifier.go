@@ -47,6 +47,7 @@ type RelevanceVerdict struct {
 	Relevant    bool   `json:"relevant"`
 	Category    string `json:"category"`
 	UrgencyHint string `json:"urgency_hint"`
+	Reason      string `json:"reason"`
 }
 
 // Stage1Relevance runs the cheap batched relevance gate over inputs ("is this
@@ -185,7 +186,7 @@ You are a fast relevance gate for an operator's incoming messages. For EACH even
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
 
 Respond with ONLY a minified JSON array, no prose and no code fences. One object per event:
-[{"thread_key":"<copy of input thread_key>","relevant":true|false,"category":"<short label>","urgency_hint":"urgent|normal|low"}]`
+[{"thread_key":"<copy of input thread_key>","relevant":true|false,"category":"<short label>","urgency_hint":"urgent|normal|low","reason":"<short reason>"}]`
 }
 
 func stage1Payload(inputsJSON string) string {

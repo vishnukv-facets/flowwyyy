@@ -40,8 +40,8 @@ func TestStage1Relevance(t *testing.T) {
 			t.Fatalf("stage1 prompt missing marker: %q", prompt)
 		}
 		// Model blesses k1, drops k2, and omits k3 entirely.
-		return `[{"thread_key":"k1","relevant":true,"category":"customer","urgency_hint":"urgent"},
-		         {"thread_key":"k2","relevant":false}]`, nil
+		return `[{"thread_key":"k1","relevant":true,"category":"customer","urgency_hint":"urgent","reason":"direct rollout question"},
+		         {"thread_key":"k2","relevant":false,"reason":"chit-chat"}]`, nil
 	})
 	inputs := []ClassifyInput{
 		{ThreadKey: "k1", Text: "rollout date?"},
@@ -55,11 +55,11 @@ func TestStage1Relevance(t *testing.T) {
 	if len(out) != 3 {
 		t.Fatalf("len = %d, want 3 (one per input)", len(out))
 	}
-	if !out[0].Relevant || out[0].UrgencyHint != "urgent" {
+	if !out[0].Relevant || out[0].UrgencyHint != "urgent" || out[0].Reason != "direct rollout question" {
 		t.Errorf("k1 = %+v, want relevant urgent", out[0])
 	}
-	if out[1].Relevant {
-		t.Errorf("k2 should be not relevant")
+	if out[1].Relevant || out[1].Reason != "chit-chat" {
+		t.Errorf("k2 = %+v, want not relevant with reason", out[1])
 	}
 	if out[2].Relevant { // omitted by model → fail-closed to not relevant
 		t.Errorf("k3 omitted by model must default to not relevant")

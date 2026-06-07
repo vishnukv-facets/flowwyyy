@@ -16,6 +16,7 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 			Author: "alice", ThreadKey: "C1:1.0", TextPreview: "hello",
 			Disposition: "surfaced", StageReached: "stage3",
 			Stage1Relevant: boolPtr(true),
+			Stage1Reason:   "direct ask",
 			Stage2Action:   "surface", Stage2Confidence: 0.8,
 			Stage3Action: "make_task", Stage3Confidence: 0.9,
 			FinalAction: "make_task", FinalConfidence: 0.9,
@@ -82,8 +83,8 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 			t.Errorf("pos %d: want id %q, got %q", i, id, all[i].ID)
 		}
 	}
-	if all[2].AutonomyAction != "make_task" || all[2].AutonomyDecision != "acted" || all[2].AutonomyReason == "" {
-		t.Errorf("autonomy audit fields not round-tripped: %+v", all[2])
+	if all[2].AutonomyAction != "make_task" || all[2].AutonomyDecision != "acted" || all[2].AutonomyReason == "" || all[2].Stage1Reason != "direct ask" {
+		t.Errorf("audit fields not round-tripped: %+v", all[2])
 	}
 
 	// ListSteeringTrace{Disposition:"dropped"} returns only drops
@@ -254,6 +255,7 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 		Origin: "live", Source: "slack",
 		Disposition: "surfaced", StageReached: "stage3",
 		Stage1Relevant: boolPtr(true),
+		Stage1Reason:   "direct question",
 		LatencyMS:      50,
 	}
 	if err := InsertSteeringTrace(db, trueTrace); err != nil {
@@ -286,6 +288,9 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 	}
 	if byID["true1"].Stage1Relevant == nil || *byID["true1"].Stage1Relevant != true {
 		t.Errorf("true1: Stage1Relevant should be *true, got %v", byID["true1"].Stage1Relevant)
+	}
+	if byID["true1"].Stage1Reason != "direct question" {
+		t.Errorf("true1: Stage1Reason = %q", byID["true1"].Stage1Reason)
 	}
 	if byID["false1"].Stage1Relevant == nil || *byID["false1"].Stage1Relevant != false {
 		t.Errorf("false1: Stage1Relevant should be *false, got %v", byID["false1"].Stage1Relevant)

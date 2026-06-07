@@ -84,6 +84,7 @@ func New(cfg Config) *Server {
 		}
 		cascade.FetchContext = steering.NewDefaultContextFetcher(cascade.TextClean, s.slackPermalinker)
 		dispatcher.Steerer = cascade
+		dispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
 		s.cascade = cascade
 		// Reuse a primed Haiku session across the cheap classifier stages (the
 		// heavy framing + task index sent once at session creation, only the
@@ -96,11 +97,13 @@ func New(cfg Config) *Server {
 		})
 		s.slackListener = slackListener
 		ghDispatcher := monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s})
-		// Trace-only parallel: route every GitHub event through the SAME cascade
-		// so it surfaces in the steering trace + attention feed. The GitHub task
-		// pipeline is untouched (the steerer call is additive + best-effort).
+		// Route every GitHub event through the SAME cascade so it surfaces in
+		// the steering trace + attention feed. In surface-only mode this remains
+		// additive; when autonomy is enabled, the dispatcher lets the steerer own
+		// task routing instead of also running the legacy monitor pipeline.
 		if s.cascade != nil {
 			ghDispatcher.Steerer = s.cascade
+			ghDispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
 		}
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}
@@ -226,6 +229,10 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.cfg.DB != nil {
 		if rc := monitor.NewSlackRepliesClient(); rc != nil {
 			backfill := monitor.NewSlackBackfill(s.cfg.DB, rc, 0)
+			if s.cascade != nil {
+				backfill.Observer = s.cascade
+				backfill.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+			}
 			// DM channels the agent registered (slack-dm: tags) are reconciled
 			// via conversations.history on the user token — the bot can't read
 			// the operator's DMs. No-op when no user token is configured.
@@ -355,6 +362,16 @@ func steeringBackfillEnabled() bool {
 	default:
 		return true
 	}
+}
+
+func steeringAutonomyRoutingEnabled() bool {
+	pol := steering.AutonomyFromEnv()
+	for _, action := range []steering.Action{steering.ActionMakeTask, steering.ActionForward} {
+		if p, ok := pol[action]; ok && p.Enabled {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {

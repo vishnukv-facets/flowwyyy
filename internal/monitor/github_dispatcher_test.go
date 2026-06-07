@@ -199,6 +199,50 @@ func TestGitHubDispatcher_ReviewCommentAppendsToTrackedPR(t *testing.T) {
 	}
 }
 
+func TestGitHubDispatcher_SteererOwnedRoutingSkipsLegacyTaskPipeline(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+	observer := &fakeMessageObserver{}
+
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = observer
+	d.SteererOwnsRouting = func() bool { return true }
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRReviewComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "PRRC_owned",
+		Author:    "reviewer",
+		Body:      "Please tighten the idempotency test.",
+		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#discussion_r1",
+		EventKey:  "review-comment:PRRC_owned",
+		RawJSON:   `{"node_id":"PRRC_owned"}`,
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(observer.events) != 1 || observer.events[0].Text != ev.Body {
+		t.Fatalf("steerer events = %+v, want exactly the GitHub comment", observer.events)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("GitHub event should not be appended directly when steerer owns routing; entries=%+v", entries)
+	}
+	seen, err := flowdb.HasGitHubEvent(db, ev.EventKeyValue())
+	if err != nil {
+		t.Fatalf("HasGitHubEvent: %v", err)
+	}
+	if !seen {
+		t.Fatal("steerer-owned GitHub event should still be recorded for poller dedupe")
+	}
+}
+
 // Regression: a new comment on an ARCHIVED but still-open PR must route to the
 // existing task (append to its inbox), NOT spawn a duplicate. Archiving only
 // declutters the active list; routing still tracks the thread.

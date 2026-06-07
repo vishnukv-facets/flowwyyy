@@ -29,6 +29,16 @@ type tagCall struct {
 	Tag  string
 }
 
+type fakeMessageObserver struct {
+	events []InboundEvent
+	err    error
+}
+
+func (f *fakeMessageObserver) Observe(_ context.Context, ev InboundEvent) error {
+	f.events = append(f.events, ev)
+	return f.err
+}
+
 // stubDispatcherIO swaps the package-level spawn/tag/open hooks for fakes
 // and returns a teardown to restore the originals. Tests use the returned
 // trackers to assert call patterns. Concurrency-safe so dispatch ordering
@@ -321,6 +331,33 @@ func TestSlackTaskBrief_MentionsAutomaticDMMonitoring(t *testing.T) {
 	// The removed manual-tag instruction must NOT reappear.
 	if strings.Contains(brief, "--tag slack-dm:") {
 		t.Errorf("brief should not instruct the removed slack-dm manual tag")
+	}
+}
+
+func TestDispatcher_SteererOwnedRoutingSendsTrackedThreadToSteererOnly(t *testing.T) {
+	db := dispatcherTestDB(t)
+	seedSlackTask(t, db, "tracked-slack", "C123:1.000000")
+	observer := &fakeMessageObserver{}
+	d := NewDispatcher(db, nil)
+	d.Steerer = observer
+	d.SteererOwnsRouting = func() bool { return true }
+
+	ev := InboundEvent{
+		Kind: "message", Channel: "C123", ChannelType: "channel",
+		TS: "2.000000", ThreadTS: "1.000000", UserID: "U_teammate", Text: "new reply",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(observer.events) != 1 || observer.events[0].Text != "new reply" {
+		t.Fatalf("steerer events = %+v, want exactly the tracked-thread reply", observer.events)
+	}
+	entries, err := ReadInboxEntries("tracked-slack")
+	if err != nil {
+		t.Fatalf("ReadInboxEntries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("tracked thread should not be appended directly when steerer owns routing; entries=%+v", entries)
 	}
 }
 

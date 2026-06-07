@@ -50,9 +50,14 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 // mirrors Dispatcher for Slack but keeps GitHub-specific tags, briefs, and
 // idempotency isolated.
 type GitHubDispatcher struct {
-	DB      *sql.DB
-	Opener  TaskOpener
-	Steerer MessageObserver // optional: ALSO routes each new event through the steering cascade (trace-only parallel; never affects the task pipeline)
+	DB     *sql.DB
+	Opener TaskOpener
+	// Steerer routes GitHub events into the steering cascade. By default this is
+	// trace/feed parallel to the legacy task pipeline; when SteererOwnsRouting
+	// returns true, the steerer becomes the owner and the legacy pipeline is
+	// skipped after event-level dedupe.
+	Steerer            MessageObserver
+	SteererOwnsRouting func() bool
 }
 
 func NewGitHubDispatcher(db *sql.DB, opener TaskOpener) *GitHubDispatcher {
@@ -74,6 +79,13 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		if seen {
 			return nil
 		}
+	}
+
+	if d.steererOwnsRouting() {
+		if err := d.Steerer.Observe(ctx, gitHubEventToInboxEvent(ev)); err != nil {
+			return fmt.Errorf("github steerer observe: %w", err)
+		}
+		return d.recordEvent(ev, "")
 	}
 
 	// Trace-only parallel: ALSO hand each NEW event to the steering cascade so
@@ -104,6 +116,10 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	default:
 		return nil
 	}
+}
+
+func (d *GitHubDispatcher) steererOwnsRouting() bool {
+	return d != nil && d.Steerer != nil && d.SteererOwnsRouting != nil && d.SteererOwnsRouting()
 }
 
 func (d *GitHubDispatcher) dispatchGitHubItem(ctx context.Context, ev GitHubEvent) error {

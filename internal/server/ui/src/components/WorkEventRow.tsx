@@ -1,5 +1,6 @@
 import { ArrowRight, ExternalLink } from 'lucide-react'
 import type { WorkEvent, WorkEventBucket, WorkEventLink } from '../lib/types'
+import { workEventLinkHref } from '../lib/workEventLinks'
 
 const BUCKET_LABEL: Record<WorkEventBucket, string> = {
   needs_action: 'needs action',
@@ -90,23 +91,6 @@ function WorkEventLinkButton({
       <ArrowRight size={12} /> {label}
     </button>
   )
-}
-
-export function workEventLinkHref(link: WorkEventLink): string {
-  if (link.url) return link.url
-  switch (link.kind) {
-    case 'task':
-      return `/session/${encodeURIComponent(link.target)}`
-    case 'project':
-      return `/project/${encodeURIComponent(link.target)}`
-    case 'attention':
-    case 'trace':
-      return '/attention'
-    case 'source':
-      return link.target
-    default:
-      return ''
-  }
 }
 
 export function strongerWorkEvent(current: WorkEvent | undefined, next: WorkEvent): WorkEvent {
