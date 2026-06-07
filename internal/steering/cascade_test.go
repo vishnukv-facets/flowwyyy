@@ -409,6 +409,145 @@ func TestObserveTraceCacheDuplicate(t *testing.T) {
 	}
 }
 
+func TestCascadeGitHubReviewCommentsDoNotShareThreadVerdictCache(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stage1Calls := 0
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Calls++
+			return `[{"thread_key":"o/r:gh-pr:o/r#159","relevant":false}]`, nil
+		}
+		t.Fatalf("stage2 should not run when stage1 drops both review comments")
+		return `{}`, nil
+	})
+
+	first := monitor.InboundEvent{
+		Kind: "pr_review_comment", ChannelType: "github", Channel: "o/r",
+		TS: "2026-06-07T09:58:19Z", ThreadTS: "gh-pr:o/r#159",
+		UserID: "reviewer", Text: "please restore stderr",
+		URL: "https://github.com/o/r/pull/159#discussion_r1",
+	}
+	second := first
+	second.TS = "2026-06-07T09:58:30Z"
+	second.Text = "please validate archive paths"
+	second.URL = "https://github.com/o/r/pull/159#discussion_r2"
+
+	if err := c.Observe(context.Background(), first); err != nil {
+		t.Fatalf("first Observe: %v", err)
+	}
+	if err := c.Observe(context.Background(), second); err != nil {
+		t.Fatalf("second Observe: %v", err)
+	}
+	if stage1Calls != 2 {
+		t.Fatalf("stage1 calls = %d, want 2; distinct GitHub comments must not share a PR-thread verdict cache", stage1Calls)
+	}
+	if len(*traces) != 2 {
+		t.Fatalf("trace count = %d, want 2", len(*traces))
+	}
+	if (*traces)[1].StageReached == "cache" {
+		t.Fatalf("second GitHub review comment was dropped by thread cache: %+v", (*traces)[1])
+	}
+	if (*traces)[1].StageReached != "stage1" || (*traces)[1].DropReason != "not relevant" {
+		t.Fatalf("second trace = stage %q reason %q, want stage1/not relevant", (*traces)[1].StageReached, (*traces)[1].DropReason)
+	}
+}
+
+func TestCascadeSlackRepliesDoNotShareThreadVerdictCache(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	traces := captureTraces(c)
+	stage1Calls := 0
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Calls++
+			i := strings.Index(prompt, "[")
+			j := strings.LastIndex(prompt, "]")
+			var inputs []ClassifyInput
+			if i >= 0 && j > i {
+				_ = json.Unmarshal([]byte(prompt[i:j+1]), &inputs)
+			}
+			out := make([]RelevanceVerdict, 0, len(inputs))
+			for _, in := range inputs {
+				out = append(out, RelevanceVerdict{ThreadKey: in.ThreadKey, Relevant: false})
+			}
+			b, _ := json.Marshal(out)
+			return string(b), nil
+		}
+		t.Fatalf("stage2 should not run when stage1 drops both Slack replies")
+		return `{}`, nil
+	})
+
+	first := monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C1", TS: "10.1", ThreadTS: "10.0", UserID: "U_OTHER", Text: "first ambiguous reply"}
+	second := first
+	second.TS = "10.2"
+	second.Text = "second ambiguous reply"
+
+	if err := c.Observe(context.Background(), first); err != nil {
+		t.Fatalf("first Observe: %v", err)
+	}
+	if err := c.Observe(context.Background(), second); err != nil {
+		t.Fatalf("second Observe: %v", err)
+	}
+	if stage1Calls != 2 {
+		t.Fatalf("stage1 calls = %d, want 2; distinct Slack replies must not share a thread verdict cache", stage1Calls)
+	}
+	if len(*traces) != 2 {
+		t.Fatalf("trace count = %d, want 2", len(*traces))
+	}
+	if (*traces)[1].StageReached == "cache" {
+		t.Fatalf("second Slack reply was dropped by thread cache: %+v", (*traces)[1])
+	}
+	if (*traces)[1].StageReached != "stage1" || (*traces)[1].DropReason != "not relevant" {
+		t.Fatalf("second trace = stage %q reason %q, want stage1/not relevant", (*traces)[1].StageReached, (*traces)[1].DropReason)
+	}
+}
+
+func TestCascadeCodeRabbitPotentialIssueBypassesStage1Drop(t *testing.T) {
+	c, db := cascadeFixture(t)
+	traces := captureTraces(c)
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "raptor-airgapped", true }
+	t.Cleanup(func() { matchExistingTask = old })
+
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"facets-cloud/raptor:gh-pr:facets-cloud/raptor#159","relevant":false}]`, nil
+		}
+		return `{"suggested_action":"forward","matched_task":"raptor-airgapped","confidence":0.84,"summary":"CodeRabbit flagged a critical review comment"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"forward","matched_task":"raptor-airgapped","confidence":0.92,"summary":"CodeRabbit critical finding needs task follow-up","reason":"review bot marked it as a potential issue"}`, nil
+	})
+
+	ev := monitor.InboundEvent{
+		Kind: "pr_review_comment", ChannelType: "github", Channel: "facets-cloud/raptor",
+		TS: "2026-06-07T09:58:19Z", ThreadTS: "gh-pr:facets-cloud/raptor#159",
+		UserID: "coderabbitai[bot]",
+		Text:   "_Potential issue_ | _Critical_ | _Quick win_\n\n**Restore stderr to stderr for validation failures.**",
+		URL:    "https://github.com/facets-cloud/raptor/pull/159#discussion_rcritical",
+	}
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1 actionable CodeRabbit item", len(items))
+	}
+	if items[0].MatchedTask != "raptor-airgapped" || items[0].SuggestedAction != "forward" {
+		t.Fatalf("feed item = %+v, want forward to matched task", items[0])
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "surfaced" {
+		t.Fatalf("trace disposition = %q, want surfaced: %+v", tr.Disposition, tr)
+	}
+	if tr.Stage1Relevant == nil || !*tr.Stage1Relevant {
+		t.Fatalf("Stage1Relevant = %v, want true for actionable CodeRabbit finding", tr.Stage1Relevant)
+	}
+}
+
 // stage1RelevanceCalls counts how many classifier prompts contained the
 // stage1-relevance mode marker (reset per test).
 var stage1RelevanceCalls int
@@ -814,10 +953,13 @@ func TestMatchExistingTaskIncludesArchived(t *testing.T) {
 
 func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 	c, _ := cascadeFixture(t) // static Config watches C1 (see cascadeFixture)
-	// ConfigFn watches a DIFFERENT channel — proves Observe consults ConfigFn,
-	// not the static Config captured at construction.
+	// ConfigFn watches a DIFFERENT channel and mutes the static one — proves
+	// Observe consults ConfigFn, not the static Config captured at construction.
 	c.ConfigFn = func() WatchConfig {
-		return WatchConfig{WatchedChannels: map[string]bool{"C_LIVE": true}}
+		return WatchConfig{
+			WatchedChannels: map[string]bool{"C_LIVE": true},
+			MutedChannels:   map[string]bool{"C1": true},
+		}
 	}
 	called := false
 	stubClassifier(t, func(prompt string) (string, error) {
@@ -832,13 +974,13 @@ func TestCascadeConfigFnOverridesStatic(t *testing.T) {
 		t.Error("Stage 0 should have passed using ConfigFn's watched channels (classifier never ran)")
 	}
 
-	// And a message in the STATIC-only channel C1 must now drop (ConfigFn wins).
+	// And a message in C1 must now drop because ConfigFn mutes it (ConfigFn wins).
 	called = false
 	if err := c.Observe(context.Background(), msg("C1", "2.1", "U_OTHER", "hi")); err != nil {
 		t.Fatalf("Observe C1: %v", err)
 	}
 	if called {
-		t.Error("C1 is not in ConfigFn's set, so Stage 0 should drop it (classifier must not run)")
+		t.Error("C1 is muted in ConfigFn, so Stage 0 should drop it (classifier must not run)")
 	}
 }
 
@@ -851,8 +993,8 @@ func TestCascadeShouldObserveUsesLiveScope(t *testing.T) {
 		}
 	}
 
-	if c.ShouldObserve(msg("C_NOISE", "1.1", "U_OTHER", "plain noise")) {
-		t.Fatal("unwatched channel message without mention should not enter cascade")
+	if !c.ShouldObserve(msg("C_NOISE", "1.1", "U_OTHER", "plain noise")) {
+		t.Fatal("human Slack message should enter cascade even without watched-channel scope")
 	}
 	if !c.ShouldObserve(msg("C_WATCHED", "1.1", "U_OTHER", "watched")) {
 		t.Fatal("watched channel message should enter cascade")

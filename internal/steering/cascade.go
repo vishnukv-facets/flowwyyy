@@ -99,10 +99,9 @@ func (c *Cascade) watchConfig() WatchConfig {
 	return cfg
 }
 
-// ShouldObserve is the dispatcher's cheap prefilter. It mirrors only the Slack
-// scope rules that decide whether a message can ever be operator-relevant:
-// watched channel, DM/MPIM, direct mention, or operator self-reply for resolving
-// an open attention card. Full Stage 0 still owns mute/self/bot/drop reasoning.
+// ShouldObserve is the dispatcher's cheap prefilter. It filters only event
+// kinds that can never be operator-relevant. Full Stage 0 still owns
+// mute/self/bot/drop reasoning and Stage 1+ owns ambiguous relevance.
 func (c *Cascade) ShouldObserve(ev monitor.InboundEvent) bool {
 	if connectorOf(ev) == "github" {
 		return true
@@ -110,17 +109,7 @@ func (c *Cascade) ShouldObserve(ev monitor.InboundEvent) bool {
 	if ev.Kind != "message" && ev.Kind != "app_mention" {
 		return false
 	}
-	cfg := c.watchConfig()
-	if containsFold(cfg.Identity.UserIDs, ev.UserID) {
-		return true
-	}
-	if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
-		return true
-	}
-	if ev.Kind == "app_mention" || mentionsOperator(ev.Text, cfg.MentionUserIDs) {
-		return true
-	}
-	return cfg.WatchedChannels[ev.Channel]
+	return true
 }
 
 type autonomyTrace struct {
@@ -219,22 +208,30 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		return nil
 	}
 	tr.ThreadKey = s0.ThreadKey
-	if c.cache.seenFn(s0.ThreadKey, c.now()) {
+	cacheKey := verdictCacheKey(ev, s0.ThreadKey)
+	if c.cache.seenFn(cacheKey, c.now()) {
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate within verdict TTL"
 		c.emitTrace(tr, start)
 		return nil
 	}
 
 	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
+	if githubActionableSignal(ev, cleaned) {
+		t := true
+		tr.Stage1Relevant = &t
+		return c.finishItem(ctx, in, tr, start, ev, cacheKey)
+	}
 
-	rel, err := Stage1Relevance(ctx, []ClassifyInput{in})
+	stage1In := in
+	stage1In.ThreadKey = cacheKey
+	rel, err := Stage1Relevance(ctx, []ClassifyInput{stage1In})
 	if err != nil {
 		tr.Disposition, tr.StageReached, tr.Error = "error", "stage1", err.Error()
 		c.emitTrace(tr, start)
 		return fmt.Errorf("steering: stage1: %w", err)
 	}
 	if len(rel) == 0 || !rel[0].Relevant {
-		c.cache.mark(s0.ThreadKey, c.now())
+		c.cache.mark(cacheKey, c.now())
 		f := false
 		tr.Stage1Relevant = &f
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage1", "not relevant"
@@ -243,14 +240,14 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	}
 	t := true
 	tr.Stage1Relevant = &t
-	return c.finishItem(ctx, in, tr, start, ev)
+	return c.finishItem(ctx, in, tr, start, ev, cacheKey)
 }
 
 // finishItem runs the per-item tail of the cascade — task index → Stage 2 →
 // budget gate → Stage 3 deep triage → feed write — and emits a trace at every
 // exit. It assumes Stage 0/cache/Stage 1 have already passed and tr.ThreadKey
 // + tr.Stage1Relevant are set.
-func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time, ev monitor.InboundEvent) error {
+func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time, ev monitor.InboundEvent, cacheKey string) error {
 	taskIndex, err := BuildTaskIndex(c.DB)
 	if err != nil {
 		tr.Disposition, tr.StageReached, tr.Error = "error", "stage1", err.Error()
@@ -267,7 +264,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	tr.Stage2Action = string(v2.SuggestedAction)
 	tr.Stage2Confidence = v2.Confidence
 	if v2.SuggestedAction == ActionDrop {
-		c.cache.mark(in.ThreadKey, c.now())
+		c.cache.mark(cacheKey, c.now())
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage2", "stage2 action=drop"
 		c.emitTrace(tr, start)
 		return nil
@@ -278,7 +275,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	// Stage-2 verdict rather than silently deferring. Nothing is lost.
 	if !c.budget.allow(c.now()) {
 		c.log("deep-triage budget exhausted; surfacing stage2 verdict for %s", in.ThreadKey)
-		c.cache.mark(in.ThreadKey, c.now())
+		c.cache.mark(cacheKey, c.now())
 		c.applyExistingTaskMatch(&v2, ev)
 		id, werr := c.writeFeed(v2, ev, pack)
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
@@ -300,7 +297,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.Stage3Confidence = v3.Confidence
 		tr.StageReached = "stage3"
 	}
-	c.cache.mark(in.ThreadKey, c.now())
+	c.cache.mark(cacheKey, c.now())
 	c.applyExistingTaskMatch(&v3, ev)
 	// A deep-triage 'drop' verdict is noise the cascade itself rejected — it
 	// belongs in the trace (for transparency), never as a feed card nagging the
@@ -374,13 +371,16 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		cfg = c.ConfigFn()
 	}
 	type pending struct {
-		in    ClassifyInput
-		tr    *flowdb.SteeringTrace
-		start time.Time
-		ev    monitor.InboundEvent
+		in       ClassifyInput
+		stage1In ClassifyInput
+		cacheKey string
+		tr       *flowdb.SteeringTrace
+		start    time.Time
+		ev       monitor.InboundEvent
 	}
 	var survivors []pending
 	var inputs []ClassifyInput
+	var firstErr error
 	for _, ev := range evs {
 		start := c.now()
 		cleaned := c.cleanText(ctx, ev.Text)
@@ -395,17 +395,28 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 			continue
 		}
 		tr.ThreadKey = s0.ThreadKey
-		if c.cache.seenFn(s0.ThreadKey, c.now()) {
+		cacheKey := verdictCacheKey(ev, s0.ThreadKey)
+		if c.cache.seenFn(cacheKey, c.now()) {
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate within verdict TTL"
 			c.emitTrace(tr, start)
 			continue
 		}
 		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
-		survivors = append(survivors, pending{in, tr, start, ev})
-		inputs = append(inputs, in)
+		if githubActionableSignal(ev, cleaned) {
+			t := true
+			tr.Stage1Relevant = &t
+			if e := c.finishItem(ctx, in, tr, start, ev, cacheKey); e != nil && firstErr == nil {
+				firstErr = e
+			}
+			continue
+		}
+		stage1In := in
+		stage1In.ThreadKey = cacheKey
+		survivors = append(survivors, pending{in: in, stage1In: stage1In, cacheKey: cacheKey, tr: tr, start: start, ev: ev})
+		inputs = append(inputs, stage1In)
 	}
 	if len(inputs) == 0 {
-		return nil
+		return firstErr
 	}
 	rel, err := Stage1Relevance(ctx, inputs)
 	if err != nil {
@@ -419,10 +430,9 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 	for _, v := range rel {
 		relByKey[v.ThreadKey] = v.Relevant
 	}
-	var firstErr error
 	for _, p := range survivors {
-		if !relByKey[p.in.ThreadKey] {
-			c.cache.mark(p.in.ThreadKey, c.now())
+		if !relByKey[p.stage1In.ThreadKey] {
+			c.cache.mark(p.cacheKey, c.now())
 			f := false
 			p.tr.Stage1Relevant = &f
 			p.tr.Disposition, p.tr.StageReached, p.tr.DropReason = "dropped", "stage1", "not relevant"
@@ -431,11 +441,92 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		}
 		t := true
 		p.tr.Stage1Relevant = &t
-		if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev); e != nil && firstErr == nil {
+		if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev, p.cacheKey); e != nil && firstErr == nil {
 			firstErr = e
 		}
 	}
 	return firstErr
+}
+
+func verdictCacheKey(ev monitor.InboundEvent, threadKey string) string {
+	threadKey = strings.TrimSpace(threadKey)
+	if connectorOf(ev) != "github" {
+		return eventLevelVerdictCacheKey(ev, threadKey)
+	}
+	if key := strings.TrimSpace(ev.EventKey); key != "" {
+		return threadKey + ":event:" + key
+	}
+	if !githubEventLevelCacheKind(ev.Kind) {
+		return threadKey
+	}
+	if url := strings.TrimSpace(ev.URL); url != "" {
+		return threadKey + ":event-url:" + url
+	}
+	fingerprint := strings.Join([]string{
+		strings.TrimSpace(ev.Kind),
+		strings.TrimSpace(ev.TS),
+		strings.TrimSpace(ev.UserID),
+		strings.TrimSpace(ev.Text),
+	}, "\x1f")
+	if fingerprint == "\x1f\x1f\x1f" {
+		return threadKey
+	}
+	return threadKey + ":event:" + shortHash(fingerprint)
+}
+
+func eventLevelVerdictCacheKey(ev monitor.InboundEvent, threadKey string) string {
+	if key := strings.TrimSpace(ev.EventKey); key != "" {
+		return threadKey + ":event:" + key
+	}
+	ts := strings.TrimSpace(ev.TS)
+	if ts != "" && ts != strings.TrimSpace(ev.ThreadTS) {
+		return threadKey + ":event-ts:" + ts
+	}
+	return threadKey
+}
+
+func githubEventLevelCacheKind(kind string) bool {
+	switch kind {
+	case "pr_head_updated", "pr_merged", "pr_closed", "pr_review_requested",
+		"pr_review_comment", "pr_review_changes_requested", "pr_review_approved",
+		"pr_comment", "issue_comment":
+		return true
+	default:
+		return false
+	}
+}
+
+func githubActionableSignal(ev monitor.InboundEvent, text string) bool {
+	if connectorOf(ev) != "github" {
+		return false
+	}
+	switch ev.Kind {
+	case "pr_review_comment", "pr_review_changes_requested", "pr_comment", "issue_comment":
+	default:
+		return false
+	}
+	author := strings.ToLower(strings.TrimSpace(ev.UserID))
+	if !strings.Contains(author, "coderabbit") {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" || strings.Contains(lower, "no actionable comments") {
+		return false
+	}
+	for _, marker := range []string{
+		"potential issue",
+		"actionable comments posted",
+		"changes requested",
+		"should-fix",
+		"must-fix",
+		"critical",
+		"major",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // cleanText rewrites connector markup (Slack <@U…> mentions, etc.) to human

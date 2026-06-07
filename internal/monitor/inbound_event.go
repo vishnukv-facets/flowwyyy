@@ -35,6 +35,7 @@ type InboundEvent struct {
 	UserID      string `json:"user_id,omitempty"`
 	Text        string `json:"text,omitempty"`
 	URL         string `json:"url,omitempty"`
+	EventKey    string `json:"event_key,omitempty"`
 	Reaction    string `json:"reaction,omitempty"`
 	ItemChannel string `json:"item_channel,omitempty"`
 	ItemTS      string `json:"item_ts,omitempty"`

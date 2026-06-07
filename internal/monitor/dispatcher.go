@@ -46,8 +46,9 @@ type MessageObserver interface {
 }
 
 // ScopedMessageObserver can cheaply decline events before they enter a heavier
-// observer. The steering cascade uses this to keep unwatched Slack channel
-// traffic out of the decision trace entirely.
+// observer. The steering cascade uses this only for deterministic prefilters
+// such as unsupported event kinds; ambiguous relevance is handled inside the
+// cascade.
 type ScopedMessageObserver interface {
 	MessageObserver
 	ShouldObserve(ev InboundEvent) bool
@@ -162,9 +163,9 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 	// specific conversation, not the whole DM channel.
 	//
 	// Untracked conversation — not owned by the reaction pipeline. Hand it to the
-	// steerer (if wired) to triage. Scoped observers can cheaply decline obvious
-	// out-of-watch-list traffic before it writes decision traces; Stage 0 still
-	// owns the full deterministic policy for accepted candidates.
+	// steerer (if wired) to triage. Scoped observers can cheaply decline event
+	// kinds that can never be relevant; Stage 0 still owns deterministic drops
+	// and the classifier owns ambiguous relevance.
 	if d.Steerer != nil {
 		if scoped, ok := d.Steerer.(ScopedMessageObserver); ok && !scoped.ShouldObserve(ev) {
 			return nil

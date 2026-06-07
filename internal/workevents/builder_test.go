@@ -86,6 +86,20 @@ func TestBuildClassifiesGitHubTaskLinkedInboxEvents(t *testing.T) {
 	}
 }
 
+func TestInboxEventKeyPrefersConnectorEventKey(t *testing.T) {
+	got := inboxEventKey("raptor-airgapped", monitor.InboxEntry{
+		EnqueuedAt: "2026-06-07T10:00:00Z",
+		Event: monitor.InboundEvent{
+			Kind: "pr_review_comment", ChannelType: "github",
+			Channel: "facets-cloud/raptor", ThreadTS: "gh-pr:facets-cloud/raptor#159",
+			TS: "2026-06-07T09:58:19Z", EventKey: "review-comment:PRRC_1",
+		},
+	})
+	if got != "raptor-airgapped:review-comment:PRRC_1" {
+		t.Fatalf("inboxEventKey = %q, want connector event key", got)
+	}
+}
+
 func TestBuildClassifiesGitHubReviewRequestAsNeedsAction(t *testing.T) {
 	db, root := testDB(t)
 	seedProject(t, db)

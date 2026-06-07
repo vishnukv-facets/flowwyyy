@@ -334,6 +334,9 @@ func inboxEntityKind(ev monitor.InboundEvent, source string) string {
 
 func inboxEventKey(taskSlug string, entry monitor.InboxEntry) string {
 	ev := entry.Event
+	if strings.TrimSpace(ev.EventKey) != "" {
+		return strings.Join([]string{taskSlug, ev.EventKey}, ":")
+	}
 	return strings.Join([]string{taskSlug, ev.Kind, ev.Channel, ev.ThreadTS, ev.TS, entry.EnqueuedAt}, ":")
 }
 

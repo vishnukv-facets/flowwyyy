@@ -44,9 +44,9 @@ func TestStage0(t *testing.T) {
 			wantPass: true, wantKey: "C_OTHER:3.5",
 		},
 		{
-			name:     "unwatched channel no mention drops",
+			name:     "unwatched channel no mention passes to classifier",
 			ev:       monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_OTHER", TS: "4.1", ThreadTS: "4.0", UserID: "U_OTHER", Text: "random chatter"},
-			wantPass: false,
+			wantPass: true, wantKey: "C_OTHER:4.0",
 		},
 		{
 			name:     "self-authored drops",

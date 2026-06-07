@@ -23,7 +23,7 @@ func (c *Cascade) Retriage(ctx context.Context, item flowdb.FeedItem) error {
 	relevant := true
 	tr.Stage1Relevant = &relevant
 	in := ClassifyInput{ThreadKey: item.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
-	return c.finishItem(ctx, in, tr, c.now(), ev)
+	return c.finishItem(ctx, in, tr, c.now(), ev, item.ThreadKey)
 }
 
 // feedItemToEvent reconstructs the InboundEvent a feed item came from, enough for

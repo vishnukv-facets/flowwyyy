@@ -32,3 +32,18 @@ func TestGitHubEventKindClassification(t *testing.T) {
 		t.Errorf("pr_involved LinkTag = %q, want gh-pr:o/r#5", got)
 	}
 }
+
+func TestGitHubEventToInboxEventCarriesEventKey(t *testing.T) {
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewComment, Owner: "o", Repo: "r", Number: 5,
+		Author: "coderabbitai[bot]", Body: "Potential issue", URL: "https://github.com/o/r/pull/5#discussion_r1",
+		CommentID: "PRRC_1", EventKey: "review-comment:PRRC_1",
+	}
+	got := gitHubEventToInboxEvent(ev)
+	if got.EventKey != "review-comment:PRRC_1" {
+		t.Fatalf("EventKey = %q, want poller event key", got.EventKey)
+	}
+	if got.ThreadTS != "gh-pr:o/r#5" || got.Channel != "o/r" {
+		t.Fatalf("thread fields = channel %q thread %q, want o/r gh-pr:o/r#5", got.Channel, got.ThreadTS)
+	}
+}

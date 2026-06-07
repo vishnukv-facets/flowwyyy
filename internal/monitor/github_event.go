@@ -188,6 +188,7 @@ func gitHubEventToInboxEvent(ev GitHubEvent) InboundEvent {
 		UserID:      strings.TrimSpace(ev.Author),
 		Text:        strings.TrimSpace(ev.Body),
 		URL:         strings.TrimSpace(ev.URL),
+		EventKey:    ev.EventKeyValue(),
 		ItemChannel: ev.RepoKey(),
 		ItemTS:      fmt.Sprintf("%d", ev.Number),
 		ItemAuthor:  strings.TrimSpace(ev.Author),
