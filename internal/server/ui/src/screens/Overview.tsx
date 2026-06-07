@@ -162,7 +162,7 @@ function BriefingPanel({ briefing, onOpen }: { briefing?: Briefing; onOpen: (hre
 
 function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: string) => void }) {
   const primary = primaryBriefingHref(item)
-  const meta = [item.project, item.source, item.urgency, item.action ? `action: ${item.action}` : ''].filter(Boolean).join(' · ')
+  const meta = [item.action, item.project, item.source, item.urgency].filter(Boolean).join(' · ')
   return (
     <div className="briefing-row" {...(primary ? clickable(() => onOpen(primary)) : {})}>
       <div className="briefing-row-top">
@@ -276,7 +276,7 @@ function MiniCalendar({ days }: { days: TokenDay[] }) {
       {portal}
       <div className="cal-months" style={{ gridTemplateColumns: `repeat(${weeks.length}, 15px)` }}>
         {monthLabels.map((m, i) => (
-          <span key={i}>{m}</span>
+          <span key={weeks[i]?.[0]?.date ?? `month-${i}`}>{m}</span>
         ))}
       </div>
       <div className="cal-body">
@@ -429,7 +429,7 @@ function AgendaBuckets({ due, onOpen }: { due: DueBuckets; onOpen: (slug: string
             </div>
             <div className="rows">
               {g.tasks.map((t) => (
-                <div key={t.slug} className="lrow" onClick={() => onOpen(t.slug)}>
+                <div key={t.slug} className="lrow" aria-label={`Open ${t.name}`} {...clickable(() => onOpen(t.slug))}>
                   <span className={`prio ${t.priority}`} />
                   <ProviderIcon provider={t.session_provider} size={14} />
                   <div className="lrow-main">
@@ -535,7 +535,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
       <div className="bento-head">
         <span className="eyebrow"><TrendingUp size={13} /> Trends</span>
         <div className="spacer" />
-        <span className="faint mono" style={{ fontSize: 10 }}>12 weeks</span>
+        <span className="faint mono" style={{ fontSize: 12 }}>12 weeks</span>
       </div>
       <div className="trend-row">
         <div className="trend-label">
@@ -580,7 +580,7 @@ function ProjectProgressCard({ projects, onOpen }: { projects: ProjectMC[]; onOp
           {shown.map((p) => {
             const pct = Math.round((p.tasks.done / p.tasks.total) * 100)
             return (
-              <div key={p.slug} className="proj-prog" onClick={() => onOpen(p.slug)}>
+              <div key={p.slug} className="proj-prog" aria-label={`Open project ${p.name}`} {...clickable(() => onOpen(p.slug))}>
                 <div className="proj-prog-head">
                   <span className="clip">{p.name}</span>
                   <span className="faint mono">{p.tasks.done}/{p.tasks.total}</span>
@@ -841,7 +841,7 @@ export function Overview() {
             <div className="bento-head">
               <span className="eyebrow"><Activity size={13} /> Activity</span>
               <div className="spacer" />
-              <span className="faint mono" style={{ fontSize: 10 }}>tasks · 28d</span>
+              <span className="faint mono" style={{ fontSize: 12 }}>tasks · 28d</span>
             </div>
             <ActivityBars days={ui.ACTIVITY_HEATMAP} />
             <div className="hairline" style={{ margin: '14px 0' }} />
@@ -876,7 +876,7 @@ export function Overview() {
                     </div>
                   </div>
                   <div className="col" style={{ alignItems: 'flex-end', gap: 3 }}>
-                    <span className="faint mono" style={{ fontSize: 10 }}>{ago(entry.timestamp)}</span>
+                    <span className="faint mono" style={{ fontSize: 12 }}>{ago(entry.timestamp)}</span>
                     {unread > 1 && <span className="tag">{unread} new</span>}
                   </div>
                 </div>

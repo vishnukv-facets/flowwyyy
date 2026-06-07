@@ -87,6 +87,164 @@ func TestBuildSeparatesNeedsActionFromFYIAndLinksEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildRoutesDigestOnlyAttentionToFYI(t *testing.T) {
+	db, root := briefingTestDB(t)
+	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "feed-leave", Source: "slack", ThreadKey: "C1:200.1",
+		Summary: "Rohit is on leave tomorrow", SuggestedAction: "digest_only",
+		Urgency: "low", Confidence: 0.82, URL: "https://example.slack.com/archives/C1/p2001",
+		Status: "new", CreatedAt: "2026-06-07T08:15:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "trace-leave", CreatedAt: "2026-06-07T08:15:01Z", Origin: "live",
+		Source: "slack", ThreadKey: "C1:200.1", Disposition: "surfaced",
+		StageReached: "stage3", FinalAction: "digest_only", FinalConfidence: 0.82,
+		FeedItemID: "feed-leave",
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	got, err := Build(db, root, Options{Now: now, Since: now.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, ok := findItem(got.NeedsAction, "attention", "feed-leave"); ok {
+		t.Fatalf("digest-only attention item should not be needs-action: %+v", got.NeedsAction)
+	}
+	fyi := requireItem(t, got.FYI, "attention", "feed-leave")
+	if fyi.Action != "No action" {
+		t.Fatalf("FYI Action = %q, want No action", fyi.Action)
+	}
+	requireLink(t, fyi, "attention", "feed-leave")
+	requireLink(t, fyi, "source", "https://example.slack.com/archives/C1/p2001")
+	requireLink(t, fyi, "trace", "trace-leave")
+}
+
+func TestBuildRoutesAttentionMatchedToWaitingTask(t *testing.T) {
+	db, root := briefingTestDB(t)
+	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+
+	seedBriefingProject(t, db, root, "flow-manager")
+	seedBriefingTask(t, db, root, taskSeed{
+		Slug: "raptor-review", Name: "Raptor PR review", Status: "in-progress",
+		Priority: "high", Project: "flow-manager", WaitingOn: "Rohit review on PR #159",
+		UpdatedAt: "2026-06-07T07:00:00Z",
+	})
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "feed-rohit-leave", Source: "slack", ThreadKey: "C1:300.1",
+		Summary: "Rohit is on leave tomorrow", SuggestedAction: "forward",
+		MatchedTask: "raptor-review", SuggestedProject: "flow-manager",
+		Urgency: "normal", Confidence: 0.89, URL: "https://example.slack.com/archives/C1/p3001",
+		Status: "new", CreatedAt: "2026-06-07T08:30:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "trace-rohit-leave", CreatedAt: "2026-06-07T08:30:01Z", Origin: "live",
+		Source: "slack", ThreadKey: "C1:300.1", Disposition: "surfaced",
+		StageReached: "stage3", FinalAction: "forward", FinalConfidence: 0.89,
+		FeedItemID: "feed-rohit-leave",
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	got, err := Build(db, root, Options{Now: now, Since: now.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, ok := findItem(got.NeedsAction, "attention", "feed-rohit-leave"); ok {
+		t.Fatalf("waiting-task attention item should not be needs-action: %+v", got.NeedsAction)
+	}
+	waiting := requireItem(t, got.Waiting, "attention", "feed-rohit-leave")
+	if waiting.Action != "Review affected task" {
+		t.Fatalf("Waiting Action = %q, want Review affected task", waiting.Action)
+	}
+	if !strings.Contains(waiting.Detail, "Affects waiting task: Raptor PR review") {
+		t.Fatalf("Waiting Detail = %q, want affected task name", waiting.Detail)
+	}
+	requireLink(t, waiting, "attention", "feed-rohit-leave")
+	requireLink(t, waiting, "task", "raptor-review")
+	requireLink(t, waiting, "source", "https://example.slack.com/archives/C1/p3001")
+	requireLink(t, waiting, "trace", "trace-rohit-leave")
+}
+
+func TestBuildKeepsReplyAttentionForWaitingTaskInNeedsAction(t *testing.T) {
+	db, root := briefingTestDB(t)
+	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+
+	seedBriefingProject(t, db, root, "flow-manager")
+	seedBriefingTask(t, db, root, taskSeed{
+		Slug: "blocked-review", Name: "Blocked review", Status: "in-progress",
+		Priority: "high", Project: "flow-manager", WaitingOn: "Rohit review",
+		UpdatedAt: "2026-06-07T07:00:00Z",
+	})
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "feed-reply", Source: "slack", ThreadKey: "C1:400.1",
+		Summary: "Reply needed on review thread", SuggestedAction: "reply",
+		MatchedTask: "blocked-review", SuggestedProject: "flow-manager",
+		Urgency: "urgent", Confidence: 0.91, URL: "https://example.slack.com/archives/C1/p4001",
+		Status: "new", CreatedAt: "2026-06-07T08:45:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+
+	got, err := Build(db, root, Options{Now: now, Since: now.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, ok := findItem(got.Waiting, "attention", "feed-reply"); ok {
+		t.Fatalf("reply attention item should stay needs-action, not waiting: %+v", got.Waiting)
+	}
+	reply := requireItem(t, got.NeedsAction, "attention", "feed-reply")
+	if reply.Action != "Review reply" {
+		t.Fatalf("NeedsAction Action = %q, want Review reply", reply.Action)
+	}
+	requireLink(t, reply, "attention", "feed-reply")
+	requireLink(t, reply, "task", "blocked-review")
+}
+
+func TestBuildRoutesDigestOnlyMatchedNonWaitingTaskToFYI(t *testing.T) {
+	db, root := briefingTestDB(t)
+	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)
+
+	seedBriefingProject(t, db, root, "flow-manager")
+	seedBriefingTask(t, db, root, taskSeed{
+		Slug: "deploy-followup", Name: "Follow up on deploy", Status: "in-progress",
+		Priority: "medium", Project: "flow-manager", UpdatedAt: "2026-06-07T07:00:00Z",
+	})
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "feed-digest-matched", Source: "slack", ThreadKey: "C1:500.1",
+		Summary: "Deploy FYI only", SuggestedAction: "digest_only",
+		MatchedTask: "deploy-followup", SuggestedProject: "flow-manager",
+		Urgency: "low", Confidence: 0.78, URL: "https://example.slack.com/archives/C1/p5001",
+		Status: "new", CreatedAt: "2026-06-07T08:50:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed item: %v", err)
+	}
+
+	got, err := Build(db, root, Options{Now: now, Since: now.Add(-24 * time.Hour)})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if _, ok := findItem(got.NeedsAction, "attention", "feed-digest-matched"); ok {
+		t.Fatalf("digest-only matched attention item should be FYI, not needs-action: %+v", got.NeedsAction)
+	}
+	fyi := requireItem(t, got.FYI, "attention", "feed-digest-matched")
+	if fyi.Action != "No action" {
+		t.Fatalf("FYI Action = %q, want No action", fyi.Action)
+	}
+	requireLink(t, fyi, "attention", "feed-digest-matched")
+	requireLink(t, fyi, "task", "deploy-followup")
+}
+
 func TestBriefingSkipsOrphanTaskUpdateDirectory(t *testing.T) {
 	db, root := briefingTestDB(t)
 	now := time.Date(2026, 6, 7, 9, 0, 0, 0, time.UTC)

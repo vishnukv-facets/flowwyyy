@@ -81,6 +81,7 @@ func New(cfg Config) *Server {
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).
 		if s.nameResolver != nil {
 			cascade.TextClean = s.nameResolver.CleanText
+			cascade.ResolveUserName = s.nameResolver.UserName
 		}
 		cascade.FetchContext = steering.NewDefaultContextFetcher(cascade.TextClean, s.slackPermalinker)
 		dispatcher.Steerer = cascade

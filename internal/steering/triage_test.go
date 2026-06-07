@@ -54,6 +54,181 @@ func TestDeepTriagePromptUsesContextPackAsPrimaryInput(t *testing.T) {
 	}
 }
 
+func TestDeepTriagePromptHidesInternalFetchErrorsAndRawSlackIDs(t *testing.T) {
+	pack := ThreadContext{
+		Source:      "slack",
+		ThreadKey:   "C1:1780000000.000100",
+		FetchStatus: "error",
+		FetchError:  "slack context fetch: not_in_channel",
+		Parent: &ContextMessage{
+			Kind:   "event",
+			Author: "U01RTHXK7EJ",
+			Text:   "I'll be on leave tomorrow and the day after.",
+			TS:     "1780000000.000100",
+		},
+		Participants: []string{"U01RTHXK7EJ"},
+		Timestamps:   []string{"1780000000.000100"},
+		Summary:      "1 Slack message from U01RTHXK7EJ",
+	}
+	prompt := deepTriagePromptWithContext(
+		ClassifyInput{
+			ThreadKey: "C1:1780000000.000100",
+			Source:    "slack",
+			Author:    "U01RTHXK7EJ",
+			Text:      "I'll be on leave tomorrow and the day after.",
+		},
+		"Tasks:\n(none)",
+		pack,
+	)
+	if !strings.Contains(prompt, "I'll be on leave tomorrow and the day after.") {
+		t.Fatalf("deep prompt must keep the fallback event text:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, `"fetch_status":"error"`) {
+		t.Fatalf("deep prompt should keep the coarse fetch status for confidence calibration:\n%s", prompt)
+	}
+	for _, leak := range []string{"not_in_channel", "slack context fetch", "U01RTHXK7EJ"} {
+		if strings.Contains(prompt, leak) {
+			t.Fatalf("deep prompt leaked %q into model-facing input:\n%s", leak, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "Do not mention context fetch failures") {
+		t.Fatalf("deep prompt must explicitly keep fetch failures out of operator-facing verdict text:\n%s", prompt)
+	}
+}
+
+func TestDeepTriagePromptScrubsRawSlackIDsFromTextFields(t *testing.T) {
+	const rawUserID = "U01RTHXK7EJ"
+	pack := ThreadContext{
+		Source:      "slack",
+		ThreadKey:   "C1:1780000000.000100",
+		FetchStatus: "ok",
+		Parent: &ContextMessage{
+			Kind:   "event",
+			Author: "Rohit Raveendran",
+			Text:   rawUserID + " is on leave tomorrow.",
+			TS:     "1780000000.000100",
+		},
+		Messages: []ContextMessage{{
+			Kind:   "reply",
+			Author: "teammate",
+			Text:   "Please tell " + rawUserID + " about the review.",
+			TS:     "1780000000.000200",
+		}},
+		Participants: []string{"Rohit Raveendran", "teammate"},
+		Timestamps:   []string{"1780000000.000100", "1780000000.000200"},
+		Summary:      "2 Slack messages from Rohit Raveendran, teammate",
+	}
+	prompt := deepTriagePromptWithContext(
+		ClassifyInput{
+			ThreadKey: "C1:1780000000.000100",
+			Source:    "slack",
+			Author:    "Rohit Raveendran",
+			Text:      rawUserID + " is unavailable today.",
+		},
+		"Tasks:\n(none)",
+		pack,
+	)
+	if strings.Contains(prompt, rawUserID) {
+		t.Fatalf("deep prompt leaked raw Slack user ID from text fields:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Slack participant is unavailable today") ||
+		!strings.Contains(prompt, "Slack participant is on leave tomorrow") ||
+		!strings.Contains(prompt, "Please tell Slack participant about the review") {
+		t.Fatalf("deep prompt should keep sanitized text meaning:\n%s", prompt)
+	}
+}
+
+func TestDeepTriagePromptIncludesTaskImpactHints(t *testing.T) {
+	pack := ThreadContext{
+		Source:      "slack",
+		ThreadKey:   "C1:1780000000.000100",
+		FetchStatus: "ok",
+		Parent: &ContextMessage{
+			Kind:   "event",
+			Author: "Rohit Raveendran",
+			Text:   "I'll be on leave tomorrow and the day after.",
+			TS:     "1780000000.000100",
+		},
+		Participants: []string{"Rohit Raveendran"},
+		Timestamps:   []string{"1780000000.000100"},
+		Summary:      "1 Slack message from Rohit Raveendran",
+	}
+	hints := []TaskImpactHint{{
+		TaskSlug: "raptor-review",
+		TaskName: "Raptor review",
+		Status:   "in-progress",
+		Priority: "high",
+		Strength: "strong",
+		Reason:   "waiting_on mentions Rohit Raveendran",
+		Evidence: "Rohit review on PR #159",
+	}}
+	prompt := deepTriagePromptWithContextAndHints(
+		ClassifyInput{
+			ThreadKey: "C1:1780000000.000100",
+			Source:    "slack",
+			Author:    "Rohit Raveendran",
+			Text:      "I'll be on leave tomorrow and the day after.",
+		},
+		"Tasks:\n- raptor-review (in-progress): Raptor review",
+		pack,
+		hints,
+	)
+	for _, want := range []string{
+		"Task-impact hints (JSON):",
+		`"task_slug":"raptor-review"`,
+		"waiting_on mentions Rohit Raveendran",
+		"Read task-impact hints",
+		"Availability/FYI events are not automatically actionable",
+		"set matched_task to the strongest affected task",
+		`Use "forward" when the affected task/session should know`,
+		`Use "digest_only" when there is no affected task and no reply needed`,
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("deep prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	taskIndexAt := strings.Index(prompt, "Operator task/project index:")
+	hintsAt := strings.Index(prompt, "Task-impact hints (JSON):")
+	contextAt := strings.Index(prompt, "Context pack (JSON):")
+	if taskIndexAt < 0 || hintsAt < 0 || contextAt < 0 {
+		t.Fatalf("deep prompt missing expected sections:\n%s", prompt)
+	}
+	if !(taskIndexAt < hintsAt && hintsAt < contextAt) {
+		t.Fatalf("deep prompt sections out of order: taskIndex=%d hints=%d context=%d\n%s", taskIndexAt, hintsAt, contextAt, prompt)
+	}
+}
+
+func TestDeepTriagePromptScrubsTaskImpactHintFields(t *testing.T) {
+	const rawUserID = "U01RTHXK7EJ"
+	prompt := deepTriagePromptWithContextAndHints(
+		ClassifyInput{
+			ThreadKey: "C1:1780000000.000100",
+			Source:    "slack",
+			Author:    "Rohit Raveendran",
+			Text:      "Rohit is on leave tomorrow.",
+		},
+		"Tasks:\n- raptor-review (in-progress): Raptor review",
+		ThreadContext{Source: "slack", ThreadKey: "C1:1780000000.000100", FetchStatus: "ok"},
+		[]TaskImpactHint{{
+			TaskSlug: "raptor-review",
+			TaskName: "Review task for " + rawUserID,
+			Status:   "in-progress",
+			Priority: "high",
+			Strength: "strong",
+			Reason:   "waiting_on mentions " + rawUserID,
+			Evidence: rawUserID + " review on PR #159",
+		}},
+	)
+	if strings.Contains(prompt, rawUserID) {
+		t.Fatalf("deep prompt leaked raw Slack user ID from task-impact hints:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Review task for Slack participant") ||
+		!strings.Contains(prompt, "waiting_on mentions Slack participant") ||
+		!strings.Contains(prompt, "Slack participant review on PR #159") {
+		t.Fatalf("deep prompt should keep sanitized task-impact hint meaning:\n%s", prompt)
+	}
+}
+
 func TestPromptsInstructUseNamesNotIDs(t *testing.T) {
 	const want = "never output raw platform IDs"
 	if !strings.Contains(stage1Prime(), want) {

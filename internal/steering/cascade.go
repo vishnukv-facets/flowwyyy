@@ -38,6 +38,11 @@ type Cascade struct {
 	// a Slack-aware cleaner is a no-op on GitHub text.
 	TextClean func(ctx context.Context, text string) string
 
+	// ResolveUserName, when set, resolves connector user IDs (Slack U… IDs) to
+	// display names for deterministic task-impact hints. It must return "" when
+	// resolution fails; raw IDs are not useful person names.
+	ResolveUserName func(context.Context, string) string
+
 	// Autonomy is the per-action auto-act policy. AutonomyFn, when set, reads it
 	// live (so Settings changes take effect without a restart); else the static
 	// Autonomy is used. NewCascade seeds Autonomy with DefaultAutonomy (every
@@ -257,6 +262,15 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	tr.Stage2Action = string(v2.SuggestedAction)
 	tr.Stage2Confidence = v2.Confidence
 	pack := c.contextPack(ctx, ev)
+	hints, hintErr := BuildTaskImpactHints(c.DB, TaskImpactInput{
+		Source: in.Source,
+		People: c.taskImpactPeople(ctx, in, ev, pack),
+		Text:   in.Text,
+	})
+	if hintErr != nil {
+		tr.Error = appendCascadeError(tr.Error, "task impact hints failed: "+hintErr.Error())
+		hints = nil
+	}
 
 	// Backpressure: when the deep-triage budget is exhausted, surface the cheap
 	// Stage-2 verdict rather than silently deferring. Nothing is lost.
@@ -280,10 +294,10 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		return werr
 	}
 
-	v3, err := DeepTriageWithContext(ctx, in, taskIndex, pack)
+	v3, err := DeepTriageWithContextAndHints(ctx, in, taskIndex, pack, hints)
 	if err != nil {
 		c.log("deep triage failed for %s: %v; falling back to stage2 verdict", in.ThreadKey, err)
-		tr.Error = "deep triage failed: " + err.Error() + "; fell back to stage2"
+		tr.Error = appendCascadeError(tr.Error, "deep triage failed: "+err.Error()+"; fell back to stage2")
 		v3 = v2
 		tr.StageReached = "stage2"
 	} else {
@@ -559,6 +573,18 @@ func dropReasonFromVerdict(prefix string, v Verdict) string {
 	return prefix + ": " + reason
 }
 
+func appendCascadeError(existing, msg string) string {
+	existing = strings.TrimSpace(existing)
+	msg = strings.TrimSpace(msg)
+	if existing == "" {
+		return msg
+	}
+	if msg == "" {
+		return existing
+	}
+	return existing + "; " + msg
+}
+
 // cleanText rewrites connector markup (Slack <@U…> mentions, etc.) to human
 // names before the text reaches the classifier/LLM and the trace. nil = the
 // text passes through unchanged.
@@ -567,6 +593,88 @@ func (c *Cascade) cleanText(ctx context.Context, text string) string {
 		return c.TextClean(ctx, text)
 	}
 	return text
+}
+
+func (c *Cascade) taskImpactPeople(ctx context.Context, in ClassifyInput, ev monitor.InboundEvent, pack ThreadContext) []string {
+	seen := map[string]bool{}
+	var people []string
+	add := func(raw string) {
+		name := c.taskImpactPersonName(ctx, raw)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		people = append(people, name)
+	}
+
+	add(in.Author)
+	add(ev.UserID)
+	if pack.Parent != nil {
+		add(pack.Parent.Author)
+	}
+	for _, msg := range pack.Messages {
+		add(msg.Author)
+	}
+	for _, participant := range pack.Participants {
+		add(participant)
+	}
+	return people
+}
+
+func (c *Cascade) taskImpactPersonName(ctx context.Context, raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if c.ResolveUserName != nil {
+		if name := cleanImpactPersonName(c.ResolveUserName(ctx, raw)); usableImpactPersonName(name) {
+			return name
+		}
+	}
+	cleaned := raw
+	if c.TextClean != nil {
+		cleaned = c.TextClean(ctx, raw)
+	}
+	cleaned = cleanImpactPersonName(cleaned)
+	if !usableImpactPersonName(cleaned) {
+		return ""
+	}
+	return cleaned
+}
+
+func cleanImpactPersonName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.TrimPrefix(name, "@")
+	return strings.TrimSpace(name)
+}
+
+func usableImpactPersonName(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" || rawSlackPersonID(name) {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "user", "unknown", "the sender", "slack user", "slack participant":
+		return false
+	default:
+		return true
+	}
+}
+
+func rawSlackPersonID(name string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	if operatorSlackUserIDRE.MatchString(name) && operatorSlackUserIDRE.ReplaceAllString(name, "") == "" {
+		return true
+	}
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "U_") || strings.HasPrefix(upper, "W_")
 }
 
 // newTrace seeds a decision-trace row from the inbound event with the fields
@@ -613,7 +721,7 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadConte
 		ID:                c.newID(),
 		Source:            v.Source,
 		ThreadKey:         v.ThreadKey,
-		Summary:           v.Summary,
+		Summary:           SanitizeOperatorText(v.Summary),
 		SuggestedAction:   string(v.SuggestedAction),
 		MatchedTask:       v.MatchedTask,
 		SuggestedProject:  v.SuggestedProject,
@@ -621,8 +729,8 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadConte
 		Urgency:           string(v.Urgency),
 		IsVIP:             v.IsVIP,
 		Confidence:        v.Confidence,
-		Draft:             v.Draft,
-		Reason:            v.Reason,
+		Draft:             SanitizeOperatorText(v.Draft),
+		Reason:            SanitizeOperatorText(v.Reason),
 		ContextJSON:       contextJSON(pack),
 		Channel:           ev.Channel,
 		ChannelType:       ev.ChannelType,

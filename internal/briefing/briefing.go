@@ -95,7 +95,9 @@ func Build(db *sql.DB, flowRoot string, opts Options) (Briefing, error) {
 	if err != nil {
 		return Briefing{}, err
 	}
-	out.NeedsAction = append(out.NeedsAction, attention...)
+	out.NeedsAction = append(out.NeedsAction, attention.NeedsAction...)
+	out.Waiting = append(out.Waiting, attention.Waiting...)
+	out.FYI = append(out.FYI, attention.FYI...)
 	for _, item := range taskActionItems(db, tasks, projects, opts) {
 		switch item.Kind {
 		case "waiting":
@@ -151,12 +153,22 @@ func projectNames(db *sql.DB) (map[string]string, error) {
 	return out, nil
 }
 
-func attentionItems(db *sql.DB, tasks map[string]*flowdb.Task) ([]Item, error) {
+type attentionBuckets struct {
+	NeedsAction []Item
+	Waiting     []Item
+	FYI         []Item
+}
+
+func attentionItems(db *sql.DB, tasks map[string]*flowdb.Task) (attentionBuckets, error) {
 	rows, err := flowdb.ListFeedItems(db, "new")
 	if err != nil {
-		return nil, err
+		return attentionBuckets{}, err
 	}
-	out := make([]Item, 0, len(rows))
+	out := attentionBuckets{
+		NeedsAction: []Item{},
+		Waiting:     []Item{},
+		FYI:         []Item{},
+	}
 	for _, row := range rows {
 		item := Item{
 			Kind:    "attention",
@@ -166,7 +178,7 @@ func attentionItems(db *sql.DB, tasks map[string]*flowdb.Task) ([]Item, error) {
 			Urgency: row.Urgency,
 			Title:   nonEmpty(row.Summary, "Attention item "+row.ID),
 			Detail:  row.Reason,
-			Action:  row.SuggestedAction,
+			Action:  readableAttentionAction(row.SuggestedAction),
 			Links:   []Link{{Kind: "attention", Target: row.ID}},
 		}
 		if item.Project == "" {
@@ -183,9 +195,78 @@ func attentionItems(db *sql.DB, tasks map[string]*flowdb.Task) ([]Item, error) {
 		if trace, err := flowdb.GetSteeringTraceByFeedItem(db, row.ID); err == nil && trace.ID != "" {
 			item.Links = append(item.Links, Link{Kind: "trace", Target: trace.ID})
 		}
-		out = append(out, item)
+		waitingTask := matchedWaitingTask(row, tasks)
+		if attentionNoAction(row.SuggestedAction) {
+			if waitingTask != nil {
+				item.Action = "Review affected task"
+				item.Detail = waitingAttentionDetail(waitingTask, row.Reason)
+				out.Waiting = append(out.Waiting, item)
+				continue
+			}
+			out.FYI = append(out.FYI, item)
+			continue
+		}
+		if waitingTask != nil && !attentionReplyAction(row.SuggestedAction) {
+			item.Action = "Review affected task"
+			item.Detail = waitingAttentionDetail(waitingTask, row.Reason)
+			out.Waiting = append(out.Waiting, item)
+			continue
+		}
+		out.NeedsAction = append(out.NeedsAction, item)
 	}
 	return out, nil
+}
+
+func matchedWaitingTask(row flowdb.FeedItem, tasks map[string]*flowdb.Task) *flowdb.Task {
+	task := tasks[row.MatchedTask]
+	if task == nil || task.Status == "done" || !task.WaitingOn.Valid {
+		return nil
+	}
+	if strings.TrimSpace(task.WaitingOn.String) == "" {
+		return nil
+	}
+	return task
+}
+
+func attentionNoAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "", "digest_only", "drop", "no_action", "none":
+		return true
+	default:
+		return false
+	}
+}
+
+func attentionReplyAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "reply", "send_reply", "afk_reply":
+		return true
+	default:
+		return false
+	}
+}
+
+func readableAttentionAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "", "digest_only", "drop", "no_action", "none":
+		return "No action"
+	case "forward":
+		return "Forward to task"
+	case "make_task":
+		return "Make task"
+	case "reply", "send_reply", "afk_reply":
+		return "Review reply"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(action), "_", " ")
+	}
+}
+
+func waitingAttentionDetail(task *flowdb.Task, reason string) string {
+	detail := "Affects waiting task: " + task.Name
+	if reason = strings.TrimSpace(reason); reason != "" {
+		detail += " - " + reason
+	}
+	return detail
 }
 
 func taskActionItems(db *sql.DB, tasks []*flowdb.Task, projects map[string]string, opts Options) []Item {

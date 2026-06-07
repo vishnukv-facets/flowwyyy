@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 )
 
 // deepTriageRunner shells out to the capable (default) Claude model for the
@@ -33,7 +34,13 @@ func DeepTriage(ctx context.Context, in ClassifyInput, taskIndex string) (Verdic
 // DeepTriageWithContext runs Stage 3 with the explicit context pack assembled
 // by Go. The draft is SURFACED only — P1 never auto-sends it.
 func DeepTriageWithContext(ctx context.Context, in ClassifyInput, taskIndex string, pack ThreadContext) (Verdict, error) {
-	raw, err := deepTriageRunner(ctx, deepTriagePromptWithContext(in, taskIndex, pack))
+	return DeepTriageWithContextAndHints(ctx, in, taskIndex, pack, nil)
+}
+
+// DeepTriageWithContextAndHints runs Stage 3 with deterministic source context
+// plus task-impact hints assembled by Go.
+func DeepTriageWithContextAndHints(ctx context.Context, in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint) (Verdict, error) {
+	raw, err := deepTriageRunner(ctx, deepTriagePromptWithContextAndHints(in, taskIndex, pack, hints))
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -45,8 +52,16 @@ func deepTriagePrompt(in ClassifyInput, taskIndex string) string {
 }
 
 func deepTriagePromptWithContext(in ClassifyInput, taskIndex string, pack ThreadContext) string {
-	payload, _ := json.Marshal(in)
-	contextPayload, _ := json.Marshal(pack)
+	return deepTriagePromptWithContextAndHints(in, taskIndex, pack, nil)
+}
+
+func deepTriagePromptWithContextAndHints(in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint) string {
+	if hints == nil {
+		hints = []TaskImpactHint{}
+	}
+	payload, _ := json.Marshal(modelFacingClassifyInput(in))
+	contextPayload, _ := json.Marshal(modelFacingThreadContext(pack))
+	hintPayload, _ := json.Marshal(modelFacingTaskImpactHints(in.Source, hints))
 	return `MODE: stage3-deep
 
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Go has already fetched the surrounding source context into the context pack below. Treat that context pack as the primary source of truth; do not rely on fetching Slack/GitHub context yourself. If fetch_status is "error" or "unavailable", proceed from the fallback event context and lower confidence when the missing context matters.
@@ -56,8 +71,10 @@ Do the following, then emit a single verdict:
 1. Read the context pack's source permalink, parent message, replies/comments, participants, timestamps, and pre-summary.
 2. Decide whether this message belongs to an EXISTING task (set matched_task) or warrants a new one. Do NOT decide from the task name alone — for any plausibly related task (especially ones in the project this message seems to belong to), use your file tools to READ that task's brief.md AND the progress notes in its updates/ directory (paths are given in the index below) before judging. A message belongs to an existing task when it continues, follows up on, or is the next step of the work that task covers — even if it arrives in a different Slack thread/DM. Prefer matched_task to an existing active task in such cases; only treat it as net-new when, after reading, no active task actually covers it.
 3. If a reply from the operator is appropriate, draft it in the operator's voice. DO NOT SEND ANYTHING — the draft is surfaced for the operator's approval only.
+4. Read task-impact hints. Availability/FYI events are not automatically actionable. If hints show the sender or named participant is blocking/reviewing/assigned to/affecting active work, set matched_task to the strongest affected task and explain impact. Use "forward" when the affected task/session should know about the update. Use "digest_only" when there is no affected task and no reply needed.
 
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
+Do not mention context fetch failures, API/token/channel access errors, fetch_status, fetch_error, or missing source context in summary, draft, or reason. Those fields are internal audit details; base the verdict on the visible fallback event context and lower confidence only when missing context materially changes the decision.
 
 Respond with ONLY a minified JSON object (no prose, fences allowed but optional):
 {"suggested_action":"make_task|forward|reply|afk_reply|digest_only|drop","matched_task":"<slug or empty>","suggested_project":"<slug or empty>","suggested_priority":"high|medium|low","urgency":"urgent|normal|low","confidence":0.0,"summary":"<= 140 chars","draft":"<reply text, if any>","reason":"<why>"}
@@ -65,11 +82,103 @@ Respond with ONLY a minified JSON object (no prose, fences allowed but optional)
 Operator task/project index:
 ` + taskIndex + `
 
+Task-impact hints (JSON):
+` + string(hintPayload) + `
+
 Context pack (JSON):
 ` + string(contextPayload) + `
 
 Message (JSON):
 ` + string(payload)
+}
+
+func modelFacingClassifyInput(in ClassifyInput) ClassifyInput {
+	out := in
+	if out.Source == "slack" {
+		out.Author = modelFacingSlackText(out.Author, "Slack participant")
+		out.ThreadKey = modelFacingSlackThreadKey(out.ThreadKey)
+		out.Text = modelFacingSlackText(out.Text, "Slack participant")
+	}
+	return out
+}
+
+func modelFacingThreadContext(pack ThreadContext) ThreadContext {
+	out := pack
+	out.FetchError = ""
+	if out.Source == "slack" {
+		out.ThreadKey = modelFacingSlackThreadKey(out.ThreadKey)
+		out.Summary = modelFacingSlackText(out.Summary, "Slack participant")
+		out.Participants = modelFacingSlackList(out.Participants)
+		out.Permalink = ""
+	}
+	if pack.Parent != nil {
+		parent := modelFacingContextMessage(out.Source, *pack.Parent)
+		out.Parent = &parent
+	}
+	if len(pack.Messages) > 0 {
+		out.Messages = make([]ContextMessage, 0, len(pack.Messages))
+		for _, msg := range pack.Messages {
+			out.Messages = append(out.Messages, modelFacingContextMessage(out.Source, msg))
+		}
+	}
+	return out
+}
+
+func modelFacingContextMessage(source string, msg ContextMessage) ContextMessage {
+	if source != "slack" {
+		return msg
+	}
+	msg.Author = modelFacingSlackText(msg.Author, "Slack participant")
+	msg.Text = modelFacingSlackText(msg.Text, "Slack participant")
+	msg.Permalink = ""
+	return msg
+}
+
+func modelFacingTaskImpactHints(source string, hints []TaskImpactHint) []TaskImpactHint {
+	if len(hints) == 0 {
+		return []TaskImpactHint{}
+	}
+	out := make([]TaskImpactHint, len(hints))
+	copy(out, hints)
+	if source != "slack" {
+		return out
+	}
+	for i := range out {
+		out[i].TaskName = modelFacingSlackText(out[i].TaskName, "Slack participant")
+		out[i].Reason = modelFacingSlackText(out[i].Reason, "Slack participant")
+		out[i].Evidence = modelFacingSlackText(out[i].Evidence, "Slack participant")
+	}
+	return out
+}
+
+func modelFacingSlackList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	seen := map[string]bool{}
+	for _, value := range values {
+		cleaned := modelFacingSlackText(value, "Slack participant")
+		if cleaned == "" || seen[cleaned] {
+			continue
+		}
+		seen[cleaned] = true
+		out = append(out, cleaned)
+	}
+	return out
+}
+
+func modelFacingSlackThreadKey(threadKey string) string {
+	if strings.TrimSpace(threadKey) == "" {
+		return ""
+	}
+	return "slack-thread"
+}
+
+func modelFacingSlackText(text, userReplacement string) string {
+	text = operatorSlackUserIDRE.ReplaceAllString(text, userReplacement)
+	text = operatorSlackChannelRE.ReplaceAllString(text, "Slack channel")
+	return text
 }
 
 func contextFromClassifyInput(in ClassifyInput) ThreadContext {

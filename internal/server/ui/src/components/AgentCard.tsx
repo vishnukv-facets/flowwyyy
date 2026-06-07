@@ -1,11 +1,13 @@
 import { useLocation } from 'wouter'
-import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2, GitFork } from 'lucide-react'
+import type { MouseEvent } from 'react'
+import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2, GitFork, Loader2, RotateCcw } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
 import { fromMinutes, fromSeconds, compact, compactTokens } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
 import { clickable } from '../lib/a11y'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
+import { useAction } from '../lib/query'
 
 const BADGE_TONE: Record<string, string> = {
   waiting: 'warn',
@@ -32,12 +34,22 @@ export function AgentCard({
 }) {
   const [, navigate] = useLocation()
   const { popOut } = useFloatingTerminals()
+  const action = useAction()
   const waiting = agent.status === 'waiting'
   // A finished task should read as "done", not as the residual runtime state
   // (its session is merely idle/released). task_status is the source of truth
   // for completion; the runtime status drives everything else.
   const isDone = agent.task_status === 'done'
   const badgeStatus = isDone ? 'done' : agent.status
+  const canRestart = !isDone && agent.status !== 'running' && !!agent.session_id
+  const restart = (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation()
+    if (!canRestart || action.isPending) return
+    action.mutate(
+      { kind: 'restart', target: agent.slug },
+      { onSuccess: () => popOut({ slug: agent.slug, provider: agent.provider, title: agent.name }) },
+    )
+  }
   return (
     <article
       className={`card acard${selected ? ' selected' : ''}`}
@@ -78,7 +90,20 @@ export function AgentCard({
           <StatusDot status={badgeStatus} />
           {isDone ? 'done' : STATUS_LABEL[agent.status] ?? agent.status}
         </span>
+        {canRestart && (
+          <button
+            type="button"
+            className="btn icon ghost sm acard-open"
+            title="Resume session in a floating window"
+            aria-label="Resume session in a floating window"
+            disabled={action.isPending}
+            onClick={restart}
+          >
+            {action.isPending ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
+          </button>
+        )}
         <button
+          type="button"
           className="btn icon ghost sm acard-open"
           title="Pop out as a floating window"
           aria-label="Pop out as a floating window"
@@ -90,6 +115,7 @@ export function AgentCard({
           <PictureInPicture2 size={13} />
         </button>
         <button
+          type="button"
           className="btn icon ghost sm acard-open"
           title="Open session in a new tab"
           aria-label="Open session in a new tab"
@@ -161,7 +187,7 @@ export function AgentCard({
 
       <div className="row gap" style={{ gap: 9 }}>
         <TokenBar used={agent.tokens_used} max={agent.tokens_max} />
-        <span className="faint mono" style={{ fontSize: 10.5 }}>
+        <span className="faint mono" style={{ fontSize: 12 }}>
           {compact(agent.tokens_used)}/{compact(agent.tokens_max)}
         </span>
       </div>

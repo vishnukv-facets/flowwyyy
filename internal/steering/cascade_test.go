@@ -217,6 +217,64 @@ func TestCascadeFetchesContextForDeepTriageAndStoresJSON(t *testing.T) {
 	}
 }
 
+func TestCascadeBuildsTaskImpactHintsWithResolvedAuthorName(t *testing.T) {
+	c, db := cascadeFixture(t)
+	now := time.Now().UTC().Format(time.RFC3339)
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug,name,status,kind,priority,work_dir,waiting_on,session_provider,created_at,updated_at)
+		 VALUES ('raptor-review','Raptor PR review','in-progress','regular','high','/tmp','Rohit review on PR #159','codex',?,?)`,
+		now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	c.ResolveUserName = func(_ context.Context, id string) string {
+		if id == "U_ROHIT" {
+			return "Rohit Raveendran"
+		}
+		return ""
+	}
+	c.FetchContext = func(_ context.Context, ev monitor.InboundEvent) (ThreadContext, error) {
+		return ThreadContext{
+			Source:      "slack",
+			ThreadKey:   monitor.ThreadKey(ev.Channel, ev.ThreadTS),
+			FetchStatus: "ok",
+			Parent: &ContextMessage{
+				Kind:   "parent",
+				Author: ev.UserID,
+				Text:   ev.Text,
+				TS:     ev.TS,
+			},
+			Participants: []string{ev.UserID},
+		}, nil
+	}
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:44.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"digest_only","confidence":0.8,"summary":"leave FYI"}`, nil
+	})
+	var deepPrompt string
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		deepPrompt = prompt
+		return `{"suggested_action":"forward","matched_task":"raptor-review","confidence":0.9,"summary":"Rohit is unavailable","reason":"Rohit affects the active review task"}`, nil
+	})
+
+	ev := msg("C1", "44.1", "U_ROHIT", "I'll be on leave tomorrow and the day after.")
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	if !strings.Contains(deepPrompt, `"task_slug":"raptor-review"`) {
+		t.Fatalf("deep prompt missing task-impact hint:\n%s", deepPrompt)
+	}
+	if !strings.Contains(deepPrompt, "Rohit Raveendran") {
+		t.Fatalf("deep prompt missing resolved display name:\n%s", deepPrompt)
+	}
+	if strings.Contains(deepPrompt, "waiting_on mentions U_ROHIT") {
+		t.Fatalf("deep prompt used raw Slack id as hint person:\n%s", deepPrompt)
+	}
+}
+
 func TestCascadeStoresFallbackContextWhenFetchFails(t *testing.T) {
 	c, db := cascadeFixture(t)
 	c.FetchContext = func(context.Context, monitor.InboundEvent) (ThreadContext, error) {
@@ -247,6 +305,38 @@ func TestCascadeStoresFallbackContextWhenFetchFails(t *testing.T) {
 	}
 	if stored.FetchStatus != "error" || stored.FetchError == "" || stored.Parent == nil || stored.Parent.Text != "fallback from event" {
 		t.Errorf("fallback context mismatch: %+v", stored)
+	}
+}
+
+func TestCascadeScrubsInternalFetchDetailsBeforeWritingFeed(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.FetchContext = func(context.Context, monitor.InboundEvent) (ThreadContext, error) {
+		return ThreadContext{}, errors.New("slack context fetch: not_in_channel")
+	}
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:1.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"digest_only","confidence":0.8,"summary":"leave notice"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"digest_only","confidence":0.82,"summary":"Teammate announced leave","reason":"Slack context fetch failed (not_in_channel) so the sender's name couldn't be resolved, but the message text is self-contained and clearly FYI-only. Worth surfacing in a digest so the operator knows the person is unavailable."}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "I'll be on leave tomorrow and the day after.")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("feed len = %d, want 1", len(items))
+	}
+	reason := items[0].Reason
+	for _, leak := range []string{"Slack context fetch failed", "not_in_channel", "sender's name couldn't be resolved"} {
+		if strings.Contains(reason, leak) {
+			t.Fatalf("feed reason leaked %q: %q", leak, reason)
+		}
+	}
+	if !strings.Contains(reason, "message text is self-contained") || !strings.Contains(reason, "Worth surfacing in a digest") {
+		t.Fatalf("feed reason lost the useful decision rationale: %q", reason)
 	}
 }
 

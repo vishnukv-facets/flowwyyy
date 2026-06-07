@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -829,6 +830,34 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 	}
 	if gh.Permalink != "https://github.com/o/r/pull/5" {
 		t.Errorf("github Permalink = %q, want the item url", gh.Permalink)
+	}
+}
+
+func TestAttentionItemViewScrubsStoredInternalFetchDetails(t *testing.T) {
+	s, _ := attentionTestServer(t)
+	item := flowdb.FeedItem{
+		ID: "leaky", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "digest_only",
+		Summary: "Slack context fetch failed (not_in_channel), but leave notice is FYI-only.",
+		Reason:  "Plain leave notice. Slack context fetch failed (not_in_channel) so the sender's name couldn't be resolved, but the message text is self-contained and clearly FYI-only. Worth surfacing in a digest.",
+		Status:  "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	v := s.attentionItemView(context.Background(), item)
+	for _, field := range []struct {
+		name string
+		text string
+	}{
+		{"summary", v.Summary},
+		{"reason", v.Reason},
+		{"why.reason", v.Why.Reason},
+	} {
+		for _, leak := range []string{"Slack context fetch failed", "not_in_channel", "sender's name couldn't be resolved"} {
+			if strings.Contains(field.text, leak) {
+				t.Fatalf("%s leaked %q: %q", field.name, leak, field.text)
+			}
+		}
+	}
+	if !strings.Contains(v.Reason, "message text is self-contained") || !strings.Contains(v.Why.Reason, "Worth surfacing in a digest") {
+		t.Fatalf("scrubbed reason lost useful rationale: reason=%q why=%q", v.Reason, v.Why.Reason)
 	}
 }
 

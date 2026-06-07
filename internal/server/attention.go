@@ -121,6 +121,9 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 		reason = s.nameResolver.CleanText(ctx, reason)
 		draft = s.nameResolver.CleanText(ctx, draft)
 	}
+	summary = steering.SanitizeOperatorText(summary)
+	reason = steering.SanitizeOperatorText(reason)
+	draft = steering.SanitizeOperatorText(draft)
 	v := AttentionItemView{
 		ID: it.ID, Source: it.Source, ThreadKey: it.ThreadKey, Summary: summary,
 		SuggestedAction: it.SuggestedAction, MatchedTask: it.MatchedTask,
@@ -198,7 +201,7 @@ func attentionHandoffView(h flowdb.AttentionHandoff) *AttentionHandoffView {
 func (s *Server) attentionWhyView(ctx context.Context, it flowdb.FeedItem) AttentionWhyView {
 	v := AttentionWhyView{
 		Source:            it.Source,
-		Reason:            it.Reason,
+		Reason:            steering.SanitizeOperatorText(it.Reason),
 		Confidence:        it.Confidence,
 		SuggestedProject:  it.SuggestedProject,
 		SuggestedPriority: it.SuggestedPriority,
