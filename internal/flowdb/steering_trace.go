@@ -12,7 +12,7 @@ type SteeringTrace struct {
 	Channel, ChannelType, Author          string
 	ThreadKey, TextPreview                string
 	Disposition, StageReached, DropReason string // disposition: dropped|surfaced|error
-	Stage1Relevant                        *bool   // nil = stage 1 not reached
+	Stage1Relevant                        *bool  // nil = stage 1 not reached
 	Stage2Action                          string
 	Stage2Confidence                      float64
 	Stage3Action                          string
@@ -20,6 +20,9 @@ type SteeringTrace struct {
 	FinalAction                           string
 	FinalConfidence                       float64
 	FeedItemID, Error                     string
+	AutonomyAction                        string
+	AutonomyDecision                      string
+	AutonomyReason                        string
 	LatencyMS                             int64
 	Model                                 string
 	TS                                    string // Slack message ts (for permalink)
@@ -47,9 +50,10 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 			stage3_action, stage3_confidence,
 			final_action, final_confidence,
 			feed_item_id, error,
+			autonomy_action, autonomy_decision, autonomy_reason,
 			latency_ms, model,
 			ts, team_id, url
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.CreatedAt, t.Origin, t.Source,
 		NullIfEmpty(t.Channel), NullIfEmpty(t.ChannelType), NullIfEmpty(t.Author), NullIfEmpty(t.ThreadKey), NullIfEmpty(t.TextPreview),
 		t.Disposition, t.StageReached, NullIfEmpty(t.DropReason),
@@ -58,6 +62,7 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 		NullIfEmpty(t.Stage3Action), t.Stage3Confidence,
 		NullIfEmpty(t.FinalAction), t.FinalConfidence,
 		NullIfEmpty(t.FeedItemID), NullIfEmpty(t.Error),
+		NullIfEmpty(t.AutonomyAction), NullIfEmpty(t.AutonomyDecision), NullIfEmpty(t.AutonomyReason),
 		t.LatencyMS, NullIfEmpty(t.Model),
 		NullIfEmpty(t.TS), NullIfEmpty(t.TeamID), NullIfEmpty(t.URL),
 	)
@@ -78,6 +83,7 @@ const steeringTraceCols = `
 	stage3_action, stage3_confidence,
 	final_action, final_confidence,
 	feed_item_id, error,
+	autonomy_action, autonomy_decision, autonomy_reason,
 	latency_ms, model,
 	ts, team_id, url`
 
@@ -89,6 +95,7 @@ func scanSteeringTrace(rows interface {
 	var tr SteeringTrace
 	var channel, channelType, author, threadKey, textPreview, dropReason sql.NullString
 	var stage2Action, stage3Action, finalAction, feedItemID, errStr, model sql.NullString
+	var autonomyAction, autonomyDecision, autonomyReason sql.NullString
 	var ts, teamID, url sql.NullString
 	var stage1Rel sql.NullInt64
 	var stage2Conf, stage3Conf, finalConf sql.NullFloat64
@@ -102,6 +109,7 @@ func scanSteeringTrace(rows interface {
 		&stage3Action, &stage3Conf,
 		&finalAction, &finalConf,
 		&feedItemID, &errStr,
+		&autonomyAction, &autonomyDecision, &autonomyReason,
 		&tr.LatencyMS, &model,
 		&ts, &teamID, &url,
 	); err != nil {
@@ -122,6 +130,9 @@ func scanSteeringTrace(rows interface {
 	tr.FinalConfidence = finalConf.Float64
 	tr.FeedItemID = feedItemID.String
 	tr.Error = errStr.String
+	tr.AutonomyAction = autonomyAction.String
+	tr.AutonomyDecision = autonomyDecision.String
+	tr.AutonomyReason = autonomyReason.String
 	tr.Model = model.String
 	tr.TS = ts.String
 	tr.TeamID = teamID.String

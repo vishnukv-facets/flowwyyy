@@ -16,10 +16,12 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 			Author: "alice", ThreadKey: "C1:1.0", TextPreview: "hello",
 			Disposition: "surfaced", StageReached: "stage3",
 			Stage1Relevant: boolPtr(true),
-			Stage2Action: "surface", Stage2Confidence: 0.8,
+			Stage2Action:   "surface", Stage2Confidence: 0.8,
 			Stage3Action: "make_task", Stage3Confidence: 0.9,
 			FinalAction: "make_task", FinalConfidence: 0.9,
 			FeedItemID: "fi1", LatencyMS: 120, Model: "gpt-4",
+			AutonomyAction: "make_task", AutonomyDecision: "acted",
+			AutonomyReason: "confidence 0.90 >= threshold 0.80",
 		},
 		{
 			ID: "t2", CreatedAt: "2026-06-05T09:00:00Z",
@@ -28,7 +30,7 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 			Disposition: "dropped", StageReached: "stage1",
 			DropReason:     "irrelevant",
 			Stage1Relevant: boolPtr(false),
-			LatencyMS: 30,
+			LatencyMS:      30,
 		},
 		{
 			ID: "t3", CreatedAt: "2026-06-05T10:00:00Z",
@@ -79,6 +81,9 @@ func TestSteeringTraceInsertAndList(t *testing.T) {
 		if all[i].ID != id {
 			t.Errorf("pos %d: want id %q, got %q", i, id, all[i].ID)
 		}
+	}
+	if all[2].AutonomyAction != "make_task" || all[2].AutonomyDecision != "acted" || all[2].AutonomyReason == "" {
+		t.Errorf("autonomy audit fields not round-tripped: %+v", all[2])
 	}
 
 	// ListSteeringTrace{Disposition:"dropped"} returns only drops
@@ -249,7 +254,7 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 		Origin: "live", Source: "slack",
 		Disposition: "surfaced", StageReached: "stage3",
 		Stage1Relevant: boolPtr(true),
-		LatencyMS: 50,
+		LatencyMS:      50,
 	}
 	if err := InsertSteeringTrace(db, trueTrace); err != nil {
 		t.Fatalf("insert true trace: %v", err)
@@ -261,7 +266,7 @@ func TestSteeringTraceStage1RelevantRoundTrip(t *testing.T) {
 		Origin: "live", Source: "slack",
 		Disposition: "dropped", StageReached: "stage1",
 		Stage1Relevant: boolPtr(false),
-		LatencyMS: 10,
+		LatencyMS:      10,
 	}
 	if err := InsertSteeringTrace(db, falseTrace); err != nil {
 		t.Fatalf("insert false trace: %v", err)

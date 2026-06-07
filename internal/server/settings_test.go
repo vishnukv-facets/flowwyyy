@@ -70,6 +70,25 @@ func TestUpdateSettings_PersistsAppliesAndMasksSecrets(t *testing.T) {
 	}
 }
 
+func TestSettingsExposeAutonomyPolicyForDedicatedPanel(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	t.Setenv("FLOW_STEERING_AUTONOMY", `{"make_task":{"enabled":true,"threshold":0.8}}`)
+	t.Setenv("FLOW_SLACK_CLIENT_SECRET", "hidden-client-secret")
+
+	rec := httptest.NewRecorder()
+	srv.handleSettings(rec, httptest.NewRequest("GET", "/api/settings", nil))
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "FLOW_STEERING_AUTONOMY") || !strings.Contains(body, "make_task") {
+		t.Fatalf("autonomy policy missing from GET /api/settings: %s", body)
+	}
+	if strings.Contains(body, "FLOW_SLACK_CLIENT_SECRET") || strings.Contains(body, "hidden-client-secret") {
+		t.Fatalf("hidden Slack app secret surfaced in GET /api/settings: %s", body)
+	}
+}
+
 func TestSeedConfigFromEnv(t *testing.T) {
 	root, db := testRootDB(t)
 	// Config already pins one GitHub key; env disagrees — config must win and

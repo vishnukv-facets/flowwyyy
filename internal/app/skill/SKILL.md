@@ -2703,6 +2703,15 @@ create tasks, or change policy.
 
 - Default autonomy is surface-only: `DefaultAutonomy()` disables every outward
   action even though it seeds sensible thresholds for future opt-in settings.
+- The autonomy trust ladder is: surface feed items; dismiss/mute only after an
+  explicit mute scope; forward high-confidence context to matched tasks; create
+  high-confidence backlog tasks; clear `waiting_on` only for tracked external
+  replies; draft AFK holding replies; and send substantive outbound replies only
+  after explicit operator approval.
+- Only `make_task` and `forward` are auto-actable in settings today, and both
+  require explicit enablement, confidence thresholds, and traceable audit
+  records. Reply/AFK actions remain manual-only even if malformed policy JSON
+  tries to enable them.
 - `FLOW_STEERING_AUTONOMY` can enable action thresholds only when the operator
   configured it. Do not edit env, settings, DB rows, or code to enable
   autonomy on the operator's behalf.

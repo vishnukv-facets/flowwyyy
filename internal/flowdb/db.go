@@ -230,6 +230,9 @@ CREATE TABLE IF NOT EXISTS steering_trace (
     final_confidence  REAL,
     feed_item_id      TEXT,
     error             TEXT,
+    autonomy_action   TEXT,
+    autonomy_decision TEXT,
+    autonomy_reason   TEXT,
     latency_ms        INTEGER NOT NULL DEFAULT 0,
     model             TEXT,
     ts                TEXT,
@@ -1023,6 +1026,33 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN url TEXT`); err != nil {
 			return fmt.Errorf("add steering_trace.url: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "autonomy_action")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_action TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.autonomy_action: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "autonomy_decision")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_decision TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.autonomy_decision: %w", err)
+		}
+	}
+	has, err = columnExists(db, "steering_trace", "autonomy_reason")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_reason TEXT`); err != nil {
+			return fmt.Errorf("add steering_trace.autonomy_reason: %w", err)
 		}
 	}
 

@@ -546,12 +546,18 @@ func TestHandleSlackChannelsError(t *testing.T) {
 
 func seedTrace(t *testing.T, db *sql.DB, id, disposition, stage, createdAt string) {
 	t.Helper()
-	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+	tr := flowdb.SteeringTrace{
 		ID: id, CreatedAt: createdAt, Origin: "slack", Source: "slack",
 		Channel: "C1", ChannelType: "channel", Author: "u1", ThreadKey: "C1:" + id,
 		TextPreview: "preview-" + id, Disposition: disposition, StageReached: stage,
 		LatencyMS: 42,
-	}); err != nil {
+	}
+	if id == "tr1" {
+		tr.AutonomyAction = "make_task"
+		tr.AutonomyDecision = "acted"
+		tr.AutonomyReason = "confidence 0.95 >= threshold 0.80"
+	}
+	if err := flowdb.InsertSteeringTrace(db, tr); err != nil {
 		t.Fatalf("seedTrace %s: %v", id, err)
 	}
 }
@@ -597,6 +603,19 @@ func TestHandleAttentionTrace(t *testing.T) {
 	}
 	if len(resp.Items) != 4 {
 		t.Errorf("len(Items) = %d, want 4", len(resp.Items))
+	}
+	var surfaced *SteeringTraceView
+	for i := range resp.Items {
+		if resp.Items[i].ID == "tr1" {
+			surfaced = &resp.Items[i]
+			break
+		}
+	}
+	if surfaced == nil {
+		t.Fatalf("tr1 missing from trace response: %+v", resp.Items)
+	}
+	if surfaced.AutonomyAction != "make_task" || surfaced.AutonomyDecision != "acted" || surfaced.AutonomyReason == "" {
+		t.Errorf("autonomy audit fields = action %q decision %q reason %q", surfaced.AutonomyAction, surfaced.AutonomyDecision, surfaced.AutonomyReason)
 	}
 
 	// --- disposition filter ---------------------------------------------------

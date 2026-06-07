@@ -994,6 +994,8 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             <KV k="stage 2 action" v={item.stage2_action ? `${item.stage2_action} · ${pctConf(item.stage2_confidence)}` : '—'} />
             <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
             <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />
+            <KV k="autonomy" v={item.autonomy_decision ? `${item.autonomy_action || item.final_action || 'action'} · ${item.autonomy_decision}` : '—'} />
+            <KV k="autonomy reason" v={item.autonomy_reason || '—'} />
             <KV k="drop reason" v={item.drop_reason || '—'} />
             <KV k="latency" v={item.latency_ms != null ? `${item.latency_ms} ms` : '—'} />
             <KV k="model" v={item.model || '—'} />

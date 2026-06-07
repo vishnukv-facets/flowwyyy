@@ -5482,8 +5482,10 @@ a.orch-pr:hover {
 .autonomy-toggle {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 248px;
+  flex-wrap: wrap;
   gap: 8px;
-  min-width: 168px;
+  min-width: 0;
   font-size: 13px;
   color: var(--text);
   cursor: pointer;
@@ -5491,6 +5493,16 @@ a.orch-pr:hover {
 }
 .autonomy-toggle input[type='checkbox'] {
   accent-color: var(--accent);
+}
+.autonomy-name {
+  white-space: nowrap;
+}
+.autonomy-meta {
+  flex-basis: 100%;
+  margin-left: 22px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
 }
 .autonomy-slider {
   flex: 1;

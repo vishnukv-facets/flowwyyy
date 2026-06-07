@@ -783,6 +783,9 @@ export interface SteeringTrace {
   final_confidence?: number
   feed_item_id?: string
   error?: string
+  autonomy_action?: string
+  autonomy_decision?: string
+  autonomy_reason?: string
   latency_ms: number
   model?: string
 }

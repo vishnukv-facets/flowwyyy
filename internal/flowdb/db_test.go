@@ -328,6 +328,19 @@ func TestMigrationAddsDueDateAndStatusChangedAt(t *testing.T) {
 	}
 }
 
+func TestMigrationAddsSteeringTraceAutonomyAudit(t *testing.T) {
+	db := openTempDB(t)
+	for _, col := range []string{"autonomy_action", "autonomy_decision", "autonomy_reason"} {
+		has, err := columnExists(db, "steering_trace", col)
+		if err != nil {
+			t.Fatalf("columnExists(%s): %v", col, err)
+		}
+		if !has {
+			t.Errorf("steering_trace.%s should exist after migration", col)
+		}
+	}
+}
+
 func TestMigrationAddsAssignee(t *testing.T) {
 	db := openTempDB(t)
 	has, err := columnExists(db, "tasks", "assignee")

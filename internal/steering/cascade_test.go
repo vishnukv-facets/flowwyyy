@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -611,6 +612,19 @@ func stubTaskSpawner(t *testing.T) *int {
 	return &calls
 }
 
+func stubFailingTaskSpawner(t *testing.T, err error) *int {
+	t.Helper()
+	calls := 0
+	oldSpawn, oldTag := taskSpawner, taskTagger
+	taskSpawner = func(_ context.Context, _, _, _, _ string) error {
+		calls++
+		return err
+	}
+	taskTagger = func(_ context.Context, _, _ string) error { return nil }
+	t.Cleanup(func() { taskSpawner, taskTagger = oldSpawn, oldTag })
+	return &calls
+}
+
 func TestCascadeAutoActsWhenAutonomyEnabled(t *testing.T) {
 	c, db := cascadeFixture(t)
 	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}
@@ -638,6 +652,73 @@ func TestCascadeAutoActsWhenAutonomyEnabled(t *testing.T) {
 	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("acted feed items = %d, want 1", len(items))
+	}
+}
+
+func TestCascadeTraceRecordsAutonomyActed(t *testing.T) {
+	c, _ := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}
+	traces := captureTraces(c)
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	stubTaskSpawner(t)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:95.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.95,"summary":"deep"}`, nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "95.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.AutonomyAction != "make_task" || tr.AutonomyDecision != "acted" {
+		t.Fatalf("autonomy trace = action %q decision %q, want make_task/acted", tr.AutonomyAction, tr.AutonomyDecision)
+	}
+	if !strings.Contains(tr.AutonomyReason, "confidence 0.95 >= threshold 0.50") {
+		t.Errorf("autonomy reason = %q, want threshold explanation", tr.AutonomyReason)
+	}
+}
+
+func TestCascadeTraceRecordsAutonomyFailureAndLeavesFeedVisible(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}
+	traces := captureTraces(c)
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	spawns := stubFailingTaskSpawner(t, errors.New("spawn refused"))
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:96.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.9,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.95,"summary":"deep"}`, nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "96.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe should leave failed auto-action visible, got error: %v", err)
+	}
+	if *spawns != 1 {
+		t.Fatalf("taskSpawner calls = %d, want 1", *spawns)
+	}
+	items, _ := flowdb.ListFeedItems(db, "new")
+	if len(items) != 1 {
+		t.Fatalf("new feed items = %d, want 1 after failed auto-action", len(items))
+	}
+	tr := (*traces)[0]
+	if tr.AutonomyDecision != "failed" || !strings.Contains(tr.AutonomyReason, "spawn refused") {
+		t.Fatalf("autonomy trace = decision %q reason %q, want failed with error", tr.AutonomyDecision, tr.AutonomyReason)
 	}
 }
 

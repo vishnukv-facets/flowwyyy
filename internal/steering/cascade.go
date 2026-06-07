@@ -91,33 +91,50 @@ func (c *Cascade) autonomy() AutonomyPolicy {
 	return DefaultAutonomy()
 }
 
+type autonomyTrace struct {
+	action, decision, reason string
+}
+
+func (a autonomyTrace) applyTo(t *flowdb.SteeringTrace) {
+	t.AutonomyAction = a.action
+	t.AutonomyDecision = a.decision
+	t.AutonomyReason = a.reason
+}
+
 // maybeAutoAct attempts the surfaced verdict's action through the autonomy gate.
 // ApplyAction with manual=false enforces the policy: it acts only when the
 // operator enabled that action above its confidence threshold, otherwise returns
-// ErrAutonomyDenied (a no-op). Only the internally-safe actions (make_task,
-// forward) are auto-actable here; outward sends (reply/afk_reply) stay
+// ErrAutonomyDenied (a no-op). Outward sends (reply/afk_reply) stay
 // operator-confirmed until the AFK/presence work lands. The feed row is already
-// written, so a denied auto-act simply leaves it surfaced for the operator.
-func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) {
+// written, so a denied or failed auto-act leaves it surfaced for the operator.
+func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) autonomyTrace {
+	audit := autonomyTrace{action: string(v.SuggestedAction)}
 	if feedID == "" {
-		return
-	}
-	if v.SuggestedAction != ActionMakeTask && v.SuggestedAction != ActionForward {
-		return
+		return audit
 	}
 	pol := c.autonomy()
-	if !pol.Allow(v.SuggestedAction, v.Confidence) {
-		return
+	decision := pol.Evaluate(v.SuggestedAction, v.Confidence)
+	audit.decision = decision.Decision
+	audit.reason = decision.Reason
+	if !decision.Allowed {
+		return audit
 	}
 	item, err := flowdb.GetFeedItem(c.DB, feedID)
 	if err != nil {
-		return
+		audit.decision = "failed"
+		audit.reason = fmt.Sprintf("auto-act %s could not load feed item %s: %v", v.SuggestedAction, feedID, err)
+		return audit
 	}
 	if err := ApplyAction(ctx, c.DB, item, v.SuggestedAction, pol, false); err != nil {
-		c.log("auto-act %s for %s failed: %v", v.SuggestedAction, feedID, err)
-		return
+		audit.decision = "failed"
+		audit.reason = fmt.Sprintf("auto-act %s for %s failed: %v", v.SuggestedAction, feedID, err)
+		c.log("%s", audit.reason)
+		return audit
 	}
+	audit.decision = "acted"
+	audit.reason = decision.Reason
 	c.log("auto-acted %s on %s (confidence %.2f >= threshold)", v.SuggestedAction, feedID, v.Confidence)
+	return audit
 }
 
 // resolveOnOperatorReply stands down any open feed item for a thread when the
@@ -238,8 +255,8 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
 		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
+		c.maybeAutoAct(ctx, id, v2).applyTo(tr)
 		c.emitTrace(tr, start)
-		c.maybeAutoAct(ctx, id, v2)
 		return werr
 	}
 
@@ -269,8 +286,8 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	id, werr := c.writeFeed(v3, ev, pack)
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
+	c.maybeAutoAct(ctx, id, v3).applyTo(tr)
 	c.emitTrace(tr, start)
-	c.maybeAutoAct(ctx, id, v3)
 	return werr
 }
 

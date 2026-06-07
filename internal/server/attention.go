@@ -679,6 +679,7 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		Stage1Relevant: t.Stage1Relevant, Stage2Action: t.Stage2Action, Stage2Confidence: t.Stage2Confidence,
 		Stage3Action: t.Stage3Action, Stage3Confidence: t.Stage3Confidence, FinalAction: t.FinalAction,
 		FinalConfidence: t.FinalConfidence, FeedItemID: t.FeedItemID, Error: t.Error, LatencyMS: t.LatencyMS, Model: t.Model,
+		AutonomyAction: t.AutonomyAction, AutonomyDecision: t.AutonomyDecision, AutonomyReason: t.AutonomyReason,
 		TS: t.TS, TeamID: t.TeamID, URL: t.URL,
 	}
 	if t.Source == "github" {

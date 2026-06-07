@@ -3,9 +3,9 @@ import { Loader2, Save, Zap } from 'lucide-react'
 import { useAction, useSettings } from '../lib/query'
 
 // The setting the steerer reads (FLOW_STEERING_AUTONOMY): a JSON object mapping
-// action name → {enabled, threshold}. It's Hidden:true in the server registry,
-// so it never appears in the generic ConfigPanels form — this panel is its sole
-// control. Saved via the same update-settings action the rest of Settings uses.
+// action name → {enabled, threshold}. The generic ConfigPanels form filters this
+// key out, so this panel is its sole control. Saved via the same update-settings
+// action the rest of Settings uses.
 const AUTONOMY_KEY = 'FLOW_STEERING_AUTONOMY'
 
 type ActionPolicy = { enabled: boolean; threshold: number }
@@ -13,9 +13,27 @@ type Policy = Record<string, ActionPolicy>
 
 // Only these two actions are auto-actable today. Outward replies (afk_reply,
 // reply) always stay operator-confirmed, so they are deliberately not shown.
-const ACTIONS: { key: string; label: string; defaultThreshold: number }[] = [
-  { key: 'make_task', label: 'Make task', defaultThreshold: 0.8 },
-  { key: 'forward', label: 'Forward to matched task', defaultThreshold: 0.85 },
+const ACTIONS: {
+  key: string
+  label: string
+  defaultThreshold: number
+  risk: string
+  audit: string
+}[] = [
+  {
+    key: 'make_task',
+    label: 'Make task',
+    defaultThreshold: 0.8,
+    risk: 'medium',
+    audit: 'trace + feedback + task link',
+  },
+  {
+    key: 'forward',
+    label: 'Forward to matched task',
+    defaultThreshold: 0.85,
+    risk: 'medium',
+    audit: 'trace + feedback + inbox link',
+  },
 ]
 
 // Parse the saved JSON defensively: empty/invalid → {}. Only well-formed
@@ -137,7 +155,7 @@ export function AutonomyPanel() {
         </p>
 
         <div className="autonomy-rows">
-          {ACTIONS.map(({ key, label, defaultThreshold }) => {
+          {ACTIONS.map(({ key, label, defaultThreshold, risk, audit }) => {
             const pol = policyFor(current, key, defaultThreshold)
             const pct = Math.round(pol.threshold * 100)
             return (
@@ -150,6 +168,9 @@ export function AutonomyPanel() {
                     onChange={() => toggle(key, defaultThreshold)}
                   />
                   <span className="autonomy-name">{label}</span>
+                  <span className="autonomy-meta">
+                    {risk} · {audit}
+                  </span>
                 </label>
                 <input
                   className="autonomy-slider"

@@ -70,9 +70,9 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
 	{Key: "FLOW_STEERING_MUTED_KEYWORDS", Label: "Muted keywords", Group: "Steering", Type: settingString, Help: "Comma-separated keywords; messages containing them are dropped before triage."},
 	// Per-action autonomy policy as JSON ({"make_task":{"enabled":true,"threshold":0.8},...}).
-	// Hidden from the generic form — the Settings → Steering autonomy panel
-	// manages it with per-action toggles + thresholds. Off (surface-only) by default.
-	{Key: "FLOW_STEERING_AUTONOMY", Label: "Autonomy policy", Group: "Steering", Type: settingString, Hidden: true, Help: "Per-action autonomy (JSON). Lets the steerer act without asking above a confidence threshold."},
+	// Exposed through /api/settings so the dedicated Settings → Steering autonomy
+	// panel can reload saved values, but filtered out of the generic form.
+	{Key: "FLOW_STEERING_AUTONOMY", Label: "Autonomy policy", Group: "Steering", Type: settingString, Help: "Per-action autonomy (JSON). Lets the steerer act without asking above a confidence threshold."},
 	{Key: "FLOW_STEERING_AUTO_RESOLVE_WAITING", Label: "Auto-resolve waiting_on", Group: "Steering", Type: settingBool, Default: "true", Help: "When a reply arrives on a task you're waiting on, automatically clear its waiting_on note."},
 	{Key: "FLOW_STEERING_SEND_MODEL", Label: "Reply send model", Group: "Steering", Type: settingEnum, Options: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"}, Default: "claude-sonnet-4-6", Help: "Model for the ephemeral session that posts your approved Slack replies. Sonnet is reliable + cheap; Haiku is cheapest but often fumbles the Slack tool call; Opus is overkill. Applies to the next send (no restart)."},
 	// General

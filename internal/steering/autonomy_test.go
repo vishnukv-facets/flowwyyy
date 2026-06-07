@@ -2,6 +2,7 @@ package steering
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"flow/internal/flowdb"
@@ -54,6 +55,68 @@ func TestDefaultAutonomyIsSurfaceOnly(t *testing.T) {
 		if p.Allow(a, 1.0) {
 			t.Errorf("DefaultAutonomy allowed %q at confidence 1.0; want surface-only (deny)", a)
 		}
+	}
+}
+
+func TestAutonomyLadderDocumentsPolicyMatrix(t *testing.T) {
+	ladder := AutonomyLadder()
+	if len(ladder) != 7 {
+		t.Fatalf("ladder length = %d, want the seven trust-ladder steps", len(ladder))
+	}
+
+	byKey := map[string]AutonomyCapability{}
+	for _, step := range ladder {
+		byKey[step.Key] = step
+		if step.Risk == "" || step.Audit == "" || step.Prerequisites == "" {
+			t.Fatalf("step %q missing risk/audit/prerequisites: %+v", step.Key, step)
+		}
+	}
+
+	if got := byKey["surface"].Risk; got != "none" {
+		t.Errorf("surface risk = %q, want none", got)
+	}
+	if step := byKey["forward"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.85 {
+		t.Errorf("forward step = %+v, want configurable auto-actable off-by-default at 0.85", step)
+	}
+	if step := byKey["make_task"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.80 {
+		t.Errorf("make_task step = %+v, want configurable auto-actable off-by-default at 0.80", step)
+	}
+	if step := byKey["reply"]; step.AutoActable || step.Configurable {
+		t.Errorf("reply step = %+v, want never auto-actable/configurable today", step)
+	}
+	if step := byKey["clear_waiting_on"]; step.DefaultEnabled || step.Configurable {
+		t.Errorf("clear_waiting_on step = %+v, want documented but not controlled by FLOW_STEERING_AUTONOMY", step)
+	}
+}
+
+func TestAutonomyEvaluateExplainsDecision(t *testing.T) {
+	p := AutonomyPolicy{
+		ActionMakeTask: {Enabled: true, Threshold: 0.80},
+		ActionForward:  {Enabled: false, Threshold: 0.85},
+		ActionReply:    {Enabled: true, Threshold: 0.10},
+	}
+
+	allowed := p.Evaluate(ActionMakeTask, 0.92)
+	if !allowed.Allowed || allowed.Decision != "allowed" || allowed.Threshold != 0.80 {
+		t.Fatalf("make_task allowed decision = %+v", allowed)
+	}
+	if !strings.Contains(allowed.Reason, "confidence 0.92 >= threshold 0.80") {
+		t.Errorf("allowed reason = %q, want confidence/threshold explanation", allowed.Reason)
+	}
+
+	disabled := p.Evaluate(ActionForward, 0.99)
+	if disabled.Allowed || disabled.Decision != "disabled" {
+		t.Fatalf("forward disabled decision = %+v, want disabled", disabled)
+	}
+
+	manualOnly := p.Evaluate(ActionReply, 1.0)
+	if manualOnly.Allowed || manualOnly.Decision != "manual_only" {
+		t.Fatalf("reply decision = %+v, want manual_only despite env enabling it", manualOnly)
+	}
+
+	below := p.Evaluate(ActionMakeTask, 0.50)
+	if below.Allowed || below.Decision != "below_threshold" {
+		t.Fatalf("below-threshold decision = %+v, want below_threshold", below)
 	}
 }
 

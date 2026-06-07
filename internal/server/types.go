@@ -400,6 +400,9 @@ type SteeringTraceView struct {
 	FinalConfidence  float64 `json:"final_confidence,omitempty"`
 	FeedItemID       string  `json:"feed_item_id,omitempty"`
 	Error            string  `json:"error,omitempty"`
+	AutonomyAction   string  `json:"autonomy_action,omitempty"`
+	AutonomyDecision string  `json:"autonomy_decision,omitempty"`
+	AutonomyReason   string  `json:"autonomy_reason,omitempty"`
 	LatencyMS        int64   `json:"latency_ms"`
 	Model            string  `json:"model,omitempty"`
 	ChannelName      string  `json:"channel_name,omitempty"`

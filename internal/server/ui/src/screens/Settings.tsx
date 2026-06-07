@@ -199,10 +199,13 @@ function ConfigPanels() {
   const { data } = useSettings()
   const action = useAction()
   const [draft, setDraft] = useState<Record<string, string>>({})
-  // FLOW_STEERING_WATCH_CHANNELS has a dedicated checkbox picker (WatchedChannels),
-  // so skip it in the generic string-input form to avoid two controls for one key.
+  // These settings have dedicated controls in the Steering section, so skip
+  // them in the generic form to avoid two controls for one key.
   const fields = useMemo(
-    () => (data?.fields ?? []).filter((f) => f.key !== 'FLOW_STEERING_WATCH_CHANNELS'),
+    () =>
+      (data?.fields ?? []).filter(
+        (f) => f.key !== 'FLOW_STEERING_WATCH_CHANNELS' && f.key !== 'FLOW_STEERING_AUTONOMY',
+      ),
     [data?.fields],
   )
 
