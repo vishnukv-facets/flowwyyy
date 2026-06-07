@@ -1084,17 +1084,20 @@ select.input {
   border-top: 1px solid var(--border);
   margin: 1.3em 0;
 }
-/* [[wiki-link]] cross-references in KB / memory docs */
-.md a.wikilink {
+/* [[wiki-link]] cross-references in KB/memory docs and task brief/update markdown */
+.md .wikilink {
+  border: 0;
   color: var(--accent-hi);
   background: var(--accent-soft);
   border-radius: var(--r-xs);
   padding: 0 4px;
   text-decoration: none;
   font-weight: 500;
+  font: inherit;
+  display: inline;
   cursor: pointer;
 }
-.md a.wikilink:hover {
+.md .wikilink:hover {
   background: var(--accent-soft);
   text-decoration: underline;
 }

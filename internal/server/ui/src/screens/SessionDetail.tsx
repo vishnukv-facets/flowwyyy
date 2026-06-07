@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 import { useLocation } from 'wouter'
 import {
   AlertTriangle,
@@ -908,7 +908,7 @@ function BriefTab({ slug, summary }: { slug: string; summary?: string }) {
   const { data, isLoading } = useMarkdown(`/api/tasks/${encodeURIComponent(slug)}/brief`)
   if (isLoading) return <Loading label="brief" />
   if (!data?.trim()) return <div className="faint">{summary || 'No brief written for this task.'}</div>
-  return <Md source={data} />
+  return <TaskMarkdown source={data} />
 }
 
 function DiffTab({
@@ -1123,7 +1123,21 @@ function UpdateBody({ slug, filename }: { slug: string; filename: string }) {
     `/api/tasks/${encodeURIComponent(slug)}/updates/${encodeURIComponent(filename)}`,
   )
   if (isLoading) return <Loading label="update" />
-  return <Md source={data || ''} />
+  return <TaskMarkdown source={data || ''} />
+}
+
+function TaskMarkdown({ source, className }: { source: string; className?: string }) {
+  const [, navigate] = useLocation()
+  const { data: tasks } = useTasks({ include_done: true })
+  const knownTaskSlugs = useMemo(() => new Set((tasks ?? []).map((t) => t.slug)), [tasks])
+  return (
+    <Md
+      source={source}
+      className={className}
+      knownTaskSlugs={knownTaskSlugs}
+      onTaskLink={(target) => navigate(`/session/${target}`)}
+    />
+  )
 }
 
 // ---- orchestration tree --------------------------------------------------

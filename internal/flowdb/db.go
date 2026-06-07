@@ -127,6 +127,15 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     CHECK (child_slug <> parent_slug)
 );
 
+CREATE TABLE IF NOT EXISTS task_links (
+    from_slug   TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE ON UPDATE CASCADE,
+    to_slug     TEXT NOT NULL REFERENCES tasks(slug) ON DELETE CASCADE ON UPDATE CASCADE,
+    from_kind   TEXT NOT NULL CHECK (from_kind IN ('brief','update')),
+    source_file TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (from_slug, to_slug, from_kind, source_file)
+);
+
 CREATE TABLE IF NOT EXISTS schema_meta (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
@@ -316,6 +325,8 @@ CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_child ON task_dependencies(child_slug);
+CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_slug);
+CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
@@ -2587,6 +2598,12 @@ func RenameTask(db *sql.DB, oldSlug, newSlug string) error {
 	}
 	if _, err := tx.Exec(`UPDATE task_tags SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade task_tags.task_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE task_links SET from_slug=? WHERE from_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade task_links.from_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE task_links SET to_slug=? WHERE to_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade task_links.to_slug: %w", err)
 	}
 	if _, err := tx.Exec(`UPDATE agent_runtime_states SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade agent_runtime_states.task_slug: %w", err)

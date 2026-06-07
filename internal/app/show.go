@@ -87,6 +87,9 @@ func showTaskCmd(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	if err := flowdb.SyncTaskLinks(db, root); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sync task links: %v\n", err)
+	}
 	printTaskMetadata(db, t, root)
 	return 0
 }
@@ -376,6 +379,15 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 		fmt.Println("updates:")
 		for _, u := range updates {
 			fmt.Printf("  - %s\n", u)
+		}
+	}
+
+	if links, err := flowdb.TaskBacklinks(db, t.Slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: load backlinks: %v\n", err)
+	} else if len(links) > 0 {
+		fmt.Println("linked from:")
+		for _, link := range links {
+			fmt.Printf("  - %s (%s) %s\n", link.FromSlug, link.FromKind, link.SourceFile)
 		}
 	}
 

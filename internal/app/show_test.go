@@ -240,6 +240,43 @@ func TestCmdShowTaskUpdatesListedSorted(t *testing.T) {
 	}
 }
 
+func TestCmdShowTaskLinkedFrom(t *testing.T) {
+	root, db := showListEditDB(t)
+	insertTask(t, db, "source-task", "Source Task", "backlog", "medium", filepath.Join(root, "x"), nil)
+	insertTask(t, db, "target-task", "Target Task", "backlog", "medium", filepath.Join(root, "x"), nil)
+
+	sourceDir := filepath.Join(root, "tasks", "source-task")
+	updatesDir := filepath.Join(sourceDir, "updates")
+	if err := os.MkdirAll(updatesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	briefPath := filepath.Join(sourceDir, "brief.md")
+	updatePath := filepath.Join(updatesDir, "2026-06-08-progress.md")
+	if err := os.WriteFile(briefPath, []byte("Brief mentions [[target-task]]."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(updatePath, []byte("Update also mentions [[target-task]]."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdShow([]string{"task", "target-task"}); rc != 0 {
+			t.Errorf("rc=%d", rc)
+		}
+	})
+	if !strings.Contains(out, "linked from:") {
+		t.Fatalf("missing linked from section; out=%q", out)
+	}
+	for _, want := range []string{
+		"- source-task (brief) " + briefPath,
+		"- source-task (update) " + updatePath,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing backlink %q; out=%q", want, out)
+		}
+	}
+}
+
 func TestCmdShowTaskWorkdirAnnotation(t *testing.T) {
 	root, db := showListEditDB(t)
 	wd := filepath.Join(root, "code", "foo")
