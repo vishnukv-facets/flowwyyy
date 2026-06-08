@@ -36,12 +36,14 @@ var slackHistoryFn = func(ctx context.Context, token, channelID, oldest string, 
 	}
 	out := make([]SlackMessage, 0, len(resp.Messages))
 	for _, m := range resp.Messages {
+		files := slackFilesFromAPIWithContent(ctx, api, m.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(m.User, m.Username),
-			Text:     m.Text,
+			Text:     strings.TrimSpace(m.Text),
 			TS:       m.Timestamp,
 			ThreadTS: m.ThreadTimestamp,
 			SubType:  m.SubType,
+			Files:    files,
 		})
 	}
 	return out, nil

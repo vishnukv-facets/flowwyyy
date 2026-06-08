@@ -47,13 +47,13 @@ func TestSlackAppManifest(t *testing.T) {
 	scopes := oauth["scopes"].(map[string]any)
 	bot := scopes["bot"].([]string)
 	user := scopes["user"].([]string)
-	for _, want := range []string{"reactions:read", "channels:history", "chat:write"} {
+	for _, want := range []string{"reactions:read", "channels:history", "files:read", "chat:write"} {
 		if !containsString(bot, want) {
 			t.Fatalf("bot scopes missing %q: %v", want, bot)
 		}
 	}
 	// DM following is the whole point of the user token — regression-pin it.
-	for _, want := range []string{"im:history", "mpim:history"} {
+	for _, want := range []string{"im:history", "mpim:history", "files:read"} {
 		if !containsString(user, want) {
 			t.Fatalf("user scopes missing %q: %v", want, user)
 		}

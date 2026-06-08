@@ -7,6 +7,8 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
+const slackMessageSubTypeFileShare = "file_share"
+
 // InboundEvent is the parsed, normalized form of a Slack Events API event
 // flow's reaction-trigger pipeline acts on. It collapses Slack's many event
 // types (message.channels, message.im, message.mpim, app_mention,
@@ -136,11 +138,12 @@ func parseMessage(env slackevents.EventsAPIEvent, ev *slackevents.MessageEvent, 
 	if ev == nil {
 		return InboundEvent{}, false
 	}
-	// Slack distinguishes edits, deletes, and bot messages via SubType.
-	// We accept top-level user messages (SubType=="") and bot messages.
+	// Slack distinguishes edits, deletes, and bot/file messages via SubType.
+	// We accept top-level user messages (SubType==""), bot messages, and file
+	// shares.
 	// Edits and deletes have their own routing; we deliberately ignore
 	// them here so a thread doesn't double-count an edit as new traffic.
-	if ev.SubType != "" && ev.SubType != "bot_message" {
+	if ev.SubType != "" && ev.SubType != "bot_message" && ev.SubType != slackMessageSubTypeFileShare {
 		return InboundEvent{}, false
 	}
 	channel := strings.TrimSpace(ev.Channel)
@@ -148,6 +151,9 @@ func parseMessage(env slackevents.EventsAPIEvent, ev *slackevents.MessageEvent, 
 	text := strings.TrimSpace(ev.Text)
 	if text == "" && ev.Message != nil {
 		text = strings.TrimSpace(ev.Message.Text)
+	}
+	if text == "" && ev.Message != nil {
+		text = slackMessageDisplayText("", slackFilesFromAPI(ev.Message.Files))
 	}
 	if channel == "" || ts == "" {
 		return InboundEvent{}, false

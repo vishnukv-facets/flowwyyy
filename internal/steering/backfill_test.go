@@ -3,6 +3,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -32,9 +33,12 @@ func (f *fakeHistory) History(ctx context.Context, ch, oldest string, limit int)
 }
 
 // fakeIMs is a stand-in SlackIMLister returning a fixed set of DM channel ids.
-type fakeIMs struct{ ids []string }
+type fakeIMs struct {
+	ids []string
+	err error
+}
 
-func (f *fakeIMs) ListIMs(ctx context.Context) ([]string, error) { return f.ids, nil }
+func (f *fakeIMs) ListIMs(ctx context.Context) ([]string, error) { return f.ids, f.err }
 
 func backfillTestDB(t *testing.T) *sql.DB {
 	t.Helper()
@@ -226,5 +230,57 @@ func TestBackfillDMsViaIMLister(t *testing.T) {
 	}
 	if got[0][0].Channel != "D1" {
 		t.Fatalf("Channel = %q, want %q", got[0][0].Channel, "D1")
+	}
+}
+
+func TestBackfillDMsFallsBackToKnownWatermarksWhenListIMsFails(t *testing.T) {
+	db := backfillTestDB(t)
+	if err := flowdb.SetSteeringWatermark(db, "D03LH2RCZMG", "1780915520.729909", fixedNow.Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetSteeringWatermark: %v", err)
+	}
+	fake := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
+		"D03LH2RCZMG": {
+			{
+				TS:   "1780916901.021529",
+				User: "U03LK2CCE68",
+				Files: []monitor.SlackFile{{
+					Name:       "PHASE2-PHASE3-EXECUTION-PLAN.md",
+					Title:      "PHASE2-PHASE3-EXECUTION-PLAN.md",
+					PrettyType: "Markdown (raw)",
+				}},
+			},
+		},
+	}}
+	ims := &fakeIMs{err: errors.New("missing_scope")}
+	var got [][]monitor.InboundEvent
+	observe := func(ctx context.Context, evs []monitor.InboundEvent) error {
+		got = append(got, evs)
+		return nil
+	}
+	cfg := func() WatchConfig { return WatchConfig{} }
+	bf := NewSteeringBackfill(db, observe, nil, fake, ims, cfg, time.Minute, time.Hour, 50)
+	bf.now = func() time.Time { return fixedNow }
+
+	bf.runOnce(context.Background())
+
+	if len(fake.calls) != 1 || fake.calls[0].Channel != "D03LH2RCZMG" {
+		t.Fatalf("history calls = %+v, want fallback call for known DM", fake.calls)
+	}
+	if len(got) != 1 || len(got[0]) != 1 {
+		t.Fatalf("observed = %+v, want one file-share event", got)
+	}
+	ev := got[0][0]
+	if ev.Channel != "D03LH2RCZMG" || ev.ChannelType != "im" {
+		t.Fatalf("channel = %q/%q, want D03LH2RCZMG/im", ev.Channel, ev.ChannelType)
+	}
+	if !strings.Contains(ev.Text, "PHASE2-PHASE3-EXECUTION-PLAN.md") || !strings.Contains(ev.Text, "Markdown") {
+		t.Fatalf("event text = %q, want readable file fallback", ev.Text)
+	}
+	wm, err := flowdb.GetSteeringWatermark(db, "D03LH2RCZMG")
+	if err != nil {
+		t.Fatalf("GetSteeringWatermark: %v", err)
+	}
+	if wm != "1780916901.021529" {
+		t.Fatalf("watermark = %q, want file message ts", wm)
 	}
 }

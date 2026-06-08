@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
@@ -107,6 +108,39 @@ func TestParseEventsAPIEvent_MessageEditAndDeleteIgnored(t *testing.T) {
 		if len(out) != 0 {
 			t.Errorf("subtype %q should be ignored, got %+v", sub, out)
 		}
+	}
+}
+
+func TestParseEventsAPIEvent_FileShareUsesFileTitleAsText(t *testing.T) {
+	envelope := slackevents.EventsAPIEvent{
+		TeamID: "T123",
+		InnerEvent: slackevents.EventsAPIInnerEvent{
+			Type: string(slackevents.Message),
+			Data: &slackevents.MessageEvent{
+				Type:        "message",
+				SubType:     "file_share",
+				Channel:     "D123",
+				ChannelType: slackevents.ChannelTypeIM,
+				User:        "U234",
+				TimeStamp:   "1710000100.000001",
+				Message: &slack.Msg{Files: []slack.File{{
+					Name:       "PHASE2-PHASE3-EXECUTION-PLAN.md",
+					Title:      "PHASE2-PHASE3-EXECUTION-PLAN.md",
+					PrettyType: "Markdown (raw)",
+				}}},
+			},
+		},
+	}
+	out := ParseEventsAPIEvent(envelope, nil)
+	if len(out) != 1 {
+		t.Fatalf("len = %d, want 1", len(out))
+	}
+	got := out[0]
+	if got.ChannelType != "im" {
+		t.Fatalf("channel_type = %q, want im", got.ChannelType)
+	}
+	if !strings.Contains(got.Text, "PHASE2-PHASE3-EXECUTION-PLAN.md") || !strings.Contains(got.Text, "Markdown") {
+		t.Fatalf("text = %q, want readable file title/type", got.Text)
 	}
 }
 

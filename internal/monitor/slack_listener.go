@@ -420,7 +420,7 @@ func expectedDroppedMessageEvent(ev *slackevents.MessageEvent) bool {
 	if ev == nil {
 		return false
 	}
-	if ev.SubType != "" && ev.SubType != "bot_message" {
+	if ev.SubType != "" && ev.SubType != "bot_message" && ev.SubType != slackMessageSubTypeFileShare {
 		return true
 	}
 	return strings.TrimSpace(ev.User) == ""

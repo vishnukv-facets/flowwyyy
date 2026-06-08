@@ -101,7 +101,7 @@ func (f SlackContextFetcher) FetchContext(ctx context.Context, ev monitor.Inboun
 		if i == parentIdx {
 			continue
 		}
-		if strings.TrimSpace(msg.TS) == "" || strings.TrimSpace(msg.Text) == "" {
+		if strings.TrimSpace(msg.TS) == "" || strings.TrimSpace(msg.DisplayText()) == "" {
 			continue
 		}
 		pack.Messages = append(pack.Messages, slackContextMessage(ctx, f, msg, "reply"))
@@ -123,7 +123,7 @@ func slackContextMessage(ctx context.Context, f SlackContextFetcher, msg monitor
 	return ContextMessage{
 		Kind:   kind,
 		Author: strings.TrimSpace(msg.User),
-		Text:   cleanContextText(ctx, f.CleanText, msg.Text),
+		Text:   cleanContextText(ctx, f.CleanText, msg.DisplayText()),
 		TS:     ts,
 	}
 }

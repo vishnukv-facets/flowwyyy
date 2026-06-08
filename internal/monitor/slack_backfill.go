@@ -47,12 +47,14 @@ func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, m := range msgs {
+		files := slackFilesFromAPIWithContent(ctx, c.api, m.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(m.User, m.Username),
-			Text:     m.Text,
+			Text:     strings.TrimSpace(m.Text),
 			TS:       m.Timestamp,
 			ThreadTS: m.ThreadTimestamp,
 			SubType:  m.SubType,
+			Files:    files,
 		})
 	}
 	return out, nil
@@ -242,7 +244,7 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 			TS:          ts,
 			ThreadTS:    threadTS,
 			UserID:      strings.TrimSpace(m.User),
-			Text:        strings.TrimSpace(m.Text),
+			Text:        strings.TrimSpace(m.DisplayText()),
 		}
 		if steererOwned {
 			if err := b.Observer.Observe(ctx, ev); err != nil {
@@ -320,8 +322,8 @@ func slackTSLess(a, b string) bool {
 // reply still reaches the inbox via the durable path.
 func backfillAcceptMessage(m SlackMessage) bool {
 	switch strings.TrimSpace(m.SubType) {
-	case "", "bot_message", "thread_broadcast":
-		return strings.TrimSpace(m.Text) != "" || strings.TrimSpace(m.User) != ""
+	case "", "bot_message", "thread_broadcast", slackMessageSubTypeFileShare:
+		return strings.TrimSpace(m.DisplayText()) != "" || strings.TrimSpace(m.User) != ""
 	default:
 		return false
 	}

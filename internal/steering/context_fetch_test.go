@@ -62,6 +62,39 @@ func TestSlackContextFetcherBuildsParentRepliesParticipantsAndPermalink(t *testi
 	}
 }
 
+func TestSlackContextFetcherIncludesTextFileContent(t *testing.T) {
+	f := SlackContextFetcher{
+		Replies: fakeSlackReplies{msgs: []monitor.SlackMessage{
+			{
+				User:     "U_ISHAN",
+				TS:       "1780916901.021529",
+				ThreadTS: "1780916901.021529",
+				SubType:  "file_share",
+				Files: []monitor.SlackFile{{
+					Title:      "PHASE2-PHASE3-EXECUTION-PLAN.md",
+					PrettyType: "Markdown (raw)",
+					Content:    "# CSX Phase 2 & 3 Execution Plan\n\nCreate DMS replication instance first.",
+				}},
+			},
+		}},
+	}
+	pack, err := f.FetchContext(context.Background(), monitor.InboundEvent{
+		Kind: "message", ChannelType: "im", Channel: "D03LH2RCZMG", TS: "1780916901.021529", ThreadTS: "1780916901.021529", UserID: "U_ISHAN", Text: "file: PHASE2-PHASE3-EXECUTION-PLAN.md",
+	})
+	if err != nil {
+		t.Fatalf("FetchContext: %v", err)
+	}
+	if pack.Parent == nil {
+		t.Fatalf("parent missing: %+v", pack)
+	}
+	if !strings.Contains(pack.Parent.Text, "Create DMS replication instance first") {
+		t.Fatalf("parent text = %q, want downloaded file content", pack.Parent.Text)
+	}
+	if !strings.Contains(pack.Parent.Text, "PHASE2-PHASE3-EXECUTION-PLAN.md") {
+		t.Fatalf("parent text = %q, want file name retained", pack.Parent.Text)
+	}
+}
+
 func TestSlackContextFetcherMissingAuthFailsClearly(t *testing.T) {
 	f := SlackContextFetcher{}
 	_, err := f.FetchContext(context.Background(), monitor.InboundEvent{

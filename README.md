@@ -371,6 +371,7 @@ oauth_config:
       - channels:read       # resolve channel name + members for task titles
       - groups:read         # same, for private channels
       - users:read          # resolve author display names for titles/inbox
+      - files:read          # read text/PDF file-share bodies for attention context
       - app_mentions:read   # receive @flow mentions
       - im:read             # DM metadata (optional, see notes)
       - mpim:read           # group-DM metadata (optional, see notes)
@@ -381,6 +382,7 @@ oauth_config:
       - mpim:history        # receive + backfill group DMs (DM following)
       - channels:history    # optional, user-scoped channel events (overlaps bot)
       - groups:history      # optional, user-scoped private-channel events
+      - files:read          # read text/PDF file-share bodies in DMs/MPIMs
 settings:
   event_subscriptions:
     bot_events:
@@ -477,11 +479,13 @@ is incremental.
 | **Bot** (`xoxb-`) | `reactions:read` | Seeing your `:claude:` / `:codex:` reaction — the core trigger |
 | Bot | `channels:history`, `groups:history` | Streaming new thread replies into the task inbox (public / private) |
 | Bot | `channels:read`, `groups:read`, `users:read` | Building nice task titles ("Alice — fix the deploy") instead of falling back to bare IDs |
+| Bot | `files:read` | Reading text/PDF file-share bodies in watched channels for attention context and security reporting |
 | Bot | `app_mentions:read` | Reacting to `@flow` mentions |
 | Bot | `im:read`, `mpim:read` | DM metadata lookups (optional — most DM work uses the user token) |
 | Bot | `chat:write`, `reactions:write` | Posting replies / reactions *back* to Slack — only used if you set `FLOW_SLACK_WRITES_ENABLED=1` (off by default) |
 | **User** (`xoxp-`) | `im:history`, `mpim:history` | **DM following** — receiving and backfilling DM replies the bot can't see |
 | User | `channels:history`, `groups:history` | Optional, user-scoped channel events (overlaps the bot's; flow dedups by `(channel, ts)` so it's safe to have both) |
+| User | `files:read` | Reading text/PDF file-share bodies in DMs/MPIMs for attention context and security reporting |
 
 #### Event → feature reference
 

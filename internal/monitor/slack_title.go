@@ -1,16 +1,27 @@
 package monitor
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/slack-go/slack"
+	"rsc.io/pdf"
 )
 
-const slackTitleContextLimit = 96
+const (
+	slackTitleContextLimit   = 96
+	slackFileContentMaxBytes = 64 * 1024
+	slackPDFContentMaxBytes  = 2 * 1024 * 1024
+)
+
+var errSlackFileContentLimit = errors.New("slack file content limit reached")
 
 // SlackConversation is the small, testable subset of conversations.info data
 // needed to name Slack-origin tasks.
@@ -35,6 +46,361 @@ type SlackMessage struct {
 	TS       string
 	ThreadTS string
 	SubType  string
+	Files    []SlackFile
+}
+
+// SlackFile is the file metadata needed to make file-only Slack messages
+// visible to the steerer without exposing private download URLs.
+type SlackFile struct {
+	ID                 string
+	Name               string
+	Title              string
+	Mimetype           string
+	Filetype           string
+	PrettyType         string
+	Size               int
+	URLPrivate         string `json:"-"`
+	URLPrivateDownload string `json:"-"`
+	Content            string
+	ContentTruncated   bool
+	SecurityReport     string
+}
+
+// DisplayText returns the message body, falling back to file titles for
+// file-only messages.
+func (m SlackMessage) DisplayText() string {
+	return slackMessageDisplayText(m.Text, m.Files)
+}
+
+func slackFilesFromAPI(files []slack.File) []SlackFile {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]SlackFile, 0, len(files))
+	for _, f := range files {
+		sf := SlackFile{
+			ID:                 strings.TrimSpace(f.ID),
+			Name:               strings.TrimSpace(f.Name),
+			Title:              strings.TrimSpace(f.Title),
+			Mimetype:           strings.TrimSpace(f.Mimetype),
+			Filetype:           strings.TrimSpace(f.Filetype),
+			PrettyType:         strings.TrimSpace(f.PrettyType),
+			Size:               f.Size,
+			URLPrivate:         strings.TrimSpace(f.URLPrivate),
+			URLPrivateDownload: strings.TrimSpace(f.URLPrivateDownload),
+			Content:            strings.TrimSpace(f.Preview),
+			ContentTruncated:   f.LinesMore > 0,
+		}
+		if sf.Name == "" && sf.Title == "" && sf.Mimetype == "" && sf.Filetype == "" && sf.PrettyType == "" && sf.Content == "" {
+			continue
+		}
+		out = append(out, sf)
+	}
+	return out
+}
+
+var slackFileDownloadFn = func(ctx context.Context, api *slack.Client, downloadURL string, maxBytes int) ([]byte, bool, error) {
+	if api == nil {
+		return nil, false, errors.New("slack api client unavailable")
+	}
+	downloadURL = strings.TrimSpace(downloadURL)
+	if downloadURL == "" {
+		return nil, false, errors.New("slack file download URL unavailable")
+	}
+	if maxBytes <= 0 {
+		maxBytes = slackFileContentMaxBytes
+	}
+	var buf limitedSlackFileBuffer
+	buf.limit = maxBytes
+	err := api.GetFileContext(ctx, downloadURL, &buf)
+	if err != nil && !errors.Is(err, errSlackFileContentLimit) {
+		return nil, false, err
+	}
+	return append([]byte(nil), buf.buf.Bytes()...), buf.truncated, nil
+}
+
+type limitedSlackFileBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedSlackFileBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		b.truncated = true
+		return 0, errSlackFileContentLimit
+	}
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return 0, errSlackFileContentLimit
+	}
+	if len(p) > remaining {
+		_, _ = b.buf.Write(p[:remaining])
+		b.truncated = true
+		return remaining, errSlackFileContentLimit
+	}
+	return b.buf.Write(p)
+}
+
+func (b *limitedSlackFileBuffer) String() string {
+	if b == nil {
+		return ""
+	}
+	return b.buf.String()
+}
+
+func slackFilesFromAPIWithContent(ctx context.Context, api *slack.Client, files []slack.File) []SlackFile {
+	out := slackFilesFromAPI(files)
+	for i := range out {
+		if !out[i].isReadableBySafeExtractor() {
+			out[i].SecurityReport = "Security report: content not fetched; unsupported file type for safe text extraction."
+			continue
+		}
+		maxBytes := out[i].downloadMaxBytes()
+		if out[i].Size > maxBytes && strings.TrimSpace(out[i].Content) == "" {
+			out[i].SecurityReport = fmt.Sprintf("Security report: content not fetched; file size %d bytes exceeds safe fetch limit %d bytes.", out[i].Size, maxBytes)
+			continue
+		}
+		url := firstNonEmpty(out[i].URLPrivateDownload, out[i].URLPrivate)
+		if url != "" {
+			data, downloadTruncated, err := slackFileDownloadFn(ctx, api, url, maxBytes)
+			if err == nil && len(data) > 0 {
+				if slackDownloadedContentLooksHTML(data) {
+					out[i].SecurityReport = "Security report: content not scanned; Slack returned an HTML page instead of file bytes. Reinstall Slack with files:read scope if this persists."
+				} else if out[i].isPDFLike() {
+					content, extractTruncated, extractErr := slackPDFExtractTextFn(data, slackFileContentMaxBytes)
+					if extractErr == nil && strings.TrimSpace(content) != "" {
+						out[i].Content = content
+						out[i].ContentTruncated = downloadTruncated || extractTruncated
+					}
+				} else {
+					out[i].Content = strings.TrimSpace(string(data))
+					out[i].ContentTruncated = downloadTruncated
+				}
+			}
+		}
+		if strings.TrimSpace(out[i].Content) == "" {
+			if strings.TrimSpace(out[i].SecurityReport) != "" {
+				continue
+			}
+			if out[i].isPDFLike() {
+				out[i].SecurityReport = "Security report: content not scanned; PDF had no extractable text or extraction failed."
+			} else {
+				out[i].SecurityReport = "Security report: content not scanned; readable file content was unavailable."
+			}
+			continue
+		}
+		out[i].SecurityReport = slackFileSecurityReport(out[i].Content, out[i].isPDFLike())
+	}
+	return out
+}
+
+var slackPDFExtractTextFn = extractSlackPDFText
+
+func extractSlackPDFText(data []byte, maxChars int) (text string, truncated bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			text, truncated, err = "", false, fmt.Errorf("pdf text extraction failed: %v", r)
+		}
+	}()
+	if len(data) == 0 {
+		return "", false, errors.New("empty pdf")
+	}
+	if maxChars <= 0 {
+		maxChars = slackFileContentMaxBytes
+	}
+	r, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return "", false, err
+	}
+	var b strings.Builder
+	for pageNo := 1; pageNo <= r.NumPage(); pageNo++ {
+		pageText := extractSlackPDFPageText(r.Page(pageNo))
+		if strings.TrimSpace(pageText) == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			if b.Len()+2 > maxChars {
+				return b.String(), true, nil
+			}
+			b.WriteString("\n\n")
+		}
+		remaining := maxChars - b.Len()
+		if len(pageText) > remaining {
+			b.WriteString(pageText[:remaining])
+			return b.String(), true, nil
+		}
+		b.WriteString(pageText)
+	}
+	return strings.TrimSpace(b.String()), false, nil
+}
+
+func extractSlackPDFPageText(page pdf.Page) string {
+	content := page.Content()
+	if len(content.Text) == 0 {
+		return ""
+	}
+	text := append([]pdf.Text(nil), content.Text...)
+	sort.Sort(pdf.TextVertical(text))
+	var b strings.Builder
+	var lastY, lastX, lastW float64
+	haveLast := false
+	for _, item := range text {
+		s := strings.TrimSpace(item.S)
+		if s == "" {
+			continue
+		}
+		if haveLast {
+			if math.Abs(item.Y-lastY) > 2 {
+				b.WriteByte('\n')
+			} else if item.X > lastX+math.Max(lastW, 3) {
+				b.WriteByte(' ')
+			}
+		}
+		b.WriteString(s)
+		lastY, lastX, lastW = item.Y, item.X, item.W
+		haveLast = true
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func slackDownloadedContentLooksHTML(data []byte) bool {
+	s := strings.TrimSpace(strings.ToLower(string(data[:min(len(data), 512)])))
+	return strings.HasPrefix(s, "<!doctype html") || strings.HasPrefix(s, "<html") || strings.Contains(s, "<title>slack")
+}
+
+func slackMessageDisplayText(text string, files []SlackFile) string {
+	text = strings.TrimSpace(text)
+	if text != "" {
+		parts := []string{text}
+		for _, f := range files {
+			if fileText := f.displayText(); fileText != "" {
+				parts = append(parts, fileText)
+			}
+		}
+		return strings.Join(parts, "\n\n")
+	}
+	if len(files) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(files))
+	for _, f := range files {
+		if fileText := f.displayText(); fileText != "" {
+			parts = append(parts, fileText)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func (f SlackFile) displayText() string {
+	label := firstNonEmpty(strings.TrimSpace(f.Title), strings.TrimSpace(f.Name), "untitled file")
+	kind := firstNonEmpty(strings.TrimSpace(f.PrettyType), strings.TrimSpace(f.Filetype), strings.TrimSpace(f.Mimetype))
+	header := "file: " + label
+	if kind != "" {
+		header += " (" + kind + ")"
+	}
+	content := strings.TrimSpace(f.Content)
+	report := strings.TrimSpace(f.SecurityReport)
+	if content == "" {
+		if report != "" {
+			return header + "\n\n" + report
+		}
+		return header
+	}
+	if f.ContentTruncated {
+		content += "\n[truncated]"
+	}
+	if report != "" {
+		content += "\n\n" + report
+	}
+	return header + "\n\n" + content
+}
+
+func (f SlackFile) isReadableBySafeExtractor() bool {
+	return f.isTextLike() || f.isPDFLike()
+}
+
+func (f SlackFile) isPDFLike() bool {
+	mime := strings.ToLower(strings.TrimSpace(f.Mimetype))
+	filetype := strings.ToLower(strings.TrimSpace(f.Filetype))
+	pretty := strings.ToLower(strings.TrimSpace(f.PrettyType))
+	name := strings.ToLower(firstNonEmpty(f.Name, f.Title))
+	return mime == "application/pdf" || filetype == "pdf" || strings.Contains(pretty, "pdf") || strings.HasSuffix(name, ".pdf")
+}
+
+func (f SlackFile) downloadMaxBytes() int {
+	if f.isPDFLike() {
+		return slackPDFContentMaxBytes
+	}
+	return slackFileContentMaxBytes
+}
+
+func (f SlackFile) isTextLike() bool {
+	mime := strings.ToLower(strings.TrimSpace(f.Mimetype))
+	if strings.HasPrefix(mime, "text/") {
+		return true
+	}
+	switch mime {
+	case "application/json", "application/x-yaml", "application/yaml", "application/xml", "application/javascript", "application/x-sh":
+		return true
+	}
+	filetype := strings.ToLower(strings.TrimSpace(f.Filetype))
+	pretty := strings.ToLower(strings.TrimSpace(f.PrettyType))
+	if strings.Contains(pretty, "markdown") || strings.Contains(pretty, "text") {
+		return true
+	}
+	switch filetype {
+	case "text", "txt", "markdown", "md", "post", "json", "yaml", "yml", "xml", "csv", "log", "go", "py", "js", "ts", "tsx", "jsx", "sh", "terraform", "tf":
+		return true
+	}
+	name := strings.ToLower(firstNonEmpty(f.Name, f.Title))
+	for _, ext := range []string{".txt", ".md", ".markdown", ".json", ".yaml", ".yml", ".xml", ".csv", ".log", ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".sh", ".tf", ".tfvars"} {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func slackFileSecurityReport(content string, pdfSource bool) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "Security report: content not scanned; no extracted text was available."
+	}
+	findings := slackFileSecurityFindings(content)
+	scope := "fetched content"
+	if pdfSource {
+		scope = "extracted PDF text"
+	}
+	if len(findings) == 0 {
+		return "Security report: no high-risk code indicators found in " + scope + "."
+	}
+	return "Security report: potential high-risk code indicators found in " + scope + ":\n- " + strings.Join(findings, "\n- ")
+}
+
+type slackFileSecurityPattern struct {
+	label string
+	re    *regexp.Regexp
+}
+
+var slackFileSecurityPatterns = []slackFileSecurityPattern{
+	{label: "download-and-execute shell pipeline", re: regexp.MustCompile(`(?is)\b(curl|wget)\b[^\n|;]*\|\s*(sudo\s+)?(sh|bash|zsh|python|python3|perl|ruby)\b`)},
+	{label: "destructive filesystem command", re: regexp.MustCompile(`(?is)\b(sudo\s+)?rm\s+-(?:[a-zA-Z]*r[a-zA-Z]*f|[a-zA-Z]*f[a-zA-Z]*r)\s+(/|\$HOME|~|\*)|\bmkfs(?:\.[a-z0-9]+)?\b|\bdd\s+if=.+\s+of=/dev/`)},
+	{label: "reverse shell or raw network shell indicator", re: regexp.MustCompile(`(?is)(/dev/tcp/|\bnc\s+[^;\n]*\s-e\s|\bncat\s+[^;\n]*\s-e\s|bash\s+-i\s+>&|python(?:3)?\s+-c\s+['"][^'"]*socket\.)`)},
+	{label: "encoded payload execution", re: regexp.MustCompile(`(?is)(base64\s+(-d|--decode)\s*\|\s*(sh|bash|python|python3|perl|ruby)|powershell(?:\.exe)?\s+[^;\n]*(?:-enc|-encodedcommand)|frombase64string\s*\()`)},
+	{label: "embedded private key or credential material", re: regexp.MustCompile(`(?is)(-----BEGIN [A-Z ]*PRIVATE KEY-----|AWS_SECRET_ACCESS_KEY|SLACK_[A-Z_]*TOKEN|xox[baprs]-[A-Za-z0-9-]+|gh[pousr]_[A-Za-z0-9_]{20,}|Authorization:\s*Bearer\s+[A-Za-z0-9._~+/=-]+)`)},
+	{label: "persistence or privileged startup modification", re: regexp.MustCompile(`(?is)(\bcrontab\s+|/etc/cron\.|systemctl\s+enable|launchctl\s+(load|bootstrap)|chmod\s+\+x\s+[^;\n]+&&\s*[^;\n]+)`)},
+}
+
+func slackFileSecurityFindings(content string) []string {
+	var findings []string
+	for _, pattern := range slackFileSecurityPatterns {
+		if pattern.re.MatchString(content) {
+			findings = append(findings, pattern.label)
+		}
+	}
+	return findings
 }
 
 // SlackUser is the small, testable subset of users.info data needed for
@@ -101,12 +467,14 @@ func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, msg := range msgs {
+		files := slackFilesFromAPIWithContent(ctx, c.api, msg.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(msg.User, msg.Username),
-			Text:     msg.Text,
+			Text:     strings.TrimSpace(msg.Text),
 			TS:       msg.Timestamp,
 			ThreadTS: msg.ThreadTimestamp,
 			SubType:  msg.SubType,
+			Files:    files,
 		})
 	}
 	return out, nil
@@ -227,7 +595,7 @@ func slackThreadContext(ctx context.Context, client SlackTitleClient, channelID,
 	msgs, err := client.ConversationReplies(ctx, channelID, threadTS, 1)
 	if err == nil {
 		for _, msg := range msgs {
-			if text := cleanSlackTitleText(msg.Text); text != "" {
+			if text := cleanSlackTitleText(msg.DisplayText()); text != "" {
 				return text
 			}
 		}
