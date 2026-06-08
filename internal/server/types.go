@@ -379,40 +379,42 @@ type KBFileView struct {
 
 // SteeringTraceView is the UI shape of a steering_trace row.
 type SteeringTraceView struct {
-	ID               string  `json:"id"`
-	CreatedAt        string  `json:"created_at"`
-	Origin           string  `json:"origin"`
-	Source           string  `json:"source"`
-	Channel          string  `json:"channel,omitempty"`
-	ChannelType      string  `json:"channel_type,omitempty"`
-	Author           string  `json:"author,omitempty"`
-	ThreadKey        string  `json:"thread_key,omitempty"`
-	TextPreview      string  `json:"text_preview,omitempty"`
-	Disposition      string  `json:"disposition"`
-	StageReached     string  `json:"stage_reached"`
-	DropReason       string  `json:"drop_reason,omitempty"`
-	Stage1Relevant   *bool   `json:"stage1_relevant,omitempty"`
-	Stage1Reason     string  `json:"stage1_reason,omitempty"`
-	Stage2Action     string  `json:"stage2_action,omitempty"`
-	Stage2Confidence float64 `json:"stage2_confidence,omitempty"`
-	Stage3Action     string  `json:"stage3_action,omitempty"`
-	Stage3Confidence float64 `json:"stage3_confidence,omitempty"`
-	FinalAction      string  `json:"final_action,omitempty"`
-	FinalConfidence  float64 `json:"final_confidence,omitempty"`
-	FeedItemID       string  `json:"feed_item_id,omitempty"`
-	Error            string  `json:"error,omitempty"`
-	AutonomyAction   string  `json:"autonomy_action,omitempty"`
-	AutonomyDecision string  `json:"autonomy_decision,omitempty"`
-	AutonomyReason   string  `json:"autonomy_reason,omitempty"`
-	LatencyMS        int64   `json:"latency_ms"`
-	Model            string  `json:"model,omitempty"`
-	ChannelName      string  `json:"channel_name,omitempty"`
-	AuthorName       string  `json:"author_name,omitempty"`
-	Text             string  `json:"text,omitempty"` // mentions resolved, full (not just preview)
-	Permalink        string  `json:"permalink,omitempty"`
-	TS               string  `json:"ts,omitempty"`
-	TeamID           string  `json:"team_id,omitempty"`
-	URL              string  `json:"url,omitempty"` // connector permalink (GitHub item URL, etc.)
+	ID               string                  `json:"id"`
+	CreatedAt        string                  `json:"created_at"`
+	Origin           string                  `json:"origin"`
+	Source           string                  `json:"source"`
+	Channel          string                  `json:"channel,omitempty"`
+	ChannelType      string                  `json:"channel_type,omitempty"`
+	Author           string                  `json:"author,omitempty"`
+	ThreadKey        string                  `json:"thread_key,omitempty"`
+	TextPreview      string                  `json:"text_preview,omitempty"`
+	Disposition      string                  `json:"disposition"`
+	StageReached     string                  `json:"stage_reached"`
+	DropReason       string                  `json:"drop_reason,omitempty"`
+	Stage1Relevant   *bool                   `json:"stage1_relevant,omitempty"`
+	Stage1Reason     string                  `json:"stage1_reason,omitempty"`
+	Stage2Action     string                  `json:"stage2_action,omitempty"`
+	Stage2Confidence float64                 `json:"stage2_confidence,omitempty"`
+	Stage3Action     string                  `json:"stage3_action,omitempty"`
+	Stage3Confidence float64                 `json:"stage3_confidence,omitempty"`
+	FinalAction      string                  `json:"final_action,omitempty"`
+	FinalConfidence  float64                 `json:"final_confidence,omitempty"`
+	FeedItemID       string                  `json:"feed_item_id,omitempty"`
+	LinkedTask       string                  `json:"linked_task,omitempty"`
+	MatchedTask      *AttentionTaskMatchView `json:"matched_task,omitempty"`
+	Error            string                  `json:"error,omitempty"`
+	AutonomyAction   string                  `json:"autonomy_action,omitempty"`
+	AutonomyDecision string                  `json:"autonomy_decision,omitempty"`
+	AutonomyReason   string                  `json:"autonomy_reason,omitempty"`
+	LatencyMS        int64                   `json:"latency_ms"`
+	Model            string                  `json:"model,omitempty"`
+	ChannelName      string                  `json:"channel_name,omitempty"`
+	AuthorName       string                  `json:"author_name,omitempty"`
+	Text             string                  `json:"text,omitempty"` // mentions resolved, full (not just preview)
+	Permalink        string                  `json:"permalink,omitempty"`
+	TS               string                  `json:"ts,omitempty"`
+	TeamID           string                  `json:"team_id,omitempty"`
+	URL              string                  `json:"url,omitempty"` // connector permalink (GitHub item URL, etc.)
 }
 
 // SteeringFunnelView is the funnel aggregate for the trace panel.

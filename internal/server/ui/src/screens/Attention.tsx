@@ -1011,8 +1011,15 @@ function relevantLabel(b: boolean | null | undefined): string {
 }
 
 function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: () => void }) {
+  const [, navigate] = useLocation()
   // Keep the last item around so content doesn't blank during the close anim.
-  if (!item) return <Modal open={false} onClose={onClose} title="" children={null} />
+  if (!item) {
+    return (
+      <Modal open={false} onClose={onClose} title="">
+        {null}
+      </Modal>
+    )
+  }
 
   const sourceLabel = item.source === 'github' ? 'GitHub' : titleCase(item.source || 'message')
   const title = `${sourceLabel} · ${item.disposition}`
@@ -1020,6 +1027,9 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
   const from = item.author_name || '(system/bot — no user)'
   const message = item.text || item.text_preview || '(no text)'
   const linkLabel = item.source === 'github' ? 'Open in GitHub' : 'Open in Slack'
+  const targetTask = item.matched_task
+  const targetSlug = item.linked_task || targetTask?.slug || ''
+  const targetLabel = item.autonomy_action === 'forward' || item.final_action === 'forward' ? 'forwarded task' : 'task'
 
   return (
     <Modal open onClose={onClose} title={title} width={620}>
@@ -1069,6 +1079,22 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             <KV k="stage 3 action" v={item.stage3_action ? `${item.stage3_action} · ${pctConf(item.stage3_confidence)}` : '—'} />
             <KV k="final action" v={item.final_action ? `${item.final_action} · ${pctConf(item.final_confidence)}` : '—'} />
             <KV k="autonomy" v={item.autonomy_decision ? `${item.autonomy_action || item.final_action || 'action'} · ${item.autonomy_decision}` : '—'} />
+            {targetSlug ? (
+              <KV
+                k={targetLabel}
+                v={
+                  <span className="row gap">
+                    <span>
+                      <strong>{targetTask?.name || targetSlug}</strong>
+                      {targetTask?.name ? <span className="mono faint"> · {targetSlug}</span> : null}
+                    </span>
+                    <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${targetSlug}`)}>
+                      <ArrowRight size={13} /> Open
+                    </button>
+                  </span>
+                }
+              />
+            ) : null}
             <KV k="autonomy reason" v={item.autonomy_reason || '—'} />
             <KV k="drop reason" v={item.drop_reason || '—'} />
             <KV k="latency" v={item.latency_ms != null ? `${item.latency_ms} ms` : '—'} />
@@ -1081,6 +1107,14 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
           <div className="td-section">
             <div className="dim">
               <Check size={13} /> Surfaced to the Attention feed.{' '}
+              {targetSlug ? (
+                <>
+                  Linked to{' '}
+                  <button type="button" className="btn ghost sm" onClick={() => navigate(`/session/${targetSlug}`)}>
+                    <ArrowRight size={13} /> {targetTask?.name || targetSlug}
+                  </button>{' '}
+                </>
+              ) : null}
               <span className="faint">Find it under the Feed tab.</span>
             </div>
           </div>

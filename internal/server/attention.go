@@ -685,6 +685,18 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		AutonomyAction: t.AutonomyAction, AutonomyDecision: t.AutonomyDecision, AutonomyReason: t.AutonomyReason,
 		TS: t.TS, TeamID: t.TeamID, URL: t.URL,
 	}
+	if strings.TrimSpace(t.FeedItemID) != "" && s.cfg.DB != nil {
+		if item, err := flowdb.GetFeedItem(s.cfg.DB, t.FeedItemID); err == nil {
+			target := strings.TrimSpace(item.LinkedTask)
+			if target == "" {
+				target = strings.TrimSpace(item.MatchedTask)
+			}
+			v.LinkedTask = target
+			if target != "" {
+				v.MatchedTask = s.attentionTaskMatch(ctx, target)
+			}
+		}
+	}
 	if t.Source == "github" {
 		// GitHub fields are already human: owner/repo channel, GitHub login
 		// author, the item URL is the canonical permalink. No resolver needed.

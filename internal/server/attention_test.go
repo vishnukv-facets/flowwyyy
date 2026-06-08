@@ -713,6 +713,70 @@ func TestHandleAttentionDecision(t *testing.T) {
 	}
 }
 
+func TestAttentionTraceIncludesForwardedTaskTarget(t *testing.T) {
+	s, db := attentionTestServer(t)
+	now := "2026-06-05T10:00:00Z"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug,name,status,priority,work_dir,session_provider,created_at,updated_at)
+		 VALUES (?,?,?,?,?,?,?,?)`,
+		"raptor-review", "Raptor PR review", "in-progress", "high", t.TempDir(), "codex", now, now,
+	); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "ft1", Source: "github", ThreadKey: "facets-cloud/raptor:gh-pr:facets-cloud/raptor#159",
+		Summary: "Raptor PR moved", SuggestedAction: "forward", MatchedTask: "raptor-review",
+		Confidence: 0.93, Status: "acted", LinkedTask: "raptor-review", CreatedAt: now, ActedAt: now,
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+		ID: "ft-trace", CreatedAt: now, Origin: "live", Source: "github", Channel: "facets-cloud/raptor",
+		ThreadKey: "facets-cloud/raptor:gh-pr:facets-cloud/raptor#159", TextPreview: "head changed",
+		Disposition: "surfaced", StageReached: "stage3", FinalAction: "forward", FinalConfidence: 0.93,
+		FeedItemID: "ft1", AutonomyAction: "forward", AutonomyDecision: "acted",
+		AutonomyReason: "forward allowed", LatencyMS: 10,
+	}); err != nil {
+		t.Fatalf("seed trace: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	s.handleAttentionTrace(rec, httptest.NewRequest(http.MethodGet, "/api/attention/trace?since=2026-06-05T00:00:00Z", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("trace status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+	var traceResp AttentionTraceResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &traceResp); err != nil {
+		t.Fatalf("decode trace response: %v", err)
+	}
+	if len(traceResp.Items) != 1 {
+		t.Fatalf("trace items = %d, want 1: %+v", len(traceResp.Items), traceResp.Items)
+	}
+	trace := traceResp.Items[0]
+	if trace.LinkedTask != "raptor-review" {
+		t.Fatalf("trace linked task = %q, want raptor-review", trace.LinkedTask)
+	}
+	if trace.MatchedTask == nil || trace.MatchedTask.Slug != "raptor-review" || trace.MatchedTask.Name != "Raptor PR review" {
+		t.Fatalf("trace matched task = %+v, want raptor-review details", trace.MatchedTask)
+	}
+
+	rec2 := httptest.NewRecorder()
+	s.handleAttentionDecision(rec2, httptest.NewRequest(http.MethodGet, "/api/attention/decision?feed_id=ft1", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("decision status = %d, want 200; body: %s", rec2.Code, rec2.Body.String())
+	}
+	var decision SteeringTraceView
+	if err := json.Unmarshal(rec2.Body.Bytes(), &decision); err != nil {
+		t.Fatalf("decode decision response: %v", err)
+	}
+	if decision.LinkedTask != "raptor-review" {
+		t.Fatalf("decision linked task = %q, want raptor-review", decision.LinkedTask)
+	}
+	if decision.MatchedTask == nil || decision.MatchedTask.Slug != "raptor-review" || decision.MatchedTask.Name != "Raptor PR review" {
+		t.Fatalf("decision matched task = %+v, want raptor-review details", decision.MatchedTask)
+	}
+}
+
 func TestHandleAttentionTraceSourceFilter(t *testing.T) {
 	s, db := attentionTestServer(t)
 	// Two slack traces (seedTrace defaults to slack) + one github.

@@ -842,6 +842,8 @@ export interface SteeringTrace {
   final_action?: string
   final_confidence?: number
   feed_item_id?: string
+  linked_task?: string
+  matched_task?: AttentionTaskMatch
   error?: string
   autonomy_action?: string
   autonomy_decision?: string
