@@ -49,8 +49,10 @@ func SetFeedRetriaging(db *sql.DB, id, at string) error {
 // UpsertFeedItem inserts a feed item, coalescing by thread_key: if a row for
 // the same thread_key already exists with status 'new', that row is updated
 // in place (and its existing id is returned) instead of creating a duplicate
-// card. Otherwise the item is inserted as given. Returns the id of the row
-// written.
+// card. A fresh 'new' item also reopens a dismissed same-thread row, refreshing
+// the card with the latest thread-level context instead of fragmenting one
+// source thread across unrelated cards. Otherwise the item is inserted as given.
+// Returns the id of the row written.
 func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 	if item.ID == "" || item.ThreadKey == "" || item.SuggestedAction == "" {
 		return "", fmt.Errorf("flowdb: feed item requires id, thread_key, suggested_action")
@@ -60,29 +62,43 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 	}
 
 	var existingID string
-	err := db.QueryRow(
-		`SELECT id FROM attention_feed WHERE thread_key = ? AND status = 'new' LIMIT 1`,
-		item.ThreadKey,
-	).Scan(&existingID)
+	lookup := `SELECT id, status FROM attention_feed WHERE thread_key = ? AND status = 'new' ORDER BY created_at DESC, id DESC LIMIT 1`
+	if item.Status == "new" {
+		lookup = `SELECT id, status
+		          FROM attention_feed
+		          WHERE thread_key = ? AND status IN ('new', 'dismissed')
+		          ORDER BY CASE status WHEN 'new' THEN 0 ELSE 1 END, created_at DESC, id DESC
+		          LIMIT 1`
+	}
+	var ignoredStatus string
+	err := db.QueryRow(lookup, item.ThreadKey).Scan(&existingID, &ignoredStatus)
 	switch {
 	case err == sql.ErrNoRows:
 		// fall through to insert
 	case err != nil:
 		return "", fmt.Errorf("flowdb: lookup feed coalesce: %w", err)
 	default:
-		_, uerr := db.Exec(
-			`UPDATE attention_feed SET
-			   source=?, summary=?, suggested_action=?, matched_task=?,
-			   suggested_project=?, suggested_priority=?, urgency=?, is_vip=?,
-			   confidence=?, draft=?, reason=?, context_json=?,
-			   channel=?, channel_type=?, author=?, ts=?, team_id=?, url=?, linked_task=?
-			 WHERE id=?`,
+		args := []any{
 			item.Source, item.Summary, item.SuggestedAction, NullIfEmpty(item.MatchedTask),
 			NullIfEmpty(item.SuggestedProject), NullIfEmpty(item.SuggestedPriority), NullIfEmpty(item.Urgency), boolToInt(item.IsVIP),
 			item.Confidence, NullIfEmpty(item.Draft), NullIfEmpty(item.Reason), NullIfEmpty(item.ContextJSON),
 			NullIfEmpty(item.Channel), NullIfEmpty(item.ChannelType), NullIfEmpty(item.Author), NullIfEmpty(item.TS), NullIfEmpty(item.TeamID), NullIfEmpty(item.URL), NullIfEmpty(item.LinkedTask),
-			existingID,
-		)
+		}
+		update := `UPDATE attention_feed SET
+			   source=?, summary=?, suggested_action=?, matched_task=?,
+			   suggested_project=?, suggested_priority=?, urgency=?, is_vip=?,
+			   confidence=?, draft=?, reason=?, context_json=?,
+			   channel=?, channel_type=?, author=?, ts=?, team_id=?, url=?, linked_task=?`
+		if item.Status == "new" {
+			update += `, status='new', snooze_until=NULL, acted_at=NULL, retriaging_at=NULL`
+			if item.CreatedAt != "" {
+				update += `, created_at=?`
+				args = append(args, item.CreatedAt)
+			}
+		}
+		update += ` WHERE id=?`
+		args = append(args, existingID)
+		_, uerr := db.Exec(update, args...)
 		if uerr != nil {
 			return "", fmt.Errorf("flowdb: coalesce feed item: %w", uerr)
 		}

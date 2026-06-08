@@ -148,7 +148,7 @@ func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 	s, db := attentionTestServer(t)
 	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
 		ID: "act1", Source: "slack", ThreadKey: "C1:1.1", Summary: "Needs reply",
-		SuggestedAction: "reply", MatchedTask: "deploy-followup", Draft: "On it.",
+		SuggestedAction: "forward", MatchedTask: "deploy-followup", Draft: "On it.",
 		Channel: "C1", Author: "alice", Confidence: 0.75, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed feed: %v", err)
@@ -185,8 +185,17 @@ func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 	if byAction["confirm_handoff"]["target"] != "deploy-followup" {
 		t.Errorf("confirm_handoff target = %#v, want deploy-followup", byAction["confirm_handoff"])
 	}
+	if byAction["confirm_handoff"]["label"] != "Ask task agent" {
+		t.Errorf("confirm_handoff label = %#v, want Ask task agent", byAction["confirm_handoff"])
+	}
 	if byAction["forward"]["target"] != "deploy-followup" {
 		t.Errorf("forward target = %#v, want deploy-followup", byAction["forward"])
+	}
+	if byAction["forward"]["primary"] != true {
+		t.Errorf("forward should be the suggested matched-task action: %#v", byAction["forward"])
+	}
+	if byAction["confirm_handoff"]["primary"] == true {
+		t.Errorf("confirm_handoff should not be the suggested action: %#v", byAction["confirm_handoff"])
 	}
 	if byAction["send_reply"]["target"] != "source thread" {
 		t.Errorf("send_reply target = %#v, want source thread", byAction["send_reply"])

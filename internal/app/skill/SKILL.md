@@ -2661,9 +2661,17 @@ create tasks, or change policy.
    action preview; CLI users can use `flow attention trace` for the broader
    funnel and recent trace rows.
 3. Choose the narrowest operator-approved action:
-   - `flow attention act <id> dismiss` when the card is noise.
+   - `flow attention act <id> dismiss` when the current card is noise. This
+     hides/resolves the card only; it does not mute the source. If a later event
+     arrives on the same thread, Flow reopens that thread's feed row with the
+     refreshed, collated thread summary instead of treating it as unrelated.
    - `flow attention act <id> make-task` when it should become tracked work.
    - `flow attention act <id> forward` when it belongs with an existing task.
+     If a matched task is shown, prefer forwarding to that task over creating a
+     duplicate task unless the match evidence is wrong.
+   - `flow attention act <id> confirm-handoff` when the match looks plausible
+     but you want the matched task's agent to accept or decline before the card
+     is marked handled.
    Mission Control also exposes retriage, mute-channel, mute-sender,
    mute-thread, make-task-start, open-source/open-session, and send-reply.
 4. Use `flow attention feedback --group <dimension>` when you need the

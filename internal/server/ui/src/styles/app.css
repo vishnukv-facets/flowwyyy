@@ -5241,6 +5241,14 @@ a.orch-pr:hover {
 .att-actions {
   margin-top: 4px;
 }
+.att-forward-target {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
 .att-resolved {
   margin-top: 2px;
   font-size: 11.5px;
@@ -5474,6 +5482,10 @@ a.orch-pr:hover {
   position: fixed;
   inset: 0;
   z-index: 40;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: default;
 }
 .mute-pop {
   position: absolute;
@@ -5516,6 +5528,14 @@ a.orch-pr:hover {
 }
 .mute-item:hover {
   background: var(--bg-3);
+}
+.mute-item:disabled {
+  color: var(--text-3);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+.mute-item:disabled:hover {
+  background: none;
 }
 .row.between {
   justify-content: space-between;

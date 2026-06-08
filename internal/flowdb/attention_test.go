@@ -71,6 +71,71 @@ func TestAttentionFeedCoalescesByThreadKey(t *testing.T) {
 	}
 }
 
+func TestAttentionFeedCoalescesDismissedThreadAndReopens(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	first := FeedItem{
+		ID:              "old",
+		Source:          "slack",
+		ThreadKey:       "C1:250.1",
+		Summary:         "first message",
+		SuggestedAction: "digest_only",
+		Status:          "new",
+		CreatedAt:       "2026-06-05T10:00:00Z",
+	}
+	if _, err := UpsertFeedItem(db, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if err := SetFeedItemStatus(db, "old", "dismissed", "2026-06-05T10:01:00Z"); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+
+	next := FeedItem{
+		ID:              "new",
+		Source:          "slack",
+		ThreadKey:       "C1:250.1",
+		Summary:         "thread now has a concrete rollout plan",
+		SuggestedAction: "forward",
+		MatchedTask:     "coinswitch-task",
+		Confidence:      0.82,
+		ContextJSON:     `{"summary":"collated thread context"}`,
+		Status:          "new",
+		CreatedAt:       "2026-06-05T10:05:00Z",
+	}
+	id, err := UpsertFeedItem(db, next)
+	if err != nil {
+		t.Fatalf("second upsert: %v", err)
+	}
+	if id != "old" {
+		t.Fatalf("coalesced id = %q, want old", id)
+	}
+
+	got, err := GetFeedItem(db, "old")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "new" {
+		t.Errorf("Status = %q, want reopened new", got.Status)
+	}
+	if got.ActedAt != "" {
+		t.Errorf("ActedAt = %q, want cleared after reopen", got.ActedAt)
+	}
+	if got.Summary != next.Summary || got.SuggestedAction != "forward" || got.MatchedTask != "coinswitch-task" {
+		t.Errorf("coalesced row did not carry refreshed decision: %+v", got)
+	}
+	if got.ContextJSON != next.ContextJSON {
+		t.Errorf("ContextJSON = %q, want refreshed context", got.ContextJSON)
+	}
+	list, err := ListFeedItems(db, "new")
+	if err != nil {
+		t.Fatalf("ListFeedItems: %v", err)
+	}
+	if len(list) != 1 || list[0].ID != "old" {
+		t.Fatalf("new feed rows = %+v, want one reopened old row", list)
+	}
+}
+
 func TestAttentionFeedSetStatus(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

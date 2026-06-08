@@ -274,27 +274,29 @@ function AttentionCard({
 
       {item.status === 'new' ? (
         <div className="att-actions row gap" onClick={stop}>
-          <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
-            <ListPlus size={13} /> Make task
-          </button>
-          <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
-            <Play size={13} /> Make task & start
-          </button>
           {item.matched_task ? (
             <>
               <button
                 type="button"
-                className="btn sm"
-                disabled={disabled || item.handoff?.status === 'pending'}
-                onClick={() => onAct(item, 'confirm-handoff')}
+                className="btn primary sm"
+                disabled={disabled}
+                onClick={() => onAct(item, 'forward')}
+                title={matchedTaskLabel(item)}
               >
-                <Handshake size={13} /> Ask owner
+                <Share2 size={13} /> Forward to <span className="att-forward-target">{matchedTaskLabel(item)}</span>
               </button>
-              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'forward')}>
-                <Share2 size={13} /> Forward
+              <MatchedTaskMoreMenu item={item} disabled={disabled} onAct={onAct} />
+            </>
+          ) : (
+            <>
+              <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
+                <ListPlus size={13} /> Make task
+              </button>
+              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
+                <Play size={13} /> Make task & start
               </button>
             </>
-          ) : null}
+          )}
           {item.draft ? (
             // Opens the detail modal (review/edit before sending) rather than
             // blind-sending — the action row already stopPropagation's the
@@ -339,6 +341,65 @@ function AttentionCard({
           ) : null}
         </div>
       )}
+    </div>
+  )
+}
+
+function matchedTaskLabel(item: AttentionItem): string {
+  return item.why?.matched_task?.name || item.why?.matched_task?.slug || item.matched_task || 'matched task'
+}
+
+function MatchedTaskMoreMenu({
+  item,
+  disabled,
+  onAct,
+}: {
+  item: AttentionItem
+  disabled?: boolean
+  onAct: (item: AttentionItem, verb: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const handoffPending = item.handoff?.status === 'pending'
+  const choose = (verb: string) => {
+    setOpen(false)
+    onAct(item, verb)
+  }
+  return (
+    <div className="mute-menu left">
+      <button
+        type="button"
+        className="btn sm"
+        disabled={disabled}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="More actions"
+        onClick={() => setOpen((o) => !o)}
+      >
+        More <ChevronDown size={11} />
+      </button>
+      {open ? (
+        <>
+          <button type="button" className="mute-backdrop" aria-label="Close actions menu" onClick={() => setOpen(false)} />
+          <div className="mute-pop" role="menu">
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task')}>
+              <ListPlus size={12} className="faint" /> Make new task
+            </button>
+            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task-start')}>
+              <Play size={12} className="faint" /> Make new task & start
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              className="mute-item"
+              disabled={handoffPending}
+              title={handoffPending ? 'A handoff request is already pending' : undefined}
+              onClick={() => choose('confirm-handoff')}
+            >
+              <Handshake size={12} className="faint" /> Ask task agent
+            </button>
+          </div>
+        </>
+      ) : null}
     </div>
   )
 }
@@ -412,7 +473,7 @@ function MuteMenu({
       </button>
       {open ? (
         <>
-          <div className="mute-backdrop" onClick={() => setOpen(false)} />
+          <button type="button" className="mute-backdrop" aria-label="Close mute menu" onClick={() => setOpen(false)} />
           <div className="mute-pop" role="menu">
             {item.channel ? (
               <button type="button" role="menuitem" className="mute-item" onClick={() => choose('mute-channel')}>

@@ -314,16 +314,16 @@ func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
 	if matched != "" {
 		out = append(out, AttentionActionPreview{
 			Action:      "confirm_handoff",
-			Label:       "Ask owner",
+			Label:       "Ask task agent",
 			Target:      matched,
 			Description: "Asks the matched task's agent to accept or decline this handoff before forwarding.",
-			Primary:     attentionActionPrimary(it, "forward"),
 		})
 		out = append(out, AttentionActionPreview{
 			Action:      "forward",
 			Label:       "Forward",
 			Target:      matched,
 			Description: "Adds the context to the matched task and wakes that task's session.",
+			Primary:     attentionActionPrimary(it, "forward"),
 		})
 	}
 	if strings.TrimSpace(it.Draft) != "" {
