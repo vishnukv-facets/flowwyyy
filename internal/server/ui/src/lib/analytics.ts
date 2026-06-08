@@ -10,6 +10,7 @@ import type { TaskView, TokenDay } from './types'
 export interface WeekPoint {
   weekStart: string // YYYY-MM-DD, the Sunday that starts the week
   value: number
+  cost?: number // estimated USD; only set by tokensByWeek
 }
 
 /** Local YYYY-MM-DD for a Date. */
@@ -90,13 +91,18 @@ export function timeToDone(tasks: TaskView[]): TimeToDone {
 /**
  * Bucket the server's daily TOKEN_SERIES into weekly sums. The series is
  * Sunday-aligned and a multiple of 7 long, so each 7-day chunk is one week.
+ * `cost` carries the matching estimated-USD sum for the bar's tooltip.
  */
 export function tokensByWeek(series: TokenDay[]): WeekPoint[] {
   const out: WeekPoint[] = []
   for (let w = 0; w * 7 < series.length; w++) {
     const chunk = series.slice(w * 7, w * 7 + 7)
     if (chunk.length === 0) break
-    out.push({ weekStart: chunk[0].date, value: chunk.reduce((s, d) => s + d.tokens, 0) })
+    out.push({
+      weekStart: chunk[0].date,
+      value: chunk.reduce((s, d) => s + d.tokens, 0),
+      cost: chunk.reduce((s, d) => s + (d.cost_usd ?? 0), 0),
+    })
   }
   return out
 }

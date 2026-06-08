@@ -222,9 +222,20 @@ type transcriptUsageStats struct {
 	// message.usage. Codex reports running totals via payload.Info, so the
 	// accumulator buckets the delta between successive totals.
 	TokensByDay map[string]int
+	// CostByDay is the estimated USD cost of each day's fresh work tokens, on
+	// the same cache-excluded basis as TokensByDay. Each turn is priced at its
+	// own model's input/output rate (see pricing.go), so a day's figure blends
+	// however many models/providers were active that day. Turns whose model has
+	// no published rate contribute 0, so this is a floor, not an invoice.
+	CostByDay map[string]float64
 	// lastCodexFreshTotal is internal accumulator state for deriving per-event
 	// Codex deltas from cumulative total_token_usage records.
 	lastCodexFreshTotal int
+	// lastCodexFreshInput / lastCodexFreshOutput mirror lastCodexFreshTotal but
+	// split, so the per-event Codex cost delta can apply input and output rates
+	// separately (Codex output is priced well above input).
+	lastCodexFreshInput  int
+	lastCodexFreshOutput int
 }
 
 type transcriptUsageRecord struct {
@@ -295,11 +306,25 @@ func (u transcriptTokenUsage) total() int {
 // bundles the cached portion into InputTokens, exposed as CachedInputTokens, so
 // subtract it.
 func (u transcriptTokenUsage) freshTotal() int {
+	return u.freshInput() + u.freshOutput()
+}
+
+// freshInput is the genuinely-fresh input for a turn: InputTokens minus the
+// cached portion. Claude reports cache reads separately (CachedInputTokens is
+// ~0 for Claude), while Codex bundles the cached portion into InputTokens and
+// exposes it as CachedInputTokens — subtracting it works for both.
+func (u transcriptTokenUsage) freshInput() int {
 	in := u.InputTokens - u.CachedInputTokens
 	if in < 0 {
 		in = 0
 	}
-	return in + u.OutputTokens + u.ReasoningOutputTokens
+	return in
+}
+
+// freshOutput is what the model generated this turn: visible output plus
+// reasoning tokens. Both are billed at the model's output rate.
+func (u transcriptTokenUsage) freshOutput() int {
+	return u.OutputTokens + u.ReasoningOutputTokens
 }
 
 func parseTranscriptLine(line []byte, offset int64) []TranscriptEntry {

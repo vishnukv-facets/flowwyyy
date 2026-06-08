@@ -91,6 +91,18 @@ export function compactTokens(n: number): string {
   return `${(n / 1_000_000_000).toFixed(2)}B`
 }
 
+// fmtUSD renders an estimated dollar cost. It keeps cents for everyday amounts
+// ($0.31, $4.20), floors tiny non-zero costs to "<$0.01" so they don't read as
+// free, and compacts large sums ($1.2k) so the trends tooltips stay narrow.
+// Always paired with a "~" in the UI to signal it's an estimate, not a bill.
+export function fmtUSD(n: number): string {
+  if (!Number.isFinite(n) || n <= 0) return '$0.00'
+  if (n < 0.01) return '<$0.01'
+  if (n < 1000) return `$${n.toFixed(2)}`
+  if (n < 1_000_000) return `$${(n / 1000).toFixed(1)}k`
+  return `$${(n / 1_000_000).toFixed(2)}M`
+}
+
 export function titleCase(s: string): string {
   return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

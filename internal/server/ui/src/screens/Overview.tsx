@@ -6,7 +6,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { AgentCard } from '../components/AgentCard'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon, Sparkline, Stat } from '../components/ui'
 import { useFloatTip } from '../components/FloatTip'
-import { ago, compact, compactTokens, dueTone } from '../lib/format'
+import { ago, compact, compactTokens, dueTone, fmtUSD } from '../lib/format'
 import { agendaCount, bucketByDue, type DueBuckets } from '../lib/agenda'
 import { throughputByWeek, timeToDone, tokensByWeek, type WeekPoint } from '../lib/analytics'
 import { clickable } from '../lib/a11y'
@@ -50,12 +50,13 @@ function dayTip(d: ActivityDay): ReactNode {
 }
 
 // Themed tooltip body for the 12-week token-usage heatmap: the day's total
-// fresh "work" tokens plus which task burned how many.
+// fresh "work" tokens, the estimated dollar cost of that work, plus which task
+// burned how many tokens / dollars. The "~$" signals an estimate (see fmtUSD).
 function tokenDayTip(d: TokenDay): ReactNode {
   const head = (
     <div className="ftip-head">
       <span className="ftip-count">
-        {d.tokens ? `${compactTokens(d.tokens)} tokens` : 'No tokens'}
+        {d.tokens ? `${compactTokens(d.tokens)} tokens · ~${fmtUSD(d.cost_usd ?? 0)}` : 'No tokens'}
       </span>
       <span className="ftip-date">{fmtDay(d.date)}</span>
     </div>
@@ -69,7 +70,10 @@ function tokenDayTip(d: TokenDay): ReactNode {
         {d.tasks.map((t) => (
           <span key={t.name} className="ftip-task ftip-task-tok">
             <span className="ftip-task-name clip">{t.name}</span>
-            <span className="ftip-task-val mono">{compactTokens(t.tokens)}</span>
+            <span className="ftip-task-val mono">
+              {compactTokens(t.tokens)}
+              {t.cost_usd ? ` · ~${fmtUSD(t.cost_usd)}` : ''}
+            </span>
           </span>
         ))}
         {more > 0 && <span className="ftip-more">+{more} more</span>}
@@ -225,21 +229,24 @@ function StatsPanel({ stats }: { stats: UiStats }) {
           <div className="stats-sub">active · 12 wk</div>
         </div>
       </div>
-      <div className="stats-tok-cap">tokens used · all sessions</div>
+      <div className="stats-tok-cap">tokens &amp; est. cost · all sessions</div>
       <div className="stats-tokens">
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="claude" size={14} /> Claude</span>
           <span className="mono stats-tok-val">{compactTokens(stats.tokens_claude)}</span>
+          <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_claude ?? 0)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_claude} sess</span>
         </div>
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="codex" size={14} /> Codex</span>
           <span className="mono stats-tok-val">{compactTokens(stats.tokens_codex)}</span>
+          <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_codex ?? 0)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_codex} sess</span>
         </div>
         <div className="stats-tok-row stats-tok-total">
           <span className="stats-tok-name">Combined</span>
           <span className="mono stats-tok-val">{compactTokens(stats.tokens_total)}</span>
+          <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_total ?? 0)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_total} sess</span>
         </div>
       </div>
@@ -493,7 +500,9 @@ function throughputWeekTip(w: WeekPoint): ReactNode {
 function tokenWeekTip(w: WeekPoint): ReactNode {
   return (
     <div className="ftip-head">
-      <span className="ftip-count">{w.value ? `${compactTokens(w.value)} tokens` : 'No tokens'}</span>
+      <span className="ftip-count">
+        {w.value ? `${compactTokens(w.value)} tokens · ~${fmtUSD(w.cost ?? 0)}` : 'No tokens'}
+      </span>
       <span className="ftip-date">{weekRangeLabel(w.weekStart)}</span>
     </div>
   )
@@ -530,6 +539,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
   const ttd = useMemo(() => timeToDone(doneTasks), [doneTasks])
   const doneTotal = throughput.reduce((s, w) => s + w.value, 0)
   const tokenTotal = tokens.reduce((s, w) => s + w.value, 0)
+  const costTotal = tokens.reduce((s, w) => s + (w.cost ?? 0), 0)
   return (
     <section className="card rail-card">
       <div className="bento-head">
@@ -548,7 +558,7 @@ function TrendsCard({ doneTasks, tokenSeries }: { doneTasks: TaskView[]; tokenSe
       <div className="trend-row">
         <div className="trend-label">
           <span className="eyebrow"><Coins size={11} /> Token cost</span>
-          <span className="faint mono">{compactTokens(tokenTotal)} fresh</span>
+          <span className="faint mono">{compactTokens(tokenTotal)} fresh · ~{fmtUSD(costTotal)}</span>
         </div>
         <TrendSparkbars points={tokens} tip={tokenWeekTip} />
       </div>

@@ -193,14 +193,18 @@ type uiActivityDay struct {
 type uiTokenDay struct {
 	Date      string        `json:"date"`
 	Tokens    int           `json:"tokens"`
+	CostUSD   float64       `json:"cost_usd,omitempty"`
 	TaskCount int           `json:"task_count,omitempty"`
 	Tasks     []uiTokenTask `json:"tasks,omitempty"`
 }
 
-// uiTokenTask is one task's token contribution on a single day.
+// uiTokenTask is one task's token contribution on a single day. CostUSD is the
+// estimated dollar cost of that task's fresh work tokens for the day (see
+// pricing.go); it is the same per-day, cache-excluded basis as Tokens.
 type uiTokenTask struct {
-	Name   string `json:"name"`
-	Tokens int    `json:"tokens"`
+	Name    string  `json:"name"`
+	Tokens  int     `json:"tokens"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // uiStats are the at-a-glance Mission Control analytics: how consistently the
@@ -211,12 +215,15 @@ type uiStats struct {
 	CurrentStreak  int `json:"current_streak"` // consecutive active days ending today
 	LongestStreak  int `json:"longest_streak"` // longest active-day run in the window
 	ActiveDays     int `json:"active_days"`    // active days within the 12-week window
-	TokensTotal    int `json:"tokens_total"`
-	TokensClaude   int `json:"tokens_claude"`
-	TokensCodex    int `json:"tokens_codex"`
-	SessionsTotal  int `json:"sessions_total"`
-	SessionsClaude int `json:"sessions_claude"`
-	SessionsCodex  int `json:"sessions_codex"`
+	TokensTotal    int     `json:"tokens_total"`
+	TokensClaude   int     `json:"tokens_claude"`
+	TokensCodex    int     `json:"tokens_codex"`
+	CostTotal      float64 `json:"cost_total,omitempty"`
+	CostClaude     float64 `json:"cost_claude,omitempty"`
+	CostCodex      float64 `json:"cost_codex,omitempty"`
+	SessionsTotal  int     `json:"sessions_total"`
+	SessionsClaude int     `json:"sessions_claude"`
+	SessionsCodex  int     `json:"sessions_codex"`
 }
 
 type uiTrash struct {
@@ -272,6 +279,7 @@ type uiAgent struct {
 	TokensUsed      int            `json:"tokens_used"`
 	TokensMax       int            `json:"tokens_max"`
 	TokensSession   int            `json:"tokens_session"`
+	CostSession     float64        `json:"cost_session,omitempty"`
 	Activity        []int          `json:"activity"`
 	Tags            []string       `json:"tags"`
 	Summary         string         `json:"summary"`
@@ -1197,6 +1205,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		TokensUsed:      tokensUsed,
 		TokensMax:       tokensMax,
 		TokensSession:   insights.TokensSession,
+		CostSession:     insights.CostSession,
 		Activity:        toolCallActivitySeries(fullTranscript, time.Now()),
 		Tags:            tv.Tags,
 		Summary:         summary,
@@ -1258,9 +1267,10 @@ func withTaskWorkDir(tv TaskView, workDir string) TaskView {
 type taskSessionInsights struct {
 	ActivityAt    string
 	LastAction    string
-	TokensUsed    int // current context-window occupancy (latest turn)
+	TokensUsed    int     // current context-window occupancy (latest turn)
 	TokensMax     int
-	TokensSession int // cumulative tokens used this session (the CLI's Σ)
+	TokensSession int     // cumulative tokens used this session (the CLI's Σ)
+	CostSession   float64 // estimated USD for this session's fresh work tokens (all-time)
 }
 
 func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript []uiTranscript) taskSessionInsights {
@@ -1295,6 +1305,11 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	}
 	if stats.TokensSession > 0 {
 		insights.TokensSession = stats.TokensSession
+	}
+	// All-time estimated cost = sum over every day the session was active. Same
+	// cache-excluded basis as TokensSession, so the two stay in lockstep.
+	for _, c := range stats.CostByDay {
+		insights.CostSession += c
 	}
 	if stats.TokensMax > 0 {
 		insights.TokensMax = stats.TokensMax
@@ -1782,8 +1797,10 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 	days := make([]uiTokenDay, 84)
 	index := make(map[string]int, len(days))
 	// perTask[dayIndex][taskLabel] = fresh work tokens that task burned that day,
-	// for the activity bar's per-task tooltip breakdown.
+	// for the activity bar's per-task tooltip breakdown. perTaskCost is the
+	// matching estimated dollar cost, so the tooltip can show "$ per task" too.
 	perTask := make([]map[string]int, 84)
+	perTaskCost := make([]map[string]float64, 84)
 	for i := range days {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
 		days[i] = uiTokenDay{Date: date}
@@ -1831,6 +1848,13 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 				perTask[i] = map[string]int{}
 			}
 			perTask[i][label] += tok
+			if cost := entry.usage.CostByDay[day]; cost > 0 {
+				days[i].CostUSD += cost
+				if perTaskCost[i] == nil {
+					perTaskCost[i] = map[string]float64{}
+				}
+				perTaskCost[i][label] += cost
+			}
 		}
 	}
 	// Finalize each day's per-task breakdown: total contributing tasks plus the
@@ -1844,7 +1868,7 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) []uiTokenDay 
 		}
 		ranked := make([]uiTokenTask, 0, len(byTask))
 		for name, tok := range byTask {
-			ranked = append(ranked, uiTokenTask{Name: name, Tokens: tok})
+			ranked = append(ranked, uiTokenTask{Name: name, Tokens: tok, CostUSD: perTaskCost[i][name]})
 		}
 		sort.Slice(ranked, func(a, b int) bool {
 			if ranked[a].Tokens != ranked[b].Tokens {
@@ -2000,15 +2024,18 @@ func buildUIStats(live, done []uiAgent, heatmap []uiActivityDay, now time.Time) 
 			// two finally correlate. (TokensUsed is just the current context-window
 			// occupancy shown on each card's X/max bar — a different axis.)
 			st.TokensTotal += a.TokensSession
+			st.CostTotal += a.CostSession
 			st.SessionsTotal++
 			// Every session is exactly one of codex / claude: the builder defaults
 			// Provider to "claude" when unset and codex is always explicit, so the
 			// else-branch correctly owns claude and any unexpected value.
 			if strings.EqualFold(strings.TrimSpace(a.Provider), agents.ProviderCodex) {
 				st.TokensCodex += a.TokensSession
+				st.CostCodex += a.CostSession
 				st.SessionsCodex++
 			} else {
 				st.TokensClaude += a.TokensSession
+				st.CostClaude += a.CostSession
 				st.SessionsClaude++
 			}
 		}

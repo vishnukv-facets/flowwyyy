@@ -431,6 +431,7 @@ export interface ActivityDay {
 export interface TokenDay {
   date: string
   tokens: number
+  cost_usd?: number
   task_count?: number
   tasks?: TokenTask[]
 }
@@ -438,6 +439,7 @@ export interface TokenDay {
 export interface TokenTask {
   name: string
   tokens: number
+  cost_usd?: number
 }
 
 export interface QuoteView {
@@ -466,6 +468,9 @@ export interface UiStats {
   tokens_total: number
   tokens_claude: number
   tokens_codex: number
+  cost_total?: number
+  cost_claude?: number
+  cost_codex?: number
   sessions_total: number
   sessions_claude: number
   sessions_codex: number

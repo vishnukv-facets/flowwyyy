@@ -3526,10 +3526,12 @@ select.input {
   font-size: 12.5px;
 }
 .stats-tok-val { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.stats-tok-cost { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
 .stats-tok-sess { font-size: 10.5px; min-width: 50px; text-align: right; }
 .stats-tok-total { margin-top: 2px; border-top: 1px solid var(--border); }
 .stats-tok-total .stats-tok-name { color: var(--text); font-weight: 600; }
 .stats-tok-total .stats-tok-val { font-weight: 600; }
+.stats-tok-total .stats-tok-cost { font-weight: 600; color: var(--text); }
 
 /* feed rows (inbox / backlog / playbooks) */
 .feed-row {

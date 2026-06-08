@@ -185,20 +185,39 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 				stats.TokensByDay = map[string]int{}
 			}
 			stats.TokensByDay[day] += fresh
+			// Price this Claude turn at its own model's rate and accrue the
+			// dollar estimate for the same day. freshInput/freshOutput carry
+			// the cache-excluded split the rate table expects.
+			u := rec.Message.Usage
+			if cost := turnCostUSD(u.freshInput(), u.freshOutput(), modelTokenRate(stats.Model)); cost > 0 {
+				if stats.CostByDay == nil {
+					stats.CostByDay = map[string]float64{}
+				}
+				stats.CostByDay[day] += cost
+			}
 		}
 	}
 	if rec.Payload == nil {
 		return
 	}
 	var payload struct {
-		Type string `json:"type"`
-		Info struct {
+		Type  string `json:"type"`
+		Model string `json:"model"` // Codex turn_context records carry the active model here
+		Info  struct {
 			LastTokenUsage     transcriptTokenUsage `json:"last_token_usage"`
 			TotalTokenUsage    transcriptTokenUsage `json:"total_token_usage"`
 			ModelContextWindow int                  `json:"model_context_window"`
 		} `json:"info"`
 	}
-	if err := json.Unmarshal(rec.Payload, &payload); err != nil || payload.Type != "token_count" {
+	if err := json.Unmarshal(rec.Payload, &payload); err != nil {
+		return
+	}
+	// Codex emits its model in a turn_context record that precedes the per-turn
+	// token_count events, so capture it here before the token_count gate below.
+	if m := strings.TrimSpace(payload.Model); m != "" {
+		stats.Model = m
+	}
+	if payload.Type != "token_count" {
 		return
 	}
 	if used := payload.Info.LastTokenUsage.total(); used > 0 {
@@ -207,21 +226,44 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		stats.TokensUsed = used
 	}
 	if fresh := payload.Info.TotalTokenUsage.freshTotal(); fresh > 0 {
+		firstEvent := stats.lastCodexFreshTotal == 0
 		stats.TokensSession = fresh // Codex: running total, cache-excluded
 		delta := fresh
-		if stats.lastCodexFreshTotal > 0 {
+		if !firstEvent {
 			delta = fresh - stats.lastCodexFreshTotal
 			if delta < 0 {
 				delta = fresh
 			}
 		}
 		stats.lastCodexFreshTotal = fresh
+		// Derive per-event input/output deltas the same way, so the higher
+		// Codex output rate is applied to the right portion. On a running-total
+		// reset (negative delta) fall back to the full current component.
+		freshIn := payload.Info.TotalTokenUsage.freshInput()
+		freshOut := payload.Info.TotalTokenUsage.freshOutput()
+		deltaIn, deltaOut := freshIn, freshOut
+		if !firstEvent {
+			if d := freshIn - stats.lastCodexFreshInput; d >= 0 {
+				deltaIn = d
+			}
+			if d := freshOut - stats.lastCodexFreshOutput; d >= 0 {
+				deltaOut = d
+			}
+		}
+		stats.lastCodexFreshInput = freshIn
+		stats.lastCodexFreshOutput = freshOut
 		if delta > 0 {
 			if day := localDay(rec.Timestamp); day != "" {
 				if stats.TokensByDay == nil {
 					stats.TokensByDay = map[string]int{}
 				}
 				stats.TokensByDay[day] += delta
+				if cost := turnCostUSD(deltaIn, deltaOut, modelTokenRate(stats.Model)); cost > 0 {
+					if stats.CostByDay == nil {
+						stats.CostByDay = map[string]float64{}
+					}
+					stats.CostByDay[day] += cost
+				}
 			}
 		}
 	}
