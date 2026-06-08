@@ -1,24 +1,30 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Brain, Search } from 'lucide-react'
-import { useUiData, queryClient } from '../lib/query'
+import { useMemorySources, queryClient } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPost } from '../lib/api'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
 import { clickable } from '../lib/a11y'
+import type { MemorySource } from '../lib/types'
+
+const EMPTY_MEMORY_SOURCES: MemorySource[] = []
 
 export function Memories() {
   useDocumentTitle('Memories')
-  const { data: ui, isLoading } = useUiData()
-  const sources = useMemo(() => ui?.AGENT_MEMORY_SOURCES ?? [], [ui])
+  const { data, isLoading } = useMemorySources()
+  const sources = data ?? EMPTY_MEMORY_SOURCES
   const [selected, setSelected] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [provider, setProvider] = useState('')
 
-  const providers = useMemo(
-    () => Array.from(new Set(sources.map((s) => s.provider).filter(Boolean))).sort(),
-    [sources],
-  )
+  const providers = useMemo(() => {
+    const seen = new Set<string>()
+    for (const source of sources) {
+      if (source.provider) seen.add(source.provider)
+    }
+    return Array.from(seen).sort()
+  }, [sources])
   const filtered = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return sources.filter((s) => {
@@ -32,12 +38,8 @@ export function Memories() {
     })
   }, [sources, provider, q])
 
-  useEffect(() => {
-    if (!filtered.length) return
-    if (!selected || !filtered.some((s) => s.id === selected)) setSelected(filtered[0].id)
-  }, [filtered, selected])
-
-  const active = filtered.find((s) => s.id === selected)
+  const selectedId = selected && filtered.some((s) => s.id === selected) ? selected : filtered[0]?.id ?? null
+  const active = filtered.find((s) => s.id === selectedId)
 
   // Memories that reference the active one via [[label]] — resolved across the
   // full source set (not just the filtered view). Computed before any early
@@ -45,9 +47,11 @@ export function Memories() {
   const backlinks = useMemo<Backlink[]>(() => {
     if (!active) return []
     const name = active.label.trim().toLowerCase()
-    return sources
-      .filter((s) => s.id !== active.id && wikiRefs(s.content ?? '').includes(name))
-      .map((s) => ({ name: s.label, onOpen: () => setSelected(s.id) }))
+    return sources.flatMap((s) =>
+      s.id !== active.id && wikiRefs(s.content ?? '').includes(name)
+        ? [{ name: s.label, onOpen: () => setSelected(s.id) }]
+        : [],
+    )
   }, [sources, active])
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
@@ -62,7 +66,7 @@ export function Memories() {
   const saveActive = async (text: string, version?: string) => {
     if (!active) return
     await apiPost('/api/memory', { path: active.path, text, mtime: version })
-    await queryClient.invalidateQueries({ queryKey: ['ui-data'] })
+    await queryClient.invalidateQueries({ queryKey: ['memory-sources'] })
   }
 
   const onWikiLink = (target: string) => {
@@ -86,21 +90,23 @@ export function Memories() {
                 <Search size={14} className="dim" />
                 <input
                   className="input"
-                  placeholder="Filter by name, path, or scope…"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                />
+                  aria-label="Filter memory sources"
+	                  placeholder="Filter by name, path, or scope…"
+	                  value={q}
+	                  onChange={(e) => setQ(e.target.value)}
+	                />
               </div>
               {providers.length > 1 && (
                 <div className="chips">
-                  <button className={`chip${provider === '' ? ' active' : ''}`} onClick={() => setProvider('')}>
-                    all
-                  </button>
-                  {providers.map((p) => (
+                  <button type="button" className={`chip${provider === '' ? ' active' : ''}`} onClick={() => setProvider('')}>
+	                    all
+	                  </button>
+	                  {providers.map((p) => (
                     <button
-                      key={p}
-                      className={`chip${provider === p ? ' active' : ''}`}
-                      onClick={() => setProvider((cur) => (cur === p ? '' : p))}
+                      type="button"
+	                      key={p}
+	                      className={`chip${provider === p ? ' active' : ''}`}
+	                      onClick={() => setProvider((cur) => (cur === p ? '' : p))}
                     >
                       {p}
                     </button>
@@ -115,14 +121,14 @@ export function Memories() {
             filtered.map((s) => (
               <div
                 key={s.id}
-                className={`pli${selected === s.id ? ' active' : ''}`}
-                aria-pressed={selected === s.id}
-                {...clickable(() => setSelected(s.id))}
-              >
-                <div className="pli-top">
-                  <span className={`dot ${s.available ? 'running' : 'idle'}`} />
-                  <span className="pli-title clip">{s.label}</span>
-                  <span className="faint mono" style={{ fontSize: 10 }}>{s.provider}</span>
+                className={`pli${selectedId === s.id ? ' active' : ''}`}
+	                aria-pressed={selectedId === s.id}
+	                {...clickable(() => setSelected(s.id))}
+	              >
+	                <div className="pli-top">
+	                  <span className={`dot ${s.available ? 'running' : 'idle'}`} />
+	                  <span className="pli-title clip">{s.label}</span>
+	                  <span className="faint mono" style={{ fontSize: 12 }}>{s.provider}</span>
                 </div>
                 <div className="pli-snippet mono">{s.path}</div>
               </div>

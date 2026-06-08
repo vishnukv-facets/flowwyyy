@@ -232,7 +232,7 @@ func TestParseEventsAPIEvent_EmptyMessageRejected(t *testing.T) {
 	}
 }
 
-func TestParseEventsAPIEvent_BotMessagePreserved(t *testing.T) {
+func TestParseEventsAPIEvent_BotMessageWithoutUserDropped(t *testing.T) {
 	envelope := slackevents.EventsAPIEvent{
 		InnerEvent: slackevents.EventsAPIInnerEvent{
 			Type: string(slackevents.Message),
@@ -247,7 +247,7 @@ func TestParseEventsAPIEvent_BotMessagePreserved(t *testing.T) {
 		},
 	}
 	out := ParseEventsAPIEvent(envelope, nil)
-	if len(out) != 1 {
-		t.Fatalf("bot_message should be kept; got %+v", out)
+	if len(out) != 0 {
+		t.Fatalf("bot_message without user should be dropped before steering; got %+v", out)
 	}
 }

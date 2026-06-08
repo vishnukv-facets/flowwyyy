@@ -14,6 +14,21 @@ func stubDeepTriage(t *testing.T, fn func(prompt string) (string, error)) {
 	t.Cleanup(func() { deepTriageRunner = old })
 }
 
+func TestDeepTriageRunnerIncludesClaudeStderrOnFailure(t *testing.T) {
+	stubClaudeBinary(t, "echo 'Claude quota exceeded; retry later' >&2\nexit 1\n")
+
+	_, err := deepTriageRunner(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("deepTriageRunner error = nil, want command failure")
+	}
+	got := err.Error()
+	for _, want := range []string{"exit status 1", "Claude quota exceeded; retry later"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("deepTriageRunner error missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestDeepTriagePromptUsesContextPackAsPrimaryInput(t *testing.T) {
 	pack := ThreadContext{
 		Source:      "github",

@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -313,5 +315,70 @@ func TestPoolResetsOnError(t *testing.T) {
 	pVal2 := pValue(call2)
 	if !strings.HasPrefix(pVal2, "PRIME\n\n") {
 		t.Errorf("second call (after error reset): expected prime re-included, got -p=%q", pVal2)
+	}
+}
+
+func TestDefaultClassifierExecIncludesStderrOnFailure(t *testing.T) {
+	stubClaudeBinary(t, "echo 'pooled classifier auth expired' >&2\nexit 1\n")
+
+	_, err := defaultClassifierExec(context.Background(), []string{"-p", "prompt"})
+	if err == nil {
+		t.Fatal("defaultClassifierExec error = nil, want command failure")
+	}
+	got := err.Error()
+	for _, want := range []string{"exit status 1", "pooled classifier auth expired"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("defaultClassifierExec error missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPoolSerializesConcurrentRuns(t *testing.T) {
+	p := newClassifierPool(100, time.Hour)
+	p.newID = func() string { return "uuid-1" }
+
+	var active int32
+	var maxActive int32
+	var calls int32
+	p.exec = func(ctx context.Context, args []string) (string, error) {
+		current := atomic.AddInt32(&active, 1)
+		for {
+			max := atomic.LoadInt32(&maxActive)
+			if current <= max || atomic.CompareAndSwapInt32(&maxActive, max, current) {
+				break
+			}
+		}
+		atomic.AddInt32(&calls, 1)
+		time.Sleep(20 * time.Millisecond)
+		atomic.AddInt32(&active, -1)
+		return "ok", nil
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	start := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := p.run(context.Background(), "stage1", "PRIME", "PAY", "k")
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("run returned error: %v", err)
+		}
+	}
+	if got := atomic.LoadInt32(&calls); got != 8 {
+		t.Fatalf("exec calls = %d, want 8", got)
+	}
+	if got := atomic.LoadInt32(&maxActive); got != 1 {
+		t.Fatalf("max concurrent exec calls = %d, want 1", got)
 	}
 }

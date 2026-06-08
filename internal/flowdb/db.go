@@ -329,6 +329,11 @@ CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_slug);
 CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering_trace(disposition, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
@@ -342,9 +347,8 @@ CREATE INDEX IF NOT EXISTS idx_attention_feedback_band ON attention_feedback(con
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_feed ON attention_handoffs(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_receiver ON attention_handoffs(receiver);
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_status ON attention_handoffs(status);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
-`
+	`
 
 // indexesPostMigrate are indexes that depend on columns added by
 // runMigrations. Running them in schemaDDL before migrations would fail

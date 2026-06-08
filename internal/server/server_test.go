@@ -482,6 +482,54 @@ func TestUIDataJSONEndpointUsesFlowRecords(t *testing.T) {
 	}
 }
 
+func TestUIDataDoneAgentsOmitHeavySessionDetails(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	now := "2026-05-12T10:00:00+05:30"
+	doneSession := filepath.Join(root, "done-session.jsonl")
+	writeTestFile(t, doneSession, strings.Repeat(`{"type":"user","message":{"content":"done transcript payload"}}`+"\n", 80))
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, session_provider, session_id, session_path, session_started, created_at, updated_at)
+		 VALUES ('done-heavy', 'Done heavy task', 'done', 'regular', 'medium', ?, 'claude', 'done-session-id', ?, ?, ?, ?)`,
+		root, doneSession, now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	liveSession := filepath.Join(root, "live-session.jsonl")
+	writeTestFile(t, liveSession, `{"type":"user","message":{"content":"live transcript marker"}}`+"\n")
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_provider = 'claude', session_id = 'live-session-id', session_path = ?, session_started = ? WHERE slug = 'build-ui'`,
+		liveSession, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	data, err := srv.buildUIData()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data.Agents) != 1 {
+		t.Fatalf("agents = %+v", data.Agents)
+	}
+	if len(data.Agents[0].Transcript) == 0 || data.Agents[0].Terminal.Mode == "" {
+		t.Fatalf("live agent lost session snapshot: %+v", data.Agents[0])
+	}
+	if len(data.DoneAgents) != 1 {
+		t.Fatalf("done agents = %+v", data.DoneAgents)
+	}
+	done := data.DoneAgents[0]
+	if done.Slug != "done-heavy" {
+		t.Fatalf("done agent = %+v", done)
+	}
+	if len(done.Transcript) != 0 || len(done.DiffFiles) != 0 || done.Brief != "" || len(done.RecentTools) != 0 || len(done.Updates) != 0 || len(done.AuxFiles) != 0 {
+		t.Fatalf("done list agent should omit heavy details: %+v", done)
+	}
+	if done.Terminal.Mode != "" || len(done.Terminal.Banner) != 0 || len(done.Terminal.Feed) != 0 {
+		t.Fatalf("done list agent should omit terminal scrollback: %+v", done.Terminal)
+	}
+}
+
 func TestUIDataIncludesFlowDBDiagnostics(t *testing.T) {
 	root, db := testRootDB(t)
 	insertSearchDoc(t, db, "task:build-ui:brief", "brief", "task", "build-ui", "Build UI brief", filepath.Join(root, "tasks", "build-ui", "brief.md"), strings.Repeat("brief ", 200))

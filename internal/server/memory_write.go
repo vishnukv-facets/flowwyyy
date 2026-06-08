@@ -75,5 +75,5 @@ func (s *Server) handleMemoryWrite(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"ok": true, "path": path, "mtime": buildMemorySource(memorySourceCandidate{path: path}).MTime})
+	writeJSON(w, map[string]any{"ok": true, "path": path, "mtime": buildMemorySource(memorySourceCandidate{path: path}, false).MTime})
 }

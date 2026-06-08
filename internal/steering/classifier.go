@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+const classifierTextRuneLimit = 1200
+
 // classifierRunner shells out to the cheap Claude model for the Stage 1/2
 // triage classifiers and returns its stdout. Tests swap this var (the same
 // package-level function-var seam as app.claudeRunner / iterm.Runner) to
@@ -19,7 +21,7 @@ var classifierRunner = func(ctx context.Context, prompt string) (string, error) 
 		"--model", classifierModel(), "--dangerously-skip-permissions")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("steering: classifier claude -p: %w", err)
+		return "", commandError("steering: classifier claude -p", err, out)
 	}
 	return string(out), nil
 }
@@ -59,7 +61,7 @@ func Stage1Relevance(ctx context.Context, inputs []ClassifyInput) ([]RelevanceVe
 	if len(inputs) == 0 {
 		return nil, nil
 	}
-	payload, err := json.Marshal(inputs)
+	payload, err := json.Marshal(compactClassifyInputs(inputs))
 	if err != nil {
 		return nil, fmt.Errorf("steering: marshal stage1 inputs: %w", err)
 	}
@@ -225,6 +227,7 @@ Operator task/project index:
 }
 
 func stage2Payload(in ClassifyInput) string {
+	in = compactClassifyInput(in)
 	payload, _ := json.Marshal(in)
 	return "Message (JSON):\n" + string(payload)
 }
@@ -233,4 +236,30 @@ func stage2Payload(in ClassifyInput) string {
 // callers. It is byte-identical to stage2Prime(ti)+"\n\n"+stage2Payload(in).
 func stage2Prompt(in ClassifyInput, taskIndex string) string {
 	return stage2Prime(taskIndex) + "\n\n" + stage2Payload(in)
+}
+
+func compactClassifyInputs(inputs []ClassifyInput) []ClassifyInput {
+	out := make([]ClassifyInput, len(inputs))
+	for i, in := range inputs {
+		out[i] = compactClassifyInput(in)
+	}
+	return out
+}
+
+func compactClassifyInput(in ClassifyInput) ClassifyInput {
+	in.Text = compactClassifierText(in.Text)
+	return in
+}
+
+func compactClassifierText(text string) string {
+	r := []rune(strings.TrimSpace(text))
+	if len(r) <= classifierTextRuneLimit {
+		return text
+	}
+	head := classifierTextRuneLimit / 2
+	tail := classifierTextRuneLimit - head
+	omitted := len(r) - head - tail
+	return string(r[:head]) +
+		fmt.Sprintf("\n[truncated %d chars]\n", omitted) +
+		string(r[len(r)-tail:])
 }

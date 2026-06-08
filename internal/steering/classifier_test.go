@@ -3,6 +3,9 @@ package steering
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -14,6 +17,31 @@ func stubClassifier(t *testing.T, fn func(prompt string) (string, error)) {
 	old := classifierRunner
 	classifierRunner = func(ctx context.Context, prompt string) (string, error) { return fn(prompt) }
 	t.Cleanup(func() { classifierRunner = old })
+}
+
+func stubClaudeBinary(t *testing.T, body string) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "claude")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body), 0o700); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func TestClassifierRunnerIncludesClaudeStderrOnFailure(t *testing.T) {
+	stubClaudeBinary(t, "echo 'Claude auth expired: run claude login' >&2\nexit 1\n")
+
+	_, err := classifierRunner(context.Background(), "prompt")
+	if err == nil {
+		t.Fatal("classifierRunner error = nil, want command failure")
+	}
+	got := err.Error()
+	for _, want := range []string{"exit status 1", "Claude auth expired: run claude login"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("classifierRunner error missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestExtractJSON(t *testing.T) {
@@ -88,6 +116,73 @@ func TestStage2Score(t *testing.T) {
 	}
 	if v.Source != "slack" || v.ThreadKey != "C1:1.1" {
 		t.Errorf("Source/ThreadKey should be filled from input: %+v", v)
+	}
+}
+
+func TestClassifierPayloadsCompactLongText(t *testing.T) {
+	longRun := strings.Repeat("x", 5000)
+	longText := "prefix " + longRun + " suffix"
+	stubClassifier(t, func(prompt string) (string, error) {
+		switch {
+		case strings.Contains(prompt, "MODE: stage1-relevance"):
+			tail := prompt
+			if marker := strings.LastIndex(prompt, "Events (JSON array):"); marker >= 0 {
+				tail = prompt[marker:]
+			}
+			jsonText, err := extractJSON(tail)
+			if err != nil {
+				t.Fatalf("stage1 prompt missing JSON: %v\n%s", err, prompt)
+			}
+			var inputs []ClassifyInput
+			if err := json.Unmarshal([]byte(jsonText), &inputs); err != nil {
+				t.Fatalf("stage1 input JSON: %v\n%s", err, jsonText)
+			}
+			if len(inputs) != 1 {
+				t.Fatalf("stage1 inputs = %d, want 1", len(inputs))
+			}
+			assertCompactedClassifierText(t, inputs[0].Text, longRun)
+			return `[{"thread_key":"k1","relevant":true}]`, nil
+		case strings.Contains(prompt, "MODE: stage2-score"):
+			tail := prompt
+			if marker := strings.LastIndex(prompt, "Message (JSON):"); marker >= 0 {
+				tail = prompt[marker:]
+			}
+			jsonText, err := extractJSON(tail)
+			if err != nil {
+				t.Fatalf("stage2 prompt missing JSON: %v\n%s", err, prompt)
+			}
+			var input ClassifyInput
+			if err := json.Unmarshal([]byte(jsonText), &input); err != nil {
+				t.Fatalf("stage2 input JSON: %v\n%s", err, jsonText)
+			}
+			assertCompactedClassifierText(t, input.Text, longRun)
+			return `{"suggested_action":"drop","confidence":0.8}`, nil
+		default:
+			t.Fatalf("unknown classifier prompt:\n%s", prompt)
+			return "", nil
+		}
+	})
+
+	if _, err := Stage1Relevance(context.Background(), []ClassifyInput{{ThreadKey: "k1", Text: longText}}); err != nil {
+		t.Fatalf("Stage1Relevance: %v", err)
+	}
+	if _, err := Stage2Score(context.Background(), ClassifyInput{ThreadKey: "k1", Text: longText}, "Tasks:\n- k"); err != nil {
+		t.Fatalf("Stage2Score: %v", err)
+	}
+}
+
+func assertCompactedClassifierText(t *testing.T, got, fullRun string) {
+	t.Helper()
+	if strings.Contains(got, fullRun) {
+		t.Fatalf("classifier text was not compacted; length=%d", len(got))
+	}
+	for _, want := range []string{"prefix", "suffix", "truncated"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("compacted classifier text missing %q:\n%s", want, got)
+		}
+	}
+	if len(got) >= len(fullRun) {
+		t.Fatalf("compacted classifier text length = %d, want less than original run %d", len(got), len(fullRun))
 	}
 }
 

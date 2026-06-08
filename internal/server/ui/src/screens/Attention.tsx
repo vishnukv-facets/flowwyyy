@@ -7,6 +7,7 @@ import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
 import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
+import { nextTraceWindowAnchor, traceSinceForWindow } from '../lib/traceWindow'
 import type { AttentionItem, SteeringFunnel, SteeringTrace, WorkEvent } from '../lib/types'
 
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
@@ -813,16 +814,18 @@ function TraceView({
   selectedTraceId?: string | null
   onClearDeepLink: () => void
 }) {
-  const [windowId, setWindowId] = useState<string>('24h')
+  const [windowAnchor, setWindowAnchor] = useState(() => nextTraceWindowAnchor(null, '24h', Date.now()))
+  const windowId = windowAnchor.windowId
   const [disposition, setDisposition] = useState<string>('all')
   const [source, setSource] = useState<string>('all')
   const [selected, setSelected] = useState<SteeringTrace | null>(null)
   const win = WINDOWS.find((w) => w.id === windowId) ?? WINDOWS[1]
-  const since = new Date(Date.now() - win.ms).toISOString()
+  const since = traceSinceForWindow(windowAnchor, win.ms)
   const { data, isLoading, error } = useAttentionTrace(since, disposition, source)
   const items = data?.items ?? []
   const routedSelected = selectedTraceId ? items.find((it) => it.id === selectedTraceId) ?? null : null
   const activeSelected = selected ?? routedSelected
+  const chooseWindow = (id: string) => setWindowAnchor((current) => nextTraceWindowAnchor(current, id, Date.now()))
 
   return (
     <>
@@ -833,7 +836,7 @@ function TraceView({
               key={w.id}
               type="button"
               className={`btn sm ${windowId === w.id ? 'primary' : 'ghost'}`}
-              onClick={() => setWindowId(w.id)}
+              onClick={() => chooseWindow(w.id)}
             >
               {w.label}
             </button>

@@ -562,7 +562,12 @@ func (s *Server) buildUIData() (uiData, error) {
 	var dead *uiAgent
 	if len(doneCandidates) > 0 {
 		doneCandidates[0].Status = "idle"
-		dead = &doneCandidates[0]
+		deadAgent := doneCandidates[0]
+		trimUIAgentSessionDetails(&deadAgent)
+		dead = &deadAgent
+		for i := range doneCandidates {
+			trimUIAgentSessionDetails(&doneCandidates[i])
+		}
 	}
 	heatmap := buildActivityHeatmap(taskViews, time.Now())
 	tokenSeries := s.buildTokenSeries(taskViews, time.Now())
@@ -588,6 +593,17 @@ func (s *Server) buildUIData() (uiData, error) {
 		User:             currentUIUser(),
 		FloatingSessions: s.floatingSessionList(),
 	}, nil
+}
+
+func trimUIAgentSessionDetails(agent *uiAgent) {
+	agent.Transcript = nil
+	agent.Brief = ""
+	agent.RecentTools = nil
+	agent.DiffFiles = nil
+	agent.BriefPath = ""
+	agent.Updates = nil
+	agent.AuxFiles = nil
+	agent.Terminal = uiTerminal{}
 }
 
 // floatingSessionList returns the adhoc Ask Flow sessions for the tray, or an

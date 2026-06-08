@@ -208,6 +208,10 @@ var (
 	ghAuthMu     sync.Mutex
 	ghAuthCached uiToolCapability
 	ghAuthExpiry time.Time
+	ghLookPath   = exec.LookPath
+	ghAuthStatus = func(ctx context.Context) error {
+		return exec.CommandContext(ctx, "gh", "auth", "status").Run()
+	}
 )
 
 // ghAuthCacheTTL controls how often `gh auth status` is re-run. The
@@ -219,15 +223,14 @@ const ghAuthCacheTTL = 15 * time.Second
 
 func detectGitHubIntegration() uiToolCapability {
 	ghAuthMu.Lock()
+	defer ghAuthMu.Unlock()
+
 	if time.Now().Before(ghAuthExpiry) {
-		c := ghAuthCached
-		ghAuthMu.Unlock()
-		return c
+		return ghAuthCached
 	}
-	ghAuthMu.Unlock()
 
 	c := uiToolCapability{ID: "gh", Label: "GitHub", Available: false}
-	path, err := exec.LookPath("gh")
+	path, err := ghLookPath("gh")
 	if err != nil {
 		c.Status = "not installed"
 		c.Reason = "gh CLI not found on PATH"
@@ -235,7 +238,7 @@ func detectGitHubIntegration() uiToolCapability {
 		c.Path = path
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
-		if err := exec.CommandContext(ctx, "gh", "auth", "status").Run(); err != nil {
+		if err := ghAuthStatus(ctx); err != nil {
 			c.Status = "not authenticated"
 			c.Reason = "run `gh auth login` to connect"
 		} else {
@@ -244,9 +247,7 @@ func detectGitHubIntegration() uiToolCapability {
 		}
 	}
 
-	ghAuthMu.Lock()
 	ghAuthCached = c
 	ghAuthExpiry = time.Now().Add(ghAuthCacheTTL)
-	ghAuthMu.Unlock()
 	return c
 }

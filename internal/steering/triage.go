@@ -4,7 +4,6 @@ package steering
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -18,7 +17,7 @@ var deepTriageRunner = func(ctx context.Context, prompt string) (string, error) 
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--dangerously-skip-permissions")
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("steering: deep triage claude -p: %w", err)
+		return "", commandError("steering: deep triage claude -p", err, out)
 	}
 	return string(out), nil
 }

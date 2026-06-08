@@ -111,6 +111,10 @@ func parseAppMention(env slackevents.EventsAPIEvent, ev *slackevents.AppMentionE
 	if channel == "" || ts == "" {
 		return InboundEvent{}, false
 	}
+	user := strings.TrimSpace(ev.User)
+	if user == "" {
+		return InboundEvent{}, false
+	}
 	threadTS := strings.TrimSpace(ev.ThreadTimeStamp)
 	if threadTS == "" {
 		threadTS = ts
@@ -120,7 +124,7 @@ func parseAppMention(env slackevents.EventsAPIEvent, ev *slackevents.AppMentionE
 		Channel:  channel,
 		TS:       ts,
 		ThreadTS: threadTS,
-		UserID:   strings.TrimSpace(ev.User),
+		UserID:   user,
 		Text:     text,
 		TeamID:   env.TeamID,
 		APIAppID: env.APIAppID,
@@ -148,6 +152,10 @@ func parseMessage(env slackevents.EventsAPIEvent, ev *slackevents.MessageEvent, 
 	if channel == "" || ts == "" {
 		return InboundEvent{}, false
 	}
+	user := strings.TrimSpace(ev.User)
+	if user == "" {
+		return InboundEvent{}, false
+	}
 	threadTS := strings.TrimSpace(ev.ThreadTimeStamp)
 	if threadTS == "" {
 		threadTS = ts
@@ -160,7 +168,7 @@ func parseMessage(env slackevents.EventsAPIEvent, ev *slackevents.MessageEvent, 
 		ChannelType: channelType,
 		TS:          ts,
 		ThreadTS:    threadTS,
-		UserID:      strings.TrimSpace(ev.User),
+		UserID:      user,
 		Text:        text,
 		TeamID:      env.TeamID,
 		APIAppID:    env.APIAppID,

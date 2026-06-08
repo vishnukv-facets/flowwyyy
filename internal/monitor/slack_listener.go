@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -356,7 +357,9 @@ func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmod
 			}
 			return
 		}
-		l.logFn("events_api: type=%s inner=%T", payload.Type, payload.InnerEvent.Data)
+		if !expectedParserDrop(payload) {
+			l.logFn("events_api: type=%s inner=%T", payload.Type, payload.InnerEvent.Data)
+		}
 		l.handleEventsAPI(ctx, payload, rawPayloadOf(evt))
 		// Ack AFTER dispatch — if we crash before this line, Slack will
 		// redeliver the event within its retry window.
@@ -377,7 +380,9 @@ func (l *SlackListener) handleEventsAPI(ctx context.Context, event slackevents.E
 		// Parser dropped the event. Surface what inner type we got so we can
 		// see whether a real event is being silently rejected (vs. genuinely
 		// not-of-interest like channel_join).
-		l.logFn("parser produced no InboundEvent for inner type %T (subtype check or missing fields?)", event.InnerEvent.Data)
+		if !expectedParserDrop(event) {
+			l.logFn("parser produced no InboundEvent for inner type %T (subtype check or missing fields?)", event.InnerEvent.Data)
+		}
 		return
 	}
 	// A forwarded/shared message carries a pointer to the original message in
@@ -398,6 +403,27 @@ func (l *SlackListener) handleEventsAPI(ctx context.Context, event slackevents.E
 			l.logFn("dispatch %s: %v", ev.Kind, err)
 		}
 	}
+}
+
+func expectedParserDrop(event slackevents.EventsAPIEvent) bool {
+	switch ev := event.InnerEvent.Data.(type) {
+	case *slackevents.MessageEvent:
+		return expectedDroppedMessageEvent(ev)
+	case slackevents.MessageEvent:
+		return expectedDroppedMessageEvent(&ev)
+	default:
+		return false
+	}
+}
+
+func expectedDroppedMessageEvent(ev *slackevents.MessageEvent) bool {
+	if ev == nil {
+		return false
+	}
+	if ev.SubType != "" && ev.SubType != "bot_message" {
+		return true
+	}
+	return strings.TrimSpace(ev.User) == ""
 }
 
 // SlackMentionUserIDs returns the slack user IDs flow treats as "you" for

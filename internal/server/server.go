@@ -139,6 +139,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/kb", s.handleKB)
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
+	mux.HandleFunc("/api/memory/sources", s.handleMemorySources)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)

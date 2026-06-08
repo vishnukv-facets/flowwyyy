@@ -2,8 +2,10 @@ package server
 
 import (
 	"errors"
+	"flow/internal/flowdb"
 	"flow/internal/memorysrc"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +23,10 @@ type memorySourceCandidate struct {
 }
 
 func (s *Server) uiAgentMemorySources(tasks []TaskView, projects []uiProject, playbooks []uiPlaybook, workdirs []uiWorkdir) []uiMemorySource {
+	return s.uiAgentMemorySourcesWithContent(tasks, projects, playbooks, workdirs, false)
+}
+
+func (s *Server) uiAgentMemorySourcesWithContent(tasks []TaskView, projects []uiProject, playbooks []uiPlaybook, workdirs []uiWorkdir, includeContent bool) []uiMemorySource {
 	candidates := memorysrc.AgentSources(memorySourceWorkdirs(tasks, projects, playbooks, workdirs))
 
 	out := make([]uiMemorySource, 0, len(candidates))
@@ -46,9 +52,42 @@ func (s *Server) uiAgentMemorySources(tasks []TaskView, projects []uiProject, pl
 			kind:     candidate.Kind,
 			label:    candidate.Label,
 			path:     candidate.Path,
-		}))
+		}, includeContent))
 	}
 	return out
+}
+
+func (s *Server) handleMemorySources(w http.ResponseWriter, r *http.Request) {
+	if !getOnly(w, r) {
+		return
+	}
+	live, _ := s.cachedLiveAgentSessions()
+	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: false})
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	taskViews, err := buildTaskViewsWithLive(s.cfg.DB, s.cfg.FlowRoot, tasks, live)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	projects, err := s.uiProjects()
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	playbooks, err := s.uiPlaybooks()
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	workdirs, err := s.uiWorkdirs()
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, s.uiAgentMemorySourcesWithContent(taskViews, projects, playbooks, workdirs, true))
 }
 
 func memorySourceWorkdirs(tasks []TaskView, projects []uiProject, playbooks []uiPlaybook, workdirs []uiWorkdir) []string {
@@ -97,7 +136,7 @@ func claudeProjectKey(path string) string {
 	return memorysrc.ClaudeProjectKey(path)
 }
 
-func buildMemorySource(candidate memorySourceCandidate) uiMemorySource {
+func buildMemorySource(candidate memorySourceCandidate, includeContent bool) uiMemorySource {
 	src := uiMemorySource{
 		ID:       candidate.id,
 		Provider: candidate.provider,
@@ -125,6 +164,11 @@ func buildMemorySource(candidate memorySourceCandidate) uiMemorySource {
 	src.Format = "text"
 	if strings.EqualFold(filepath.Ext(candidate.path), ".md") {
 		src.Format = "markdown"
+	}
+	if !includeContent {
+		src.Status = "available"
+		src.Available = true
+		return src
 	}
 	body, err := os.ReadFile(candidate.path)
 	if err != nil {

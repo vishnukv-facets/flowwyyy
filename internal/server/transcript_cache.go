@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// transcriptCache memoizes the parsed contents of a session jsonl file
+// transcriptCache memoizes derived contents of a session jsonl file
 // keyed by (path, mtime, size). The UI tick calls into three different
 // derivations — the recent-messages list, the token-usage stats, and the
 // pending-user-input check — and pre-cache they all independently read
@@ -22,7 +22,8 @@ import (
 //
 // All three outputs are produced from a single pass over the file
 // during populate, so a cache miss costs one open + one line scan
-// instead of three.
+// instead of three. The transcript text itself is capped to the recent
+// tail; usage and pending-input stats still scan the full file.
 type transcriptCache struct {
 	mu sync.RWMutex
 	m  map[string]*transcriptCacheEntry
@@ -32,10 +33,15 @@ type transcriptCacheEntry struct {
 	mtime time.Time
 	size  int64
 
+	// entries is intentionally a bounded tail. Some long sessions have
+	// enormous transcript files; keeping every parsed text/tool/result in
+	// memory made a small /api/ui-data response retain gigabytes of heap.
 	entries []TranscriptEntry
 	usage   transcriptUsageStats
 	pending *codexPendingUserInput
 }
+
+const transcriptCacheEntryLimit = 200
 
 func newTranscriptCache() *transcriptCache {
 	return &transcriptCache{m: map[string]*transcriptCacheEntry{}}
@@ -102,10 +108,12 @@ func populateTranscriptCacheEntry(path string) (*transcriptCacheEntry, error) {
 		if len(line) == 0 {
 			continue
 		}
-		// 1) Transcript entries (existing dispatch handles both Claude
-		//    and Codex shapes).
+		// 1) Recent transcript entries (existing dispatch handles both
+		//    Claude and Codex shapes). Keep only the tail; display,
+		//    terminal preview, last-action, and activity strips only need
+		//    recent rows, while usage stats below still scan everything.
 		if parsed := parseTranscriptLine(line, lineOffset); len(parsed) > 0 {
-			entry.entries = append(entry.entries, parsed...)
+			entry.entries = appendTranscriptTail(entry.entries, parsed, transcriptCacheEntryLimit)
 		}
 		// 2) Token usage / model — same logic as sessionTranscriptUsageStats
 		//    but inlined to avoid a second file scan.
@@ -128,6 +136,22 @@ func populateTranscriptCacheEntry(path string) (*transcriptCacheEntry, error) {
 	}
 	entry.pending = latest
 	return entry, nil
+}
+
+func appendTranscriptTail(tail, parsed []TranscriptEntry, limit int) []TranscriptEntry {
+	if limit <= 0 {
+		return append(tail, parsed...)
+	}
+	tail = append(tail, parsed...)
+	if len(tail) <= limit {
+		return tail
+	}
+	over := len(tail) - limit
+	copy(tail, tail[over:])
+	for i := limit; i < len(tail); i++ {
+		tail[i] = TranscriptEntry{}
+	}
+	return tail[:limit]
 }
 
 // accumulateTranscriptUsage processes one jsonl line for token-usage

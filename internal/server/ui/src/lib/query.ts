@@ -2,6 +2,7 @@ import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } 
 import { apiAction, apiGet, apiGetText, apiPost } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
+import { UI_DATA_IDLE_REFETCH_MS, focusedLiveInvalidationKeys } from './liveInvalidation'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
@@ -12,6 +13,7 @@ import type {
   InboxConversation,
   InboxFeed,
   KBFileView,
+  MemorySource,
   OverviewView,
   PlaybookView,
   ProjectView,
@@ -44,17 +46,33 @@ export const queryClient = new QueryClient({
 // Live events should refresh live work data, not slow/static metadata. Quote,
 // settings, and Slack channel listing have their own refresh cadence; invalidating
 // Slack channels on every message can hammer conversations.list into rate limits.
-const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup'])
+const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'memory-sources'])
 const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
-function scheduleInvalidate() {
+let pendingBroadInvalidate = false
+const pendingFocusedInvalidations = new Set<string>()
+function scheduleInvalidate(env?: { type?: string }) {
+  const focused = focusedLiveInvalidationKeys(env)
+  if (focused === null) {
+    pendingBroadInvalidate = true
+  } else {
+    focused.forEach((key) => pendingFocusedInvalidations.add(key))
+  }
   if (invalidateTimer) return
   invalidateTimer = setTimeout(() => {
     invalidateTimer = null
-    queryClient.invalidateQueries(liveData)
+    if (pendingBroadInvalidate) {
+      queryClient.invalidateQueries(liveData)
+    } else {
+      for (const key of pendingFocusedInvalidations) {
+        queryClient.invalidateQueries({ queryKey: [key] })
+      }
+    }
+    pendingBroadInvalidate = false
+    pendingFocusedInvalidations.clear()
   }, 500)
 }
-events.on(() => scheduleInvalidate())
+events.on((env) => scheduleInvalidate(env))
 rpc.onReady(() => queryClient.invalidateQueries(liveData))
 
 // ----- query string helper ----------------------------------------------
@@ -69,15 +87,12 @@ function qs(params: Record<string, string | boolean | number | undefined>): stri
 
 // ----- queries ------------------------------------------------------------
 export function useUiData() {
-  // refetchInterval keeps live figures (token tallies, activity, statuses) moving
-  // in near-real-time even between /ws/events pushes — token usage grows mid-turn
-  // without emitting an event, so event-only invalidation would look frozen. The
-  // server recomputes cheaply (transcript usage is mtime-cached); react-query
-  // pauses this while the tab is hidden, so it's not wasteful.
+  // Runtime events refresh this immediately during active work. The idle poll is
+  // a slow backstop for mid-turn token growth and missed filesystem-side changes.
   return useQuery({
     queryKey: ['ui-data'],
     queryFn: () => apiGet<UiData>('/api/ui-data'),
-    refetchInterval: 5000,
+    refetchInterval: UI_DATA_IDLE_REFETCH_MS,
   })
 }
 export function useSettings() {
@@ -196,6 +211,9 @@ export function usePlaybook(slug: string | undefined) {
 
 export function useKB() {
   return useQuery({ queryKey: ['kb'], queryFn: () => apiGet<KBFileView[]>('/api/kb') })
+}
+export function useMemorySources() {
+  return useQuery({ queryKey: ['memory-sources'], queryFn: () => apiGet<MemorySource[]>('/api/memory/sources') })
 }
 export function useWorkdirs() {
   return useQuery({ queryKey: ['workdirs'], queryFn: () => apiGet<WorkdirView[]>('/api/workdirs') })

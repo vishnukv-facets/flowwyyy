@@ -56,7 +56,14 @@ type Cascade struct {
 	newID  func() string
 	cache  *verdictCache
 	budget *budgetGuard
-	log    func(string, ...any)
+	// classifierBudget caps Stage 1/2 Claude subprocess turns. The stages are
+	// "cheap" compared with deep triage, but still CPU-heavy under connector
+	// floods because each allowed turn shells out to claude.
+	classifierBudget         *budgetGuard
+	classifierMu             sync.Mutex
+	classifierCooldownUntil  time.Time
+	classifierCooldownReason string
+	log                      func(string, ...any)
 	// trace records one decision-trace row per observed event. NewCascade
 	// defaults it to a writer that inserts into the steering_trace table; tests
 	// swap it to capture rows in memory.
@@ -72,15 +79,16 @@ type Cascade struct {
 // a 10-minute verdict TTL, and an env-configurable hourly deep-triage budget).
 func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 	return &Cascade{
-		DB:       db,
-		Config:   cfg,
-		now:      time.Now,
-		newID:    randomID,
-		cache:    newVerdictCache(10 * time.Minute),
-		budget:   newBudgetGuard(deepBudgetPerHour()),
-		log:      func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
-		trace:    func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
-		Autonomy: DefaultAutonomy(),
+		DB:               db,
+		Config:           cfg,
+		now:              time.Now,
+		newID:            randomID,
+		cache:            newVerdictCache(10 * time.Minute),
+		budget:           newBudgetGuard(deepBudgetPerHour()),
+		classifierBudget: newBudgetGuard(classifierBudgetPerHour()),
+		log:              func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
+		trace:            func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		Autonomy:         DefaultAutonomy(),
 	}
 }
 
@@ -228,11 +236,26 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		return c.finishItem(ctx, in, tr, start, ev, cacheKey)
 	}
 
+	if reason, ok := c.classifierUnavailable(c.now()); ok {
+		c.dropForClassifierUnavailable(tr, start, cacheKey, "stage1", reason)
+		return nil
+	}
+	if !c.allowClassifier(c.now()) {
+		c.dropForClassifierBudget(tr, start, cacheKey, "stage1")
+		return nil
+	}
 	stage1In := in
 	stage1In.ThreadKey = cacheKey
 	rel, err := Stage1Relevance(ctx, []ClassifyInput{stage1In})
 	if err != nil {
 		tr.Error = "stage1 advisory failed: " + err.Error()
+		c.noteClassifierError(err, c.now())
+		tr.Disposition, tr.StageReached = "error", "stage1"
+		if c.cache != nil {
+			c.cache.mark(cacheKey, c.now())
+		}
+		c.emitTrace(tr, start)
+		return nil
 	} else if len(rel) > 0 {
 		r := rel[0]
 		tr.Stage1Relevant = &r.Relevant
@@ -246,6 +269,14 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 // exit. It assumes Stage 0/cache/Stage 1 have already passed and tr.ThreadKey
 // + tr.Stage1Relevant are set.
 func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time, ev monitor.InboundEvent, cacheKey string) error {
+	if reason, ok := c.classifierUnavailable(c.now()); ok {
+		c.dropForClassifierUnavailable(tr, start, cacheKey, "stage2", reason)
+		return nil
+	}
+	if !c.allowClassifier(c.now()) {
+		c.dropForClassifierBudget(tr, start, cacheKey, "stage2")
+		return nil
+	}
 	taskIndex, err := BuildTaskIndex(c.DB)
 	if err != nil {
 		tr.Disposition, tr.StageReached, tr.Error = "error", "stage1", err.Error()
@@ -255,9 +286,13 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 
 	v2, err := Stage2Score(ctx, in, taskIndex)
 	if err != nil {
+		c.noteClassifierError(err, c.now())
 		tr.Disposition, tr.StageReached, tr.Error = "error", "stage2", err.Error()
+		if c.cache != nil {
+			c.cache.mark(cacheKey, c.now())
+		}
 		c.emitTrace(tr, start)
-		return fmt.Errorf("steering: stage2: %w", err)
+		return nil
 	}
 	tr.Stage2Action = string(v2.SuggestedAction)
 	tr.Stage2Confidence = v2.Confidence
@@ -444,13 +479,28 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 	if len(inputs) == 0 {
 		return firstErr
 	}
+	if reason, ok := c.classifierUnavailable(c.now()); ok {
+		for _, p := range survivors {
+			c.dropForClassifierUnavailable(p.tr, p.start, p.cacheKey, "stage1", reason)
+		}
+		return firstErr
+	}
+	if !c.allowClassifier(c.now()) {
+		for _, p := range survivors {
+			c.dropForClassifierBudget(p.tr, p.start, p.cacheKey, "stage1")
+		}
+		return firstErr
+	}
 	rel, err := Stage1Relevance(ctx, inputs)
 	if err != nil {
+		c.noteClassifierError(err, c.now())
 		for _, p := range survivors {
 			p.tr.Error = "stage1 advisory failed: " + err.Error()
-			if e := c.finishItem(ctx, p.in, p.tr, p.start, p.ev, p.cacheKey); e != nil && firstErr == nil {
-				firstErr = e
+			p.tr.Disposition, p.tr.StageReached = "error", "stage1"
+			if c.cache != nil {
+				c.cache.mark(p.cacheKey, c.now())
 			}
+			c.emitTrace(p.tr, p.start)
 		}
 		return firstErr
 	}
@@ -468,6 +518,74 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		}
 	}
 	return firstErr
+}
+
+func (c *Cascade) allowClassifier(now time.Time) bool {
+	if c.classifierBudget == nil {
+		return true
+	}
+	return c.classifierBudget.allow(now)
+}
+
+func (c *Cascade) dropForClassifierBudget(tr *flowdb.SteeringTrace, start time.Time, cacheKey, stage string) {
+	tr.Disposition = "dropped"
+	tr.StageReached = stage
+	tr.DropReason = "classifier budget exhausted"
+	if c.cache != nil {
+		c.cache.mark(cacheKey, c.now())
+	}
+	c.emitTrace(tr, start)
+}
+
+func (c *Cascade) dropForClassifierUnavailable(tr *flowdb.SteeringTrace, start time.Time, cacheKey, stage, reason string) {
+	tr.Disposition = "dropped"
+	tr.StageReached = stage
+	tr.DropReason = "classifier unavailable: " + reason
+	if c.cache != nil {
+		c.cache.mark(cacheKey, c.now())
+	}
+	c.emitTrace(tr, start)
+}
+
+func (c *Cascade) classifierUnavailable(now time.Time) (string, bool) {
+	c.classifierMu.Lock()
+	defer c.classifierMu.Unlock()
+	if now.Before(c.classifierCooldownUntil) {
+		return c.classifierCooldownReason, true
+	}
+	if !c.classifierCooldownUntil.IsZero() {
+		c.classifierCooldownUntil = time.Time{}
+		c.classifierCooldownReason = ""
+	}
+	return "", false
+}
+
+func (c *Cascade) noteClassifierError(err error, now time.Time) {
+	reason, ok := classifierUnavailableReason(err)
+	if !ok {
+		return
+	}
+	c.classifierMu.Lock()
+	defer c.classifierMu.Unlock()
+	c.classifierCooldownReason = reason
+	c.classifierCooldownUntil = now.Add(classifierFailureCooldown())
+}
+
+func classifierUnavailableReason(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "weekly limit"):
+		return "weekly limit", true
+	case strings.Contains(msg, "rate limit"), strings.Contains(msg, "quota"):
+		return "rate/quota limit", true
+	case strings.Contains(msg, "auth"), strings.Contains(msg, "login"), strings.Contains(msg, "permission"):
+		return "authentication required", true
+	default:
+		return "", false
+	}
 }
 
 func verdictCacheKey(ev monitor.InboundEvent, threadKey string) string {
@@ -838,6 +956,24 @@ func deepBudgetPerHour() int {
 		}
 	}
 	return 40
+}
+
+func classifierBudgetPerHour() int {
+	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 30
+}
+
+func classifierFailureCooldown() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 30 * time.Minute
 }
 
 func randomID() string {

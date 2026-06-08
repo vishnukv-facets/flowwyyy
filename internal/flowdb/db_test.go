@@ -341,6 +341,23 @@ func TestMigrationAddsSteeringTraceAuditColumns(t *testing.T) {
 	}
 }
 
+func TestOpenDBCreatesSteeringTraceHotPathIndexes(t *testing.T) {
+	db := openTempDB(t)
+	for _, name := range []string{
+		"idx_steering_trace_created_id",
+		"idx_steering_trace_disposition_created_id",
+		"idx_steering_trace_source_created_id",
+		"idx_steering_trace_disposition_source_created_id",
+		"idx_steering_trace_funnel",
+	} {
+		var got string
+		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&got)
+		if err != nil {
+			t.Fatalf("index %s missing: %v", name, err)
+		}
+	}
+}
+
 func TestMigrationAddsAssignee(t *testing.T) {
 	db := openTempDB(t)
 	has, err := columnExists(db, "tasks", "assignee")

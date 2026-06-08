@@ -470,6 +470,170 @@ func TestCascadeBudgetExhaustionSurfacesStage2(t *testing.T) {
 	}
 }
 
+func TestCascadeClassifierBudgetDropsBeforeStage1(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.classifierBudget = newBudgetGuard(0)
+	traces := captureTraces(c)
+	classifierCalled := false
+	deepCalled := false
+	stubClassifier(t, func(prompt string) (string, error) {
+		classifierCalled = true
+		return "{}", nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		deepCalled = true
+		return "{}", nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "5.2", "U_OTHER", "please handle this")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if classifierCalled {
+		t.Fatal("classifier must not run when classifier budget is exhausted")
+	}
+	if deepCalled {
+		t.Fatal("deep triage must not run when classifier budget is exhausted")
+	}
+	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+		t.Fatalf("classifier-budget drop must not write feed items, got %d", len(items))
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "dropped" || tr.StageReached != "stage1" || tr.DropReason != "classifier budget exhausted" {
+		t.Fatalf("trace = %+v, want dropped at stage1 for classifier budget", tr)
+	}
+}
+
+func TestCascadeClassifierBudgetDropsBeforeStage2(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.classifierBudget = newBudgetGuard(1)
+	traces := captureTraces(c)
+	stage1Calls := 0
+	stage2Called := false
+	deepCalled := false
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Calls++
+			return stage1JSONForPrompt(prompt, true, "passes cheap gate"), nil
+		}
+		stage2Called = true
+		return `{"suggested_action":"reply","confidence":0.8,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		deepCalled = true
+		return "{}", nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "5.3", "U_OTHER", "please handle this")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if stage1Calls != 1 {
+		t.Fatalf("stage1 calls = %d, want 1", stage1Calls)
+	}
+	if stage2Called {
+		t.Fatal("stage2 classifier must not run after the classifier budget is exhausted")
+	}
+	if deepCalled {
+		t.Fatal("deep triage must not run after the classifier budget is exhausted")
+	}
+	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+		t.Fatalf("classifier-budget drop must not write feed items, got %d", len(items))
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "dropped" || tr.StageReached != "stage2" || tr.DropReason != "classifier budget exhausted" {
+		t.Fatalf("trace = %+v, want dropped at stage2 for classifier budget", tr)
+	}
+}
+
+func TestCascadeStage1ErrorDoesNotRunStage2(t *testing.T) {
+	c, db := cascadeFixture(t)
+	traces := captureTraces(c)
+	stage2Called := false
+	deepCalled := false
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return "", errors.New("classifier parse failed")
+		}
+		stage2Called = true
+		return `{"suggested_action":"reply","confidence":0.8}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		deepCalled = true
+		return "{}", nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "5.4", "U_OTHER", "please handle this")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if stage2Called {
+		t.Fatal("stage2 must not run after stage1 classifier error")
+	}
+	if deepCalled {
+		t.Fatal("deep triage must not run after stage1 classifier error")
+	}
+	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+		t.Fatalf("stage1 error must not write feed items, got %d", len(items))
+	}
+	if len(*traces) != 1 {
+		t.Fatalf("trace count = %d, want 1", len(*traces))
+	}
+	tr := (*traces)[0]
+	if tr.Disposition != "error" || tr.StageReached != "stage1" || !strings.Contains(tr.Error, "classifier parse failed") {
+		t.Fatalf("trace = %+v, want stage1 error", tr)
+	}
+}
+
+func TestCascadeStage2UnavailableErrorOpensClassifierCooldown(t *testing.T) {
+	c, db := cascadeFixture(t)
+	traces := captureTraces(c)
+	stage1Calls := 0
+	stage2Calls := 0
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			stage1Calls++
+			return stage1JSONForPrompt(prompt, true, "passes cheap gate"), nil
+		}
+		stage2Calls++
+		return "", errors.New("steering: pooled classifier claude: exit status 1 (stdout: You've hit your weekly limit · resets 10:30pm (Asia/Calcutta))")
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		t.Fatal("deep triage must not run when stage2 classifier is unavailable")
+		return "{}", nil
+	})
+
+	if err := c.Observe(context.Background(), msg("C1", "5.5", "U_OTHER", "please handle this")); err != nil {
+		t.Fatalf("first Observe: %v", err)
+	}
+	if err := c.Observe(context.Background(), msg("C1", "5.6", "U_OTHER", "please handle another")); err != nil {
+		t.Fatalf("second Observe: %v", err)
+	}
+	if stage1Calls != 1 {
+		t.Fatalf("stage1 calls = %d, want 1; cooldown should stop the second event before stage1", stage1Calls)
+	}
+	if stage2Calls != 1 {
+		t.Fatalf("stage2 calls = %d, want 1; cooldown should stop repeated stage2 launches", stage2Calls)
+	}
+	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+		t.Fatalf("classifier-unavailable path must not write feed items, got %d", len(items))
+	}
+	if len(*traces) != 2 {
+		t.Fatalf("trace count = %d, want 2", len(*traces))
+	}
+	first := (*traces)[0]
+	if first.Disposition != "error" || first.StageReached != "stage2" || !strings.Contains(first.Error, "weekly limit") {
+		t.Fatalf("first trace = %+v, want stage2 error with weekly limit", first)
+	}
+	second := (*traces)[1]
+	if second.Disposition != "dropped" || second.StageReached != "stage1" || !strings.Contains(second.DropReason, "classifier unavailable: weekly limit") {
+		t.Fatalf("second trace = %+v, want cooldown drop before stage1", second)
+	}
+}
+
 func TestObserveTraceStage0Drop(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	traces := captureTraces(c)

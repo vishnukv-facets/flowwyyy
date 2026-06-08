@@ -80,6 +80,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [side, setSide] = useState(false) // side panel collapsed by default — terminal maximized
   const [full, setFull] = useState(false) // terminal fullscreen
+  const [briefModal, setBriefModal] = useState(false)
   const [diffModal, setDiffModal] = useState(false)
   const [transcriptModal, setTranscriptModal] = useState(false)
   const [updatesModal, setUpdatesModal] = useState(false)
@@ -609,7 +610,7 @@ export function SessionDetail({ slug }: { slug: string }) {
               ))}
             </div>
             <div className="tab-body" style={{ padding: '14px 14px' }}>
-              {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} />}
+              {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} onExpand={() => setBriefModal(true)} />}
               {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} slug={slug} trackLook />}
               {tab === 'transcript' && (
                 <TranscriptTab
@@ -627,6 +628,10 @@ export function SessionDetail({ slug }: { slug: string }) {
           </div>
         )}
       </div>
+
+      <Modal open={briefModal} onClose={() => setBriefModal(false)} title="Brief" width={900}>
+        <BriefTab slug={slug} summary={agent?.summary} full />
+      </Modal>
 
       <Modal open={diffModal} onClose={() => setDiffModal(false)} title={`Changes · ${agent?.diff?.files ?? 0} files`} width={1100}>
         <DiffTab files={agent?.diff_files} error={agentError} slug={slug} />
@@ -904,11 +909,37 @@ function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; a
   )
 }
 
-function BriefTab({ slug, summary }: { slug: string; summary?: string }) {
+function BriefTab({
+  slug,
+  summary,
+  onExpand,
+  full,
+}: {
+  slug: string
+  summary?: string
+  onExpand?: () => void
+  full?: boolean
+}) {
   const { data, isLoading } = useMarkdown(`/api/tasks/${encodeURIComponent(slug)}/brief`)
   if (isLoading) return <Loading label="brief" />
   if (!data?.trim()) return <div className="faint">{summary || 'No brief written for this task.'}</div>
-  return <TaskMarkdown source={data} />
+  const words = data.trim().split(/\s+/).length
+  return (
+    <div>
+      {onExpand && (
+        <div className="row" style={{ marginBottom: 10 }}>
+          <span className="faint mono" style={{ fontSize: 12 }}>
+            {words} word{words === 1 ? '' : 's'} in brief
+          </span>
+          <div className="spacer" />
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
+            <Maximize2 size={13} /> Full view
+          </button>
+        </div>
+      )}
+      <TaskMarkdown source={data} className={full ? 'brief-full-md' : undefined} />
+    </div>
+  )
 }
 
 function DiffTab({

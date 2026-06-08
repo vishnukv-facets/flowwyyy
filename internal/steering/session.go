@@ -17,7 +17,7 @@ type classifierExec func(ctx context.Context, args []string) (string, error)
 func defaultClassifierExec(ctx context.Context, args []string) (string, error) {
 	out, err := exec.CommandContext(ctx, "claude", args...).Output()
 	if err != nil {
-		return "", err
+		return "", commandError("steering: pooled classifier claude", err, out)
 	}
 	return string(out), nil
 }
@@ -33,6 +33,7 @@ type classifierPool struct {
 	newID    func() string
 	exec     classifierExec
 
+	execMu   sync.Mutex
 	mu       sync.Mutex
 	sessions map[string]*sessionSlot
 }
@@ -63,6 +64,9 @@ func newClassifierPool(maxTurns int, ttl time.Duration) *classifierPool {
 // sent every turn. primeKey rotates the session when the primed context
 // changes (pass a stable string for static primes).
 func (p *classifierPool) run(ctx context.Context, mode, prime, payload, primeKey string) (string, error) {
+	p.execMu.Lock()
+	defer p.execMu.Unlock()
+
 	p.mu.Lock()
 	slot := p.sessions[mode]
 	fresh := slot == nil ||

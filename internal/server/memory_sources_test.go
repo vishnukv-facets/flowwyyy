@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestUIDataIncludesAgentMemorySources(t *testing.T) {
+func TestMemorySourcesEndpointIncludesAgentMemorySourceContent(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
@@ -35,19 +35,17 @@ func TestUIDataIncludesAgentMemorySources(t *testing.T) {
 
 	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/memory/sources", nil)
 	srv.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 
-	var payload struct {
-		MemorySources []uiMemorySource `json:"AGENT_MEMORY_SOURCES"`
-	}
-	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+	var memorySources []uiMemorySource
+	if err := json.Unmarshal(rec.Body.Bytes(), &memorySources); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.MemorySources) == 0 {
+	if len(memorySources) == 0 {
 		t.Fatal("AGENT_MEMORY_SOURCES is empty")
 	}
 
@@ -63,9 +61,9 @@ func TestUIDataIncludesAgentMemorySources(t *testing.T) {
 		"project-codex-marker":  {"codex", "project", "instructions"},
 		"claude-auto-marker":    {"claude", "project", "auto-memory"},
 	} {
-		src, ok := findMemorySourceWithContent(payload.MemorySources, marker)
+		src, ok := findMemorySourceWithContent(memorySources, marker)
 		if !ok {
-			t.Fatalf("missing memory marker %q in %#v", marker, payload.MemorySources)
+			t.Fatalf("missing memory marker %q in %#v", marker, memorySources)
 		}
 		if !src.Available || src.Status != "available" {
 			t.Fatalf("%s availability = %v/%q, want available", marker, src.Available, src.Status)
@@ -87,14 +85,51 @@ func TestUIDataIncludesAgentMemorySources(t *testing.T) {
 		"project-claude-rule-marker",
 		"nested-claude-marker",
 	} {
-		if src, ok := findMemorySourceWithContent(payload.MemorySources, marker); ok {
+		if src, ok := findMemorySourceWithContent(memorySources, marker); ok {
 			t.Fatalf("unexpected Claude instruction/rule source for marker %q: %+v", marker, src)
 		}
 	}
-	for _, src := range payload.MemorySources {
+	for _, src := range memorySources {
 		if isClaudeMDPath(src.Path) {
 			t.Fatalf("unexpected CLAUDE.md source: %+v", src)
 		}
+	}
+}
+
+func TestUIDataIncludesAgentMemorySourceMetadataWithoutContent(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	home := t.TempDir()
+	codexHome := filepath.Join(home, ".codex")
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
+	writeTestFile(t, filepath.Join(codexHome, "AGENTS.md"), "# Codex user memory\ncodex-user-marker\n")
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var payload struct {
+		MemorySources []uiMemorySource `json:"AGENT_MEMORY_SOURCES"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	src, ok := findMemorySourceWithPathSuffix(payload.MemorySources, filepath.Join(".codex", "AGENTS.md"))
+	if !ok {
+		t.Fatalf("missing codex AGENTS.md metadata in %#v", payload.MemorySources)
+	}
+	if !src.Available || src.Status != "available" || src.MTime == "" || src.Size <= 0 {
+		t.Fatalf("memory source metadata incomplete: %+v", src)
+	}
+	if src.Content != "" {
+		t.Fatalf("ui-data memory metadata should not include file content, got %d bytes", len(src.Content))
 	}
 }
 
@@ -149,10 +184,10 @@ func TestAgentMemorySourcesKeepDuplicateProjectFilenames(t *testing.T) {
 	writeTestFile(t, filepath.Join(workB, "AGENTS.md"), "# Repo B\nrepo-b-marker\n")
 
 	srv := &Server{cfg: Config{FlowRoot: root}}
-	sources := srv.uiAgentMemorySources(nil, nil, nil, []uiWorkdir{
+	sources := srv.uiAgentMemorySourcesWithContent(nil, nil, nil, []uiWorkdir{
 		{Path: workA, Name: "Repo A"},
 		{Path: workB, Name: "Repo B"},
-	})
+	}, true)
 
 	seenIDs := map[string]bool{}
 	markers := map[string]bool{}

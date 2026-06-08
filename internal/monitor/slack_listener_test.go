@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -150,6 +151,35 @@ func TestSlackListener_MockConnectorDispatchesEvents(t *testing.T) {
 	}
 	// We sent both events with Request set — both should be acked. (Tests
 	// without a request field would not produce ack calls. See helper.)
+}
+
+func TestSlackListener_ExpectedParserDropsStayQuiet(t *testing.T) {
+	l := NewSlackListener(NewDispatcher(nil, nil))
+	var logs []string
+	l.logFn = func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	}
+
+	l.handleSocketEvent(context.Background(), nil, socketmode.Event{
+		Type: socketmode.EventTypeEventsAPI,
+		Data: slackevents.EventsAPIEvent{
+			Type: "events_api",
+			InnerEvent: slackevents.EventsAPIInnerEvent{
+				Type: string(slackevents.Message),
+				Data: &slackevents.MessageEvent{
+					Type:      "message",
+					SubType:   "bot_message",
+					Channel:   "C123",
+					Text:      "deploy ok",
+					TimeStamp: "1710000020.000001",
+				},
+			},
+		},
+	})
+
+	if len(logs) != 0 {
+		t.Fatalf("expected no logs for parser-dropped bot/system messages, got %q", logs)
+	}
 }
 
 func makeReactionEvent(reactor, emoji, channel, itemTS, eventTS string) slackevents.EventsAPIEvent {
