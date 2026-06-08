@@ -55,6 +55,10 @@ type Server struct {
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
+	// zrok manages an optional `zrok share reserved` subprocess when
+	// FLOW_ZROK_AUTO_START is enabled. Always non-nil after New().
+	zrok *zrokManager
+
 	// slackOAuth is the in-flight Connect-Slack install attempt (the
 	// ephemeral TLS callback listener + state nonce). At most one at a time;
 	// guarded by slackSetupMu. Nil when no install is in progress.

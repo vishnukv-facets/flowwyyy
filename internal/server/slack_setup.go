@@ -70,7 +70,14 @@ func slackOAuthPort() int {
 	return slackSetupDefaultOAuthPort
 }
 
-func slackOAuthRedirectURL() string {
+// slackCallbackURL returns the OAuth redirect URL to register in the Slack app
+// manifest and use in the OAuth authorize round-trip. When a public ingress
+// base URL is configured (zrok or manual), that URL is preferred and no
+// self-signed TLS listener is needed. Falls back to https://localhost:<port>.
+func (s *Server) slackCallbackURL() string {
+	if cb := s.connectorCallbackURL(slackOAuthCallbackPath); cb != "" {
+		return cb
+	}
 	return fmt.Sprintf("https://localhost:%d%s", slackOAuthPort(), slackOAuthCallbackPath)
 }
 
@@ -411,15 +418,16 @@ func mergeSelfUserIDs(existing, discovered string) string {
 // outcome. At most one dance runs at a time; starting a new one replaces any
 // active dance.
 type slackOAuthDance struct {
-	mu           sync.Mutex
-	state        string
-	authorizeURL string
-	srv          *http.Server
-	addr         string // host:port actually bound (tests bind port 0)
-	expires      time.Time
-	status       string // "waiting" | "done" | "error"
-	errMsg       string
-	team         string
+	mu            sync.Mutex
+	state         string
+	authorizeURL  string
+	srv           *http.Server
+	addr          string // host:port actually bound (tests bind port 0)
+	expires       time.Time
+	status        string // "waiting" | "done" | "error"
+	errMsg        string
+	team          string
+	publicIngress bool // true: callback lands on main server, no TLS listener
 }
 
 func (d *slackOAuthDance) snapshot() (status, errMsg, authorizeURL, team string) {
@@ -486,16 +494,10 @@ func (s *Server) startSlackOAuthDance(clientID, clientSecret string, port int) (
 	if err != nil {
 		return nil, err
 	}
-	cert, err := selfSignedLocalhostCert()
-	if err != nil {
-		return nil, fmt.Errorf("generate callback certificate: %w", err)
-	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
-	if err != nil {
-		return nil, fmt.Errorf("bind callback port %d: %w (another flow instance mid-install?)", port, err)
-	}
 
-	redirectURI := slackOAuthRedirectURL()
+	redirectURI := s.slackCallbackURL()
+	usingPublicIngress := s.publicBaseURL() != ""
+
 	authorize := "https://slack.com/oauth/v2/authorize?" + url.Values{
 		"client_id":    {clientID},
 		"scope":        {strings.Join(slackManifestBotScopes, ",")},
@@ -505,36 +507,51 @@ func (s *Server) startSlackOAuthDance(clientID, clientSecret string, port int) (
 	}.Encode()
 
 	dance := &slackOAuthDance{
-		state:        state,
-		authorizeURL: authorize,
-		addr:         ln.Addr().String(),
-		expires:      time.Now().Add(slackOAuthDanceTTL),
-		status:       "waiting",
+		state:         state,
+		authorizeURL:  authorize,
+		expires:       time.Now().Add(slackOAuthDanceTTL),
+		status:        "waiting",
+		publicIngress: usingPublicIngress,
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc(slackOAuthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
-		s.handleSlackOAuthCallback(w, r, dance, clientID, clientSecret, redirectURI)
-	})
-	srv := &http.Server{
-		Handler:           mux,
-		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-	dance.srv = srv
-
-	go func() {
-		if err := srv.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
-			dance.mu.Lock()
-			if dance.status == "waiting" {
-				dance.status = "error"
-				dance.errMsg = "callback listener: " + err.Error()
-			}
-			dance.mu.Unlock()
+	if !usingPublicIngress {
+		// Localhost mode: bind an ephemeral self-signed TLS listener.
+		// Slack mandates HTTPS for the redirect URL; for a loopback hop the
+		// one-time browser certificate warning is the accepted cost.
+		cert, err := selfSignedLocalhostCert()
+		if err != nil {
+			return nil, fmt.Errorf("generate callback certificate: %w", err)
 		}
-	}()
-	// Self-destruct after the TTL so an abandoned install doesn't hold the
-	// port (or keep a stale state nonce alive) forever.
+		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return nil, fmt.Errorf("bind callback port %d: %w (another flow instance mid-install?)", port, err)
+		}
+		dance.addr = ln.Addr().String()
+		mux := http.NewServeMux()
+		mux.HandleFunc(slackOAuthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
+			s.handleSlackOAuthCallback(w, r, dance, clientID, clientSecret, redirectURI)
+		})
+		srv := &http.Server{
+			Handler:           mux,
+			TLSConfig:         &tls.Config{Certificates: []tls.Certificate{cert}},
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		dance.srv = srv
+		go func() {
+			if err := srv.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+				dance.mu.Lock()
+				if dance.status == "waiting" {
+					dance.status = "error"
+					dance.errMsg = "callback listener: " + err.Error()
+				}
+				dance.mu.Unlock()
+			}
+		}()
+	}
+	// In public ingress mode the callback arrives on the main server via
+	// handleSlackSetupOAuthCallbackMain — no TLS listener is needed.
+
+	// Self-destruct after the TTL.
 	go func() {
 		time.Sleep(time.Until(dance.expires))
 		dance.mu.Lock()
@@ -646,6 +663,11 @@ type slackSetupStatus struct {
 	UserTokenSet bool   `json:"user_token_set"`
 	SelfUserIDs  string `json:"self_user_ids,omitempty"`
 	RedirectURL  string `json:"redirect_url"`
+	// CallbackMode reports how the OAuth redirect is handled:
+	// "localhost" = ephemeral self-signed TLS listener (default/fallback)
+	// "zrok"      = zrok public share forwarding to main server
+	// "manual"    = operator-supplied public URL forwarding to main server
+	CallbackMode string `json:"callback_mode"`
 
 	OAuthActive       bool   `json:"oauth_active"`
 	OAuthStatus       string `json:"oauth_status,omitempty"`
@@ -671,7 +693,8 @@ func (s *Server) handleSlackSetupStatus(w http.ResponseWriter, r *http.Request) 
 		BotTokenSet:  strings.TrimSpace(os.Getenv("FLOW_SLACK_TOKEN")) != "",
 		UserTokenSet: strings.TrimSpace(os.Getenv("FLOW_SLACK_USER_TOKEN")) != "",
 		SelfUserIDs:  strings.TrimSpace(os.Getenv("FLOW_SLACK_SELF_USER_IDS")),
-		RedirectURL:  slackOAuthRedirectURL(),
+		RedirectURL:  s.slackCallbackURL(),
+		CallbackMode: s.callbackMode(),
 	}
 	if appID != "" {
 		st.ManageURL = "https://api.slack.com/apps/" + url.PathEscape(appID)
@@ -728,7 +751,7 @@ func (s *Server) handleSlackSetupCreateApp(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	manifest := slackAppManifest(req.AppName, slackOAuthRedirectURL())
+	manifest := slackAppManifest(req.AppName, s.slackCallbackURL())
 	api := newSlackSetupAPI()
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -818,7 +841,7 @@ func (s *Server) handleSlackSetupOAuthStart(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	_, _, authorizeURL, _ := dance.snapshot()
-	writeJSON(w, map[string]any{"ok": true, "authorize_url": authorizeURL, "redirect_url": slackOAuthRedirectURL()})
+	writeJSON(w, map[string]any{"ok": true, "authorize_url": authorizeURL, "redirect_url": s.slackCallbackURL()})
 }
 
 func (s *Server) handleSlackSetupOAuthCancel(w http.ResponseWriter, r *http.Request) {
@@ -834,4 +857,26 @@ func (s *Server) handleSlackSetupOAuthCancel(w http.ResponseWriter, r *http.Requ
 		dance.shutdown()
 	}
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleSlackSetupOAuthCallbackMain serves GET /api/slack/oauth/callback on the
+// main HTTP server. In public ingress mode (zrok/manual) the external redirect URL
+// points here and the ingress provider forwards the request. In localhost mode
+// the ephemeral TLS listener handles the callback instead — this handler returns
+// 404 when no install is in progress.
+func (s *Server) handleSlackSetupOAuthCallbackMain(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	s.slackSetupMu.Lock()
+	dance := s.slackOAuth
+	clientID := os.Getenv("FLOW_SLACK_CLIENT_ID")
+	clientSecret := os.Getenv("FLOW_SLACK_CLIENT_SECRET")
+	s.slackSetupMu.Unlock()
+	if dance == nil {
+		http.Error(w, "no Slack install in progress", http.StatusNotFound)
+		return
+	}
+	s.handleSlackOAuthCallback(w, r, dance, clientID, clientSecret, s.slackCallbackURL())
 }

@@ -319,11 +319,14 @@ at any point — reload the page and it picks up where you left off:
    token, your user token (DM following), *and* your member ID in a
    single OAuth exchange — nothing to copy, nothing to look up.
 
-> **The one rough edge:** the OAuth redirect lands on
-> `https://localhost:8790` with a locally-generated certificate, so your
-> browser shows a one-time "connection is not private" warning — click
+> **The one rough edge (default / localhost mode):** the OAuth redirect
+> lands on `https://localhost:8790` with a locally-generated certificate, so
+> your browser shows a one-time "connection is not private" warning — click
 > **Advanced → Proceed**. Slack mandates an HTTPS redirect URL; the
-> authorization code never leaves your machine.
+> authorization code never leaves your machine. Configure
+> [public ingress](#public-ingress--public-callback-urls-for-connectors) (zrok
+> or your own URL) and this warning disappears — the redirect lands on a real
+> public HTTPS URL instead. The wizard detects the mode and adjusts its copy.
 
 When the wizard turns green, react to any Slack message with `:claude:`
 and a session opens. Scope changes later? Hit **Reinstall** on the same
@@ -519,7 +522,7 @@ Slack vars), but the Settings UI always reads/writes the `FLOW_SLACK_*` key.
 | `FLOW_SLACK_AUTOOPEN` | — | `true` | Open a session automatically when a thread is triggered |
 | `FLOW_SLACK_WRITES_ENABLED` | — | `false` | Gate for posting back to Slack; **off** by default |
 | `FLOW_SLACK_API_BASE_URL` | — | `https://slack.com/api` | Override the Slack API base (testing / proxies only) |
-| `FLOW_SLACK_OAUTH_PORT` | — | `8790` | Loopback port for the wizard's HTTPS OAuth callback. Must not change after app creation — the redirect URL is registered in the app manifest |
+| `FLOW_SLACK_OAUTH_PORT` | — | `8790` | Loopback port for the wizard's HTTPS OAuth callback **in default/localhost mode only**. Must not change after app creation — the redirect URL is registered in the app manifest. Ignored when [public ingress](#public-ingress--public-callback-urls-for-connectors) is configured (the callback then lands on the main server). |
 
 Three more keys — `FLOW_SLACK_APP_ID`, `FLOW_SLACK_CLIENT_ID`,
 `FLOW_SLACK_CLIENT_SECRET` — are written by the Connect Slack wizard
@@ -550,6 +553,105 @@ rest of flow works unchanged — Slack is opt-in.
 | Thread replies don't wake the session | Missing `channels:history` / `groups:history`, or you changed scopes without reinstalling |
 | DM replies don't wake the session | No user token, or `message.im` / `message.mpim` not subscribed under "on behalf of users", or app not reinstalled after adding them |
 | Task titles show raw IDs instead of names | Missing `channels:read` / `users:read` — flow falls back to the author ID rather than erroring |
+
+## Public ingress — public callback URLs for connectors
+
+Some connectors need an external service to reach flow *inbound*, over a real
+public HTTPS URL:
+
+- **Slack OAuth install** — Slack redirects your browser back to a callback
+  URL. By default that's the self-signed `https://localhost:8790` hop with the
+  one-time certificate warning (above).
+- **GitHub webhooks** — GitHub has no Socket-Mode equivalent; event delivery is
+  a `POST` to a public URL. A local-only flow server can't receive it without a
+  tunnel.
+
+Public ingress is one reusable abstraction for both (and any future
+OAuth/webhook connector). flow keeps running locally; the outside world sees a
+normal public HTTPS URL; flow still validates everything itself (Slack OAuth
+`state`, GitHub HMAC signatures, token exchanges).
+
+Pick a provider with **`FLOW_INGRESS_PROVIDER`**:
+
+| Provider | Public URL comes from | Use when |
+| -------- | --------------------- | -------- |
+| `none` *(default)* | — | You only use Slack and accept the localhost cert warning |
+| `zrok` | **Generated at runtime** by [zrok](https://zrok.io) and read back from the share — you do *not* set it by hand | You want a public URL without running your own server |
+| `manual` | `FLOW_PUBLIC_BASE_URL` you set | You already front flow with your own reverse proxy / tunnel / domain |
+
+### zrok (recommended)
+
+[zrok](https://zrok.io) is an open-source, self-hostable sharing platform built
+on OpenZiti. flow embeds the **zrok Go SDK** — no `zrok` binary to install or
+keep running, no subprocess. flow opens a public share, serves it directly over
+the Ziti overlay (your local port is never exposed to the internet), and reads
+the **runtime-assigned public URL** back from the share. The URL is not derived
+from config: it comes from zrok and works the same against the hosted
+`share.zrok.io` or your own self-hosted zrok instance.
+
+One-time setup:
+
+1. Install zrok and enable your environment once: `zrok enable <your-token>`
+   (this writes `~/.zrok` identity files the SDK reuses). flow never needs the
+   `zrok` CLI again after this.
+2. In **Settings → Ingress** (or via env): set `FLOW_INGRESS_PROVIDER=zrok`.
+3. Set **`FLOW_ZROK_SHARE_NAME`** to a stable, unique name (e.g. `my-flow`).
+   This reserves the share so the public URL **survives restarts** — required,
+   because Slack and GitHub register the callback URL once. Leave it empty only
+   for throwaway/ephemeral shares whose URL changes every boot.
+4. Set `FLOW_ZROK_AUTO_START=true` so flow creates/attaches the share when
+   `flow ui serve` starts.
+
+flow then exposes only the connector callback paths over the public URL — never
+the Mission Control UI or its data API, which have no auth and stay local.
+
+Check the live state any time:
+
+```bash
+curl -s localhost:8787/api/ingress/status | jq
+# { "provider": "zrok", "base_url": "https://my-flow.share.zrok.io",
+#   "running": true, "share_name": "my-flow", "share_running": true,
+#   "slack_callback_url": ".../api/slack/oauth/callback",
+#   "github_webhook_url": ".../api/github/webhook" }
+```
+
+`base_url` is empty until the share is established; while it's empty, Slack OAuth
+transparently falls back to the localhost callback, so setup never blocks on
+zrok being up.
+
+### manual (bring your own ingress)
+
+Already running flow behind your own reverse proxy, Cloudflare Tunnel, or
+domain? Set `FLOW_INGRESS_PROVIDER=manual` and `FLOW_PUBLIC_BASE_URL` to your
+public HTTPS base (e.g. `https://flow.example.com`). flow derives the connector
+callback paths from it. This var is **only** used in `manual` mode — zrok
+discovers its own URL and ignores it.
+
+### Configuration reference
+
+| Setting key | Default | Purpose |
+| ----------- | ------- | ------- |
+| `FLOW_INGRESS_PROVIDER` | `none` | `none` \| `zrok` \| `manual` |
+| `FLOW_ZROK_SHARE_NAME` | — | Reserved zrok share unique-name. Set it to pin a stable URL across restarts; empty → ephemeral share |
+| `FLOW_ZROK_AUTO_START` | `false` | Create the zrok share + attach the SDK listener on server start (needs an enabled zrok environment) |
+| `FLOW_PUBLIC_BASE_URL` | — | **`manual` only.** Your own public HTTPS base URL; ignored for zrok |
+
+### How the Slack callback adapts
+
+The Connect Slack wizard reports its callback mode (`localhost` \| `zrok` \|
+`manual`) and adjusts:
+
+- **`localhost`** — ephemeral self-signed TLS listener on `FLOW_SLACK_OAUTH_PORT`;
+  the one-time browser certificate warning applies.
+- **`zrok` / `manual`** — the redirect lands on the main flow server via the
+  public URL, so there is **no certificate warning**. The app manifest and the
+  OAuth authorize round-trip both use the public callback URL.
+
+> **Changing the public URL after creating the Slack app?** The redirect URL is
+> baked into the Slack app manifest at creation time. If the base URL changes
+> (e.g. you switch providers or rename the zrok share), re-run the Connect Slack
+> install so the new redirect URL is registered — pinning `FLOW_ZROK_SHARE_NAME`
+> avoids this by keeping the URL stable.
 
 ## GitHub integration — assigned work and review threads
 

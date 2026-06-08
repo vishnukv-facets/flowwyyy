@@ -77,6 +77,11 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_SEND_MODEL", Label: "Reply send model", Group: "Steering", Type: settingEnum, Options: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"}, Default: "claude-sonnet-4-6", Help: "Model for the ephemeral session that posts your approved Slack replies. Sonnet is reliable + cheap; Haiku is cheapest but often fumbles the Slack tool call; Opus is overkill. Applies to the next send (no restart)."},
 	{Key: "FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR", Label: "Classifier budget / hour", Group: "Steering", Type: settingInt, Default: "30", Help: "Maximum Stage 1/2 classifier subprocess turns per rolling hour. Lower this if Mission Control heats the laptop under Slack/GitHub noise."},
 	{Key: "FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN", Label: "Classifier failure cooldown", Group: "Steering", Type: settingString, Default: "30m", Help: "Go duration for pausing classifier subprocesses after quota/auth failures, e.g. 30m or 1h."},
+	// Ingress — public callback URL for connectors that need inbound HTTPS
+	{Key: "FLOW_INGRESS_PROVIDER", Label: "Ingress provider", Group: "Ingress", Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public callback URL provider. 'zrok' generates the URL at runtime via the zrok SDK; 'manual' uses your own URL from FLOW_PUBLIC_BASE_URL."},
+	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Type: settingString, Help: "Only for the 'manual' provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
+	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable public URL across restarts (required for Slack/GitHub callbacks). Leave empty for an ephemeral share whose URL changes each restart."},
+	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Type: settingBool, Default: "false", Help: "Create the zrok public share and attach the SDK listener automatically when the Flow server starts (requires an enabled zrok environment: run `zrok enable` once)."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
@@ -310,13 +315,16 @@ func validateSettingValue(sp settingSpec, val string) error {
 // tokens / Socket-Mode / enabled flags take effect without a server restart.
 // Stop()/Start() are safe and no-op when the new config disables the listener.
 func (s *Server) applySettingsRestart(changed []string) {
-	slackTouched, ghTouched := false, false
+	slackTouched, ghTouched, ingressTouched := false, false, false
 	for _, k := range changed {
 		if strings.HasPrefix(k, "FLOW_SLACK_") || strings.HasPrefix(k, "SLACK_") {
 			slackTouched = true
 		}
 		if strings.HasPrefix(k, "FLOW_GH_") {
 			ghTouched = true
+		}
+		if strings.HasPrefix(k, "FLOW_ZROK_") || strings.HasPrefix(k, "FLOW_INGRESS_") || k == "FLOW_PUBLIC_BASE_URL" {
+			ingressTouched = true
 		}
 	}
 	if slackTouched && s.slackListener != nil {
@@ -326,5 +334,9 @@ func (s *Server) applySettingsRestart(changed []string) {
 	if ghTouched && s.githubListener != nil {
 		s.githubListener.Stop()
 		_ = s.githubListener.Start()
+	}
+	if ingressTouched && s.zrok != nil {
+		s.zrok.stop()
+		s.zrok.start()
 	}
 }

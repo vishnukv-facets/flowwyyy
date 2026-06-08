@@ -688,6 +688,7 @@ export interface SlackSetupStatus {
   user_token_set: boolean
   self_user_ids?: string
   redirect_url: string
+  callback_mode: 'localhost' | 'zrok' | 'manual'
   oauth_active: boolean
   oauth_status?: string
   oauth_error?: string
@@ -696,6 +697,21 @@ export interface SlackSetupStatus {
   listener_running: boolean
   listener_connected: boolean
   listener_suppressed: boolean
+}
+
+export interface IngressStatus {
+  provider: string
+  // Public base URL, discovered from zrok at runtime (or operator-supplied for
+  // manual). Empty until the share is established.
+  base_url?: string
+  running: boolean
+  env_enabled?: boolean
+  // Reserved zrok share unique-name (FLOW_ZROK_SHARE_NAME), if configured.
+  share_name?: string
+  share_running?: boolean
+  last_error?: string
+  slack_callback_url?: string
+  github_webhook_url?: string
 }
 
 export interface ActionRequest {

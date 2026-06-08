@@ -50,6 +50,7 @@ func New(cfg Config) *Server {
 	s.caches = newUICaches()
 	s.dbWatcher = newDBWatcher(s)
 	s.respawn = newRespawnGate(respawnDebounceWindow)
+	s.zrok = &zrokManager{}
 	s.inboxMonitors = newInboxMonitorManager(inboxWakeTarget{server: s})
 	s.monitorReconcile = newMonitorReconciler(s)
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
@@ -145,9 +146,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)
 	mux.HandleFunc("/api/quote", s.handleQuote)
-	// Connect-Slack wizard. The OAuth callback itself is NOT here — it lives
-	// on a separate ephemeral HTTPS listener (Slack requires an https
-	// redirect URL); see slack_setup.go.
+	// Slack OAuth callback. In public ingress mode (zrok/manual) zrok forwards
+	// the external redirect to this path on the main server. In localhost mode
+	// the ephemeral TLS listener also handles it; this route acts as a
+	// fallback that returns 404 when no install is in progress.
+	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallbackMain)
+	mux.HandleFunc("/api/ingress/status", s.handleIngressStatus)
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
 	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
@@ -188,6 +192,14 @@ func (s *Server) ListenAndServe(addr string) int {
 		Addr:              addr,
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+	// Start the optional zrok public share when auto-start is enabled. The
+	// share serves only the restricted ingress mux (connector callbacks), never
+	// the full Mission Control handler.
+	if s.zrok != nil {
+		s.zrok.handler = s.ingressMux()
+		s.zrok.start()
+		defer s.zrok.stop()
 	}
 	// Start the liveness reconciler so dead Claude/Codex sessions get
 	// detected even when their Stop/SessionEnd hook never fires. Stops

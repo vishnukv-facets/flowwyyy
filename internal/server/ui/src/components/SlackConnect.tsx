@@ -265,12 +265,24 @@ function StepInstall({ st, active, onDone }: { st: SlackSetupStatus; active: boo
       summary={st.self_user_ids ? <span className="slack-step-link mono">{st.self_user_ids}</span> : undefined}
     >
       <p className="config-help">
-        One browser approval. Slack hands back the bot token, your user token
-        (DM following), and your member ID in a single round trip — nothing to
-        copy. The redirect lands on <code>{st.redirect_url}</code> with a
-        locally-generated certificate, so your browser will warn once —{' '}
-        <strong>Advanced → Proceed</strong> is expected; the code never leaves
-        this machine.
+        {st.callback_mode === 'localhost' ? (
+          <>
+            One browser approval. Slack hands back the bot token, your user token
+            (DM following), and your member ID in a single round trip — nothing to
+            copy. The redirect lands on <code>{st.redirect_url}</code> with a
+            locally-generated certificate, so your browser will warn once —{' '}
+            <strong>Advanced → Proceed</strong> is expected; the code never leaves
+            this machine.
+          </>
+        ) : (
+          <>
+            One browser approval. Slack hands back the bot token, your user token
+            (DM following), and your member ID in a single round trip — nothing to
+            copy. The redirect lands on <code>{st.redirect_url}</code> via{' '}
+            {st.callback_mode === 'zrok' ? 'zrok' : 'public ingress'} — no
+            certificate warning.
+          </>
+        )}
       </p>
       {st.oauth_active ? (
         <div className="slack-step-controls">
