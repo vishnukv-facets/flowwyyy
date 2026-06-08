@@ -18,6 +18,7 @@ import (
 // channel and records each History call's args.
 type fakeHistory struct {
 	byChannel map[string][]monitor.SlackMessage
+	errByChan map[string]error
 	calls     []struct {
 		Channel, Oldest string
 		Limit           int
@@ -29,6 +30,9 @@ func (f *fakeHistory) History(ctx context.Context, ch, oldest string, limit int)
 		Channel, Oldest string
 		Limit           int
 	}{ch, oldest, limit})
+	if f.errByChan != nil && f.errByChan[ch] != nil {
+		return nil, f.errByChan[ch]
+	}
 	return f.byChannel[ch], nil
 }
 
@@ -161,6 +165,27 @@ func TestBackfillCapWarning(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a log line containing %q, got %v", "hit cap", logs)
+	}
+}
+
+func TestBackfillSkipsInaccessibleChannelDuringCooldown(t *testing.T) {
+	db := backfillTestDB(t)
+	fake := &fakeHistory{errByChan: map[string]error{"C1": errors.New("not_in_channel")}}
+	observe := func(ctx context.Context, evs []monitor.InboundEvent) error { return nil }
+	bf := NewSteeringBackfill(db, observe, fake, nil, nil, watchOne("C1"), time.Minute, time.Hour, 50)
+	now := fixedNow
+	bf.now = func() time.Time { return now }
+
+	bf.runOnce(context.Background())
+	bf.runOnce(context.Background())
+
+	if len(fake.calls) != 1 {
+		t.Fatalf("history calls during cooldown = %d, want 1", len(fake.calls))
+	}
+	now = now.Add(backfillInaccessibleCooldown + time.Second)
+	bf.runOnce(context.Background())
+	if len(fake.calls) != 2 {
+		t.Fatalf("history calls after cooldown = %d, want 2", len(fake.calls))
 	}
 }
 

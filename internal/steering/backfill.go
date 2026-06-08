@@ -3,6 +3,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,6 +13,8 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
+
+const backfillInaccessibleCooldown = 15 * time.Minute
 
 // SteeringBackfill is the steerer's durable catch-up. The live Socket Mode
 // listener only sees events delivered while connected; this runner reconciles
@@ -38,6 +41,7 @@ type SteeringBackfill struct {
 	limit    int
 	now      func() time.Time
 	logFn    func(string, ...any)
+	skipTill map[string]time.Time
 }
 
 // NewSteeringBackfill builds the runner. Zero interval/lookback/limit fall back
@@ -58,7 +62,7 @@ func NewSteeringBackfill(db *sql.DB, observe func(context.Context, []monitor.Inb
 	return &SteeringBackfill{
 		db: db, observe: observe, channels: channels, dms: dms, ims: ims,
 		configFn: configFn, interval: interval, lookback: lookback, limit: limit,
-		now: time.Now, logFn: func(string, ...any) {},
+		now: time.Now, logFn: func(string, ...any) {}, skipTill: map[string]time.Time{},
 	}
 }
 
@@ -127,6 +131,9 @@ func (b *SteeringBackfill) runOnce(ctx context.Context) {
 }
 
 func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channelType string, client monitor.SlackHistory) {
+	if b.backfillSkipped(channel) {
+		return
+	}
 	wm, err := flowdb.GetSteeringWatermark(b.db, channel)
 	if err != nil {
 		b.logFn("steering backfill %s: watermark: %v", channel, err)
@@ -139,9 +146,11 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 	}
 	msgs, err := client.History(ctx, channel, oldest, b.limit)
 	if err != nil {
+		b.noteBackfillHistoryError(channel, err)
 		b.logFn("steering backfill %s: history: %v", channel, err)
 		return
 	}
+	b.clearBackfillHistoryError(channel)
 	if len(msgs) == 0 {
 		return
 	}
@@ -263,6 +272,53 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+func (b *SteeringBackfill) backfillSkipped(channel string) bool {
+	if b == nil || len(b.skipTill) == 0 {
+		return false
+	}
+	until, ok := b.skipTill[strings.TrimSpace(channel)]
+	if !ok {
+		return false
+	}
+	if b.now().Before(until) {
+		return true
+	}
+	delete(b.skipTill, strings.TrimSpace(channel))
+	return false
+}
+
+func (b *SteeringBackfill) noteBackfillHistoryError(channel string, err error) {
+	if b == nil || err == nil || !backfillInaccessibleError(err) {
+		return
+	}
+	if b.skipTill == nil {
+		b.skipTill = map[string]time.Time{}
+	}
+	b.skipTill[strings.TrimSpace(channel)] = b.now().Add(backfillInaccessibleCooldown)
+}
+
+func (b *SteeringBackfill) clearBackfillHistoryError(channel string) {
+	if b == nil || len(b.skipTill) == 0 {
+		return
+	}
+	delete(b.skipTill, strings.TrimSpace(channel))
+}
+
+func backfillInaccessibleError(err error) bool {
+	if err == nil {
+		return false
+	}
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		text := strings.ToLower(e.Error())
+		for _, marker := range []string{"not_in_channel", "channel_not_found", "missing_scope"} {
+			if strings.Contains(text, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func backfillInterval() time.Duration {
