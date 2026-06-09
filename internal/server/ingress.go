@@ -229,6 +229,14 @@ func (m *zrokManager) start() {
 		m.runErr = nil
 		m.mu.Unlock()
 
+		// Reclaim leaked shares from earlier (re)starts — keep only the one we
+		// just brought up. Runs on every start, so reset/recreate cleans up too.
+		if n, perr := pruneStaleZrokShares(root, shr.Token); perr != nil {
+			fmt.Fprintf(os.Stderr, "zrok prune: %v\n", perr)
+		} else if n > 0 {
+			fmt.Fprintf(os.Stderr, "zrok: pruned %d stale flow share(s)\n", n)
+		}
+
 		if err := http.Serve(listener, handler); err != nil && !errors.Is(err, net.ErrClosed) {
 			m.setErr(fmt.Errorf("zrok serve: %w", err))
 		}
@@ -309,6 +317,66 @@ func (m *zrokManager) setErr(err error) {
 	m.mu.Unlock()
 }
 
+// flowZrokTarget is the proxy-backend target flow stamps on every share it
+// creates. It doubles as the marker pruneStaleZrokShares matches on, so we only
+// ever delete shares flow itself made.
+const flowZrokTarget = "flow"
+
+// flowSharesToPrune returns the share tokens in a zrok account Overview that
+// flow created (backend target == flowZrokTarget) but are not keepToken — the
+// leaked shares from earlier runs to delete. Pure (no network) so it's unit
+// tested; pruneStaleZrokShares wires it to Overview + DeleteShare. Pass an empty
+// keepToken to select every flow share.
+func flowSharesToPrune(overviewJSON, keepToken string) []string {
+	var ov struct {
+		Environments []struct {
+			Shares []struct {
+				ShareToken           string `json:"shareToken"`
+				BackendProxyEndpoint string `json:"backendProxyEndpoint"`
+			} `json:"shares"`
+		} `json:"environments"`
+	}
+	if err := json.Unmarshal([]byte(overviewJSON), &ov); err != nil {
+		return nil
+	}
+	var out []string
+	for _, env := range ov.Environments {
+		for _, sh := range env.Shares {
+			if sh.ShareToken == "" || sh.ShareToken == keepToken {
+				continue
+			}
+			if sh.BackendProxyEndpoint == flowZrokTarget {
+				out = append(out, sh.ShareToken)
+			}
+		}
+	}
+	return out
+}
+
+// pruneStaleZrokShares deletes flow-created public shares that aren't the one
+// currently in use (keepToken), reclaiming the zrok account's share quota. flow
+// brings up a fresh share each (re)start; an ungraceful exit leaks the old one,
+// so without pruning they pile up (the stale "flow" shares on the dashboard).
+// Best-effort: a delete error on one share doesn't stop the rest. Returns how
+// many were pruned.
+//
+// Caveat: if two real flow servers share one zrok account, each will prune the
+// other's share. That's already a broken setup (one zrok env per server); the
+// throwaway/smoke servers don't enable zrok auto-start, so they never prune.
+func pruneStaleZrokShares(root env_core.Root, keepToken string) (int, error) {
+	raw, err := zroksdk.Overview(root)
+	if err != nil {
+		return 0, fmt.Errorf("zrok overview: %w", err)
+	}
+	pruned := 0
+	for _, tok := range flowSharesToPrune(raw, keepToken) {
+		if err := zroksdk.DeleteShare(root, &zroksdk.Share{Token: tok}); err == nil {
+			pruned++
+		}
+	}
+	return pruned, nil
+}
+
 // ensureZrokShare returns a usable public share and its runtime public URL.
 // When name is set it first looks for an existing reserved share of that name
 // (so restarts reuse the same stable URL); otherwise it creates a new share
@@ -324,7 +392,7 @@ func ensureZrokShare(root env_core.Root, name string) (*zroksdk.Share, string, b
 		ShareMode:   zroksdk.PublicShareMode,
 		BackendMode: zroksdk.ProxyBackendMode,
 		Frontends:   []string{"public"},
-		Target:      "flow",
+		Target:      flowZrokTarget,
 		Reserved:    name != "",
 		UniqueName:  name,
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -38,8 +39,11 @@ func TestGitHubAppManifest_HasRequiredFields(t *testing.T) {
 	if m["redirect_url"] != "https://flow.example.com/api/github/setup/callback" {
 		t.Errorf("redirect_url = %v", m["redirect_url"])
 	}
-	if m["public"] != false {
-		t.Errorf("public = %v, want false", m["public"])
+	// Public ("Any account") so the App can be installed on the operator's
+	// personal account AND any org they admin — a private App installs only on
+	// its owner account, which would block the personal+org "both" case.
+	if m["public"] != true {
+		t.Errorf("public = %v, want true", m["public"])
 	}
 	perms, _ := m["default_permissions"].(map[string]any)
 	if perms["issues"] != "write" || perms["pull_requests"] != "write" || perms["metadata"] != "read" {
@@ -308,5 +312,68 @@ func TestHandleGitHubSetupStatus_Shape(t *testing.T) {
 	}
 	if st.InstallURL != "https://github.com/apps/flow-dev/installations/new" {
 		t.Errorf("install_url = %q", st.InstallURL)
+	}
+}
+
+func TestHandleGitHubSetupDisconnect_ForgetsCredentials(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+
+	// Simulate a fully connected App: secrets in the keyring, metadata in
+	// config + env, transport flipped to webhook, one installation captured.
+	if err := srv.persistGitHubApp(githubManifestConversion{
+		AppID: 99, Slug: "flow-dev", ClientID: "Iv1.cid",
+		ClientSecret: "cs", WebhookSecret: "wh", PEM: "PEMDATA",
+		HTMLURL: "https://github.com/settings/apps/flow-dev",
+	}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	srv.captureInstallationID("12345")
+	if pre := srv.githubSetupStatus(); !pre.AppCreated || !pre.Installed {
+		t.Fatalf("precondition: app should be connected, got %+v", pre)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupDisconnect(rec, httptest.NewRequest("POST", "/api/github/setup/disconnect", nil))
+	if rec.Code != 200 {
+		t.Fatalf("disconnect status = %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// All three keyring secrets (and their hydrated env vars) are cleared.
+	for _, acct := range []string{keyringAcctAppPEM, keyringAcctWebhookSecret, keyringAcctClientSecret} {
+		if v, _ := getGitHubSecret(acct); v != "" {
+			t.Errorf("secret %q not cleared from keyring: %q", acct, v)
+		}
+	}
+	if os.Getenv("FLOW_GH_APP_PEM") != "" || githubWebhookSecret() != "" {
+		t.Errorf("secret env vars still set after disconnect")
+	}
+
+	// Non-secret metadata is stripped from both config.json and the env.
+	cfg := loadConfigFile(srv.configPath())
+	for _, k := range githubAppConfigKeys {
+		if cfg[k] != "" {
+			t.Errorf("config key %q not removed: %q", k, cfg[k])
+		}
+		if os.Getenv(k) != "" {
+			t.Errorf("env %q not unset: %q", k, os.Getenv(k))
+		}
+	}
+
+	// Status reverts to not-connected; transport falls back off webhook.
+	st := srv.githubSetupStatus()
+	if st.AppCreated || st.Installed || st.AppID != "" || st.AppSlug != "" {
+		t.Errorf("status still connected after disconnect: %+v", st)
+	}
+	if st.Transport == "webhook" {
+		t.Errorf("transport still webhook after disconnect: %q", st.Transport)
+	}
+}
+
+func TestHandleGitHubSetupDisconnect_RejectsGET(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupDisconnect(rec, httptest.NewRequest("GET", "/api/github/setup/disconnect", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("GET should be 405, got %d", rec.Code)
 	}
 }

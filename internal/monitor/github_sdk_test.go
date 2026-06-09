@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -10,6 +11,48 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestListGitHubAppInstallations_ReturnsPersonalAndOrg(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/app/installations" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// One personal install + one org install — the "both" case.
+		_, _ = w.Write([]byte(`[
+			{"id": 11, "account": {"login": "vishnukv-facets", "type": "User"}},
+			{"id": 22, "account": {"login": "Facets-cloud", "type": "Organization"}}
+		]`))
+	}))
+	defer stub.Close()
+	t.Setenv("FLOW_GH_API_BASE_URL", stub.URL)
+	t.Setenv("FLOW_GH_APP_ID", "12345")
+	t.Setenv("FLOW_GH_APP_PEM", testRSAKeyPEM(t))
+
+	installs, ok, err := ListGitHubAppInstallations(context.Background())
+	if err != nil || !ok {
+		t.Fatalf("ListGitHubAppInstallations: ok=%v err=%v", ok, err)
+	}
+	if len(installs) != 2 {
+		t.Fatalf("want 2 installations, got %d: %+v", len(installs), installs)
+	}
+	if installs[0].Account != "vishnukv-facets" || installs[0].Type != "User" {
+		t.Errorf("install[0] = %+v, want personal User", installs[0])
+	}
+	if installs[1].Account != "Facets-cloud" || installs[1].Type != "Organization" {
+		t.Errorf("install[1] = %+v, want org Organization", installs[1])
+	}
+}
+
+func TestListGitHubAppInstallations_NoAppReturnsNotOK(t *testing.T) {
+	t.Setenv("FLOW_GH_APP_ID", "")
+	t.Setenv("FLOW_GH_APP_PEM", "")
+	installs, ok, err := ListGitHubAppInstallations(context.Background())
+	if err != nil || ok || installs != nil {
+		t.Fatalf("want (nil,false,nil) when no App connected; got installs=%v ok=%v err=%v", installs, ok, err)
+	}
+}
 
 func testRSAKeyPEM(t *testing.T) string {
 	t.Helper()

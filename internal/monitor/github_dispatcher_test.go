@@ -650,7 +650,7 @@ func TestGitHubDispatcher_ClosedPRAppendsAndStaysActionableWithoutMarkingDone(t 
 	}
 }
 
-func TestGitHubDispatcher_MergedPRMarksTrackedTaskDone(t *testing.T) {
+func TestGitHubDispatcher_MergedPRDeliversToSessionWithoutAutoClose(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
 	defer restore()
@@ -669,12 +669,15 @@ func TestGitHubDispatcher_MergedPRMarksTrackedTaskDone(t *testing.T) {
 	if err := d.Dispatch(context.Background(), ev); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
+	// A merge delivers an actionable event to the session and lets the AGENT
+	// decide how to close (final steps, post an update, mark done). flow no
+	// longer server-side auto-closes — mirrors pr_closed.
 	task, err := flowdb.GetTask(db, "tracked-pr")
 	if err != nil {
 		t.Fatalf("GetTask: %v", err)
 	}
-	if task.Status != "done" {
-		t.Fatalf("status = %q, want done", task.Status)
+	if task.Status != "backlog" {
+		t.Fatalf("status = %q, want backlog (merge must not auto-close; the agent decides)", task.Status)
 	}
 	entries, err := ReadInboxEntries("tracked-pr")
 	if err != nil {
@@ -682,6 +685,191 @@ func TestGitHubDispatcher_MergedPRMarksTrackedTaskDone(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Event.Kind != string(GitHubEventPRMerged) {
 		t.Fatalf("entries = %#v", entries)
+	}
+	if !entries[0].Meta.Actionable {
+		t.Fatal("pr_merged inbox entry must be actionable so the live session wakes")
+	}
+}
+
+// TestGitHubDispatcher_AutonomyDeliversMergeToLinkedSession is the regression
+// for the reported bug: with steering autonomy owning routing, a PR merge must
+// still reach the linked task's inbox (actionable wake) so the session learns of
+// it and the agent decides how to close. Before the fix the dispatcher handed
+// the event only to the steerer's relevance cascade — which drops bare lifecycle
+// notifications — so the session never woke and the task was never closed.
+func TestGitHubDispatcher_AutonomyDeliversMergeToLinkedSession(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	obs := &recordingObserver{}
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = obs
+	d.SteererOwnsRouting = func() bool { return true } // steering autonomy on
+
+	ev := GitHubEvent{
+		Kind:     GitHubEventPRMerged,
+		Owner:    "Facets-cloud",
+		Repo:     "flow-manager",
+		Number:   42,
+		Body:     "Pull request merged.",
+		EventKey: "pr-merged:Facets-cloud/flow-manager#42",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event.Kind != string(GitHubEventPRMerged) {
+		t.Fatalf("merge not delivered to linked task inbox in autonomy mode: %#v", entries)
+	}
+	if !entries[0].Meta.Actionable {
+		t.Fatal("delivered merge must be actionable so the session wakes")
+	}
+	// The steerer still observes the event (feed/trace) — delivery is additive.
+	if len(obs.events) != 1 {
+		t.Fatalf("steerer should still observe the event, got %d", len(obs.events))
+	}
+	// Agent decides the close: no server-side mark-done.
+	task, err := flowdb.GetTask(db, "tracked-pr")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status == "done" {
+		t.Fatal("autonomy merge must not auto-close; the agent decides")
+	}
+}
+
+// --- legacy (non-autonomy) involvement gate ---------------------------------
+// The webhook is a firehose (org-wide install delivers every repo's PRs). The
+// legacy dispatcher must not spawn a task for a PR/issue the operator isn't
+// involved in — only when they're a participant (author/assignee/reviewer),
+// @-mentioned, or the PR/issue is already tracked.
+
+func TestGitHubDispatcher_DropsUninvolvedNewPR(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat-self")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+
+	d := NewGitHubDispatcher(db, nil) // non-autonomy: no steerer ownership
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewRequested, Owner: "Facets-cloud", Repo: "agent-factory", Number: 1285,
+		Title: "Azure migration", Author: "srikxcipher",
+		Participants: []string{"srikxcipher", "anujhydrabadi"}, // operator absent
+		EventKey:     "gh-pr:Facets-cloud/agent-factory#1285:pr_review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 0 {
+		t.Fatalf("uninvolved PR must not spawn a task, spawned %d", len(*spawns))
+	}
+}
+
+func TestGitHubDispatcher_CreatesTaskWhenOperatorIsRequestedReviewer(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat-self")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewRequested, Owner: "o", Repo: "r", Number: 5,
+		Author: "alice", Participants: []string{"alice", "octocat-self"},
+		EventKey: "gh-pr:o/r#5:pr_review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("operator as requested reviewer must spawn a task, spawned %d", len(*spawns))
+	}
+}
+
+func TestGitHubDispatcher_CreatesTaskWhenOperatorMentionedInComment(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat-self")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRComment, Owner: "o", Repo: "r", Number: 5,
+		Author: "alice", Body: "hey @octocat-self can you take a look?",
+		Participants: []string{"alice"},
+		EventKey:     "issue-comment:c-mention",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("operator @-mentioned must spawn a task, spawned %d", len(*spawns))
+	}
+}
+
+func TestGitHubDispatcher_DropsUninvolvedComment(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat-self")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRComment, Owner: "o", Repo: "r", Number: 5,
+		Author: "alice", Body: "looks good to me",
+		Participants: []string{"alice", "bob"},
+		EventKey:     "issue-comment:c-uninvolved",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 0 {
+		t.Fatalf("uninvolved comment must not spawn a task, spawned %d", len(*spawns))
+	}
+}
+
+func TestGitHubDispatcher_ProcessesTrackedPRRegardlessOfInvolvement(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat-self")
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:o/r#5")
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRComment, Owner: "o", Repo: "r", Number: 5,
+		Author: "alice", Body: "looks good", Participants: []string{"alice"},
+		EventKey: "issue-comment:c-tracked",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("a comment on a TRACKED PR must reach its inbox regardless of involvement, got %d", len(entries))
+	}
+}
+
+func TestGitHubDispatcher_FailsOpenWhenSelfLoginsUnset(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "") // identity unknown → can't gate → fail open
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewRequested, Owner: "o", Repo: "r", Number: 5,
+		Author: "alice", Participants: []string{"alice", "bob"},
+		EventKey: "gh-pr:o/r#5:pr_review_requested",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("fail-open (no self logins) must preserve task creation, spawned %d", len(*spawns))
 	}
 }
 

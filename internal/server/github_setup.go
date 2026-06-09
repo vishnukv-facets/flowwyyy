@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os/exec"
 	"regexp"
@@ -45,6 +46,12 @@ var (
 	}
 	ghAuthSwitch = func(ctx context.Context, host, login string) (string, error) {
 		out, err := exec.CommandContext(ctx, "gh", "auth", "switch", "--hostname", host, "--user", login).CombinedOutput()
+		return string(out), err
+	}
+	// ghOrgsOutput lists the orgs the active `gh` identity belongs to, one login
+	// per line. --paginate covers users in more than one page of orgs.
+	ghOrgsOutput = func(ctx context.Context) (string, error) {
+		out, err := exec.CommandContext(ctx, "gh", "api", "--paginate", "user/orgs", "--jq", ".[].login").CombinedOutput()
 		return string(out), err
 	}
 )
@@ -230,4 +237,55 @@ func (s *Server) handleGitHubAuthSwitch(w http.ResponseWriter, r *http.Request) 
 	s.publishUIChange("github-auth")
 
 	writeJSON(w, map[string]any{"ok": true, "status": detectGitHubAuth()})
+}
+
+// listGitHubOrgs returns the orgs the active `gh` identity belongs to, deduped
+// and in gh's order. Read-only. An error (gh missing, not authenticated, API
+// failure) is returned to the caller, which surfaces it without blocking the
+// wizard's manual-entry fallback.
+func listGitHubOrgs(ctx context.Context) ([]string, error) {
+	if _, err := ghLookPath("gh"); err != nil {
+		return nil, errors.New("gh CLI not found on PATH")
+	}
+	out, err := ghOrgsOutput(ctx)
+	if err != nil {
+		msg := strings.TrimSpace(out)
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nil, errors.New(msg)
+	}
+	var orgs []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		login := strings.TrimSpace(line)
+		if login == "" || seen[login] {
+			continue
+		}
+		seen[login] = true
+		orgs = append(orgs, login)
+	}
+	return orgs, nil
+}
+
+// handleGitHubSetupOrgs powers the org dropdown in the Connect-GitHub wizard:
+// the orgs the active gh account can target. It always returns 200 — on
+// failure it reports an empty list plus an error string so the wizard falls
+// back to a manual org-login input rather than dead-ending.
+func (s *Server) handleGitHubSetupOrgs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	orgs, err := listGitHubOrgs(ctx)
+	resp := map[string]any{
+		"orgs":         orgs,
+		"active_login": detectGitHubAuth().ActiveLogin,
+	}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
 }

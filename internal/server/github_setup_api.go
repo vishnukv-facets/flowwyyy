@@ -62,7 +62,12 @@ func githubAppManifest(name, webhookURL, redirectURL string) map[string]any {
 		// SDK can mint installation tokens with no manual entry.
 		"setup_url":       redirectURL,
 		"setup_on_update": true,
-		"public":          false,
+		// Public ("Any account") so the App can be installed on the operator's
+		// personal account AND the orgs they admin. A private App installs only on
+		// its owning account, which makes the personal+org "both" case impossible.
+		// The App is unlisted (no marketplace), so "public" only widens *where it
+		// can be installed*, not its discoverability.
+		"public": true,
 		"hook_attributes": map[string]any{
 			"url":    webhookURL,
 			"active": true,

@@ -576,7 +576,8 @@ func (s *Server) handleSlackOAuthCallback(w http.ResponseWriter, r *http.Request
 		dance.status = "error"
 		dance.errMsg = internal
 		dance.mu.Unlock()
-		http.Error(w, public, status)
+		// Branded error page (callback_page.go), same design as success.
+		writeCallbackResultHTML(w, status, callbackError, "Couldn't connect Slack", htmlEscape(public))
 		s.publishUIChange("slack-setup")
 		go dance.shutdown()
 	}
@@ -627,23 +628,13 @@ func (s *Server) handleSlackOAuthCallback(w http.ResponseWriter, r *http.Request
 	dance.mu.Unlock()
 	s.publishUIChange("slack-setup")
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!doctype html><html><head><title>flow — Slack connected</title></head>
-<body style="font-family:ui-monospace,monospace;background:#0f1115;color:#e8e8ea;display:grid;place-items:center;height:100vh;margin:0">
-<div style="text-align:center">
-<div style="font-size:2rem;margin-bottom:.5rem">✓</div>
-<h2 style="margin:.2rem 0">Slack connected%s</h2>
-<p style="opacity:.7">flow has the tokens it needs — close this tab and head back to Mission&nbsp;Control.</p>
-</div></body></html>`, htmlTeamSuffix(tokens.Team))
-	go dance.shutdown()
-}
-
-func htmlTeamSuffix(team string) string {
-	team = strings.TrimSpace(team)
-	if team == "" {
-		return ""
+	title := "Slack connected"
+	if team := strings.TrimSpace(tokens.Team); team != "" {
+		title += " to " + team
 	}
-	return " to " + htmlEscape(team)
+	// Branded result page (callback_page.go) — same design as the GitHub callback.
+	writeCallbackResultHTML(w, http.StatusOK, callbackOK, title, "flow has the tokens it needs.")
+	go dance.shutdown()
 }
 
 func htmlEscape(s string) string {

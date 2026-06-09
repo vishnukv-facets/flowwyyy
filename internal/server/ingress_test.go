@@ -13,6 +13,38 @@ import (
 	"testing"
 )
 
+func TestFlowSharesToPrune(t *testing.T) {
+	// Two flow shares + one non-flow share, across the env. Keep the live one,
+	// prune the other flow share, never touch the non-flow share.
+	overview := `{"environments":[{"shares":[
+		{"shareToken":"flowLIVE","backendProxyEndpoint":"flow"},
+		{"shareToken":"flowSTALE","backendProxyEndpoint":"flow"},
+		{"shareToken":"someoneElse","backendProxyEndpoint":"http://localhost:9999"}
+	]}]}`
+	got := flowSharesToPrune(overview, "flowLIVE")
+	if len(got) != 1 || got[0] != "flowSTALE" {
+		t.Fatalf("toPrune = %#v, want [flowSTALE]", got)
+	}
+}
+
+func TestFlowSharesToPrune_KeepEmptyPrunesAllFlowShares(t *testing.T) {
+	overview := `{"environments":[{"shares":[
+		{"shareToken":"a","backendProxyEndpoint":"flow"},
+		{"shareToken":"b","backendProxyEndpoint":"flow"},
+		{"shareToken":"keep-me","backendProxyEndpoint":"other"}
+	]}]}`
+	got := flowSharesToPrune(overview, "")
+	if len(got) != 2 {
+		t.Fatalf("toPrune = %#v, want [a b]", got)
+	}
+}
+
+func TestFlowSharesToPrune_IgnoresGarbage(t *testing.T) {
+	if got := flowSharesToPrune("not json", "x"); got != nil {
+		t.Fatalf("garbage overview should prune nothing, got %#v", got)
+	}
+}
+
 // clearIngressEnv zeros every env var the ingress subsystem reads so real
 // shell exports can never pollute these tests.
 func clearIngressEnv(t *testing.T) {

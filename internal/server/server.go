@@ -176,6 +176,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// public URL. This local route is the same-process fallback.
 	mux.HandleFunc(githubSetupCallbackPath, s.handleGitHubSetupCallback)
 	mux.HandleFunc("/api/github/setup/backfill", s.handleGitHubSetupBackfill)
+	mux.HandleFunc("/api/github/setup/disconnect", s.handleGitHubSetupDisconnect)
+	mux.HandleFunc("/api/github/setup/orgs", s.handleGitHubSetupOrgs)
+	mux.HandleFunc("/api/github/setup/installations", s.handleGitHubSetupInstallations)
 }
 
 // apiHandler lazily builds and caches the data-plane mux used by the

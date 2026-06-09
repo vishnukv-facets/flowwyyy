@@ -109,6 +109,45 @@ func newGitHubAppClient() (*github.Client, bool, error) {
 	return client, true, nil
 }
 
+// GitHubInstallation is one account the connected App is installed on.
+type GitHubInstallation struct {
+	ID      int64  `json:"id"`
+	Account string `json:"account"`
+	Type    string `json:"type"` // "User" | "Organization"
+}
+
+// ListGitHubAppInstallations returns every account the connected App is
+// installed on — the operator's personal account plus any orgs they installed
+// it on. It authenticates as the App itself (App JWT) and reads
+// GET /app/installations, so it reflects GitHub's truth, not Flow's captured
+// installation-id list. ok is false (nil error) when no App is connected yet.
+func ListGitHubAppInstallations(ctx context.Context) (installs []GitHubInstallation, ok bool, err error) {
+	client, ok, err := newGitHubAppClient()
+	if err != nil || !ok {
+		return nil, ok, err
+	}
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		page, resp, err := client.Apps.ListInstallations(ctx, opts)
+		if err != nil {
+			return nil, true, err
+		}
+		for _, in := range page {
+			acct := in.GetAccount()
+			installs = append(installs, GitHubInstallation{
+				ID:      in.GetID(),
+				Account: acct.GetLogin(),
+				Type:    acct.GetType(),
+			})
+		}
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
+	}
+	return installs, true, nil
+}
+
 // sdkOpenPRsForIssue returns the numbers of OPEN pull requests in the issue's
 // own repo that are cross-referenced from the issue and authored by one of the
 // self logins — the native-SDK replacement for the old `gh api .../timeline`

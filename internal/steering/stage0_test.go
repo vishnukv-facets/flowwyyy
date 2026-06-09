@@ -119,13 +119,80 @@ func ghEvent(channel, author, body string) monitor.InboundEvent {
 	}
 }
 
-func TestStage0GitHubPasses(t *testing.T) {
+func TestStage0GitHubDropsUninvolved(t *testing.T) {
+	// A webhook PR the operator has nothing to do with — not author/assignee/
+	// reviewer, not @-mentioned, no tracking task — must drop. An org-wide webhook
+	// install otherwise floods the cascade with the whole org's PR churn.
+	ev := ghEvent("o/r", "reviewer", "please take a look")
+	ev.Participants = []string{"reviewer", "someone-else"} // webhook event; operator absent
+	got := Stage0(ev, githubCfg())
+	if got.Pass {
+		t.Fatalf("Pass = true, want dropped out-of-scope for an uninvolved PR")
+	}
+	if got.DropReason != "out of scope (operator not involved)" {
+		t.Errorf("DropReason = %q, want out-of-scope", got.DropReason)
+	}
+}
+
+func TestStage0GitHubFailsOpenWithoutParticipantData(t *testing.T) {
+	// A poller-sourced event carries no Participants and is pre-filtered to
+	// involve the operator — must pass (we can't and shouldn't gate it).
 	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), githubCfg())
 	if !got.Pass {
-		t.Fatalf("Pass = false (reason %q), want true", got.DropReason)
+		t.Fatalf("Pass = false (reason %q), want pass for a no-participant (poller) event", got.DropReason)
+	}
+}
+
+func TestStage0GitHubPassesWhenMentioned(t *testing.T) {
+	ev := ghEvent("o/r", "reviewer", "hey @octocat-self can you take a look?")
+	ev.Participants = []string{"reviewer"} // webhook event; operator surfaces via mention
+	got := Stage0(ev, githubCfg())
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want true when the operator is @-mentioned", got.DropReason)
 	}
 	if got.ThreadKey != "o/r:gh-pr:o/r#5" {
-		t.Errorf("ThreadKey = %q, want %q", got.ThreadKey, "o/r:gh-pr:o/r#5")
+		t.Errorf("ThreadKey = %q", got.ThreadKey)
+	}
+}
+
+func TestStage0GitHubPassesWhenParticipant(t *testing.T) {
+	// Operator is the PR author / assignee / requested reviewer (a participant),
+	// surfaced via Participants on the event.
+	ev := ghEvent("o/r", "reviewer", "please take a look")
+	ev.Participants = []string{"someone-else", "octocat-self"}
+	got := Stage0(ev, githubCfg())
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want true when the operator is a participant", got.DropReason)
+	}
+}
+
+func TestStage0GitHubPassesWhenTaskLinked(t *testing.T) {
+	cfg := githubCfg()
+	cfg.TaskLinkedGitHubThreads = map[string]bool{"o/r:gh-pr:o/r#5": true}
+	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), cfg)
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want true when the PR is task-linked", got.DropReason)
+	}
+}
+
+func TestStage0GitHubFailsOpenWhenIdentityUnset(t *testing.T) {
+	// Without the operator's GitHub login we can't judge involvement — don't
+	// silently drop everything; preserve prior behavior (pass).
+	cfg := githubCfg()
+	cfg.GitHubIdentity = nil
+	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), cfg)
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want pass (fail open) when identity unset", got.DropReason)
+	}
+}
+
+func TestStage0GitHubMentionRespectsWordBoundary(t *testing.T) {
+	// "@octocat-self-bot" must NOT match operator "octocat-self".
+	ev := ghEvent("o/r", "reviewer", "ping @octocat-self-bot to run CI")
+	ev.Participants = []string{"reviewer"} // webhook event so the gate fires
+	got := Stage0(ev, githubCfg())
+	if got.Pass {
+		t.Fatalf("Pass = true, want drop — @octocat-self-bot is not @octocat-self")
 	}
 }
 

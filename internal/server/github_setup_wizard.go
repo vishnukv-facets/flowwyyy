@@ -188,7 +188,7 @@ func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Reques
 		if instID := strings.TrimSpace(r.URL.Query().Get("installation_id")); instID != "" {
 			s.captureInstallationID(instID)
 			s.publishUIChange("github-setup")
-			writeSetupResultHTML(w, "GitHub App installed ✅", "Flow is now connected and receiving webhooks. You can close this tab and return to Mission Control.")
+			writeSetupResultHTML(w, callbackOK, "GitHub App installed", "Flow is now connected and receiving webhooks.")
 			return
 		}
 	}
@@ -198,16 +198,16 @@ func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Reques
 	s.githubSetupMu.Unlock()
 
 	if pending == nil || state == "" || state != pending.state {
-		writeSetupResultHTML(w, "Couldn't verify the setup request", "The state nonce did not match or the setup expired. Close this tab and start Connect GitHub again.")
+		writeSetupResultHTML(w, callbackError, "Couldn't verify the setup request", "The state nonce did not match or the setup expired. Start Connect GitHub again.")
 		return
 	}
 	if time.Since(pending.created) > githubManifestTTL {
 		s.clearGitHubSetup()
-		writeSetupResultHTML(w, "Setup expired", "Too much time passed before GitHub returned. Close this tab and start Connect GitHub again.")
+		writeSetupResultHTML(w, callbackError, "Setup expired", "Too much time passed before GitHub returned. Start Connect GitHub again.")
 		return
 	}
 	if code == "" {
-		writeSetupResultHTML(w, "No code returned", "GitHub didn't return a manifest code. Close this tab and try Connect GitHub again.")
+		writeSetupResultHTML(w, callbackError, "No code returned", "GitHub didn't return a manifest code. Try Connect GitHub again.")
 		return
 	}
 
@@ -215,19 +215,19 @@ func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 	conv, err := newGitHubSetupAPI().convertManifest(ctx, code)
 	if err != nil {
-		writeSetupResultHTML(w, "GitHub setup failed", html.EscapeString(err.Error()))
+		writeSetupResultHTML(w, callbackError, "GitHub setup failed", html.EscapeString(err.Error()))
 		return
 	}
 	if err := s.persistGitHubApp(conv); err != nil {
-		writeSetupResultHTML(w, "Couldn't save the GitHub App", html.EscapeString(err.Error()))
+		writeSetupResultHTML(w, callbackError, "Couldn't save the GitHub App", html.EscapeString(err.Error()))
 		return
 	}
 	s.clearGitHubSetup()
 	s.publishUIChange("github-setup")
 
 	installURL := "https://github.com/apps/" + url.PathEscape(conv.Slug) + "/installations/new"
-	writeSetupResultHTML(w, "GitHub App created 🎉",
-		fmt.Sprintf("Flow now owns the App <b>%s</b>. Next, install it on your account or org: <a href=%q>Install the App</a>. You can close this tab and return to Mission Control.",
+	writeSetupResultHTML(w, callbackOK, "GitHub App created",
+		fmt.Sprintf("Flow now owns the App <b>%s</b>. Next, install it on your personal account and any org you want Flow to watch: <a href=%q>Install the App</a>.",
 			html.EscapeString(conv.Slug), installURL))
 }
 
@@ -260,6 +260,91 @@ func (s *Server) clearGitHubSetup() {
 	s.githubSetupMu.Lock()
 	s.githubSetup = nil
 	s.githubSetupMu.Unlock()
+}
+
+// ---------------------------------------------------------------------------
+// disconnect — forget the App on this machine
+// ---------------------------------------------------------------------------
+
+// githubAppConfigKeys are the non-secret config.json keys persistGitHubApp /
+// captureInstallationID write. Disconnect removes exactly these so config.json
+// returns to its pre-Connect state. FLOW_GH_TRANSPORT is included so the mode
+// reverts to its legacy default (gh polling if enabled, else off) instead of
+// staying "webhook" while pointing at an App that no longer exists.
+var githubAppConfigKeys = []string{
+	"FLOW_GH_APP_ID",
+	"FLOW_GH_APP_SLUG",
+	"FLOW_GH_CLIENT_ID",
+	"FLOW_GH_HTML_URL",
+	"FLOW_GH_INSTALLATION_IDS",
+	"FLOW_GH_TRANSPORT",
+}
+
+// forgetGitHubApp is the inverse of persistGitHubApp: it deletes the three App
+// secrets from the keyring (and their hydrated env vars) and strips the
+// non-secret App metadata from config.json + env, then bounces the listener +
+// ingress so the cleared transport/secret take effect without a restart.
+//
+// It deliberately does NOT touch the App on github.com — that App and any
+// installation still exist there and must be removed by the operator. This only
+// severs Flow's copy of the credentials. It also leaves the legacy `gh` CLI
+// keyring identity untouched, so the polling fallback keeps working.
+func (s *Server) forgetGitHubApp() error {
+	// "" clears both the keyring entry and the hydrated env var.
+	for _, acct := range []string{keyringAcctAppPEM, keyringAcctWebhookSecret, keyringAcctClientSecret} {
+		if err := storeGitHubSecret(acct, ""); err != nil {
+			return fmt.Errorf("clear %s: %w", acct, err)
+		}
+	}
+	cfg := loadConfigFile(s.configPath())
+	for _, k := range githubAppConfigKeys {
+		delete(cfg, k)
+		os.Unsetenv(k)
+	}
+	if err := saveConfigFile(s.configPath(), cfg); err != nil {
+		return fmt.Errorf("save config: %w", err)
+	}
+	if s.githubListener != nil {
+		s.githubListener.Stop()
+		_ = s.githubListener.Start()
+	}
+	s.restartIngress()
+	return nil
+}
+
+// handleGitHubSetupInstallations lists the accounts the connected App is
+// installed on (personal + orgs), so the wizard can show "installed on X and Y"
+// and nudge the operator to install on both. Always 200 — on failure (no App,
+// API error) it returns an empty list + error string rather than breaking the
+// wizard. Not folded into the polled setup-status because it hits the GitHub API.
+func (s *Server) handleGitHubSetupInstallations(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	installs, _, err := monitor.ListGitHubAppInstallations(ctx)
+	resp := map[string]any{"installations": installs}
+	if err != nil {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+// handleGitHubSetupDisconnect forgets the connected GitHub App's credentials on
+// this machine. The App itself is not deleted on github.com (see forgetGitHubApp).
+func (s *Server) handleGitHubSetupDisconnect(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if err := s.forgetGitHubApp(); err != nil {
+		writeJSONStatus(w, map[string]any{"ok": false, "error": err.Error()}, http.StatusInternalServerError)
+		return
+	}
+	s.publishUIChange("github-setup")
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // captureInstallationID appends an installation id to FLOW_GH_INSTALLATION_IDS
@@ -337,10 +422,10 @@ func (s *Server) persistGitHubApp(conv githubManifestConversion) error {
 
 // writeSetupResultHTML renders a minimal standalone result page for the OAuth /
 // manifest callbacks, which open in the operator's browser on the public
-// ingress (which serves no UI). Mirrors the Slack callback's success page.
-func writeSetupResultHTML(w http.ResponseWriter, title, body string) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>%s</title>
-<style>body{font:16px -apple-system,system-ui,sans-serif;max-width:36rem;margin:4rem auto;padding:0 1.5rem;color:#1a1a1a}h1{font-size:1.4rem}a{color:#2563eb}</style>
-</head><body><h1>%s</h1><p>%s</p></body></html>`, html.EscapeString(title), html.EscapeString(title), body)
+// ingress (which serves no UI). Thin wrapper over the shared, brand-matched
+// callback renderer (see callback_page.go) — kind selects the success/error
+// styling; body is trusted HTML (callers escape any dynamic text). Always 200,
+// matching the prior behavior (the wizard reads outcome from setup status).
+func writeSetupResultHTML(w http.ResponseWriter, kind callbackResultKind, title, body string) {
+	writeCallbackResultHTML(w, http.StatusOK, kind, title, body)
 }

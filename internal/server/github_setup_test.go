@@ -1,6 +1,126 @@
 package server
 
-import "testing"
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestListGitHubOrgs_ParsesAndDedupes(t *testing.T) {
+	origLook, origOrgs := ghLookPath, ghOrgsOutput
+	t.Cleanup(func() { ghLookPath, ghOrgsOutput = origLook, origOrgs })
+	ghLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	// gh api --jq emits one login per line; duplicates + blank lines can appear.
+	ghOrgsOutput = func(context.Context) (string, error) { return "facets-cloud\nacme\nfacets-cloud\n\n", nil }
+
+	orgs, err := listGitHubOrgs(context.Background())
+	if err != nil {
+		t.Fatalf("listGitHubOrgs: %v", err)
+	}
+	if len(orgs) != 2 || orgs[0] != "facets-cloud" || orgs[1] != "acme" {
+		t.Fatalf("orgs = %#v, want [facets-cloud acme]", orgs)
+	}
+}
+
+func TestListGitHubOrgs_GhMissing(t *testing.T) {
+	origLook := ghLookPath
+	t.Cleanup(func() { ghLookPath = origLook })
+	ghLookPath = func(string) (string, error) { return "", errors.New("not found") }
+	if _, err := listGitHubOrgs(context.Background()); err == nil {
+		t.Fatalf("expected an error when gh is missing")
+	}
+}
+
+func TestHandleGitHubSetupOrgs_ReturnsOrgsAndActiveLogin(t *testing.T) {
+	origLook, origOrgs, origStatus := ghLookPath, ghOrgsOutput, ghAuthStatusOutput
+	t.Cleanup(func() { ghLookPath, ghOrgsOutput, ghAuthStatusOutput = origLook, origOrgs, origStatus })
+	ghLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	ghOrgsOutput = func(context.Context) (string, error) { return "facets-cloud\nacme\n", nil }
+	ghAuthStatusOutput = func(context.Context) (string, error) {
+		return "github.com\n  ✓ Logged in to github.com account vishnukv-facets (keyring)\n  - Active account: true\n", nil
+	}
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleGitHubSetupOrgs(rec, httptest.NewRequest("GET", "/api/github/setup/orgs", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Orgs        []string `json:"orgs"`
+		ActiveLogin string   `json:"active_login"`
+		Error       string   `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Orgs) != 2 || resp.Orgs[0] != "facets-cloud" {
+		t.Errorf("orgs = %#v", resp.Orgs)
+	}
+	if resp.ActiveLogin != "vishnukv-facets" {
+		t.Errorf("active_login = %q", resp.ActiveLogin)
+	}
+	if resp.Error != "" {
+		t.Errorf("unexpected error: %q", resp.Error)
+	}
+}
+
+func TestHandleGitHubSetupOrgs_GhErrorDegradesGracefully(t *testing.T) {
+	origLook, origOrgs := ghLookPath, ghOrgsOutput
+	t.Cleanup(func() { ghLookPath, ghOrgsOutput = origLook, origOrgs })
+	ghLookPath = func(string) (string, error) { return "/usr/bin/gh", nil }
+	ghOrgsOutput = func(context.Context) (string, error) { return "HTTP 401: Bad credentials", errors.New("exit status 1") }
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleGitHubSetupOrgs(rec, httptest.NewRequest("GET", "/api/github/setup/orgs", nil))
+	// Still 200 so the wizard can fall back to manual entry, with an error string.
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200 (graceful)", rec.Code)
+	}
+	var resp struct {
+		Orgs  []string `json:"orgs"`
+		Error string   `json:"error"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Orgs) != 0 {
+		t.Errorf("orgs should be empty on error, got %#v", resp.Orgs)
+	}
+	if resp.Error == "" {
+		t.Errorf("expected an error message")
+	}
+}
+
+func TestHandleGitHubSetupInstallations_NoAppIsGraceful(t *testing.T) {
+	// No App connected → empty list, 200, no error key (the monitor helper
+	// returns ok=false,nil err; the happy path is covered in the monitor pkg).
+	t.Setenv("FLOW_GH_APP_ID", "")
+	t.Setenv("FLOW_GH_APP_PEM", "")
+
+	rec := httptest.NewRecorder()
+	(&Server{}).handleGitHubSetupInstallations(rec, httptest.NewRequest("GET", "/api/github/setup/installations", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var resp struct {
+		Installations []map[string]any `json:"installations"`
+		Error         string           `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Installations) != 0 || resp.Error != "" {
+		t.Errorf("want empty installations and no error, got %+v", resp)
+	}
+}
+
+func TestHandleGitHubSetupInstallations_RejectsPOST(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&Server{}).handleGitHubSetupInstallations(rec, httptest.NewRequest("POST", "/api/github/setup/installations", nil))
+	if rec.Code != 405 {
+		t.Errorf("POST should be 405, got %d", rec.Code)
+	}
+}
 
 func TestParseGitHubAuthStatus(t *testing.T) {
 	t.Run("multi-source dedupes by login and detects env-pinned active", func(t *testing.T) {

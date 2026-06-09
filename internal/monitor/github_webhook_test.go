@@ -243,3 +243,34 @@ func TestWebhookNormalizeDispatchAppendsInboxOnce(t *testing.T) {
 		t.Fatalf("after redelivery: %d inbox entries, want 1 (cross-transport dedupe)", len(entries))
 	}
 }
+
+// TestNormalizeGitHubWebhook_PopulatesParticipants verifies the involvement
+// signal steering Stage 0 scopes on: the subject's author + assignees +
+// requested reviewers — NOT the event author (reviewer/commenter).
+func TestNormalizeGitHubWebhook_PopulatesParticipants(t *testing.T) {
+	payload := `{"action":"submitted","repository":{"full_name":"o/r"},
+		"pull_request":{"number":9,"html_url":"https://github.com/o/r/pull/9",
+			"user":{"login":"author1"},
+			"assignees":[{"login":"assignee1"}],
+			"requested_reviewers":[{"login":"reviewer1"},{"login":"author1"}]},
+		"review":{"id":11,"state":"commented","body":"lgtm","user":{"login":"randomreviewer"},"submitted_at":"2026-06-09T00:00:00Z"}}`
+	evs, err := NormalizeGitHubWebhook("pull_request_review", "d", []byte(payload))
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("normalize: err=%v evs=%d", err, len(evs))
+	}
+	got := map[string]bool{}
+	for _, p := range evs[0].Participants {
+		got[p] = true
+	}
+	for _, want := range []string{"author1", "assignee1", "reviewer1"} {
+		if !got[want] {
+			t.Errorf("missing participant %q; got %#v", want, evs[0].Participants)
+		}
+	}
+	if got["randomreviewer"] {
+		t.Errorf("event author (reviewer) must not be a participant: %#v", evs[0].Participants)
+	}
+	if len(evs[0].Participants) != 3 {
+		t.Errorf("participants should dedupe to 3 (author1 once), got %#v", evs[0].Participants)
+	}
+}

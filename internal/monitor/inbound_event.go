@@ -46,6 +46,13 @@ type InboundEvent struct {
 	APIAppID    string `json:"api_app_id,omitempty"`
 	RawJSON     string `json:"raw_json,omitempty"`
 
+	// Participants are the logins involved in a GitHub event's subject — the
+	// PR/issue author plus its assignees and requested reviewers. Steering's
+	// Stage 0 uses this (with @-mentions and task linkage) to scope GitHub
+	// attention to events that actually involve the operator, rather than the
+	// whole org's webhook firehose. Empty for Slack.
+	Participants []string `json:"participants,omitempty"`
+
 	// Shared-message reference: when this message forwards/shares or unfurls
 	// another Slack message, these point at the original conversation+thread so
 	// a reply that lands in a different conversation can still be correlated to

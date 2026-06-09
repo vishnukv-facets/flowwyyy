@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { Check, ExternalLink, Github, Globe2, Loader2, RefreshCw } from 'lucide-react'
+import { Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
 import { apiPost } from '../lib/api'
-import { useGitHubSetupStatus } from '../lib/query'
+import { confirmAction } from '../lib/confirm'
+import { useGitHubInstallations, useGitHubOrgs, useGitHubSetupStatus } from '../lib/query'
 import { pushToast } from '../lib/toast'
-import type { GitHubSetupStatus } from '../lib/types'
+import type { GitHubInstallation, GitHubSetupStatus } from '../lib/types'
 
 // Connect-GitHub wizard. Built on GitHub's App-manifest flow — one click
 // registers a GitHub App, captures its credentials, and wires Flow for
@@ -57,7 +58,7 @@ export function GitHubConnect({ framed = true }: { framed?: boolean } = {}) {
 
   const body = (
     <>
-      {step === 'done' ? <FinishedSummary st={st} /> : null}
+      {step === 'done' ? <FinishedSummary st={st} onChange={refetch} /> : null}
       <div className="slack-wizard-steps">
         <StepIngress st={st} active={step === 'ingress'} />
         <StepCreateApp st={st} active={step === 'app'} onDone={refetch} />
@@ -127,6 +128,11 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
   const [target, setTarget] = useState<'user' | 'org'>('user')
   const [org, setOrg] = useState('')
   const [busy, setBusy] = useState(false)
+  // Fetch the orgs the active gh account can target, but only once "Organization"
+  // is picked — keeps the gh shell-out off the common personal-account path.
+  const { data: orgsData, isLoading: orgsFetching } = useGitHubOrgs(target === 'org')
+  const orgs = orgsData?.orgs ?? []
+  const orgsLoading = target === 'org' && orgsFetching
 
   const create = async () => {
     if (target === 'org' && !org.trim()) return
@@ -171,14 +177,30 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
           <option value="user">Personal account</option>
           <option value="org">Organization</option>
         </select>
-        {target === 'org' && (
-          <input
-            className="input"
-            placeholder="org login (e.g. acme)"
-            value={org}
-            onChange={(e) => setOrg(e.target.value)}
-          />
-        )}
+        {target === 'org' &&
+          (orgsLoading ? (
+            <select className="input" disabled>
+              <option>Loading orgs…</option>
+            </select>
+          ) : orgs.length > 0 ? (
+            <select className="input" value={org} onChange={(e) => setOrg(e.target.value)}>
+              <option value="">Select an organization…</option>
+              {orgs.map((o) => (
+                <option key={o} value={o}>
+                  {o}
+                </option>
+              ))}
+            </select>
+          ) : (
+            // No orgs found (gh missing / unauthenticated / none) — fall back to
+            // manual entry so the wizard never dead-ends.
+            <input
+              className="input"
+              placeholder="org login (e.g. acme)"
+              value={org}
+              onChange={(e) => setOrg(e.target.value)}
+            />
+          ))}
         <input
           className="input"
           placeholder="App name (optional)"
@@ -200,28 +222,53 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
   )
 }
 
+// AccountPills renders the accounts the App is installed on — a personal-account
+// pill and one per org — so the operator can see "both" coverage at a glance.
+function AccountPills({ installs }: { installs: GitHubInstallation[] }) {
+  if (installs.length === 0) return null
+  return (
+    <div className="gh-install-pills">
+      {installs.map((i) => (
+        <span key={i.id} className="env-pill" title={i.type}>
+          {i.type === 'Organization' ? <Building2 size={12} /> : <User size={12} />} {i.account}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function StepInstall({ st, active }: { st: GitHubSetupStatus; active: boolean }) {
+  // Enabled once the App exists — the installations call authenticates as the App.
+  const { data: instData } = useGitHubInstallations(st.app_created)
+  const installs = instData?.installations ?? []
   const install = () => {
     if (st.install_url) window.open(st.install_url, '_blank', 'noopener')
   }
   return (
     <StepShell index={3} title="Install the App" state={st.installed ? 'done' : active ? 'active' : 'pending'}>
       <p className="config-help">
-        Install the App on the account or org whose repos Flow should watch. GitHub
-        sends you back here with the installation id — Flow captures it automatically
-        and starts minting tokens. No copy-paste.
+        Install the App on every account whose repos Flow should watch — your{' '}
+        <strong>personal account and any org</strong>. You can install on more than one:
+        pick the account on GitHub, and Flow captures each installation automatically.
       </p>
+      <AccountPills installs={installs} />
       <div className="slack-step-controls">
         <button type="button" className="btn primary" disabled={!st.install_url} onClick={install}>
-          <Github size={14} /> Install — opens GitHub
+          <Github size={14} /> {installs.length > 0 ? 'Install on another account' : 'Install'} — opens GitHub
         </button>
       </div>
     </StepShell>
   )
 }
 
-function FinishedSummary({ st }: { st: GitHubSetupStatus }) {
+function FinishedSummary({ st, onChange }: { st: GitHubSetupStatus; onChange: () => void }) {
   const [busy, setBusy] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
+  const { data: instData } = useGitHubInstallations(true)
+  const installs = instData?.installations ?? []
+  const installMore = () => {
+    if (st.install_url) window.open(st.install_url, '_blank', 'noopener')
+  }
 
   const backfill = async () => {
     setBusy(true)
@@ -235,33 +282,83 @@ function FinishedSummary({ st }: { st: GitHubSetupStatus }) {
     }
   }
 
+  // Disconnect forgets Flow's copy of the App credentials (keyring + config). The
+  // App itself stays on github.com — only the operator can delete it there — so
+  // the confirm spells that out and the summary links to the App's page.
+  const disconnect = async () => {
+    const ok = await confirmAction({
+      title: 'Disconnect GitHub App?',
+      body: `Flow will erase this App's credentials (private key, webhook secret, installation) from this machine and stop receiving webhooks. The App${st.app_slug ? ` "${st.app_slug}"` : ''} still exists on GitHub — open it there to uninstall or delete it for good.`,
+      confirmLabel: 'Disconnect',
+      danger: true,
+    })
+    if (!ok) return
+    setDisconnecting(true)
+    try {
+      await apiPost('/api/github/setup/disconnect', {})
+      pushToast('ok', 'Disconnected — GitHub App credentials cleared from this machine')
+      onChange()
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'disconnect failed')
+    } finally {
+      setDisconnecting(false)
+    }
+  }
+
   return (
     <div className="slack-wizard-done">
-      <Check size={15} />
-      <div>
-        GitHub is connected
-        {st.app_slug ? (
-          <>
-            {' '}as{' '}
-            <a href={st.html_url} target="_blank" rel="noreferrer">
-              <code>{st.app_slug}</code>
-            </a>
-          </>
-        ) : null}
-        . Assigned/mentioned issues &amp; PRs and review requests now arrive over signed
-        webhooks — no <code>gh</code> polling.
+      <div className="slack-wizard-done-head">
+        <Check size={15} />
+        <div>
+          GitHub is connected
+          {st.app_slug ? (
+            <>
+              {' '}as{' '}
+              <a href={st.html_url} target="_blank" rel="noreferrer">
+                <code>{st.app_slug}</code>
+              </a>
+            </>
+          ) : null}
+          . Assigned/mentioned issues &amp; PRs and review requests now arrive over signed
+          webhooks — no <code>gh</code> polling.
+          {installs.length > 0 ? (
+            <div className="gh-install-line">
+              Installed on <AccountPills installs={installs} />
+            </div>
+          ) : null}
+        </div>
       </div>
-      <span className="spacer" />
-      <button
-        type="button"
-        className="btn"
-        disabled={busy}
-        onClick={backfill}
-        title="Replay GitHub webhook deliveries missed while Flow or the public ingress was down"
-      >
-        {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={13} />}
-        Replay missed
-      </button>
+      <div className="slack-wizard-done-actions">
+        <button
+          type="button"
+          className="btn"
+          disabled={!st.install_url}
+          onClick={installMore}
+          title="Install this App on another account or org (e.g. add your org alongside your personal account)"
+        >
+          <Github size={13} /> Install on another account
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={backfill}
+          title="Replay GitHub webhook deliveries missed while Flow or the public ingress was down"
+        >
+          {busy ? <Loader2 size={14} className="spin" /> : <RefreshCw size={13} />}
+          Replay missed
+        </button>
+        <button
+          type="button"
+          className="btn danger"
+          disabled={disconnecting}
+          onClick={disconnect}
+          title="Forget this App's credentials on this machine (the App stays on GitHub until you delete it there)"
+        >
+          {disconnecting ? <Loader2 size={14} className="spin" /> : <Unplug size={13} />}
+          Disconnect
+        </button>
+      </div>
     </div>
   )
 }

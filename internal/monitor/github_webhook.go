@@ -78,19 +78,21 @@ type ghWebhookRepository struct {
 }
 
 type ghWebhookPR struct {
-	Number    int              `json:"number"`
-	Title     string           `json:"title"`
-	Body      string           `json:"body"`
-	HTMLURL   string           `json:"html_url"`
-	State     string           `json:"state"`
-	Merged    bool             `json:"merged"`
-	User      githubUser       `json:"user"`
-	Base      githubRef        `json:"base"`
-	Head      githubRef        `json:"head"`
-	Labels    []githubLabel    `json:"labels"`
-	Milestone *githubMilestone `json:"milestone"`
-	CreatedAt string           `json:"created_at"`
-	UpdatedAt string           `json:"updated_at"`
+	Number             int              `json:"number"`
+	Title              string           `json:"title"`
+	Body               string           `json:"body"`
+	HTMLURL            string           `json:"html_url"`
+	State              string           `json:"state"`
+	Merged             bool             `json:"merged"`
+	User               githubUser       `json:"user"`
+	Assignees          []githubUser     `json:"assignees"`
+	RequestedReviewers []githubUser     `json:"requested_reviewers"`
+	Base               githubRef        `json:"base"`
+	Head               githubRef        `json:"head"`
+	Labels             []githubLabel    `json:"labels"`
+	Milestone          *githubMilestone `json:"milestone"`
+	CreatedAt          string           `json:"created_at"`
+	UpdatedAt          string           `json:"updated_at"`
 }
 
 type ghWebhookIssue struct {
@@ -99,11 +101,56 @@ type ghWebhookIssue struct {
 	Body        string           `json:"body"`
 	HTMLURL     string           `json:"html_url"`
 	User        githubUser       `json:"user"`
+	Assignees   []githubUser     `json:"assignees"`
 	Labels      []githubLabel    `json:"labels"`
 	Milestone   *githubMilestone `json:"milestone"`
 	PullRequest json.RawMessage  `json:"pull_request"`
 	CreatedAt   string           `json:"created_at"`
 	UpdatedAt   string           `json:"updated_at"`
+}
+
+// prParticipantLogins / issueParticipantLogins collect the logins "involved" in
+// a subject for steering scope: author + assignees + requested reviewers. The
+// event author (commenter) is intentionally NOT added here — self-authored
+// events are dropped earlier, and a third party's comment shouldn't make THEM a
+// participant for the operator's involvement check.
+func prParticipantLogins(pr *ghWebhookPR) []string {
+	if pr == nil {
+		return nil
+	}
+	logins := []string{pr.User.Login}
+	for _, u := range pr.Assignees {
+		logins = append(logins, u.Login)
+	}
+	for _, u := range pr.RequestedReviewers {
+		logins = append(logins, u.Login)
+	}
+	return dedupeNonEmpty(logins)
+}
+
+func issueParticipantLogins(iss *ghWebhookIssue) []string {
+	if iss == nil {
+		return nil
+	}
+	logins := []string{iss.User.Login}
+	for _, u := range iss.Assignees {
+		logins = append(logins, u.Login)
+	}
+	return dedupeNonEmpty(logins)
+}
+
+func dedupeNonEmpty(in []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range in {
+		s = strings.TrimSpace(s)
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
 }
 
 type ghWebhookComment struct {
@@ -137,6 +184,7 @@ func normalizePullRequestEvent(p ghWebhookPayload, owner, repo, raw string) (Git
 		BaseRef: pr.Base.Name, HeadRef: pr.Head.Name, HeadSHA: pr.Head.SHA,
 		Labels: webhookLabelNames(pr.Labels), Milestone: webhookMilestoneTitle(pr.Milestone),
 		RawJSON: raw, CreatedAt: pr.CreatedAt, UpdatedAt: pr.UpdatedAt,
+		Participants: prParticipantLogins(pr),
 	}
 	switch p.Action {
 	case "assigned":
@@ -180,6 +228,7 @@ func normalizeIssuesEvent(p ghWebhookPayload, owner, repo, raw string) (GitHubEv
 		Labels: webhookLabelNames(iss.Labels), Milestone: webhookMilestoneTitle(iss.Milestone),
 		EventKey: discoveryEventKey(kind, owner, repo, iss.Number),
 		RawJSON:  raw, CreatedAt: iss.CreatedAt, UpdatedAt: iss.UpdatedAt,
+		Participants: issueParticipantLogins(iss),
 	}, true
 }
 
@@ -206,6 +255,7 @@ func normalizeIssueCommentEvent(p ghWebhookPayload, owner, repo, raw string) (Gi
 		Body: cmt.Body, URL: cmt.HTMLURL, Author: cmt.User.Login,
 		CommentID: id, EventKey: "issue-comment:" + id,
 		RawJSON: raw, CreatedAt: cmt.CreatedAt, UpdatedAt: cmt.UpdatedAt,
+		Participants: issueParticipantLogins(iss),
 	}, true
 }
 
@@ -237,6 +287,7 @@ func normalizeReviewEvent(p ghWebhookPayload, owner, repo, raw string) (GitHubEv
 		Body: rev.Body, URL: rev.HTMLURL, Author: rev.User.Login,
 		CommentID: id, EventKey: "review:" + id,
 		RawJSON: raw, CreatedAt: rev.SubmittedAt, UpdatedAt: rev.SubmittedAt,
+		Participants: prParticipantLogins(pr),
 	}, true
 }
 
@@ -257,6 +308,7 @@ func normalizeReviewCommentEvent(p ghWebhookPayload, owner, repo, raw string) (G
 		Body: cmt.Body, URL: cmt.HTMLURL, Author: cmt.User.Login,
 		CommentID: id, EventKey: "review-comment:" + id,
 		RawJSON: raw, CreatedAt: cmt.CreatedAt, UpdatedAt: cmt.UpdatedAt,
+		Participants: prParticipantLogins(pr),
 	}, true
 }
 

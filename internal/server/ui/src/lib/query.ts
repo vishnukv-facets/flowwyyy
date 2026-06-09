@@ -10,6 +10,8 @@ import type {
   AttentionItem,
   AttentionTraceResponse,
   GitHubAuthStatus,
+  GitHubInstallations,
+  GitHubOrgs,
   GitHubWebhookStatus,
   HealthView,
   IngressStatus,
@@ -140,6 +142,29 @@ export function useGitHubWebhookStatus() {
       if (st && (st.transport === 'webhook' || st.transport === 'hybrid') && !st.receiving) return 5000
       return 20000
     },
+  })
+}
+// Orgs the active gh identity can create an App in — feeds the wizard's org
+// dropdown. Disabled until the operator picks the "Organization" target, so the
+// `gh api user/orgs` shell-out doesn't run on every modal open.
+export function useGitHubOrgs(enabled: boolean) {
+  return useQuery({
+    queryKey: ['github-orgs'],
+    queryFn: () => apiGet<GitHubOrgs>('/api/github/setup/orgs'),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+// Accounts the connected App is installed on (personal + orgs). Enabled only
+// once an App exists (install step / done), since it makes an App-JWT call to
+// GitHub. Polls while enabled so a freshly-added install (done in a github.com
+// tab) appears without a manual reload.
+export function useGitHubInstallations(enabled: boolean) {
+  return useQuery({
+    queryKey: ['github-installations'],
+    queryFn: () => apiGet<GitHubInstallations>('/api/github/setup/installations'),
+    enabled,
+    refetchInterval: enabled ? 5000 : false,
   })
 }
 // Connect-GitHub App-manifest wizard status. Polls quickly while the App isn't

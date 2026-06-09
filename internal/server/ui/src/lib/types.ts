@@ -727,6 +727,28 @@ export interface GitHubSetupStatus {
   summary: string
 }
 
+/** One account the connected GitHub App is installed on. */
+export interface GitHubInstallation {
+  id: number
+  account: string
+  type: string // "User" | "Organization"
+}
+
+/** Accounts the connected App is installed on (personal + orgs). */
+export interface GitHubInstallations {
+  installations: GitHubInstallation[]
+  /** Present when the App-JWT call to GitHub failed. */
+  error?: string
+}
+
+/** Orgs the active `gh` identity can target when creating a GitHub App. */
+export interface GitHubOrgs {
+  orgs: string[]
+  active_login?: string
+  /** Present when gh is missing / unauthenticated / the API call failed; the wizard falls back to manual org entry. */
+  error?: string
+}
+
 /** One identity `gh` is logged in as. */
 export interface GitHubAccount {
   login: string

@@ -48,6 +48,10 @@ type GitHubEvent struct {
 	RawJSON   string
 	CreatedAt string
 	UpdatedAt string
+	// Participants are the logins involved in the event's subject PR/issue:
+	// author + assignees + requested reviewers. Used to scope steering attention
+	// to events that involve the operator (see steering Stage 0 githubInScope).
+	Participants []string
 }
 
 func (ev GitHubEvent) RepoKey() string {
@@ -190,8 +194,9 @@ func gitHubEventToInboxEvent(ev GitHubEvent) InboundEvent {
 		URL:         strings.TrimSpace(ev.URL),
 		EventKey:    ev.EventKeyValue(),
 		ItemChannel: ev.RepoKey(),
-		ItemTS:      fmt.Sprintf("%d", ev.Number),
-		ItemAuthor:  strings.TrimSpace(ev.Author),
-		RawJSON:     strings.TrimSpace(ev.RawJSON),
+		ItemTS:       fmt.Sprintf("%d", ev.Number),
+		ItemAuthor:   strings.TrimSpace(ev.Author),
+		RawJSON:      strings.TrimSpace(ev.RawJSON),
+		Participants: ev.Participants,
 	}
 }

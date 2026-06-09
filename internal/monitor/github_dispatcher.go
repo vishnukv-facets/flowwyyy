@@ -85,6 +85,22 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		if err := d.Steerer.Observe(ctx, gitHubEventToInboxEvent(ev)); err != nil {
 			return fmt.Errorf("github steerer observe: %w", err)
 		}
+		// The steerer owns ATTENTION — triaging comments/mentions into the feed.
+		// But PR lifecycle STATE transitions (merge / close / new head) are
+		// deterministic connector mechanics: a merge on a PR you own must ALWAYS
+		// reach that task's session so the agent can wrap up. The relevance
+		// classifier drops these bare notifications, so without this they vanish
+		// in autonomy mode. Deliver them straight to the linked task's inbox (every
+		// GitHub event is actionable → the session wakes); the agent decides how to
+		// close. Comments/mentions are excluded — the steerer already triages those.
+		if isGitHubLifecycleStateEvent(ev.Kind) {
+			if slug, found, ferr := d.findTaskByGitHubTag(ev.LinkTag()); ferr == nil && found {
+				if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
+					return fmt.Errorf("github monitor: append inbox (steered lifecycle): %w", err)
+				}
+				return d.recordEvent(ev, slug)
+			}
+		}
 		return d.recordEvent(ev, "")
 	}
 
@@ -128,6 +144,13 @@ func (d *GitHubDispatcher) dispatchGitHubItem(ctx context.Context, ev GitHubEven
 		return fmt.Errorf("github monitor: lookup task by tag: %w", err)
 	}
 	if !found {
+		// Webhook firehose guard: don't spawn a task for an untracked PR/issue the
+		// operator isn't involved in (the org-wide webhook delivers every repo's
+		// activity). Poller-sourced events already involve the operator by
+		// construction, so they pass. Tracked PRs (found) are processed regardless.
+		if !gitHubEventInvolvesOperator(ev) {
+			return d.recordEvent(ev, "")
+		}
 		slug, err = d.createGitHubTask(ctx, ev)
 		if err != nil {
 			return fmt.Errorf("github monitor: create task: %w", err)
@@ -165,6 +188,12 @@ func (d *GitHubDispatcher) dispatchGitHubReview(ctx context.Context, ev GitHubEv
 		return fmt.Errorf("github monitor: lookup task by tag: %w", err)
 	}
 	if !found {
+		// Firehose guard (see dispatchGitHubItem): a comment/review on an untracked
+		// PR the operator isn't involved in (not a participant, not @-mentioned)
+		// must not spawn a task. A comment on a TRACKED PR (found) always processes.
+		if !gitHubEventInvolvesOperator(ev) {
+			return d.recordEvent(ev, "")
+		}
 		slug, err = d.createGitHubTask(ctx, ev)
 		if err != nil {
 			return fmt.Errorf("github monitor: create task for comment: %w", err)
@@ -216,9 +245,10 @@ func (d *GitHubDispatcher) dispatchGitHubMerged(ev GitHubEvent) error {
 	if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
 		return fmt.Errorf("github monitor: append inbox: %w", err)
 	}
-	if err := d.markTaskDoneFromGitHubMerge(slug); err != nil {
-		return err
-	}
+	// Deliver the merge to the session as an actionable wake and let the AGENT
+	// decide how to close — run any final steps, post an update, then mark done.
+	// flow does NOT server-side auto-close: "merged" is the agent's cue to wrap
+	// up, not a unilateral state change. (Mirrors dispatchGitHubClosed.)
 	return d.recordEvent(ev, slug)
 }
 
@@ -388,23 +418,18 @@ func (d *GitHubDispatcher) reopenTaskForGitHubReview(slug string) error {
 	return nil
 }
 
-func (d *GitHubDispatcher) markTaskDoneFromGitHubMerge(slug string) error {
-	now := flowdb.NowISO()
-	res, err := d.DB.Exec(
-		`UPDATE tasks
-		 SET status = 'done',
-		     status_changed_at = CASE WHEN status != 'done' THEN ? ELSE status_changed_at END,
-		     updated_at = ?
-		 WHERE slug = ?`,
-		now, now, slug,
-	)
-	if err != nil {
-		return fmt.Errorf("github monitor: mark merged task done: %w", err)
+// isGitHubLifecycleStateEvent reports whether a kind is a bare PR lifecycle
+// STATE transition (merge / close / new head) — events the steering relevance
+// classifier drops as non-content, but which a task tracking that PR must always
+// see so the agent can react. Comments/mentions are deliberately excluded: those
+// are content the steerer triages, and delivering them here would double-deliver.
+func isGitHubLifecycleStateEvent(kind GitHubEventKind) bool {
+	switch kind {
+	case GitHubEventPRMerged, GitHubEventPRClosed, GitHubEventPRHeadUpdated:
+		return true
+	default:
+		return false
 	}
-	if affected, _ := res.RowsAffected(); affected == 0 {
-		return fmt.Errorf("github monitor: task %q not updated after merge", slug)
-	}
-	return nil
 }
 
 func githubTaskName(ev GitHubEvent) string {

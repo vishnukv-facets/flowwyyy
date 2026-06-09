@@ -80,12 +80,51 @@ func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	if cfg.MutedThreads[key] {
 		return Stage0Result{DropReason: "muted thread"}
 	}
+	// Scope gate (runs last, after mutes): only GitHub events that involve the
+	// operator reach the classifier — otherwise an org-wide webhook install
+	// floods the cascade with the whole org's PR churn (mirrors the Slack scope
+	// gate). The legacy poller got this for free by searching involves:@operator.
+	if !githubInScope(ev, cfg) {
+		return Stage0Result{DropReason: "out of scope (operator not involved)"}
+	}
 	return Stage0Result{Pass: true, ThreadKey: key}
 }
 
 func githubTaskLinked(ev monitor.InboundEvent, cfg WatchConfig) bool {
 	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
 	return key != "" && cfg.TaskLinkedGitHubThreads[key]
+}
+
+// githubInScope reports whether a GitHub event involves the operator enough to
+// warrant attention: the PR/issue is already tracked by a task, the operator is
+// @-mentioned, or the operator is a participant (subject author / assignee /
+// requested reviewer). Fails OPEN when the operator's GitHub identity is
+// unconfigured — without knowing who the operator is, we can't judge
+// involvement, so we preserve prior behavior rather than silently drop
+// everything.
+func githubInScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
+	if githubTaskLinked(ev, cfg) {
+		return true
+	}
+	if len(cfg.GitHubIdentity) == 0 {
+		return true
+	}
+	if monitor.MentionsLogin(ev.Text, cfg.GitHubIdentity) {
+		return true
+	}
+	for _, login := range ev.Participants {
+		if containsFold(cfg.GitHubIdentity, login) {
+			return true
+		}
+	}
+	// No participant data → not a webhook firehose event. Poller-sourced events
+	// are pre-filtered to involve the operator (the search query did the
+	// filtering) and don't carry Participants — fail open rather than drop them.
+	// Webhook events always carry the subject author, so the gate above applies.
+	if len(ev.Participants) == 0 {
+		return true
+	}
+	return false
 }
 
 func githubLifecycleNeedsTaskAttention(kind string) bool {

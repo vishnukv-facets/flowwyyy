@@ -608,16 +608,28 @@
 }
 .slack-wizard-done {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  flex-direction: column;
+  gap: 14px;
   font-size: 13px;
   color: var(--text-2);
   line-height: 1.5;
 }
-.slack-wizard-done > svg {
+.slack-wizard-done-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.slack-wizard-done-head > svg {
   flex: none;
   margin-top: 2px;
   color: var(--running);
+}
+/* Actions wrap onto their own row(s) so a third button (Disconnect) can never
+   overflow the modal edge — the failure mode when they shared the text row. */
+.slack-wizard-done-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .slack-wizard-done code {
   font-family: var(--font-mono);
@@ -625,6 +637,21 @@
   background: var(--bg-3);
   padding: 0 4px;
   border-radius: 4px;
+}
+/* GitHub App installation account pills (personal + orgs the App is on) */
+.gh-install-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 4px 0;
+  vertical-align: middle;
+}
+.gh-install-line {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 /* redesigned settings page: summary bar + labelled sections */
 .settings-summary {
