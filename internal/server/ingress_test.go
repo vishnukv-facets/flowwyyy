@@ -261,89 +261,87 @@ func TestHandleIngressStatus_MethodNotAllowed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Slack: callback URL stays local even when public ingress is live
+// Slack: OAuth redirect prefers the public ingress URL (real cert, no warning),
+// falling back to the loopback self-signed listener when no ingress is up.
 // ---------------------------------------------------------------------------
 
-func TestSlackCallbackURL_AlwaysLocalhost(t *testing.T) {
-	t.Run("default localhost", func(t *testing.T) {
+func TestSlackRedirectURL_PrefersPublicIngress(t *testing.T) {
+	t.Run("no ingress -> loopback", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 		clearIngressEnv(t)
 		clearSlackSetupEnv(t)
-		got := srv.slackCallbackURL()
-		if !strings.HasPrefix(got, "https://localhost:") {
-			t.Errorf("no ingress: expected localhost URL, got %q", got)
-		}
-		if !strings.Contains(got, slackOAuthCallbackPath) {
-			t.Errorf("callback path missing: %q", got)
+		got := srv.slackRedirectURL()
+		if !strings.HasPrefix(got, "https://localhost:") || !strings.Contains(got, slackOAuthCallbackPath) {
+			t.Errorf("no ingress: want loopback callback, got %q", got)
 		}
 	})
 
-	t.Run("zrok live URL ignored for Slack", func(t *testing.T) {
+	t.Run("zrok live -> public URL", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 		clearIngressEnv(t)
 		clearSlackSetupEnv(t)
 		t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 		setZrokLive(t, srv, "https://zrtoken.share.zrok.io")
-		got := srv.slackCallbackURL()
-		if !strings.HasPrefix(got, "https://localhost:") {
-			t.Errorf("zrok ingress should not change Slack callback URL, got %q", got)
+		if got, want := srv.slackRedirectURL(), "https://zrtoken.share.zrok.io"+slackOAuthCallbackPath; got != want {
+			t.Errorf("zrok live: want public %q, got %q", want, got)
 		}
 	})
 
-	t.Run("manual URL ignored for Slack", func(t *testing.T) {
+	t.Run("manual public -> public URL", func(t *testing.T) {
 		root, db := testRootDB(t)
 		srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 		clearIngressEnv(t)
 		clearSlackSetupEnv(t)
 		t.Setenv("FLOW_INGRESS_PROVIDER", "manual")
 		t.Setenv("FLOW_PUBLIC_BASE_URL", "https://my.host.com")
-		got := srv.slackCallbackURL()
-		if !strings.HasPrefix(got, "https://localhost:") {
-			t.Errorf("manual ingress should not change Slack callback URL, got %q", got)
+		if got, want := srv.slackRedirectURL(), "https://my.host.com"+slackOAuthCallbackPath; got != want {
+			t.Errorf("manual public: want %q, got %q", want, got)
 		}
 	})
 }
 
 // ---------------------------------------------------------------------------
-// Slack: manifest never registers standing public ingress URLs
+// Slack: manifest registers BOTH the public and loopback redirect URLs when a
+// public ingress exists, so the app authorizes whichever transport is live.
 // ---------------------------------------------------------------------------
 
-func TestSlackManifestUsesLocalhost(t *testing.T) {
+func TestSlackManifestRegistersPublicAndLoopback(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	clearIngressEnv(t)
 	clearSlackSetupEnv(t)
 
-	// Default: manifest carries the localhost redirect URL.
-	m := slackAppManifest("flow", srv.slackCallbackURL())
-	redirects := m["oauth_config"].(map[string]any)["redirect_urls"].([]string)
-	if len(redirects) != 1 || !strings.HasPrefix(redirects[0], "https://localhost:") {
-		t.Fatalf("default manifest redirect = %v", redirects)
+	// No ingress: just the loopback URL.
+	r1 := srv.slackRedirectURLs()
+	if len(r1) != 1 || !strings.HasPrefix(r1[0], "https://localhost:") {
+		t.Fatalf("no ingress redirect URLs = %v", r1)
 	}
 
-	// With a live zrok share: manifest still carries the localhost redirect URL.
+	// Live zrok: public URL first, loopback retained as fallback.
 	t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 	setZrokLive(t, srv, "https://maniftoken.share.zrok.io")
-	m2 := slackAppManifest("flow", srv.slackCallbackURL())
-	redirects2 := m2["oauth_config"].(map[string]any)["redirect_urls"].([]string)
-	if len(redirects2) != 1 || !strings.HasPrefix(redirects2[0], "https://localhost:") {
-		t.Fatalf("zrok manifest redirect = %v, want localhost", redirects2)
+	r2 := srv.slackRedirectURLs()
+	if len(r2) != 2 || r2[0] != "https://maniftoken.share.zrok.io"+slackOAuthCallbackPath || !strings.HasPrefix(r2[1], "https://localhost:") {
+		t.Fatalf("zrok redirect URLs = %v, want [public, loopback]", r2)
+	}
+	got := slackAppManifest("flow", r2)["oauth_config"].(map[string]any)["redirect_urls"].([]string)
+	if len(got) != 2 {
+		t.Fatalf("manifest redirect_urls = %v", got)
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Slack: OAuth dance always uses the short-lived local TLS listener
+// Slack: with a public ingress, the OAuth dance rides the ingress mux — no
+// loopback TLS listener (the source of the browser cert warning).
 // ---------------------------------------------------------------------------
 
-func TestSlackOAuthDance_PublicIngressStillUsesLocalTLSListener(t *testing.T) {
+func TestSlackOAuthDance_PublicIngressUsesIngressMux(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	clearIngressEnv(t)
 	clearSlackSetupEnv(t)
-
-	// Activate zrok ingress with a live share URL.
 	t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
 	setZrokLive(t, srv, "https://dancetoken.share.zrok.io")
 
@@ -353,20 +351,17 @@ func TestSlackOAuthDance_PublicIngressStillUsesLocalTLSListener(t *testing.T) {
 	}
 	defer dance.shutdown()
 
-	if dance.publicIngress {
-		t.Fatal("Slack OAuth must not use standing public ingress")
+	if !dance.publicIngress {
+		t.Fatal("public ingress up: dance must ride the ingress mux (publicIngress=true)")
 	}
-	if dance.srv == nil {
-		t.Error("TLS srv must be non-nil for Slack OAuth")
+	if dance.srv != nil {
+		t.Error("public mode must NOT bind a loopback TLS listener")
 	}
-	if dance.addr != "" {
-		// port 0 in tests should still bind a local listener.
-	} else {
-		t.Error("addr must be set for local Slack OAuth")
+	want := "https://dancetoken.share.zrok.io" + slackOAuthCallbackPath
+	if dance.redirectURI != want {
+		t.Errorf("dance.redirectURI = %q, want %q", dance.redirectURI, want)
 	}
-
-	expectedRedirect := srv.slackCallbackURL()
-	if !strings.Contains(dance.authorizeURL, "redirect_uri="+urlEncodeRaw(expectedRedirect)) {
+	if !strings.Contains(dance.authorizeURL, "redirect_uri="+urlEncodeRaw(want)) {
 		t.Errorf("authorize URL redirect_uri wrong: %s", dance.authorizeURL)
 	}
 }
@@ -407,31 +402,42 @@ func TestSlackSetupStatus_CallbackMode(t *testing.T) {
 		assertCallbackMode(t, "zrok", false, "", "localhost")
 	})
 	t.Run("zrok live", func(t *testing.T) {
-		assertCallbackMode(t, "zrok", true, "", "localhost")
+		assertCallbackMode(t, "zrok", true, "", "public")
 	})
 	t.Run("manual no url", func(t *testing.T) {
 		assertCallbackMode(t, "manual", false, "", "localhost")
 	})
 	t.Run("manual with url", func(t *testing.T) {
-		assertCallbackMode(t, "manual", false, "https://cb.example.com", "localhost")
+		assertCallbackMode(t, "manual", false, "https://cb.example.com", "public")
 	})
 }
 
-func TestIngressMuxExposesOnlyGitHubWebhook(t *testing.T) {
+func TestIngressMuxRoutes(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 	clearIngressEnv(t)
+	clearSlackSetupEnv(t)
 
+	// The Slack OAuth callback IS exposed on the public ingress now (public mode),
+	// but it's state-gated: with no install in progress the handler — not the mux —
+	// returns 404, proving the route is wired to handleSlackSetupOAuthCallback.
 	rec := httptest.NewRecorder()
 	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", slackOAuthCallbackPath, nil))
-	if rec.Code != http.StatusNotFound {
-		t.Fatalf("public ingress must not expose Slack OAuth callback, status %d", rec.Code)
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no Slack install in progress") {
+		t.Fatalf("Slack callback should be routed + 404 without a dance, got %d %q", rec.Code, rec.Body.String())
 	}
 
 	rec = httptest.NewRecorder()
 	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", "/api/github/webhook", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GitHub webhook route missing from ingress mux, status %d", rec.Code)
+	}
+
+	// A path that is NOT exposed still hits the mux's own 404 (no data-plane leak).
+	rec = httptest.NewRecorder()
+	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", "/api/health", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unexposed path should 404 on ingress mux, got %d", rec.Code)
 	}
 }
 
@@ -514,7 +520,7 @@ func TestHandleSlackSetupOAuthCallbackMain_NoDance(t *testing.T) {
 	clearIngressEnv(t)
 
 	rec := httptest.NewRecorder()
-	srv.handleSlackSetupOAuthCallbackMain(rec, httptest.NewRequest("GET", slackOAuthCallbackPath, nil))
+	srv.handleSlackSetupOAuthCallback(rec, httptest.NewRequest("GET", slackOAuthCallbackPath, nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("no active dance: expected 404, got %d", rec.Code)
 	}
@@ -551,7 +557,7 @@ func TestHandleSlackSetupOAuthCallbackMain_ExchangesCode(t *testing.T) {
 	srv.slackOAuth = dance
 	srv.slackSetupMu.Unlock()
 
-	srv.handleSlackSetupOAuthCallbackMain(rec, req)
+	srv.handleSlackSetupOAuthCallback(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("callback: %d %s", rec.Code, rec.Body.String())
 	}

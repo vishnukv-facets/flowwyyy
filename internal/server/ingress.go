@@ -451,5 +451,10 @@ func (s *Server) ingressMux() http.Handler {
 	// operator's browser lands here after GitHub creates the App. State-nonce
 	// validated; no UI or data-plane is exposed.
 	mux.HandleFunc(githubSetupCallbackPath, s.handleGitHubSetupCallback)
+	// Slack OAuth callback in public mode: the operator's browser lands here on
+	// the zrok URL (real cert — no localhost warning) after approving the install.
+	// State-nonce validated against the in-flight dance; routes to the same
+	// handler as the loopback path. No UI or data-plane is exposed.
+	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallback)
 	return mux
 }

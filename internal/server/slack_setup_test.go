@@ -34,7 +34,7 @@ func clearSlackSetupEnv(t *testing.T) {
 }
 
 func TestSlackAppManifest(t *testing.T) {
-	m := slackAppManifest("", "https://localhost:8790/api/slack/oauth/callback")
+	m := slackAppManifest("", []string{"https://localhost:8790/api/slack/oauth/callback"})
 
 	display := m["display_information"].(map[string]any)
 	if display["name"] != "flow" {
@@ -74,7 +74,7 @@ func TestSlackAppManifest(t *testing.T) {
 		t.Fatalf("user_events must include message.im + message.mpim: %v", userEvents)
 	}
 
-	named := slackAppManifest("  custom-name  ", "https://localhost:1/cb")
+	named := slackAppManifest("  custom-name  ", []string{"https://localhost:1/cb"})
 	if named["display_information"].(map[string]any)["name"] != "custom-name" {
 		t.Fatal("custom app name not honored")
 	}

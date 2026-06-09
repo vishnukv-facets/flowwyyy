@@ -152,9 +152,9 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)
 	mux.HandleFunc("/api/quote", s.handleQuote)
 	// Slack OAuth callback. The install flow uses a short-lived localhost TLS
-	// listener; this local route is only a same-process fallback and is not
-	// registered on the public ingress mux.
-	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallbackMain)
+	// listener (loopback mode); in public-ingress mode it also rides the ingress
+	// mux (see ingressMux). This local route is the same-process path.
+	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallback)
 	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
 	mux.HandleFunc("/api/github/webhook/status", s.handleGitHubWebhookStatus)
 	mux.HandleFunc("/api/ingress/status", s.handleIngressStatus)
