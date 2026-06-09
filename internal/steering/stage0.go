@@ -100,9 +100,12 @@ func githubLifecycleNeedsTaskAttention(kind string) bool {
 // stage0Slack applies the no-LLM drop rules (spec §6, Stage 0) for the Slack
 // connector. It only considers human chat events ("message"/"app_mention");
 // reactions belong to the existing reaction-trigger pipeline and are dropped
-// here. Order: kind → self → bot → mute. Scope is intentionally NOT a drop
-// criterion here: once a live event reached the steerer, ambiguous relevance
-// belongs to Stage 1+ rather than a deterministic watched-channel gate.
+// here. Order: kind → self → bot → mute → scope. Scope is a strict drop
+// criterion: only in-scope events (DMs/MPIMs, operator @mentions, and watched
+// channels — see inScope) reach the Stage 1 classifier; everything else drops
+// deterministically as out-of-scope, so classifier budget is never spent on
+// channels the operator isn't watching. The scope gate runs last so the more
+// specific mute reasons (muted channel/sender/keyword/thread) keep precedence.
 func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	if ev.Kind != "message" && ev.Kind != "app_mention" {
 		return Stage0Result{DropReason: "not a chat event"}
@@ -128,6 +131,9 @@ func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	}
 	if cfg.MutedThreads[key] {
 		return Stage0Result{DropReason: "muted thread"}
+	}
+	if !inScope(ev, cfg) {
+		return Stage0Result{DropReason: "out of scope / not watched"}
 	}
 	return Stage0Result{Pass: true, ThreadKey: key}
 }

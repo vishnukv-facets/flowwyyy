@@ -18,10 +18,11 @@ func baseCfg() WatchConfig {
 
 func TestStage0(t *testing.T) {
 	cases := []struct {
-		name     string
-		ev       monitor.InboundEvent
-		wantPass bool
-		wantKey  string
+		name       string
+		ev         monitor.InboundEvent
+		wantPass   bool
+		wantKey    string
+		wantReason string // asserted only when set and the case is a drop
 	}{
 		{
 			name:     "dm passes",
@@ -44,9 +45,10 @@ func TestStage0(t *testing.T) {
 			wantPass: true, wantKey: "C_OTHER:3.5",
 		},
 		{
-			name:     "unwatched channel no mention passes to classifier",
-			ev:       monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_OTHER", TS: "4.1", ThreadTS: "4.0", UserID: "U_OTHER", Text: "random chatter"},
-			wantPass: true, wantKey: "C_OTHER:4.0",
+			name:       "unwatched channel no mention drops (out of scope)",
+			ev:         monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_OTHER", TS: "4.1", ThreadTS: "4.0", UserID: "U_OTHER", Text: "random chatter"},
+			wantPass:   false,
+			wantReason: "out of scope / not watched",
 		},
 		{
 			name:     "self-authored drops",
@@ -59,9 +61,12 @@ func TestStage0(t *testing.T) {
 			wantPass: false,
 		},
 		{
-			name:     "muted channel drops",
-			ev:       monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_MUTED", TS: "7.1", ThreadTS: "7.1", UserID: "U_OTHER", Text: "hi"},
-			wantPass: false,
+			// C_MUTED is muted AND not in WatchedChannels; mute must win so the
+			// trace stays legible (ordering preserved, not the scope drop).
+			name:       "muted channel drops (mute beats scope)",
+			ev:         monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_MUTED", TS: "7.1", ThreadTS: "7.1", UserID: "U_OTHER", Text: "hi"},
+			wantPass:   false,
+			wantReason: "muted channel",
 		},
 		{
 			name:     "muted keyword drops",
@@ -82,6 +87,9 @@ func TestStage0(t *testing.T) {
 			}
 			if c.wantPass && got.ThreadKey != c.wantKey {
 				t.Errorf("ThreadKey = %q, want %q", got.ThreadKey, c.wantKey)
+			}
+			if !c.wantPass && c.wantReason != "" && got.DropReason != c.wantReason {
+				t.Errorf("DropReason = %q, want %q", got.DropReason, c.wantReason)
 			}
 		})
 	}
