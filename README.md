@@ -659,27 +659,29 @@ The Connect Slack wizard reports its callback mode (`localhost` \| `zrok` \|
 
 ## GitHub integration — assigned work and review threads
 
-flow can also poll GitHub through the authenticated `gh` CLI and turn
-assigned issues, assigned/review-requested pull requests, review
-comments, and top-level PR reviews on tracked pull requests into flow
-work.
+flow ingests GitHub activity — assigned issues, assigned/review-requested
+pull requests, review comments, top-level reviews, head updates, merges,
+and closes — and turns it into flow work. Two transports feed the **same**
+`GitHubDispatcher`:
+
+- **Webhook-first (recommended).** GitHub POSTs signed deliveries to
+  `POST /api/github/webhook` the instant an event happens. flow verifies the
+  `X-Hub-Signature-256` HMAC, records the delivery for idempotency, normalizes
+  the payload into a `GitHubEvent`, and dispatches it — **no GitHub API call** is
+  needed to act on the event. This is the live path and it does not use `gh`.
+- **Legacy polling (fallback / off-install discovery).** The older path
+  searches GitHub through the authenticated `gh` CLI on a timer. It is no longer
+  the primary transport; keep it only for installations without a webhook, or to
+  surface `@`-mentions / involvement in repos where no webhook is installed.
 
 ```
-                           gh api polling
-                                │
+   GitHub  ──signed POST──▶  POST /api/github/webhook
+                                │  • verify X-Hub-Signature-256 (HMAC)
+                                │  • record delivery (X-GitHub-Delivery) — idempotent
+                                │  • normalize payload → GitHubEvent(s)
                                 ▼
    ┌─────────────────────────────────────────────────┐
-   │  monitor.GitHubListener                         │
-   │   • search assigned issues / PRs                 │
-   │   • search PRs requesting your review            │
-   │   • track head changes / merge state for PRs      │
-   │   • fetch review comments / reviews for PR tasks │
-   └────────────────┬────────────────────────────────┘
-                    │  is FLOW_GH_ENABLED=1?
-                    │  is login in FLOW_GH_SELF_LOGINS?
-                    ▼
-   ┌─────────────────────────────────────────────────┐
-   │  GitHubDispatcher                               │
+   │  GitHubDispatcher (shared by webhook + polling) │
    │   • find task by gh-pr:<owner>/<repo>#<n>        │
    │     or gh-issue:<owner>/<repo>#<n>               │
    │   • create one if absent                        │
@@ -689,9 +691,24 @@ work.
    └─────────────────────────────────────────────────┘
 ```
 
-**All repos by default.** Once enabled, GitHub search is not limited to
-the current checkout. Set `FLOW_GH_REPOS=owner/repo,owner/repo2` when
-you want a smaller allowlist.
+**Webhook setup.** The receiver needs (1) a public HTTPS URL GitHub can reach —
+flow's [public ingress](#public-ingress--public-callback-urls-for-connectors) (zrok)
+exposes `<public-base>/api/github/webhook` — and (2) a shared signing secret in
+`FLOW_GH_WEBHOOK_SECRET`. Point a GitHub repo/org/App webhook (events: `issues`,
+`issue_comment`, `pull_request`, `pull_request_review`,
+`pull_request_review_comment`) at that URL with that secret. A one-click
+"Connect GitHub" wizard (GitHub App manifest) that registers the App and wires
+the URL + secret automatically is tracked as follow-on work; until then the
+webhook is configured manually or via `gh`.
+
+**Same event keys across transports.** Webhook and poll paths produce identical
+`event_key`s (e.g. `review-comment:<node_id>`, `pr-head:<owner>/<repo>#<n>:<sha>`),
+so the shared `github_event_log` dedupes an event even if it arrives by both
+paths — running webhook + polling together never double-appends.
+
+**All repos by default (polling).** When the legacy poller runs, GitHub search
+is not limited to the current checkout. Set `FLOW_GH_REPOS=owner/repo,owner/repo2`
+when you want a smaller allowlist.
 
 **One GitHub item, one task.** PR tasks are tagged
 `gh-pr:<owner>/<repo>#<number>` and issue tasks are tagged
@@ -718,19 +735,24 @@ Without either label, flow defaults to Claude.
 
 **Configuration.**
 
-| Env var                 | Purpose                                                                    |
-| ----------------------- | -------------------------------------------------------------------------- |
-| `FLOW_GH_ENABLED`       | `1` to enable GitHub polling; default is off                               |
-| `FLOW_GH_SELF_LOGINS`   | Comma-separated GitHub logins that count as you                            |
-| `FLOW_GH_REPOS`         | Optional repo allowlist; unset means search all repos visible to `gh`      |
-| `FLOW_GH_POLL_INTERVAL` | Poll interval such as `60s`, `2m`, or `120`; default is `1m`               |
-| `FLOW_GH_AUTOOPEN`      | `0` to create tasks without opening a Mission Control terminal immediately |
+| Env var                 | Purpose                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `FLOW_GH_TRANSPORT`     | `webhook` (live, recommended), `polling` (legacy gh-api search), `hybrid` (both), `off`, or `auto` (derive from below) |
+| `FLOW_GH_WEBHOOK_SECRET`| Shared HMAC secret for `X-Hub-Signature-256`; required for the webhook receiver to accept deliveries                    |
+| `FLOW_GH_ENABLED`       | Legacy on/off for gh-api polling; used only when transport is `auto`/`polling`/`hybrid`                                |
+| `FLOW_GH_SELF_LOGINS`   | Comma-separated GitHub logins that count as you                                                                        |
+| `FLOW_GH_REPOS`         | Optional repo allowlist (polling); unset means search all repos visible to `gh`                                        |
+| `FLOW_GH_POLL_INTERVAL` | Poll interval such as `60s`, `2m`, or `120`; default is `1m` (polling only)                                            |
+| `FLOW_GH_AUTOOPEN`      | `0` to create tasks without opening a Mission Control terminal immediately                                             |
 
-Run `gh auth login` first, or provide the usual `GH_TOKEN` /
-`GITHUB_TOKEN` environment that `gh api` supports. Without
-`FLOW_GH_ENABLED=1`, the rest of flow works unchanged — GitHub is
-opt-in. **Mission Control → Connectors → GitHub** shows the live `gh`
-auth status and lets you edit these `FLOW_GH_*` settings in one place.
+Webhook mode needs no `gh` auth — only a public ingress URL and
+`FLOW_GH_WEBHOOK_SECRET`. The legacy polling path still uses `gh`: run
+`gh auth login` first, or provide the usual `GH_TOKEN` / `GITHUB_TOKEN`
+environment that `gh api` supports. With transport `off` (or `auto` while
+`FLOW_GH_ENABLED` is unset), the rest of flow works unchanged — GitHub is
+opt-in. **Mission Control → Connectors → GitHub** shows the live webhook
+transport status (configured / receiving / last delivery) and lets you edit
+these `FLOW_GH_*` settings in one place.
 
 ## Settings & configuration
 

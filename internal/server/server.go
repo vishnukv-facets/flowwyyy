@@ -151,6 +151,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	// registered on the public ingress mux.
 	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallbackMain)
 	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
+	mux.HandleFunc("/api/github/webhook/status", s.handleGitHubWebhookStatus)
 	mux.HandleFunc("/api/ingress/status", s.handleIngressStatus)
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)

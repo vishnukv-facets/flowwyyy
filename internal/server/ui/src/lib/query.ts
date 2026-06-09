@@ -10,6 +10,7 @@ import type {
   AttentionItem,
   AttentionTraceResponse,
   GitHubAuthStatus,
+  GitHubWebhookStatus,
   HealthView,
   IngressStatus,
   InboxConversation,
@@ -124,6 +125,20 @@ export function useGitHubAuth() {
     queryKey: ['github-auth'],
     queryFn: () => apiGet<GitHubAuthStatus>('/api/github/auth/status'),
     staleTime: 10_000,
+  })
+}
+// GitHub webhook transport status (mode, secret configured, deliveries). Polls
+// while in webhook mode so "awaiting first delivery" flips to "receiving" without
+// a manual reload.
+export function useGitHubWebhookStatus() {
+  return useQuery({
+    queryKey: ['github-webhook-status'],
+    queryFn: () => apiGet<GitHubWebhookStatus>('/api/github/webhook/status'),
+    refetchInterval: (q) => {
+      const st = q.state.data
+      if (st && (st.transport === 'webhook' || st.transport === 'hybrid') && !st.receiving) return 5000
+      return 20000
+    },
   })
 }
 // Public ingress status (zrok/manual/none) + derived connector callback URLs.

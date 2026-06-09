@@ -730,6 +730,20 @@ export interface GitHubAuthStatus {
   error?: string
 }
 
+// GitHubWebhookStatus mirrors GET /api/github/webhook/status — the live
+// webhook transport state for the Connectors Git card.
+export interface GitHubWebhookStatus {
+  transport: string
+  secret_configured: boolean
+  webhook_url?: string
+  deliveries_total: number
+  last_received_at?: string
+  last_status?: string
+  last_error?: string
+  receiving: boolean
+  summary: string
+}
+
 export interface IngressStatus {
   provider: string
   // Public base URL, discovered from zrok at runtime (or operator-supplied for

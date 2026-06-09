@@ -2509,14 +2509,25 @@ under the `tags:` line), follow this bootstrap:
 
 ## 10c. GitHub PR and issue tasks (monitor pipeline)
 
-`flow ui serve` can also host a GitHub polling listener when the user
-starts it with `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS=<login>`.
-Set `FLOW_GH_REPOS=owner/repo,owner/repo2` only when the user wants a
-narrow repo allowlist; unset means all repos visible to the authenticated
-`gh` CLI. The listener turns open assigned issues, open assigned PRs,
-open PRs requesting the user's review, **open issues/PRs that @-mention
-the user**, tracked PR review comments, top-level PR reviews, PR head
-updates, and PR merges into flow inbox events.
+`flow ui serve` ingests GitHub activity through one of two transports, both
+feeding the same dispatcher (task creation, inbox append, attention routing,
+reopen/mark-done). The transport is set by `FLOW_GH_TRANSPORT`:
+
+- **`webhook` (webhook-first, recommended).** GitHub POSTs signed deliveries to
+  `POST /api/github/webhook`. flow verifies the `X-Hub-Signature-256` HMAC
+  (`FLOW_GH_WEBHOOK_SECRET`), records the delivery for idempotency, normalizes
+  the payload into a `GitHubEvent`, and dispatches it — no `gh` API call is
+  needed to act on the event. Needs a public ingress URL (zrok) + the secret.
+- **`polling` / `hybrid` (legacy).** The older path searches GitHub through the
+  `gh` CLI on a timer (`FLOW_GH_ENABLED=1` + `FLOW_GH_SELF_LOGINS`). `hybrid`
+  runs the search-poller alongside the webhook to also catch mentions/involvement
+  in repos where no webhook is installed. `auto` (default) derives polling from
+  the legacy `FLOW_GH_ENABLED` toggle.
+
+Either transport turns open assigned issues, open assigned PRs, open PRs
+requesting the user's review, **open issues/PRs that @-mention the user**, PR
+review comments, top-level PR reviews, PR head updates, and PR merges into flow
+inbox events. (`FLOW_GH_REPOS=owner/repo,...` narrows the polling allowlist.)
 
 Discovery has two tiers. **Direct asks** — assignment, review-request, or
 an @-mention — create a task AND auto-open a session (you're expected to
@@ -2535,11 +2546,14 @@ or GitHub URL when the tag exists.
 If your task carries a `gh-pr:` or `gh-issue:` tag (`flow show task`
 lists tags under the `tags:` line), follow this bootstrap:
 
-1. **Confirm the monitor is running when live follow-up matters.** If you
-   are expected to receive new review comments, new commits, or merge
-   notifications while working, make sure `flow ui serve` is running
-   with `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS` set. If the user
-   wants only a one-time review and no live follow-up, note that choice.
+1. **Confirm the ingress is live when follow-up matters.** If you expect new
+   review comments, commits, or merge notifications while working, make sure
+   `flow ui serve` is running with a working GitHub transport: for `webhook`
+   mode, a public ingress URL + `FLOW_GH_WEBHOOK_SECRET` (check
+   `GET /api/github/webhook/status` — it reports transport, secret-configured,
+   and whether deliveries are being received); for `polling`/`hybrid`, set
+   `FLOW_GH_ENABLED=1` and `FLOW_GH_SELF_LOGINS`. If the user wants only a
+   one-time review and no live follow-up, note that choice.
 2. **Read your brief.** It is a snapshot of the PR/issue at task
    creation time: title, URL, author, labels, milestone, base/head refs,
    and the initial GitHub body. Treat it as initial context, not the

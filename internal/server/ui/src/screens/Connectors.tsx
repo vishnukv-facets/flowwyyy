@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, AlertTriangle, Check, CheckCircle2, ChevronRight, Copy, ExternalLink, Globe2, Link2, Loader2, Plug, RotateCw, Save, Terminal } from 'lucide-react'
-import { useAction, useGitHubAuth, useIngressStatus, useSettings, useUiData } from '../lib/query'
+import { ArrowLeftRight, AlertTriangle, Check, CheckCircle2, ChevronRight, Copy, ExternalLink, Globe2, Link2, Loader2, Plug, RotateCw, Save, Terminal, Webhook } from 'lucide-react'
+import { useAction, useGitHubAuth, useGitHubWebhookStatus, useIngressStatus, useSettings, useUiData } from '../lib/query'
 import { apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -260,8 +260,45 @@ function ConnectorForm({
 // its config + IngressDetail cover it.
 function ConnectorSetup({ def }: { def: ConnectorDef }) {
   if (def.id === 'slack') return <SlackConnect framed={false} />
-  if (def.id === 'github') return <GitHubAuth />
+  if (def.id === 'github') {
+    // Webhook transport status first (gh-independent — webhook mode needs no gh
+    // auth), then the gh-CLI identity used by the legacy polling path.
+    return (
+      <>
+        <GitHubWebhookTransport />
+        <GitHubAuth />
+      </>
+    )
+  }
   return null
+}
+
+// GitHubWebhookTransport surfaces the live webhook ingress state: which transport
+// is active, whether a signing secret is configured, the URL to register, and
+// whether deliveries are arriving. Shown regardless of gh-auth state because
+// webhook mode does not use gh.
+function GitHubWebhookTransport() {
+  const { data: wh } = useGitHubWebhookStatus()
+  if (!wh) return null
+  const webhooky = wh.transport === 'webhook' || wh.transport === 'hybrid'
+  let tone: 'ok' | 'warn' | 'error' | '' = ''
+  if (webhooky) {
+    if (!wh.secret_configured) tone = 'warn'
+    else if (wh.last_status === 'error') tone = 'error'
+    else if (wh.receiving) tone = 'ok'
+  }
+  return (
+    <div className={`connector-auth${tone === 'ok' ? ' ok' : ''}`}>
+      <span className="connector-auth-icon">
+        {tone === 'warn' || tone === 'error' ? <AlertTriangle size={15} /> : <Webhook size={15} />}
+      </span>
+      <div className="connector-auth-main">
+        <div>Transport: <strong>{wh.transport}</strong></div>
+        <div className="connector-auth-src">{wh.summary}</div>
+        {webhooky && wh.webhook_url && <div className="connector-auth-path mono">{wh.webhook_url}</div>}
+      </div>
+    </div>
+  )
 }
 
 // GitHub auth runs through the `gh` CLI (no first-party OAuth yet — see brief).

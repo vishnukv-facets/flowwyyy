@@ -43,6 +43,10 @@ func (l *GitHubListener) Start() error {
 	if l.running {
 		return nil
 	}
+	if mode := GitHubTransport(); !mode.SchedulesPolling() {
+		l.logFn("scheduled polling off (transport=%s); webhook receiver handles live GitHub events", mode)
+		return nil
+	}
 	if !GitHubPollingEnabled() {
 		l.logFn("not starting: set FLOW_GH_ENABLED=1 and FLOW_GH_SELF_LOGINS")
 		return nil
@@ -90,6 +94,17 @@ func (l *GitHubListener) PollOnce(ctx context.Context) {
 		return
 	}
 	l.pollOnce(ctx)
+}
+
+// Dispatch routes a single already-normalized event through the dispatcher. The
+// webhook receiver uses this to push parsed deliveries into the same pipeline
+// the poller feeds — task creation, inbox append, attention routing, reopen/
+// mark-done — without making any GitHub API call.
+func (l *GitHubListener) Dispatch(ctx context.Context, ev GitHubEvent) error {
+	if l == nil || l.dispatcher == nil {
+		return nil
+	}
+	return l.dispatcher.Dispatch(ctx, ev)
 }
 
 func (l *GitHubListener) run(ctx context.Context) {
