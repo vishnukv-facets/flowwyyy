@@ -320,7 +320,14 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 			return nil
 		}
 		c.applyExistingTaskMatch(&v2, ev)
-		id, werr := c.writeFeed(v2, ev, pack)
+		id, surfaced, werr := c.writeFeed(v2, ev, pack)
+		if werr == nil && !surfaced {
+			tr.Disposition, tr.StageReached = "dropped", "stage2"
+			tr.DropReason = "operator dismissed this thread"
+			tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
+			c.emitTrace(tr, start)
+			return nil
+		}
 		tr.Disposition, tr.StageReached = "surfaced", "stage2"
 		tr.DropReason = "deep budget exhausted; surfaced stage2 verdict"
 		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v2.SuggestedAction), v2.Confidence, id
@@ -353,7 +360,16 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		c.emitTrace(tr, start)
 		return nil
 	}
-	id, werr := c.writeFeed(v3, ev, pack)
+	id, surfaced, werr := c.writeFeed(v3, ev, pack)
+	if werr == nil && !surfaced {
+		// Operator already dismissed this thread/message; re-observation must not
+		// resurrect the card or auto-act on it. Record an honest trace and stop.
+		tr.Disposition = "dropped"
+		tr.DropReason = "operator dismissed this thread"
+		tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
+		c.emitTrace(tr, start)
+		return nil
+	}
 	tr.Disposition = "surfaced"
 	tr.FinalAction, tr.FinalConfidence, tr.FeedItemID = string(v3.SuggestedAction), v3.Confidence, id
 	c.maybeAutoAct(ctx, id, v3).applyTo(tr)
@@ -833,8 +849,10 @@ func preview(s string) string {
 }
 
 // writeFeed maps a Verdict to a surface-only ('new') Attention feed row and
-// returns the upserted item's id.
-func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, error) {
+// returns the upserted item's id plus whether it actually surfaced a live card.
+// surfaced == false means the operator already dismissed this thread/message and
+// the upsert left it dismissed — the caller must not re-surface or auto-act.
+func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
 	item := flowdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
@@ -862,11 +880,11 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadConte
 	if item.SuggestedAction == "" {
 		item.SuggestedAction = string(ActionDrop)
 	}
-	id, err := flowdb.UpsertFeedItem(c.DB, item)
+	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(c.DB, item)
 	if err != nil {
-		return "", fmt.Errorf("steering: write feed item: %w", err)
+		return "", false, fmt.Errorf("steering: write feed item: %w", err)
 	}
-	return id, nil
+	return id, surfaced, nil
 }
 
 func (c *Cascade) contextPack(ctx context.Context, ev monitor.InboundEvent) ThreadContext {

@@ -3,6 +3,8 @@ package flowdb
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // FeedItem mirrors a row in the attention_feed table (spec §7). It is the
@@ -54,30 +56,48 @@ func SetFeedRetriaging(db *sql.DB, id, at string) error {
 // source thread across unrelated cards. Otherwise the item is inserted as given.
 // Returns the id of the row written.
 func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
+	id, _, err := UpsertFeedItemSurfaced(db, item)
+	return id, err
+}
+
+// UpsertFeedItemSurfaced is UpsertFeedItem that also reports whether the call
+// produced a live ('new') card. surfaced == false means the upsert coalesced
+// onto a dismissed row that it deliberately left dismissed — see the dismissal
+// guard below. Callers (the cascade) use this to avoid re-surfacing or auto-
+// acting on a thread the operator already cleared.
+func UpsertFeedItemSurfaced(db *sql.DB, item FeedItem) (id string, surfaced bool, err error) {
 	if item.ID == "" || item.ThreadKey == "" || item.SuggestedAction == "" {
-		return "", fmt.Errorf("flowdb: feed item requires id, thread_key, suggested_action")
+		return "", false, fmt.Errorf("flowdb: feed item requires id, thread_key, suggested_action")
 	}
 	if item.Status == "" {
 		item.Status = "new"
 	}
 
 	var existingID string
-	lookup := `SELECT id, status FROM attention_feed WHERE thread_key = ? AND status = 'new' ORDER BY created_at DESC, id DESC LIMIT 1`
+	lookup := `SELECT id, status, COALESCE(ts, '') FROM attention_feed WHERE thread_key = ? AND status = 'new' ORDER BY created_at DESC, id DESC LIMIT 1`
 	if item.Status == "new" {
-		lookup = `SELECT id, status
+		lookup = `SELECT id, status, COALESCE(ts, '')
 		          FROM attention_feed
 		          WHERE thread_key = ? AND status IN ('new', 'dismissed')
 		          ORDER BY CASE status WHEN 'new' THEN 0 ELSE 1 END, created_at DESC, id DESC
 		          LIMIT 1`
 	}
-	var ignoredStatus string
-	err := db.QueryRow(lookup, item.ThreadKey).Scan(&existingID, &ignoredStatus)
+	var existingStatus, existingTS string
+	err = db.QueryRow(lookup, item.ThreadKey).Scan(&existingID, &existingStatus, &existingTS)
 	switch {
 	case err == sql.ErrNoRows:
 		// fall through to insert
 	case err != nil:
-		return "", fmt.Errorf("flowdb: lookup feed coalesce: %w", err)
+		return "", false, fmt.Errorf("flowdb: lookup feed coalesce: %w", err)
 	default:
+		// Respect dismissal: a dismissed card must not be resurrected by re-
+		// surfacing the SAME message (or an older one). The verdict cache is only
+		// a short window and backfills replay threads, so the same message is
+		// re-observed long after the operator dismissed it. Only genuinely newer
+		// thread activity (a strictly newer message ts) reopens the card.
+		if item.Status == "new" && existingStatus == "dismissed" && feedTSSameOrOlder(item.TS, existingTS) {
+			return existingID, false, nil
+		}
 		args := []any{
 			item.Source, item.Summary, item.SuggestedAction, NullIfEmpty(item.MatchedTask),
 			NullIfEmpty(item.SuggestedProject), NullIfEmpty(item.SuggestedPriority), NullIfEmpty(item.Urgency), boolToInt(item.IsVIP),
@@ -100,9 +120,9 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 		args = append(args, existingID)
 		_, uerr := db.Exec(update, args...)
 		if uerr != nil {
-			return "", fmt.Errorf("flowdb: coalesce feed item: %w", uerr)
+			return "", false, fmt.Errorf("flowdb: coalesce feed item: %w", uerr)
 		}
-		return existingID, nil
+		return existingID, item.Status == "new", nil
 	}
 
 	_, err = db.Exec(
@@ -119,9 +139,23 @@ func UpsertFeedItem(db *sql.DB, item FeedItem) (string, error) {
 		item.Status, NullIfEmpty(item.SnoozeUntil), NullIfEmpty(item.LinkedTask), item.CreatedAt, NullIfEmpty(item.ActedAt),
 	)
 	if err != nil {
-		return "", fmt.Errorf("flowdb: insert feed item: %w", err)
+		return "", false, fmt.Errorf("flowdb: insert feed item: %w", err)
 	}
-	return item.ID, nil
+	return item.ID, true, nil
+}
+
+// feedTSSameOrOlder reports whether incoming is the same Slack message ts as
+// existing, or older. Slack ts are "seconds.micros" and monotonic per channel,
+// so a strictly larger value is genuinely newer thread activity. When either ts
+// is missing or non-numeric (some non-Slack sources) it returns false, so the
+// caller keeps the prior reopen behavior rather than over-suppressing.
+func feedTSSameOrOlder(incoming, existing string) bool {
+	fi, ierr := strconv.ParseFloat(strings.TrimSpace(incoming), 64)
+	fe, eerr := strconv.ParseFloat(strings.TrimSpace(existing), 64)
+	if ierr != nil || eerr != nil {
+		return false
+	}
+	return fi <= fe
 }
 
 // ListFeedItems returns feed rows, newest first. An empty status returns all

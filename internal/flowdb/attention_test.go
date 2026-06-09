@@ -136,6 +136,63 @@ func TestAttentionFeedCoalescesDismissedThreadAndReopens(t *testing.T) {
 	}
 }
 
+func TestAttentionFeedDismissedNotResurrectedBySameMessage(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	// Surface a message, then the operator dismisses it.
+	first := FeedItem{
+		ID: "m1", Source: "slack", ThreadKey: "C9:400.1", TS: "1780985380.421019",
+		Summary: "can you please join the meet", SuggestedAction: "reply",
+		Status: "new", CreatedAt: "2026-06-09T06:12:00Z",
+	}
+	if _, err := UpsertFeedItem(db, first); err != nil {
+		t.Fatalf("first upsert: %v", err)
+	}
+	if err := SetFeedItemStatus(db, "m1", "dismissed", "2026-06-09T06:20:00Z"); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+
+	// The SAME message is re-observed an hour later (verdict-cache TTL lapsed,
+	// backfill replay) and re-triaged. It must NOT resurrect the dismissed card.
+	resurface := first
+	resurface.ID = "m2"
+	resurface.CreatedAt = "2026-06-09T07:15:00Z"
+	id, surfaced, err := UpsertFeedItemSurfaced(db, resurface)
+	if err != nil {
+		t.Fatalf("resurface upsert: %v", err)
+	}
+	if surfaced {
+		t.Errorf("surfaced = true, want false: a dismissal must survive re-observation of the same message")
+	}
+	if id != "m1" {
+		t.Errorf("id = %q, want the existing dismissed row m1", id)
+	}
+	if got, _ := GetFeedItem(db, "m1"); got.Status != "dismissed" {
+		t.Errorf("Status = %q, want still dismissed", got.Status)
+	}
+	if n, _ := ListFeedItems(db, "new"); len(n) != 0 {
+		t.Errorf("new feed rows = %d, want 0 (card stays dismissed)", len(n))
+	}
+
+	// Genuinely newer thread activity (a strictly newer ts) DOES reopen the card.
+	newer := first
+	newer.ID = "m3"
+	newer.TS = "1780989999.000000"
+	newer.Summary = "follow-up reply with new context"
+	newer.CreatedAt = "2026-06-09T08:30:00Z"
+	_, surfaced2, err := UpsertFeedItemSurfaced(db, newer)
+	if err != nil {
+		t.Fatalf("newer upsert: %v", err)
+	}
+	if !surfaced2 {
+		t.Errorf("surfaced = false, want true: newer thread activity should reopen the card")
+	}
+	if got, _ := GetFeedItem(db, "m1"); got.Status != "new" || got.Summary != newer.Summary {
+		t.Errorf("after newer activity, row = {status:%q summary:%q}, want reopened with refreshed context", got.Status, got.Summary)
+	}
+}
+
 func TestAttentionFeedSetStatus(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()
