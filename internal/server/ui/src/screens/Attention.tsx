@@ -6,12 +6,13 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
+import { SteeringConfig } from '../components/SteeringConfig'
 import { dateTimeFull, dateTimeSec, titleCase } from '../lib/format'
 import { nextTraceWindowAnchor, traceSinceForWindow } from '../lib/traceWindow'
 import type { AttentionItem, SteeringFunnel, SteeringTrace, WorkEvent } from '../lib/types'
 
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
-const VIEWS = ['feed', 'trace'] as const
+const VIEWS = ['feed', 'trace', 'config'] as const
 type View = (typeof VIEWS)[number]
 
 export function Attention() {
@@ -19,13 +20,14 @@ export function Attention() {
   const search = useSearch()
   const [, navigate] = useLocation()
   const params = useMemo(() => new URLSearchParams(search), [search])
-  const routedView: View = params.get('view') === 'trace' ? 'trace' : 'feed'
+  const viewParam = params.get('view')
+  const routedView: View = viewParam === 'trace' ? 'trace' : viewParam === 'config' ? 'config' : 'feed'
   const routedItem = routedView === 'feed' ? params.get('item') : null
   const routedTrace = routedView === 'trace' ? params.get('trace') : null
   const view = routedView
 
   const chooseView = (next: View) => {
-    navigate(next === 'trace' ? '/attention?view=trace' : '/attention')
+    navigate(next === 'feed' ? '/attention' : `/attention?view=${next}`)
   }
   const clearDeepLink = () => {
     navigate(routedView === 'trace' ? '/attention?view=trace' : '/attention')
@@ -36,7 +38,7 @@ export function Attention() {
       <div className="page-head">
         <div>
           <div className="eyebrow">attention</div>
-          <h1 className="h-xl">Attention Feed</h1>
+          <h1 className="h-xl">Attention</h1>
         </div>
         <div className="spacer" />
         <div className="row gap">
@@ -55,8 +57,10 @@ export function Attention() {
 
       {view === 'feed' ? (
         <FeedView selectedItemId={routedItem} onClearDeepLink={clearDeepLink} />
-      ) : (
+      ) : view === 'trace' ? (
         <TraceView selectedTraceId={routedTrace} onClearDeepLink={clearDeepLink} />
+      ) : (
+        <SteeringConfig />
       )}
     </div>
   )

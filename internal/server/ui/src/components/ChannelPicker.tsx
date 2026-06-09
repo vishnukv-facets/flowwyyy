@@ -1,11 +1,32 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { Hash, Loader2, Lock, Save, Search } from 'lucide-react'
 import { useAction, useSettings, useSlackChannels } from '../lib/query'
 
-// The setting the attention router reads (FLOW_STEERING_WATCH_CHANNELS). The
-// generic settings form is told to skip this key (see Settings.tsx) so this
-// checkbox picker is the single control for it.
-const WATCH_KEY = 'FLOW_STEERING_WATCH_CHANNELS'
+// ChannelPicker is a checkbox picker over the live Slack channel list bound to a
+// single comma-separated channel-ID setting. It's the shared control behind both
+// the attention router's "watched" channels (FLOW_STEERING_WATCH_CHANNELS) and
+// its "muted" channels (FLOW_STEERING_MUTED_CHANNELS) — the same decision, so the
+// same crafted control. The generic settings form is told to skip these keys (see
+// Settings.tsx / SteeringConfig.tsx) so this picker is their sole editor.
+//
+// Saving writes Array.from(current), where `current` starts from the saved set —
+// so channel IDs not present in the live list (e.g. a channel you've left) are
+// preserved across a save rather than silently dropped.
+
+export interface ChannelPickerProps {
+  /** The setting key this picker reads/writes (a comma-separated channel-ID CSV). */
+  settingKey: string
+  title: string
+  icon: ReactNode
+  /** One-line description shown above the list. */
+  help: string
+  /** Noun for the count pill, e.g. "watched" / "muted". */
+  pillNoun: string
+  /** Label for the save button, e.g. "Save watched channels". */
+  saveLabel: string
+  /** Shown in the Slack-error fallback when a saved selection still exists. */
+  savedActiveHint: string
+}
 
 function parseIds(csv: string): string[] {
   return csv
@@ -16,19 +37,14 @@ function parseIds(csv: string): string[] {
     })
 }
 
-// WatchedChannels is a checkbox picker for the channels the attention router
-// watches (in addition to DMs + @mentions, which are always triaged). It reads
-// the live channel list from /api/slack/channels and the current selection from
-// the persisted FLOW_STEERING_WATCH_CHANNELS setting, and saves via the same
-// update-settings action the rest of Settings uses.
-export function WatchedChannels() {
+export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLabel, savedActiveHint }: ChannelPickerProps) {
   const { data: settings } = useSettings()
   const { data: channels, isLoading, error } = useSlackChannels()
   const action = useAction()
 
   const savedValue = useMemo(
-    () => settings?.fields?.find((f) => f.key === WATCH_KEY)?.value ?? '',
-    [settings],
+    () => settings?.fields?.find((f) => f.key === settingKey)?.value ?? '',
+    [settings, settingKey],
   )
   const savedSet = useMemo(() => new Set(parseIds(savedValue)), [savedValue])
 
@@ -56,7 +72,7 @@ export function WatchedChannels() {
 
   const save = () => {
     action.mutate(
-      { kind: 'update-settings', settings: { [WATCH_KEY]: Array.from(current).join(',') } },
+      { kind: 'update-settings', settings: { [settingKey]: Array.from(current).join(',') } },
       { onSuccess: () => setSelected(null) },
     )
   }
@@ -66,7 +82,7 @@ export function WatchedChannels() {
     const list = (channels ?? []).filter(
       (c) => !q || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q),
     )
-    // Watched first, then alphabetical — so the current selection stays visible.
+    // Selected first, then alphabetical — so the current selection stays visible.
     return list.sort((a, b) => {
       const aw = current.has(a.id) ? 0 : 1
       const bw = current.has(b.id) ? 0 : 1
@@ -78,20 +94,16 @@ export function WatchedChannels() {
   return (
     <section className="settings-card">
       <div className="settings-card-head">
-        <span>
-          <Hash size={17} />
-        </span>
-        <h2>Watched channels</h2>
+        <span>{icon}</span>
+        <h2>{title}</h2>
         <span className="spacer" />
-        <span className="env-pill" title="channels the attention router watches">
+        <span className="env-pill" title={`channels currently ${pillNoun}`}>
           <span className="dot idle" />
-          {current.size} watched
+          {current.size} {pillNoun}
         </span>
       </div>
       <div className="settings-card-body">
-        <p className="config-help">
-          DMs and @mentions are always triaged. Tick channels to also watch them.
-        </p>
+        <p className="config-help">{help}</p>
 
         {isLoading ? (
           <div className="row gap dim">
@@ -101,7 +113,7 @@ export function WatchedChannels() {
           <div className="wc-fallback">
             <div className="slack-error">
               Couldn&apos;t list Slack channels: {errorMessage || 'unknown error'}.
-              {savedIDs.length > 0 ? ' Your saved watch list is still active.' : ' Connect Slack with channel-list access to pick channels here.'}
+              {savedIDs.length > 0 ? ` ${savedActiveHint}` : ' Connect Slack with channel-list access to pick channels here.'}
             </div>
             {savedIDs.length > 0 ? (
               <div className="wc-list saved-only">
@@ -148,7 +160,7 @@ export function WatchedChannels() {
                 onClick={save}
               >
                 {action.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
-                Save watched channels
+                {saveLabel}
               </button>
             </div>
           </>

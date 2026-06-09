@@ -5,8 +5,6 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from '../components/SettingsPanels'
-import { WatchedChannels } from '../components/WatchedChannels'
-import { AutonomyPanel } from '../components/AutonomyPanel'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 
@@ -130,11 +128,6 @@ export function Settings() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Steering" hint="What the attention router watches beyond DMs and mentions.">
-        <WatchedChannels />
-        <AutonomyPanel />
-      </SettingsSection>
-
       <SettingsSection title="Configuration" hint="Applied live — secrets stay on this machine.">
         <div className="settings-grid">
           <ConfigPanels />
@@ -162,18 +155,16 @@ function SummaryItem({ label, value, mono = false }: { label: string; value: str
 }
 
 // ConfigPanels renders one editable card per setting group, sourced from the
-// server registry. Connector-owned settings (Slack/GitHub/ingress) are excluded
-// — they live on the Connectors page — as are the two Steering keys with
-// dedicated controls. Edits stage through useConfigDraft; Save submits only the
-// changed keys for that group (empty secret fields keep the stored value).
+// server registry. Connector-owned settings (Slack/GitHub/ingress) live on the
+// Connectors page and every Steering key lives on the Attention → config view,
+// so both are excluded here — Settings keeps only generic workspace groups
+// (General). Edits stage through useConfigDraft; Save submits only the changed
+// keys for that group (empty secret fields keep the stored value).
 function ConfigPanels() {
   const { data } = useSettings()
   const cfg = useConfigDraft()
   const fields = useMemo(
-    () =>
-      (data?.fields ?? []).filter(
-        (f) => !f.connector && f.key !== 'FLOW_STEERING_WATCH_CHANNELS' && f.key !== 'FLOW_STEERING_AUTONOMY',
-      ),
+    () => (data?.fields ?? []).filter((f) => !f.connector && f.group !== 'Steering'),
     [data?.fields],
   )
 
