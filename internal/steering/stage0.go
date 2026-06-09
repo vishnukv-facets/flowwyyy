@@ -139,9 +139,12 @@ func stage0Slack(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 }
 
 // inScope passes DMs/MPIMs, anything that mentions the operator, and messages
-// in watched channels.
+// in watched channels. DM detection falls back to the channel-id prefix (Slack
+// DM channels are "D…") because not every ingestion path stamps channel_type —
+// the durable backfill and some payloads omit it. Same convention as the
+// context fetcher's DM-client gate.
 func inScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
-	if ev.ChannelType == "im" || ev.ChannelType == "mpim" {
+	if ev.ChannelType == "im" || ev.ChannelType == "mpim" || strings.HasPrefix(strings.ToUpper(strings.TrimSpace(ev.Channel)), "D") {
 		return true
 	}
 	if ev.Kind == "app_mention" || mentionsOperator(ev.Text, cfg.MentionUserIDs) {

@@ -195,6 +195,48 @@ func TestSlackBackfill_DMThreadUsesUserClient(t *testing.T) {
 	}
 }
 
+func TestSlackBackfill_DMRecoveryTypedAsIM(t *testing.T) {
+	// A DM-thread reply recovered by the durable backfill must be typed
+	// ChannelType:"im" so Stage 0's inScope recognizes it as a DM (always in
+	// scope). Mislabeling it "channel" makes inScope drop it as
+	// "out of scope / not watched" — the bug this guards against. The channel id
+	// (D-prefix) is the source of truth here, exactly as the DM client selection
+	// already uses isDMChannel.
+	db := dispatcherTestDB(t)
+	const slug, dm, root = "slack-dm-typed", "D_ALICE", "1780480392.819809"
+	if err := AppendInboxEvent(slug, InboundEvent{
+		Kind: "message", Channel: dm, ChannelType: "im",
+		TS: "1780489629.079919", ThreadTS: root, UserID: "U_me", Text: "stepping out",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	user := &fakeHistory{repliesByRoot: map[string][]SlackMessage{
+		root: {
+			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},    // seen
+			{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "PR is merged"}, // missed
+		},
+	}}
+	observer := &fakeMessageObserver{}
+	bf := &SlackBackfill{
+		db:                 db,
+		client:             &fakeReplies{}, // bot client must not be touched for a DM
+		limit:              200,
+		Observer:           observer,
+		SteererOwnsRouting: func() bool { return true },
+	}
+	bf.SetDMRepliesClient(user)
+
+	if _, err := bf.reconcile(context.Background(), slug, dm, root); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(observer.events) != 1 {
+		t.Fatalf("observed events = %d, want 1 (the missed reply)", len(observer.events))
+	}
+	if got := observer.events[0].ChannelType; got != "im" {
+		t.Fatalf("recovered DM event ChannelType = %q, want \"im\" (else Stage 0 drops it as out-of-scope)", got)
+	}
+}
+
 func TestSlackBackfill_ChannelThreadUsesBotClient(t *testing.T) {
 	// Regression guard: a normal channel thread keeps using the bot-token
 	// client and never touches the user client.

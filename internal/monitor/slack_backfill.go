@@ -217,6 +217,14 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	if isDMChannel(channel) && b.dmClient != nil {
 		client = b.dmClient
 	}
+	// Type recovered events by their channel id: a DM (D-prefix) must be "im" so
+	// Stage 0's inScope treats it as a DM (always in scope). Labeling a DM
+	// "channel" makes the cascade drop it as "out of scope / not watched" — the
+	// channel id is authoritative, same as the DM-client selection above.
+	channelType := "channel"
+	if isDMChannel(channel) {
+		channelType = "im"
+	}
 	msgs, err := client.Replies(ctx, channel, threadTS, cursor, b.limit)
 	if err != nil {
 		return 0, err
@@ -240,7 +248,7 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 		ev := InboundEvent{
 			Kind:        "message",
 			Channel:     channel,
-			ChannelType: "channel",
+			ChannelType: channelType,
 			TS:          ts,
 			ThreadTS:    threadTS,
 			UserID:      strings.TrimSpace(m.User),

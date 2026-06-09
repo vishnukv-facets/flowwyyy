@@ -30,6 +30,15 @@ func TestStage0(t *testing.T) {
 			wantPass: true, wantKey: "D1:1.1",
 		},
 		{
+			// A DM channel id (D-prefix) is a DM regardless of whether the event
+			// carried channel_type — the durable backfill recovers DM replies and
+			// the parser doesn't always stamp "im". inScope must still treat it as
+			// in scope, matching the D-prefix convention used in context_fetch.
+			name:     "dm channel id passes even when channel_type is unset",
+			ev:       monitor.InboundEvent{Kind: "message", Channel: "D7", TS: "10.1", ThreadTS: "10.0", UserID: "U_OTHER", Text: "recovered dm reply"},
+			wantPass: true, wantKey: "D7:10.0",
+		},
+		{
 			name:     "watched channel passes",
 			ev:       monitor.InboundEvent{Kind: "message", ChannelType: "channel", Channel: "C_WATCHED", TS: "2.1", ThreadTS: "2.0", UserID: "U_OTHER", Text: "ship it"},
 			wantPass: true, wantKey: "C_WATCHED:2.0",
