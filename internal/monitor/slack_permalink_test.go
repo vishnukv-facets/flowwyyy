@@ -9,7 +9,7 @@ import (
 // newTestPermalinker builds a resolver without depending on an env token, so
 // the cache behaviour can be exercised hermetically.
 func newTestPermalinker() *SlackPermalinker {
-	return &SlackPermalinker{token: "x", cache: map[string]permaEntry{}}
+	return &SlackPermalinker{tokenFn: func() string { return "x" }, cache: map[string]permaEntry{}}
 }
 
 func TestSlackPermalinkerResolvesAndCaches(t *testing.T) {

@@ -22,9 +22,9 @@ var slackPermalinkFn = func(ctx context.Context, token, channel, ts string) (str
 // team_id), so it works for any historical item. Every method is nil-safe: a nil
 // resolver (no token) returns "". Negative results are cached too.
 type SlackPermalinker struct {
-	token string
-	mu    sync.Mutex
-	cache map[string]permaEntry
+	tokenFn func() string
+	mu      sync.Mutex
+	cache   map[string]permaEntry
 }
 type permaEntry struct {
 	link string
@@ -32,13 +32,13 @@ type permaEntry struct {
 }
 
 // NewSlackPermalinker returns a resolver backed by the bot token, or nil when no
-// token is configured.
+// token is configured. The token is resolved per call so a rotated token takes
+// effect without reconstructing the resolver.
 func NewSlackPermalinker() *SlackPermalinker {
-	tok := SlackBotToken()
-	if strings.TrimSpace(tok) == "" {
+	if strings.TrimSpace(SlackBotToken()) == "" {
 		return nil
 	}
-	return &SlackPermalinker{token: tok, cache: map[string]permaEntry{}}
+	return &SlackPermalinker{tokenFn: SlackBotToken, cache: map[string]permaEntry{}}
 }
 
 // Permalink returns the message permalink, or "" when nil/blank/lookup fails.
@@ -54,7 +54,13 @@ func (p *SlackPermalinker) Permalink(ctx context.Context, channel, ts string) st
 		return e.link
 	}
 	p.mu.Unlock()
-	link, err := slackPermalinkFn(ctx, p.token, channel, ts)
+	token := callSlackTokenFn(p.tokenFn)
+	if token == "" {
+		// No token configured right now (e.g. between disconnect and re-auth).
+		// Return "" without caching so the link resolves once a token returns.
+		return ""
+	}
+	link, err := slackPermalinkFn(ctx, token, channel, ts)
 	if err != nil {
 		link = "" // negative-cache
 	}

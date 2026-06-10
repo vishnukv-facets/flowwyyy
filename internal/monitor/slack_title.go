@@ -422,19 +422,22 @@ type SlackTitleClient interface {
 }
 
 type slackTitleAPIClient struct {
-	api *slack.Client
+	lazy *lazySlackClient
 }
 
 func newSlackTitleAPIClient() SlackTitleClient {
-	token := SlackBotToken()
-	if token == "" {
+	if strings.TrimSpace(SlackBotToken()) == "" {
 		return nil
 	}
-	return slackTitleAPIClient{api: slack.New(token)}
+	return slackTitleAPIClient{lazy: newLazySlackClient(SlackBotToken)}
 }
 
 func (c slackTitleAPIClient) ConversationInfo(ctx context.Context, channelID string) (SlackConversation, error) {
-	ch, err := c.api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
+	api := c.lazy.client()
+	if api == nil {
+		return SlackConversation{}, ErrNoToken
+	}
+	ch, err := api.GetConversationInfoContext(ctx, &slack.GetConversationInfoInput{
 		ChannelID:         normalizeSlackChannelID(channelID),
 		IncludeNumMembers: true,
 	})
@@ -457,7 +460,11 @@ func (c slackTitleAPIClient) ConversationInfo(ctx context.Context, channelID str
 }
 
 func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID, threadTS string, limit int) ([]SlackMessage, error) {
-	msgs, _, _, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+	api := c.lazy.client()
+	if api == nil {
+		return nil, ErrNoToken
+	}
+	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: normalizeSlackChannelID(channelID),
 		Timestamp: strings.TrimSpace(threadTS),
 		Limit:     limit,
@@ -467,7 +474,7 @@ func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, msg := range msgs {
-		files := slackFilesFromAPIWithContent(ctx, c.api, msg.Files)
+		files := slackFilesFromAPIWithContent(ctx, api, msg.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(msg.User, msg.Username),
 			Text:     strings.TrimSpace(msg.Text),
@@ -481,7 +488,11 @@ func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID,
 }
 
 func (c slackTitleAPIClient) UsersInConversation(ctx context.Context, channelID string, limit int) ([]string, error) {
-	members, _, err := c.api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
+	api := c.lazy.client()
+	if api == nil {
+		return nil, ErrNoToken
+	}
+	members, _, err := api.GetUsersInConversationContext(ctx, &slack.GetUsersInConversationParameters{
 		ChannelID: normalizeSlackChannelID(channelID),
 		Limit:     limit,
 	})
@@ -489,7 +500,11 @@ func (c slackTitleAPIClient) UsersInConversation(ctx context.Context, channelID 
 }
 
 func (c slackTitleAPIClient) UserInfo(ctx context.Context, userID string) (SlackUser, error) {
-	u, err := c.api.GetUserInfoContext(ctx, strings.TrimSpace(userID))
+	api := c.lazy.client()
+	if api == nil {
+		return SlackUser{}, ErrNoToken
+	}
+	u, err := api.GetUserInfoContext(ctx, strings.TrimSpace(userID))
 	if err != nil {
 		return SlackUser{}, err
 	}

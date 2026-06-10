@@ -49,19 +49,24 @@ var slackHistoryFn = func(ctx context.Context, token, channelID, oldest string, 
 	return out, nil
 }
 
-type slackHistoryClient struct{ token string }
+type slackHistoryClient struct{ tokenFn func() string }
 
 func (c slackHistoryClient) History(ctx context.Context, channelID, oldest string, limit int) ([]SlackMessage, error) {
-	return slackHistoryFn(ctx, c.token, channelID, oldest, limit)
+	token := callSlackTokenFn(c.tokenFn)
+	if token == "" {
+		return nil, ErrNoToken
+	}
+	return slackHistoryFn(ctx, token, channelID, oldest, limit)
 }
 
 // NewSlackHistoryClient returns a bot-token history client (watched channels),
-// or nil when no bot token is configured.
+// or nil when no bot token is configured. The token is resolved per call so a
+// rotated token takes effect without reconstructing the client.
 func NewSlackHistoryClient() SlackHistory {
 	if strings.TrimSpace(SlackBotToken()) == "" {
 		return nil
 	}
-	return slackHistoryClient{token: SlackBotToken()}
+	return slackHistoryClient{tokenFn: SlackBotToken}
 }
 
 // NewSlackUserHistoryClient returns a user-token history client (DMs — the
@@ -70,7 +75,7 @@ func NewSlackUserHistoryClient() SlackHistory {
 	if strings.TrimSpace(SlackUserToken()) == "" {
 		return nil
 	}
-	return slackHistoryClient{token: SlackUserToken()}
+	return slackHistoryClient{tokenFn: SlackUserToken}
 }
 
 // slackIMListFn enumerates im channels; swapped in tests.
@@ -98,17 +103,22 @@ var slackIMListFn = func(ctx context.Context, token string) ([]string, error) {
 	return ids, nil
 }
 
-type slackIMLister struct{ token string }
+type slackIMLister struct{ tokenFn func() string }
 
 func (c slackIMLister) ListIMs(ctx context.Context) ([]string, error) {
-	return slackIMListFn(ctx, c.token)
+	token := callSlackTokenFn(c.tokenFn)
+	if token == "" {
+		return nil, ErrNoToken
+	}
+	return slackIMListFn(ctx, token)
 }
 
 // NewSlackUserIMLister returns a user-token IM lister, or nil when no user
-// token is configured.
+// token is configured. The token is resolved per call so a rotated token takes
+// effect without reconstructing the lister.
 func NewSlackUserIMLister() SlackIMLister {
 	if strings.TrimSpace(SlackUserToken()) == "" {
 		return nil
 	}
-	return slackIMLister{token: SlackUserToken()}
+	return slackIMLister{tokenFn: SlackUserToken}
 }

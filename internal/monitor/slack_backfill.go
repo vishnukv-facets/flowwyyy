@@ -19,23 +19,29 @@ type SlackThreadReplies interface {
 	Replies(ctx context.Context, channelID, threadTS, oldest string, limit int) ([]SlackMessage, error)
 }
 
-type slackRepliesAPIClient struct{ api *slack.Client }
+type slackRepliesAPIClient struct{ lazy *lazySlackClient }
 
 // NewSlackRepliesClient returns a production replies client, or nil when no
 // Slack bot/read token is configured — in which case the caller skips
-// backfill entirely.
+// backfill entirely. The returned client resolves its token per call (see
+// lazySlackClient), so a token rotated while the server runs is picked up
+// without reconstructing the client.
 func NewSlackRepliesClient() SlackThreadReplies {
 	if strings.TrimSpace(SlackBotToken()) == "" {
 		return nil
 	}
-	return slackRepliesAPIClient{api: slack.New(SlackBotToken())}
+	return slackRepliesAPIClient{lazy: newLazySlackClient(SlackBotToken)}
 }
 
 func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS, oldest string, limit int) ([]SlackMessage, error) {
+	api := c.lazy.client()
+	if api == nil {
+		return nil, ErrNoToken
+	}
 	if limit <= 0 {
 		limit = 200
 	}
-	msgs, _, _, err := c.api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
+	msgs, _, _, err := api.GetConversationRepliesContext(ctx, &slack.GetConversationRepliesParameters{
 		ChannelID: normalizeSlackChannelID(channelID),
 		Timestamp: strings.TrimSpace(threadTS),
 		Oldest:    strings.TrimSpace(oldest),
@@ -47,7 +53,7 @@ func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, m := range msgs {
-		files := slackFilesFromAPIWithContent(ctx, c.api, m.Files)
+		files := slackFilesFromAPIWithContent(ctx, api, m.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(m.User, m.Username),
 			Text:     strings.TrimSpace(m.Text),
@@ -68,7 +74,7 @@ func NewSlackUserRepliesClient() SlackThreadReplies {
 	if strings.TrimSpace(SlackUserToken()) == "" {
 		return nil
 	}
-	return slackRepliesAPIClient{api: slack.New(SlackUserToken())}
+	return slackRepliesAPIClient{lazy: newLazySlackClient(SlackUserToken)}
 }
 
 // SlackBackfill is the durable safety net behind the live Socket Mode

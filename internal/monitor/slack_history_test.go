@@ -25,7 +25,7 @@ func TestSlackHistoryClientMapsAndPasses(t *testing.T) {
 		}, nil
 	}
 
-	client := slackHistoryClient{token: "xoxb-test"}
+	client := slackHistoryClient{tokenFn: func() string { return "xoxb-test" }}
 	msgs, err := client.History(context.Background(), "C1", "100.0", 50)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -61,7 +61,7 @@ func TestSlackIMListerCollectsIDs(t *testing.T) {
 		return []string{"D1", "D2"}, nil
 	}
 
-	lister := slackIMLister{token: "xoxp-test"}
+	lister := slackIMLister{tokenFn: func() string { return "xoxp-test" }}
 	ids, err := lister.ListIMs(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
