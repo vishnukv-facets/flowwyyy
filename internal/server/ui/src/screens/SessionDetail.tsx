@@ -60,7 +60,7 @@ import { changedSinceLook, commitLook } from '../lib/difflook'
 import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
 import { Modal } from '../components/Modal'
-import { AgentPicker, PermissionPicker } from '../components/pickers'
+import { AgentPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
 import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../lib/format'
@@ -331,6 +331,13 @@ export function SessionDetail({ slug }: { slug: string }) {
                 value={task.session_provider || 'claude'}
                 onChange={(v) => run('update-provider', { provider: v })}
                 providers={providers}
+              />
+            )}
+            {canChooseAgent && (
+              <ModelPicker
+                provider={task.session_provider || 'claude'}
+                value={task.model || ''}
+                onChange={(v) => run('update-model', { model: v })}
               />
             )}
             <PermissionPicker

@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, FolderGit2, ImagePlus, Loader2, Plus, X } f
 import { Modal } from './Modal'
 import { Field } from './ui'
 import { Select } from './Select'
-import { AgentPicker, PermissionPicker, PriorityPicker } from './pickers'
+import { AgentPicker, ModelPicker, PermissionPicker, PriorityPicker } from './pickers'
 import { WorkdirPicker } from './WorkdirPicker'
 import { apiAction, apiActionForm, fileToRpcFile } from '../lib/api'
 import { pushToast } from '../lib/toast'
@@ -58,6 +58,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
   const [project, setProject] = useState('__adhoc')
   const [workDir, setWorkDir] = useState('')
   const [provider, setProvider] = useState('claude')
+  const [model, setModel] = useState('')
 
   // If the chosen provider isn't installed, fall back to whichever is.
   useEffect(() => {
@@ -119,6 +120,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
     setProject('__adhoc')
     setWorkDir('')
     setPriority('medium')
+    setModel('')
     setFiles([])
     setBusy(false)
   }
@@ -146,6 +148,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
         work_dir: effectiveWorkdir,
         provider,
         permission_mode: permission,
+        model,
         priority,
         prompt,
         no_open: !openSession,
@@ -161,6 +164,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
             work_dir: effectiveWorkdir,
             provider,
             permission_mode: permission,
+            model,
             priority,
             prompt,
             no_open: String(!openSession),
@@ -296,7 +300,17 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
             />
           </Field>
           <Field label="Agent">
-            <AgentPicker value={provider} onChange={setProvider} providers={providers} />
+            <AgentPicker
+              value={provider}
+              onChange={(v) => {
+                setProvider(v)
+                setModel('') // concrete model ids are provider-specific; reset to Auto on switch
+              }}
+              providers={providers}
+            />
+          </Field>
+          <Field label="Model">
+            <ModelPicker provider={provider} value={model} onChange={setModel} />
           </Field>
         </div>
         <Field

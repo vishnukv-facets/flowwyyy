@@ -1271,6 +1271,7 @@ func TestClearWaitingActionClearsWaitingOnAndReturnsAgent(t *testing.T) {
 
 func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	root, db := testRootDB(t)
+	t.Setenv("FLOW_MODEL_TIER", "medium") // deterministic default tier → sonnet
 	insertProjectTask(t, db, root)
 
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -1281,14 +1282,19 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	if !launch.Created || launch.Slug != "build-ui" || launch.SessionID == "" || launch.WorkDir != root {
 		t.Fatalf("launch = %+v", launch)
 	}
-	if len(launch.Args) != 5 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
+	// Bootstrap now resolves the session model (no explicit pin → default medium
+	// tier → sonnet), mirroring `flow do`, so --model is threaded into the launch.
+	if len(launch.Args) != 7 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
 		t.Fatalf("args = %#v", launch.Args)
 	}
-	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "auto" {
+	if launch.Args[2] != "--model" || launch.Args[3] != "sonnet" {
+		t.Fatalf("default model args = %#v", launch.Args)
+	}
+	if launch.Args[4] != "--permission-mode" || launch.Args[5] != "auto" {
 		t.Fatalf("default permission args = %#v", launch.Args)
 	}
-	if !strings.Contains(launch.Args[4], "flow task build-ui") {
-		t.Fatalf("bootstrap prompt = %q", launch.Args[4])
+	if !strings.Contains(launch.Args[6], "flow task build-ui") {
+		t.Fatalf("bootstrap prompt = %q", launch.Args[6])
 	}
 	task, err := flowdb.GetTask(db, "build-ui")
 	if err != nil {
@@ -1481,6 +1487,60 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	}
 }
 
+func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root) // build-ui: backlog, no session, model NULL
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	// A backlog task can pin a concrete model; the choice is stored.
+	resp, status := srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: "opus"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("pin opus: status=%d resp=%+v", status, resp)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.Model.Valid || task.Model.String != "opus" {
+		t.Fatalf("model = %+v, want opus", task.Model)
+	}
+
+	// Empty model clears the pin back to auto (NULL).
+	resp, status = srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: ""})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("clear model: status=%d resp=%+v", status, resp)
+	}
+	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Model.Valid && strings.TrimSpace(task.Model.String) != "" {
+		t.Fatalf("model after clear = %+v, want NULL/empty", task.Model)
+	}
+
+	// Re-pin, then start a session — the model is now locked.
+	if _, status := srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: "sonnet"}); status != http.StatusOK {
+		t.Fatalf("re-pin sonnet: status=%d", status)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, flowdb.NowISO(), "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	resp, status = srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: "haiku"})
+	if status != http.StatusBadRequest || resp.OK || !strings.Contains(resp.Message, "before a session starts") {
+		t.Fatalf("locked change: status=%d resp=%+v", status, resp)
+	}
+	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Model.String != "sonnet" {
+		t.Fatalf("model after rejected change = %q, want sonnet (unchanged)", task.Model.String)
+	}
+
+	// Unknown slug is a 404.
+	if resp, status := srv.runAction(actionRequest{Kind: "update-model", Slug: "nope", Model: "opus"}); status != http.StatusNotFound || resp.OK {
+		t.Fatalf("unknown slug: status=%d resp=%+v", status, resp)
+	}
+}
+
 func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	root, db := testRootDB(t)
 	workDir := t.TempDir()
@@ -1616,6 +1676,7 @@ func TestPrepareTerminalLaunchAppliesPermissionMode(t *testing.T) {
 
 func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	root, db := testRootDB(t)
+	t.Setenv("FLOW_MODEL_TIER", "medium") // deterministic default tier → gpt-5.4
 	insertProjectTask(t, db, root)
 	workDir := t.TempDir()
 	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex', work_dir = ? WHERE slug = 'build-ui'`, workDir); err != nil {
@@ -1630,7 +1691,9 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	if !launch.Created || launch.Provider != "codex" || launch.SessionID != "" || !launch.NeedsCapture {
 		t.Fatalf("codex launch = %+v", launch)
 	}
-	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--ask-for-approval", "never", "--sandbox", "workspace-write"}
+	// --model (default medium tier → gpt-5.4) is threaded after the writable-root
+	// and before the permission flags, mirroring `flow do`'s codex arg order.
+	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--model", "gpt-5.4", "--ask-for-approval", "never", "--sandbox", "workspace-write"}
 	if len(launch.Args) < len(wantPrefix)+1 {
 		t.Fatalf("codex args too short: %#v", launch.Args)
 	}

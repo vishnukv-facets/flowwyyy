@@ -1472,7 +1472,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		if task.Slug == overviewTaskSlug {
 			prompt = overviewInitialPrompt(s.cfg.FlowRoot, task)
 		}
-		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode)
+		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode, s.resolveTaskLaunchModel(task, provider, true))
 		return terminalLaunch{
 			Slug:           task.Slug,
 			SessionID:      sessionID,
@@ -1485,7 +1485,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			StartedAt:      time.Now().Add(-2 * time.Second),
 		}, nil
 	}
-	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode)
+	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode, s.resolveTaskLaunchModel(task, provider, false))
 	return terminalLaunch{
 		Slug:           task.Slug,
 		SessionID:      sessionID,
@@ -1519,7 +1519,7 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 		return terminalLaunch{}, err
 	}
 	sessionID := uuid.NewString()
-	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode)
+	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode, "")
 	return terminalLaunch{
 		Slug:           "overview-" + uuid.NewString(),
 		SessionID:      sessionID,
@@ -1619,26 +1619,70 @@ func (s *terminalSession) captureCodexSession(started time.Time) {
 	}
 }
 
-func agentTerminalArgs(provider string, fresh bool, sessionID, workDir, flowRootPath, prompt, permissionMode string) []string {
+func agentTerminalArgs(provider string, fresh bool, sessionID, workDir, flowRootPath, prompt, permissionMode, model string) []string {
 	if provider == agents.ProviderCodex {
 		args := []string{"--no-alt-screen", "-C", workDir}
 		args = appendCodexWritableRoot(args, workDir, flowRootPath)
+		args = append(args, modelTerminalArgs(model)...)
 		args = append(args, codexPermissionArgs(permissionMode)...)
 		if fresh {
 			return append(args, prompt)
 		}
 		resume := []string{"resume", "--include-non-interactive", "--no-alt-screen", "-C", workDir}
 		resume = appendCodexWritableRoot(resume, workDir, flowRootPath)
+		resume = append(resume, modelTerminalArgs(model)...)
 		resume = append(resume, codexPermissionArgs(permissionMode)...)
 		return append(resume, sessionID)
 	}
 	if fresh {
 		args := []string{"--session-id", sessionID}
+		args = append(args, modelTerminalArgs(model)...)
 		args = append(args, claudePermissionArgs(permissionMode)...)
 		return append(args, prompt)
 	}
 	args := []string{"--resume", sessionID}
+	args = append(args, modelTerminalArgs(model)...)
 	return append(args, claudePermissionArgs(permissionMode)...)
+}
+
+// modelTerminalArgs returns the `--model <m>` flag passed to claude/codex when
+// the task pinned (or flow resolved) an explicit model, or nil to let the
+// provider use its own default. Both CLIs take `--model`. This is what makes a
+// UI-launched session honor tasks.model — the #30 model feature only threaded
+// --model through `flow do`, never the server's terminal bridge, so web-UI
+// sessions silently launched on the provider default (e.g. claude → Opus)
+// regardless of the pinned model.
+func modelTerminalArgs(model string) []string {
+	if strings.TrimSpace(model) == "" {
+		return nil
+	}
+	return []string{"--model", strings.TrimSpace(model)}
+}
+
+// resolveTaskLaunchModel mirrors app.resolveLaunchModel for the server's
+// terminal-bridge launches. On bootstrap (fresh) it runs flow's tier resolution
+// — an explicit per-task pin wins, otherwise the baseline tier (default medium)
+// is downshifted one rung when the brief is descriptive enough. On resume it
+// passes only an explicit pin, never re-running the heuristic, so a live session
+// never silently switches models mid-life. Empty result = pass no --model.
+func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fresh bool) string {
+	if task == nil {
+		return ""
+	}
+	explicit := ""
+	if task.Model.Valid {
+		explicit = task.Model.String
+	}
+	if !fresh {
+		return flowdb.NormalizeModel(explicit)
+	}
+	briefText := ""
+	if root := strings.TrimSpace(s.cfg.FlowRoot); root != "" {
+		if b, err := os.ReadFile(filepath.Join(root, "tasks", task.Slug, "brief.md")); err == nil {
+			briefText = string(b)
+		}
+	}
+	return flowdb.ResolveSessionModel(provider, explicit, briefText).Model
 }
 
 func appendCodexWritableRoot(args []string, workDir, flowRootPath string) []string {

@@ -4499,6 +4499,17 @@ summary.detail-branch.as-button:hover {
   filter: grayscale(1);
 }
 
+/* Inline session-model dropdown. Sits beside the agent picker in both the
+   session toolbar and the new-task form, so it's sized to read like the
+   segmented controls (auto width, ~control height) rather than a full-width
+   field — select.input otherwise stretches to 100% and is taller. */
+.model-select {
+  width: auto;
+  height: 30px;
+  padding: 0 30px 0 11px;
+  font-size: 12.5px;
+}
+
 /* recent-workdir quick-pick pills (New task form) */
 .wd-pills {
   display: flex;

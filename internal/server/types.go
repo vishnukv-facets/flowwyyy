@@ -178,6 +178,7 @@ type TaskView struct {
 	DueInfo             *string       `json:"due_info"`
 	Assignee            *string       `json:"assignee"`
 	PermissionMode      string        `json:"permission_mode"`
+	Model               string        `json:"model"`
 	Tags                []string      `json:"tags"`
 	SessionID           *string       `json:"session_id"`
 	SessionProvider     *string       `json:"session_provider"`

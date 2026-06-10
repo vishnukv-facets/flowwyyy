@@ -46,6 +46,7 @@ export interface TaskView {
   due_info: string | null
   assignee: string | null
   permission_mode: string
+  model: string
   tags: string[]
   session_id: string | null
   session_provider: string | null

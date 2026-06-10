@@ -42,6 +42,7 @@ type actionRequest struct {
 	EntityKind     string `json:"entity_kind"`
 	Provider       string `json:"provider"`
 	PermissionMode string `json:"permission_mode"`
+	Model          string `json:"model"`
 	Mkdir          bool   `json:"mkdir"`
 
 	// NoOpen, on create-flow, creates the task in backlog without opening an
@@ -146,6 +147,7 @@ func (s *Server) multipartActionRequest(w http.ResponseWriter, r *http.Request) 
 		EntityKind:     strings.TrimSpace(r.FormValue("entity_kind")),
 		Provider:       strings.TrimSpace(r.FormValue("provider")),
 		PermissionMode: strings.TrimSpace(r.FormValue("permission_mode")),
+		Model:          strings.TrimSpace(r.FormValue("model")),
 	}
 	if req.Kind == "" {
 		return actionRequest{}, errors.New("kind is required")
@@ -278,6 +280,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.updatePriority(req)
 	case "update-provider":
 		return s.updateProvider(req)
+	case "update-model":
+		return s.updateModel(req)
 	case "update-task-name":
 		return s.updateTaskName(req)
 	case "update-project":
@@ -683,6 +687,9 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	// so always pass the resolved provider — claude included.
 	args := []string{"add", "task", name, "--slug", slug, "--priority", priority, "--agent", provider}
 	args = append(args, "--permission-mode", permissionMode)
+	if model := flowdb.NormalizeModel(req.Model); model != "" {
+		args = append(args, "--model", model)
+	}
 	if project != "" {
 		args = append(args, "--project", project)
 	}
@@ -1033,6 +1040,60 @@ func (s *Server) updateProvider(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
 	return actionResponse{OK: true, Message: "agent set to " + provider}, http.StatusOK
+}
+
+// updateModel pins (or clears) the per-task session model for a not-yet-started
+// task. An empty model means "Auto" — no explicit pin, so flow resolves a tier
+// at launch (with auto-downshift). Like the agent picker, the model is
+// backlog-locked: flow do/resume reads tasks.model at bootstrap and never
+// switches a live session's model mid-life, so a started session is rejected.
+func (s *Server) updateModel(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	if err := s.applyBacklogModelChoice(target, req.Model); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	if model := flowdb.NormalizeModel(req.Model); model != "" {
+		return actionResponse{OK: true, Message: "model set to " + model}, http.StatusOK
+	}
+	return actionResponse{OK: true, Message: "model cleared (auto — resolved at launch)"}, http.StatusOK
+}
+
+// applyBacklogModelChoice persists tasks.model for a backlog task, mirroring
+// applyBacklogProviderChoice. An empty model clears the column (NULL → auto).
+// The same "only before a session starts" guard applies; a no-op change on an
+// already-started task is allowed so re-saving the unchanged value never errors.
+func (s *Server) applyBacklogModelChoice(target, rawModel string) error {
+	model := flowdb.NormalizeModel(rawModel)
+	task, err := flowdb.GetTask(s.cfg.DB, target)
+	if err != nil {
+		return err
+	}
+	current := ""
+	if task.Model.Valid {
+		current = strings.TrimSpace(task.Model.String)
+	}
+	if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
+		if current == model {
+			return nil
+		}
+		return fmt.Errorf("model can only be changed before a session starts")
+	}
+	var modelArg any
+	if model != "" {
+		modelArg = model
+	}
+	_, err = s.cfg.DB.Exec(
+		`UPDATE tasks SET model = ?, updated_at = ?
+		 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
+		modelArg, flowdb.NowISO(), target,
+	)
+	return err
 }
 
 func (s *Server) updatePriority(req actionRequest) (actionResponse, int) {

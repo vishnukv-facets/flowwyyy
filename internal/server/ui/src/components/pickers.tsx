@@ -21,6 +21,58 @@ export function PermissionPicker({ value, onChange }: { value: string; onChange:
   )
 }
 
+// Concrete model ids per provider, passed straight to `claude --model` /
+// `codex --model` — mirrors flowdb.ModelForTier. "Auto" (empty value) leaves the
+// task with no explicit pin, so flow resolves a tier at launch (with
+// auto-downshift). Largest → smallest. Backlog-locked like the agent picker: a
+// started session never switches models mid-life.
+const MODELS: Record<string, { v: string; label: string; title: string }[]> = {
+  claude: [
+    { v: '', label: 'Auto', title: 'Resolve at launch — tier default with auto-downshift on descriptive briefs' },
+    { v: 'opus', label: 'Opus', title: 'claude --model opus · largest' },
+    { v: 'sonnet', label: 'Sonnet', title: 'claude --model sonnet · medium' },
+    { v: 'haiku', label: 'Haiku', title: 'claude --model haiku · smallest' },
+  ],
+  codex: [
+    { v: '', label: 'Auto', title: 'Resolve at launch — tier default with auto-downshift on descriptive briefs' },
+    { v: 'gpt-5.5', label: 'gpt-5.5', title: 'codex --model gpt-5.5 · largest' },
+    { v: 'gpt-5.4', label: 'gpt-5.4', title: 'codex --model gpt-5.4 · medium' },
+    { v: 'gpt-5.4-mini', label: 'gpt-5.4-mini', title: 'codex --model gpt-5.4-mini · smallest' },
+  ],
+}
+
+// Session-model selector, scoped to the chosen provider. A model the operator
+// pinned via the CLI that isn't in the menu is appended so it still shows.
+export function ModelPicker({
+  provider,
+  value,
+  onChange,
+}: {
+  provider: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const base = MODELS[provider] ?? MODELS.claude
+  const opts = value && !base.some((o) => o.v === value)
+    ? [...base, { v: value, label: value, title: `--model ${value}` }]
+    : base
+  return (
+    <select
+      className="input model-select"
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
+      title="Session model — set before the session starts"
+      aria-label="Session model"
+    >
+      {opts.map((o) => (
+        <option key={o.v || 'auto'} value={o.v} title={o.title}>
+          {o.v ? o.label : 'Model: Auto'}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 const PRIOS = [
   { v: 'low', label: 'low' },
   { v: 'medium', label: 'medium' },
