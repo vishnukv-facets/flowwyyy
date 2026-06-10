@@ -69,6 +69,12 @@ type Cascade struct {
 	// swap it to capture rows in memory.
 	trace func(flowdb.SteeringTrace)
 
+	// Progress, when set, receives a StageEvent at each cascade boundary so the
+	// server can stream live triage progress to Mission Control. NewCascade
+	// leaves it nil (no-op); serve wiring sets it. It is never load-bearing — a
+	// nil hook changes nothing about triage behavior.
+	Progress func(StageEvent)
+
 	// FetchContext deterministically loads connector context for Stage 3. Nil
 	// means context fetching is unavailable; the cascade writes an explicit
 	// event-only fallback pack rather than asking the model to fetch context.
@@ -209,6 +215,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	start := c.now()
 	cleaned := c.cleanText(ctx, ev.Text)
 	tr := c.newTrace(ev, origin, cleaned)
+	c.stage(tr, start, "received", "running", connectorOf(ev))
 	cfg := c.watchConfig()
 
 	s0 := Stage0(ev, cfg)
@@ -221,6 +228,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		return nil
 	}
 	tr.ThreadKey = s0.ThreadKey
+	c.stage(tr, start, "stage0", "passed", "scope gate passed")
 	cacheKey := verdictCacheKey(ev, s0.ThreadKey)
 	if c.cache.seenFn(cacheKey, c.now()) {
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate within verdict TTL"
@@ -246,6 +254,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	}
 	stage1In := in
 	stage1In.ThreadKey = cacheKey
+	c.stage(tr, start, "stage1", "running", "relevance check")
 	rel, err := Stage1Relevance(ctx, []ClassifyInput{stage1In})
 	if err != nil {
 		tr.Error = "stage1 advisory failed: " + err.Error()
@@ -284,6 +293,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		return fmt.Errorf("steering: task index: %w", err)
 	}
 
+	c.stage(tr, start, "stage2", "running", "scoring against tasks")
 	v2, err := Stage2Score(ctx, in, taskIndex)
 	if err != nil {
 		c.noteClassifierError(err, c.now())
@@ -339,7 +349,8 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		return werr
 	}
 
-	v3, err := DeepTriageWithContextAndHints(ctx, in, taskIndex, pack, hints)
+	c.stage(tr, start, "stage3", "running", "deep triage")
+	v3, err := DeepTriageWithContextAndHints(c.deepStreamCtx(ctx, tr, start), in, taskIndex, pack, hints)
 	if err != nil {
 		c.log("deep triage failed for %s: %v; falling back to stage2 verdict", in.ThreadKey, err)
 		tr.Error = appendCascadeError(tr.Error, "deep triage failed: "+err.Error()+"; fell back to stage2")
@@ -881,7 +892,98 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin, cleaned string) *flo
 // emitTrace stamps the latency and hands the finished trace row to the sink.
 func (c *Cascade) emitTrace(tr *flowdb.SteeringTrace, start time.Time) {
 	tr.LatencyMS = c.now().Sub(start).Milliseconds()
+	// Terminal stage event. Every exit path funnels through emitTrace, so this
+	// fires exactly once per run with the final disposition — no need to sprinkle
+	// terminal emits across the ~10 early-returns.
+	c.stage(tr, start, "verdict", verdictStatus(tr.Disposition), verdictDetail(tr))
 	c.trace(*tr)
+}
+
+// stage emits a live progress signal for one cascade boundary. Nil-safe: with no
+// Progress hook (the default) it is a cheap no-op, so triage behavior is
+// identical whether or not anyone is watching.
+func (c *Cascade) stage(tr *flowdb.SteeringTrace, start time.Time, stage, status, detail string) {
+	if c.Progress == nil || tr == nil {
+		return
+	}
+	now := c.now()
+	c.Progress(StageEvent{
+		RunID:     tr.ID,
+		ThreadKey: tr.ThreadKey,
+		Source:    tr.Source,
+		Stage:     stage,
+		Status:    status,
+		Detail:    detail,
+		At:        now.UTC().Format(time.RFC3339),
+		ElapsedMs: now.Sub(start).Milliseconds(),
+	})
+}
+
+func verdictStatus(disposition string) string {
+	switch disposition {
+	case "surfaced", "dropped", "error":
+		return disposition
+	default:
+		return "done"
+	}
+}
+
+func verdictDetail(tr *flowdb.SteeringTrace) string {
+	if tr.Error != "" {
+		return tr.Error
+	}
+	if tr.DropReason != "" {
+		return tr.DropReason
+	}
+	if tr.FinalAction != "" {
+		if tr.FinalConfidence > 0 {
+			return fmt.Sprintf("%s · conf %.2f", tr.FinalAction, tr.FinalConfidence)
+		}
+		return tr.FinalAction
+	}
+	return ""
+}
+
+// deepStreamCtx returns a context that streams Stage 3's model output into the
+// live stage view as it generates. No-op (returns ctx unchanged) when nobody is
+// watching or streaming is disabled, so the deep-triage runner takes its
+// one-shot path. Coalesces by growth so a token-rate stream emits a bounded
+// number of progress updates (each carries the full accumulated text, so dropped
+// intermediate events are harmless — the store keeps the latest).
+func (c *Cascade) deepStreamCtx(ctx context.Context, tr *flowdb.SteeringTrace, start time.Time) context.Context {
+	if c.Progress == nil || !streamingEnabled() {
+		return ctx
+	}
+	var buf strings.Builder
+	lastLen := 0
+	return withStreamSink(ctx, func(delta string) {
+		buf.WriteString(delta)
+		if buf.Len()-lastLen < 24 {
+			return
+		}
+		lastLen = buf.Len()
+		c.stageStream(tr, start, "stage3", buf.String())
+	})
+}
+
+// stageStream emits a streaming update for an in-flight stage (Status "running"
+// with the accumulated model text). The server folds it into the existing stage
+// row in place rather than appending.
+func (c *Cascade) stageStream(tr *flowdb.SteeringTrace, start time.Time, stage, text string) {
+	if c.Progress == nil || tr == nil {
+		return
+	}
+	now := c.now()
+	c.Progress(StageEvent{
+		RunID:     tr.ID,
+		ThreadKey: tr.ThreadKey,
+		Source:    tr.Source,
+		Stage:     stage,
+		Status:    "running",
+		Stream:    text,
+		At:        now.UTC().Format(time.RFC3339),
+		ElapsedMs: now.Sub(start).Milliseconds(),
+	})
 }
 
 // preview trims and truncates message text for the trace (operator's own data —

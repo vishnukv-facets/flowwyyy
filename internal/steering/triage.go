@@ -14,6 +14,15 @@ import (
 // classifier it does NOT pin --model, so the operator's default (capable)
 // model is used.
 var deepTriageRunner = func(ctx context.Context, prompt string) (string, error) {
+	// When a stage stream sink is on the context (live triage view) and streaming
+	// is enabled, run in stream-json mode so the operator watches the verdict form.
+	// Any failure — exec, parse, or empty/garbage output — falls through to the
+	// proven one-shot exec, so streaming can never break the verdict.
+	if sink := streamSinkFrom(ctx); sink != nil && streamingEnabled() {
+		if out, err := runClaudeStreaming(ctx, []string{"--dangerously-skip-permissions"}, prompt, sink); err == nil && strings.ContainsAny(out, "{[") {
+			return out, nil
+		}
+	}
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--dangerously-skip-permissions")
 	out, err := cmd.Output()
 	if err != nil {

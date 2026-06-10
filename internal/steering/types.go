@@ -72,6 +72,29 @@ type Verdict struct {
 	Reason            string  `json:"reason,omitempty"`
 }
 
+// StageEvent is one progress signal emitted as an observed event moves through
+// the cascade. The server fans these to Mission Control so the operator can
+// watch triage happen live (CI-style stages) instead of only seeing the final
+// trace after the fact. Connector-blind; carries just enough to render and link
+// a stage row. RunID equals the trace ID, so a live run and its persisted trace
+// are the same object.
+type StageEvent struct {
+	RunID     string `json:"run_id"`
+	ThreadKey string `json:"thread_key,omitempty"`
+	Source    string `json:"source,omitempty"`
+	// Stage is one of: received | stage0 | stage1 | stage2 | stage3 | verdict.
+	Stage string `json:"stage"`
+	// Status is one of: running | passed | surfaced | dropped | error.
+	Status string `json:"status"`
+	Detail string `json:"detail,omitempty"`
+	// Stream is the model's output accumulated so far for this stage, when the
+	// stage is being streamed live (Stage 3 deep triage). Re-emitted as it grows;
+	// the server updates the stage row in place rather than appending.
+	Stream    string `json:"stream,omitempty"`
+	At        string `json:"at"`
+	ElapsedMs int64  `json:"elapsed_ms"`
+}
+
 // OperatorIdentity is the set of identifiers that count as "the operator" on
 // a connector (Slack user IDs, GitHub logins, email addresses). Stage 0 uses
 // it to drop self-authored events.
