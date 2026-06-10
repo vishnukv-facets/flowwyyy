@@ -197,7 +197,7 @@ function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: stri
       {item.links?.length ? (
         <div className="briefing-links">
           {item.links.slice(0, 4).map((link) => {
-            const href = briefingLinkHref(link)
+            const href = briefingLinkHref(item, link)
             const label = link.kind === 'source' ? 'source' : link.kind
             if (!href) return <span key={`${link.kind}:${link.target}`} className="briefing-link">{label}</span>
             if (href.startsWith('http')) {
@@ -212,6 +212,14 @@ function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: stri
 }
 
 function primaryBriefingHref(item: BriefingItem): string {
+  // An update row should open that update, not just its owning task/project.
+  if (item.kind === 'update') {
+    const updateLink = item.links?.find((l) => l.kind === 'update')
+    if (updateLink) {
+      const href = briefingUpdateHref(item, updateLink)
+      if (href) return href
+    }
+  }
   const taskLink = item.links?.find((l) => l.kind === 'task' || l.kind === 'session')
   if (taskLink) return workEventLinkHref(taskLink)
   const attentionLink = item.links?.find((l) => l.kind === 'attention' || l.kind === 'trace')
@@ -221,8 +229,24 @@ function primaryBriefingHref(item: BriefingItem): string {
   return ''
 }
 
-function briefingLinkHref(link: { kind: string; target: string; url?: string }): string {
+function briefingLinkHref(item: BriefingItem, link: { kind: string; target: string; url?: string }): string {
+  if (link.kind === 'update') return briefingUpdateHref(item, link)
   return workEventLinkHref(link)
+}
+
+// The update link's target is the file's absolute path with no slug, and the web
+// UI can't open a local file path — so route to the owning task/project detail
+// deep-linked to that specific update (slug from the sibling task/project link,
+// filename from the path). Without this the link was a dead span and clicks fell
+// through to the row, opening just the project.
+function briefingUpdateHref(item: BriefingItem, link: { target: string }): string {
+  const filename = link.target.split('/').pop() || ''
+  if (!filename) return ''
+  const taskLink = item.links?.find((l) => l.kind === 'task' || l.kind === 'session')
+  if (taskLink) return `/session/${encodeURIComponent(taskLink.target)}?tab=updates&update=${encodeURIComponent(filename)}`
+  const projectLink = item.links?.find((l) => l.kind === 'project')
+  if (projectLink) return `/project/${encodeURIComponent(projectLink.target)}?update=${encodeURIComponent(filename)}`
+  return ''
 }
 
 // Mission Control analytics: activity-day streaks (the same active days that

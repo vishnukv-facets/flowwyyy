@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
-import { useLocation } from 'wouter'
+import { useLocation, useSearch } from 'wouter'
 import {
   AlertTriangle,
   Archive,
@@ -67,8 +67,20 @@ import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../l
 
 type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree'
 
+const TABS: readonly Tab[] = ['brief', 'diff', 'transcript', 'updates', 'tree']
+function isTab(v: string | null): v is Tab {
+  return v != null && (TABS as readonly string[]).includes(v)
+}
+
 export function SessionDetail({ slug }: { slug: string }) {
   const [, navigate] = useLocation()
+  // Deep-link support: ?tab=<tab>&update=<filename> (e.g. from the Morning
+  // Briefing) opens a specific tab/update, and forces the side panel open since
+  // it hosts the tabs (collapsed by default with the terminal maximized).
+  const search = useSearch()
+  const linkParams = useMemo(() => new URLSearchParams(search), [search])
+  const tabParam = linkParams.get('tab')
+  const updateParam = linkParams.get('update') || undefined
   const { data: task, isLoading, error } = useTask(slug)
   const { data: agent, error: agentError } = useTaskBridge(slug)
   useDocumentTitle(task?.name)
@@ -76,9 +88,9 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [restartKey, setRestartKey] = useState(0)
   const [termStatus, setTermStatus] = useState('')
   const [termConn, setTermConn] = useState<'open' | 'closed'>('closed')
-  const [tab, setTab] = useState<Tab>('brief')
+  const [tab, setTab] = useState<Tab>(() => (isTab(tabParam) ? tabParam : 'brief'))
   const [busy, setBusy] = useState<string | null>(null)
-  const [side, setSide] = useState(false) // side panel collapsed by default — terminal maximized
+  const [side, setSide] = useState(() => !!(tabParam || updateParam)) // collapsed by default; open when deep-linked to a tab/update
   const [full, setFull] = useState(false) // terminal fullscreen
   const [briefModal, setBriefModal] = useState(false)
   const [diffModal, setDiffModal] = useState(false)
@@ -628,7 +640,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 />
               )}
               {tab === 'updates' && (
-                <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} />
+                <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} initialFile={updateParam} />
               )}
               {tab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
             </div>
@@ -1113,15 +1125,23 @@ function UpdatesTab({
   updates,
   onExpand,
   startOpen,
+  initialFile,
 }: {
   slug: string
   updates: { filename: string; path: string; mtime: string }[]
   onExpand?: () => void
   startOpen?: boolean
+  initialFile?: string
 }) {
   // In the full-view modal every update is expanded; in the side panel only the
-  // most recent one opens, the rest are collapsible.
-  const [openFile, setOpenFile] = useState<string | null>(startOpen ? null : updates[0]?.filename ?? null)
+  // most recent one opens (or the deep-linked one), the rest are collapsible.
+  const deepLinked = initialFile && updates.some((u) => u.filename === initialFile) ? initialFile : undefined
+  const [openFile, setOpenFile] = useState<string | null>(startOpen ? null : deepLinked ?? updates[0]?.filename ?? null)
+  // Re-open when the deep-linked file changes under a mounted panel (clicking a
+  // different update link without remounting the route).
+  useEffect(() => {
+    if (deepLinked) setOpenFile(deepLinked)
+  }, [deepLinked])
   if (!updates || updates.length === 0) return <div className="faint">No updates logged for this task.</div>
   return (
     <div className="col" style={{ gap: 8 }}>

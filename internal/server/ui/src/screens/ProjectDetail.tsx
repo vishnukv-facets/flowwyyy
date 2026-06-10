@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { useLocation } from 'wouter'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useSearch } from 'wouter'
 import { ArrowLeft, Check, ChevronLeft, ChevronRight, FileText, Loader2, Pencil, X } from 'lucide-react'
 import { useAction, useMarkdown, useProject, useProjectTasks } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -16,6 +16,9 @@ export function ProjectDetail({ slug }: { slug: string }) {
   const { data: project, isLoading, error } = useProject(slug)
   const { data: tasks } = useProjectTasks(slug)
   useDocumentTitle(project?.name)
+  // Deep-link from the Morning Briefing: ?update=<filename> opens that update.
+  const search = useSearch()
+  const updateParam = useMemo(() => new URLSearchParams(search).get('update') || undefined, [search])
 
   if (isLoading) return <div className="page"><Loading /></div>
   if (error) return <div className="page"><ErrorNote error={error} /></div>
@@ -62,7 +65,7 @@ export function ProjectDetail({ slug }: { slug: string }) {
           <span className="eyebrow">Updates</span>
           <span className="section-count">{project.updates?.length ?? 0}</span>
         </div>
-        <ProjectUpdates slug={slug} updates={project.updates ?? []} />
+        <ProjectUpdates slug={slug} updates={project.updates ?? []} initialFile={updateParam} />
         {project.aux_files?.length > 0 && (
           <div className="row gap wrap" style={{ gap: 8, marginTop: 12 }}>
             <span className="eyebrow" style={{ marginRight: 4 }}>files</span>
@@ -223,8 +226,12 @@ function ProjectHead({ project }: { project: ProjectView }) {
 // (the brief flags [[entity-detail-shared-component]] as the eventual shared
 // primitive; until then this mirrors that pattern). The newest update opens by
 // default; markdown is fetched per-file on expand.
-function ProjectUpdates({ slug, updates }: { slug: string; updates: FileRef[] }) {
-  const [openFile, setOpenFile] = useState<string | null>(updates[0]?.filename ?? null)
+function ProjectUpdates({ slug, updates, initialFile }: { slug: string; updates: FileRef[]; initialFile?: string }) {
+  const deepLinked = initialFile && updates.some((u) => u.filename === initialFile) ? initialFile : undefined
+  const [openFile, setOpenFile] = useState<string | null>(deepLinked ?? updates[0]?.filename ?? null)
+  useEffect(() => {
+    if (deepLinked) setOpenFile(deepLinked)
+  }, [deepLinked])
   if (updates.length === 0) {
     return <div className="rows"><div className="lrow"><span className="faint">No updates logged for this project.</span></div></div>
   }
