@@ -37,6 +37,11 @@ type Server struct {
 	// backfill (ListenAndServe) can replay catch-up messages through the SAME
 	// cascade via ObserveBatch. Nil when no DB is configured.
 	cascade       *steering.Cascade
+	// steeringRuns holds the recent + in-flight cascade runs (the live CI-style
+	// stage view). Populated by the cascade's Progress hook; read by the inbox
+	// UI over /api/steering/runs + the steering_stage WS event. Always non-nil
+	// after New().
+	steeringRuns  *steeringRunStore
 	inboxMonitors *inboxMonitorManager
 	dbWatcher     *dbWatcher
 	// nameResolver maps Slack user/channel IDs to display names for the

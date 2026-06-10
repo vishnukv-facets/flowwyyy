@@ -50,6 +50,7 @@ func New(cfg Config) *Server {
 	// process, so the Ask Flow tray survives a flow-server restart.
 	s.terminals.loadFloatingFromDisk()
 	s.events = newEventHub()
+	s.steeringRuns = newSteeringRunStore()
 	s.reconcile = newLivenessReconciler(s)
 	s.transcripts = newTranscriptCache()
 	s.caches = newUICaches()
@@ -90,6 +91,8 @@ func New(cfg Config) *Server {
 			cascade.ResolveUserName = s.nameResolver.UserName
 		}
 		cascade.FetchContext = steering.NewDefaultContextFetcher(cascade.TextClean, s.slackPermalinker)
+		// Stream live stage progress to Mission Control's inbox (CI-style view).
+		cascade.Progress = s.publishSteeringStage
 		dispatcher.Steerer = cascade
 		dispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
 		s.cascade = cascade
@@ -161,6 +164,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
 	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
+	mux.HandleFunc("/api/steering/runs", s.handleSteeringRuns)
 	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)
 	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
 	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)
