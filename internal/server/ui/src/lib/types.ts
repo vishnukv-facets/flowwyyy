@@ -176,11 +176,11 @@ export interface Briefing {
   generated_at: string
   window_start: string
   window_end: string
-  needs_action: BriefingItem[]
-  closeout: BriefingItem[]
-  waiting: BriefingItem[]
+  // Three ranked tiers, scanned top-to-bottom: what needs you now, what changed
+  // while you were away, and what to pick up next.
+  needs_you: BriefingItem[]
+  overnight: BriefingItem[]
   next_up: BriefingItem[]
-  fyi: BriefingItem[]
 }
 
 export interface BriefingItem {

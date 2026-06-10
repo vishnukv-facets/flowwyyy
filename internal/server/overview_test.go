@@ -52,12 +52,12 @@ func TestHandleOverviewIncludesBriefing(t *testing.T) {
 	if !ok {
 		t.Fatalf("overview missing briefing: %s", rec.Body.String())
 	}
-	items, ok := raw["needs_action"].([]any)
+	items, ok := raw["needs_you"].([]any)
 	if !ok || len(items) == 0 {
-		t.Fatalf("briefing.needs_action empty or missing: %+v", raw)
+		t.Fatalf("briefing.needs_you empty or missing: %+v", raw)
 	}
 	first, _ := items[0].(map[string]any)
 	if first["kind"] != "attention" || first["ref"] != "overview-feed" {
-		t.Fatalf("first needs_action item = %+v, want attention overview-feed", first)
+		t.Fatalf("first needs_you item = %+v, want attention overview-feed", first)
 	}
 }

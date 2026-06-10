@@ -16,11 +16,9 @@ func RenderMarkdown(b Briefing) string {
 	if b.GeneratedAt != "" {
 		fmt.Fprintf(&out, "_Generated: %s_\n", b.GeneratedAt)
 	}
-	renderSection(&out, "Needs action", b.NeedsAction, true, "Nothing needs action.")
-	renderSection(&out, "Closeout", b.Closeout, true, "No closeout items.")
-	renderSection(&out, "Waiting", b.Waiting, true, "Nothing is waiting.")
-	renderSection(&out, "Next up", b.NextUp, true, "No startable next-up work.")
-	renderSection(&out, "FYI", b.FYI, false, "No FYI items in this window.")
+	renderSection(&out, "Needs you", b.NeedsYou, true, "Nothing needs you right now.")
+	renderSection(&out, "Since you last looked", b.Overnight, false, "Nothing changed in this window.")
+	renderSection(&out, "Pick up next", b.NextUp, true, "No startable or resumable work.")
 	return out.String()
 }
 

@@ -37,10 +37,10 @@ func TestCmdStandupRendersBriefing(t *testing.T) {
 	})
 	for _, want := range []string{
 		"Flow briefing",
-		"## Needs action",
+		"## Needs you",
 		"[attention] Rollback note needed before Friday deploy",
 		"links: attention:standup-feed",
-		"## FYI",
+		"## Since you last looked",
 		"[update]",
 	} {
 		if !strings.Contains(out, want) {

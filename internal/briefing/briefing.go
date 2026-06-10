@@ -13,7 +13,7 @@ import (
 	"flow/internal/flowdb"
 )
 
-// Options controls briefing assembly. Since bounds FYI activity; Now and
+// Options controls briefing assembly. Since bounds Overnight activity; Now and
 // StaleAfter make tests deterministic and keep stale detection local to this
 // package rather than tied to Mission Control's process/liveness cache.
 type Options struct {
@@ -21,20 +21,42 @@ type Options struct {
 	Since      time.Time
 	StaleAfter time.Duration
 	Limit      int
+	// WaitingSessions are live agents paused for the operator's input. The
+	// briefing builder has no view of process liveness, so the server resolves
+	// these from the runtime agent snapshot and passes them in to rank as tier-1
+	// NeedsYou rows. Empty for the CLI standup, which runs without a live server.
+	WaitingSessions []WaitingSession
 }
 
-// Briefing is the shared on-demand/status-startup digest shape. NeedsAction is
-// for work the operator can decide on now; FYI is context that should not steal
-// the top of the morning queue.
+// WaitingSession describes a live agent that is blocked on the operator. It is
+// deliberately minimal: the server already holds the rich runtime view, and the
+// briefing only needs enough to render and link a NeedsYou row.
+type WaitingSession struct {
+	TaskSlug string
+	Name     string
+	Project  string
+	Detail   string
+}
+
+// Briefing is the shared on-demand/status-startup digest shape, organised as
+// three ranked tiers that answer, in priority order: what needs me now, what
+// changed while I was away, and what I should pick up next. The operator scans
+// top-to-bottom and stops once the things that are actually on them are handled.
 type Briefing struct {
 	GeneratedAt string `json:"generated_at"`
 	WindowStart string `json:"window_start"`
 	WindowEnd   string `json:"window_end"`
-	NeedsAction []Item `json:"needs_action"`
-	Closeout    []Item `json:"closeout"`
-	Waiting     []Item `json:"waiting"`
-	NextUp      []Item `json:"next_up"`
-	FYI         []Item `json:"fyi"`
+	// NeedsYou (tier 1) is work where you are the bottleneck: attention cards
+	// awaiting a decision or reply, and tasks you own that are waiting on
+	// someone (you still have to chase them). Ranked most-urgent first.
+	NeedsYou []Item `json:"needs_you"`
+	// Overnight (tier 2) is what changed since you last looked: tasks shipped,
+	// update notes written, and digest-only attention. Read-only awareness — it
+	// should never steal the top of the queue from NeedsYou.
+	Overnight []Item `json:"overnight"`
+	// NextUp (tier 3) is what to start or resume next: startable high-priority
+	// backlog and in-progress sessions that have gone cold.
+	NextUp []Item `json:"next_up"`
 }
 
 // Item is one briefing row. Source, Project, and Urgency are first-class so
@@ -71,11 +93,9 @@ func Build(db *sql.DB, flowRoot string, opts Options) (Briefing, error) {
 		GeneratedAt: opts.Now.Format(time.RFC3339),
 		WindowStart: opts.Since.Format(time.RFC3339),
 		WindowEnd:   opts.Now.Format(time.RFC3339),
-		NeedsAction: []Item{},
-		Closeout:    []Item{},
-		Waiting:     []Item{},
+		NeedsYou:    []Item{},
+		Overnight:   []Item{},
 		NextUp:      []Item{},
-		FYI:         []Item{},
 	}
 
 	projects, err := projectNames(db)
@@ -95,35 +115,38 @@ func Build(db *sql.DB, flowRoot string, opts Options) (Briefing, error) {
 	if err != nil {
 		return Briefing{}, err
 	}
-	out.NeedsAction = append(out.NeedsAction, attention.NeedsAction...)
-	out.Waiting = append(out.Waiting, attention.Waiting...)
-	out.FYI = append(out.FYI, attention.FYI...)
+	// Tier 1 (NeedsYou): attention you must act on, plus attention nudges that
+	// affect a waiting task (the wait may now be resolvable). Tier 2 (Overnight):
+	// digest-only attention is awareness, not action.
+	out.NeedsYou = append(out.NeedsYou, attention.NeedsAction...)
+	out.NeedsYou = append(out.NeedsYou, attention.Waiting...)
+	out.Overnight = append(out.Overnight, attention.FYI...)
 	for _, item := range taskActionItems(db, tasks, projects, opts) {
 		switch item.Kind {
-		case "waiting":
-			out.Waiting = append(out.Waiting, item)
-		case "ready":
+		case "ready", "stale":
+			// Startable backlog and cold in-progress sessions are both "what to
+			// pick up next" — resume-first ordering is handled by actionRank.
 			out.NextUp = append(out.NextUp, item)
-		case "stale":
-			out.FYI = append(out.FYI, item)
 		default:
-			out.NeedsAction = append(out.NeedsAction, item)
+			// "waiting" (you own it, chase it) and anything else lands on you.
+			out.NeedsYou = append(out.NeedsYou, item)
 		}
 	}
-	out.FYI = append(out.FYI, shippedItems(tasks, projects, opts)...)
-	out.FYI = append(out.FYI, updateItems(flowRoot, taskBySlug, projects, opts)...)
+	out.Overnight = append(out.Overnight, shippedItems(tasks, projects, opts)...)
+	out.Overnight = append(out.Overnight, updateItems(flowRoot, taskBySlug, projects, opts)...)
 
-	sortItems(out.NeedsAction, true)
-	sortItems(out.Closeout, true)
-	sortItems(out.Waiting, true)
+	// A live agent paused for your input is the most literal "needs you" there
+	// is. Append after the task-derived items so dedup can suppress a session
+	// whose task is already surfaced (an attention card or waiting_on row).
+	out.NeedsYou = append(out.NeedsYou, waitingSessionItems(opts.WaitingSessions, out.NeedsYou)...)
+
+	sortItems(out.NeedsYou, true)
+	sortItems(out.Overnight, false)
 	sortItems(out.NextUp, true)
-	sortItems(out.FYI, false)
 	if opts.Limit > 0 {
-		out.NeedsAction = limitItems(out.NeedsAction, opts.Limit)
-		out.Closeout = limitItems(out.Closeout, opts.Limit)
-		out.Waiting = limitItems(out.Waiting, opts.Limit)
+		out.NeedsYou = limitItems(out.NeedsYou, opts.Limit)
+		out.Overnight = limitItems(out.Overnight, opts.Limit)
 		out.NextUp = limitItems(out.NextUp, opts.Limit)
-		out.FYI = limitItems(out.FYI, opts.Limit)
 	}
 	return out, nil
 }
@@ -302,6 +325,50 @@ func taskActionItems(db *sql.DB, tasks []*flowdb.Task, projects map[string]strin
 				})
 			}
 		}
+	}
+	return out
+}
+
+// waitingSessionItems maps live waiting agents into NeedsYou rows, skipping any
+// whose task is already surfaced by an attention card or waiting_on row (the
+// existing row already links the same task/session, so a second is just noise).
+func waitingSessionItems(sessions []WaitingSession, existing []Item) []Item {
+	if len(sessions) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	for _, item := range existing {
+		if item.Ref != "" {
+			seen[item.Ref] = true
+		}
+		for _, link := range item.Links {
+			if link.Kind == "task" || link.Kind == "session" {
+				seen[link.Target] = true
+			}
+		}
+	}
+	var out []Item
+	for _, ws := range sessions {
+		slug := strings.TrimSpace(ws.TaskSlug)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		detail := strings.TrimSpace(ws.Detail)
+		if detail == "" {
+			detail = "agent is paused for your input"
+		}
+		out = append(out, Item{
+			Kind:    "session",
+			Ref:     slug,
+			Source:  "session",
+			Project: strings.TrimSpace(ws.Project),
+			Urgency: "urgent",
+			Title:   nonEmpty(ws.Name, slug),
+			Detail:  detail,
+			Action:  "Send input",
+			Links:   []Link{{Kind: "session", Target: slug}, {Kind: "task", Target: slug}},
+		})
 	}
 	return out
 }
@@ -518,12 +585,16 @@ func actionRank(item Item) int {
 	switch item.Kind {
 	case "attention":
 		return 0
-	case "waiting":
+	case "session":
+		// A live agent paused for your input ranks just below attention cards
+		// and above waiting-on-others tasks — one keystroke unblocks it.
 		return 1
-	case "stale":
+	case "waiting":
 		return 2
-	case "ready":
+	case "stale":
 		return 3
+	case "ready":
+		return 4
 	default:
 		return 9
 	}

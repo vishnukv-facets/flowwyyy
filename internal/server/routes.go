@@ -295,9 +295,10 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	brief, err := briefing.Build(s.cfg.DB, s.cfg.FlowRoot, briefing.Options{
-		Now:   now,
-		Since: time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()),
-		Limit: 20,
+		Now:             now,
+		Since:           time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()),
+		Limit:           20,
+		WaitingSessions: s.waitingSessionsForBriefing(),
 	})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
@@ -305,6 +306,47 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Briefing = brief
 	writeJSON(w, out)
+}
+
+// waitingSessionsForBriefing resolves the live agents paused for the operator's
+// input from the same snapshot the session cards render (uiData.Agents), so the
+// briefing's "Needs you" tier and the Live-sessions panel never disagree about
+// what is waiting. Returns nil on any snapshot error — the briefing degrades to
+// its DB-derived rows rather than failing the whole overview.
+func (s *Server) waitingSessionsForBriefing() []briefing.WaitingSession {
+	data, err := s.cachedUIData()
+	if err != nil {
+		return nil
+	}
+	var out []briefing.WaitingSession
+	for _, a := range data.Agents {
+		if a.Status != "waiting" {
+			continue
+		}
+		project := ""
+		if a.Project != nil {
+			project = *a.Project
+		}
+		out = append(out, briefing.WaitingSession{
+			TaskSlug: a.Slug,
+			Name:     a.Name,
+			Project:  project,
+			Detail:   waitingSessionDetail(a),
+		})
+	}
+	return out
+}
+
+func waitingSessionDetail(a uiAgent) string {
+	if a.WaitingFor != nil {
+		if why := strings.TrimSpace(a.WaitingFor.Why); why != "" {
+			return "agent is waiting: " + why
+		}
+	}
+	if mins := a.LastActivitySec / 60; mins >= 1 {
+		return fmt.Sprintf("agent is paused for your input · idle %dm", mins)
+	}
+	return "agent is paused for your input"
 }
 
 func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {

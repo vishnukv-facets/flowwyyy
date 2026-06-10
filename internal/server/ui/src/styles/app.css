@@ -3622,31 +3622,100 @@ select.input {
   gap: 14px;
 }
 .briefing-panel {
-  margin-bottom: 22px;
+  /* First child of the flex `.mc-main` column — spacing comes from its gap. */
+  min-width: 0;
 }
-.briefing-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+/* Header status chip: how many things are actually on you right now. */
+.briefing-alert {
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border));
+  border-radius: var(--r-pill);
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1;
+  padding: 4px 8px;
+}
+.briefing-clear {
+  flex: 0 0 auto;
+  color: var(--ok);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+/* Three stacked tiers, read top-to-bottom. */
+.briefing-tiers {
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
-.briefing-column {
+.briefing-tier {
   min-width: 0;
   border: 1px solid var(--border);
+  border-left-width: 3px;
   border-radius: var(--r);
   background: var(--bg-2);
   overflow: hidden;
 }
-.briefing-column.muted {
-  background: color-mix(in srgb, var(--bg-2) 78%, var(--bg) 22%);
+/* Tier 1 carries the weight; 2 and 3 recede so the eye lands on what's on you. */
+.briefing-tier.now {
+  border-left-color: var(--warn);
 }
-.briefing-label {
-  padding: 10px 12px;
+.briefing-tier.changed {
+  border-left-color: var(--border);
+  background: color-mix(in srgb, var(--bg-2) 80%, var(--bg) 20%);
+}
+.briefing-tier.next {
+  border-left-color: color-mix(in srgb, var(--ok) 60%, var(--border));
+  background: color-mix(in srgb, var(--bg-2) 88%, var(--bg) 12%);
+}
+.briefing-tier-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 9px 12px;
   border-bottom: 1px solid var(--border-faint);
-  color: var(--text-2);
+}
+.briefing-tier-label {
+  color: var(--text);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
+}
+.briefing-tier.now .briefing-tier-label {
+  color: var(--warn);
+}
+.briefing-tier-sub {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.briefing-tier-count {
+  flex: 0 0 auto;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+/* Rows in the same tier flow in a responsive grid so a busy tier stays
+   compact rather than scrolling forever; a quiet tier reads as one column. */
+/* 1px grid gap reveals the faint border colour as hairline separators in both
+   axes — clean for a responsive multi-column tier without per-row border hacks.
+   auto-fit (not auto-fill) collapses empty tracks, so one item spans the full
+   width instead of leaving a stray divider and an empty half. */
+.briefing-rows {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1px;
+  background: var(--border-faint);
+}
+.briefing-more {
+  grid-column: 1 / -1;
+  padding: 9px 12px;
+  background: var(--bg-2);
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
 }
 .briefing-empty {
   padding: 13px 12px;
@@ -3655,12 +3724,9 @@ select.input {
 }
 .briefing-row {
   padding: 11px 12px;
-  border-top: 1px solid var(--border-faint);
+  background: var(--bg-2);
   cursor: pointer;
   transition: background var(--dur-1) var(--ease);
-}
-.briefing-row:first-of-type {
-  border-top: none;
 }
 .briefing-row:hover {
   background: var(--surface-hover);
@@ -3682,22 +3748,27 @@ select.input {
   padding: 4px 7px;
   background: var(--bg);
 }
-.briefing-kind.attention,
-.briefing-kind.waiting {
+.briefing-kind.k-attention,
+.briefing-kind.k-waiting,
+.briefing-kind.k-session {
   border-color: color-mix(in srgb, var(--warn) 52%, var(--border));
   color: var(--warn);
 }
-.briefing-kind.stale {
+.briefing-kind.k-stale {
   border-color: color-mix(in srgb, var(--warn) 44%, var(--border));
   color: var(--warn);
 }
-.briefing-kind.ready,
-.briefing-kind.shipped {
+.briefing-kind.k-ready,
+.briefing-kind.k-shipped {
   border-color: color-mix(in srgb, var(--ok) 48%, var(--border));
   color: var(--ok);
 }
 .briefing-title {
+  flex: 1 1 auto;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 560;
   font-size: 13.5px;
 }
@@ -3743,9 +3814,6 @@ select.input {
 }
 @media (max-width: 1080px) {
   .mc-cols {
-    grid-template-columns: 1fr;
-  }
-  .briefing-grid {
     grid-template-columns: 1fr;
   }
 }

@@ -128,34 +128,51 @@ function useGreeting() {
   return info
 }
 
+// Three ranked tiers, stacked so the operator reads top-to-bottom and stops
+// once the things actually on them are handled. Tier 1 (needs you) carries the
+// visual weight; tier 2 (what changed) is muted awareness; tier 3 (next) is a
+// quiet on-deck list. Empty tiers collapse to one line instead of a dead column.
 function BriefingPanel({ briefing, onOpen }: { briefing?: Briefing; onOpen: (href: string) => void }) {
-  const sections = [
-    { key: 'needs', label: 'Needs action', items: briefing?.needs_action ?? [], limit: 5, empty: 'Nothing needs a decision right now.' },
-    { key: 'closeout', label: 'Closeout', items: briefing?.closeout ?? [], limit: 4, empty: 'No closeout checks.' },
-    { key: 'waiting', label: 'Waiting', items: briefing?.waiting ?? [], limit: 4, empty: 'Nothing is waiting.' },
-    { key: 'next', label: 'Next up', items: briefing?.next_up ?? [], limit: 4, empty: 'No startable next-up work.' },
-    { key: 'fyi', label: 'FYI', items: briefing?.fyi ?? [], limit: 4, empty: 'No recent FYI activity in this window.', muted: true },
+  const tiers = [
+    { key: 'needs', tone: 'now', label: 'Needs you', sub: "you're the bottleneck", items: briefing?.needs_you ?? [], limit: 8, empty: "Nothing is blocked on you right now." },
+    { key: 'overnight', tone: 'changed', label: 'Since you last looked', sub: 'shipped · updates · digest', items: briefing?.overnight ?? [], limit: 6, empty: 'Nothing changed while you were away.' },
+    { key: 'next', tone: 'next', label: 'Pick up next', sub: 'startable & resumable', items: briefing?.next_up ?? [], limit: 6, empty: 'No work queued to start or resume.' },
   ]
-  const total = sections.reduce((n, s) => n + s.items.length, 0)
+  const total = tiers.reduce((n, tier) => n + tier.items.length, 0)
   if (total === 0) return null
+  const needsCount = tiers[0].items.length
   return (
     <section className="briefing-panel">
       <div className="section-head">
         <span className="eyebrow"><Activity size={13} /> Morning briefing</span>
-        <span className="section-count">{total}</span>
+        {needsCount > 0 ? (
+          <span className="briefing-alert">{needsCount} need{needsCount === 1 ? 's' : ''} you</span>
+        ) : (
+          <span className="briefing-clear">all clear</span>
+        )}
         <div className="spacer" />
-        <span className="faint" style={{ fontSize: 12 }}>action · closeout · waiting · next · FYI</span>
+        <span className="faint" style={{ fontSize: 12 }}>needs you · changed · next</span>
       </div>
-      <div className="briefing-grid">
-        {sections.map((section) => (
-          <div className={`briefing-column${section.muted ? ' muted' : ''}`} key={section.key}>
-            <div className="briefing-label">{section.label}</div>
-            {section.items.length === 0 ? (
-              <div className="briefing-empty">{section.empty}</div>
+      <div className="briefing-tiers">
+        {tiers.map((tier) => (
+          <div className={`briefing-tier ${tier.tone}`} key={tier.key}>
+            <div className="briefing-tier-head">
+              <span className="briefing-tier-label">{tier.label}</span>
+              <span className="briefing-tier-sub">{tier.sub}</span>
+              <div className="spacer" />
+              <span className="briefing-tier-count">{tier.items.length}</span>
+            </div>
+            {tier.items.length === 0 ? (
+              <div className="briefing-empty">{tier.empty}</div>
             ) : (
-              section.items.slice(0, section.limit).map((item) => (
-                <BriefingRow key={`${section.key}:${item.kind}:${item.ref}:${item.title}`} item={item} onOpen={onOpen} />
-              ))
+              <div className="briefing-rows">
+                {tier.items.slice(0, tier.limit).map((item) => (
+                  <BriefingRow key={`${tier.key}:${item.kind}:${item.ref}:${item.title}`} item={item} onOpen={onOpen} />
+                ))}
+                {tier.items.length > tier.limit && (
+                  <div className="briefing-more">+{tier.items.length - tier.limit} more</div>
+                )}
+              </div>
             )}
           </div>
         ))}
@@ -170,7 +187,9 @@ function BriefingRow({ item, onOpen }: { item: BriefingItem; onOpen: (href: stri
   return (
     <div className="briefing-row" {...(primary ? clickable(() => onOpen(primary)) : {})}>
       <div className="briefing-row-top">
-        <span className={`briefing-kind ${item.kind}`}>{item.kind}</span>
+        {/* Namespaced kind class: a bare `${item.kind}` (e.g. "session")
+            collides with unrelated global classes like `.session`. */}
+        <span className={`briefing-kind k-${item.kind}`}>{item.kind}</span>
         <span className="briefing-title clip">{item.title}</span>
       </div>
       {meta && <div className="briefing-meta clip">{meta}</div>}
@@ -671,7 +690,10 @@ export function Overview() {
   // section, so a "going cold" shelf keeps them from being forgotten.
   const stale = ui.AGENTS.filter((a) => a.status === 'stale')
   const live = ui.AGENTS.filter((a) => a.status === 'idle' || a.status === 'released' || a.status === 'running')
-  const sessions = [...running, ...live.filter((a) => a.status !== 'running')]
+  // Waiting agents (awaiting your input) are still live sessions — surface them
+  // here, ranked just behind running, rather than in a separate "needs your
+  // attention" shelf, since the briefing's "Needs you" tier already owns triage.
+  const sessions = [...running, ...waiting, ...live.filter((a) => a.status !== 'running')]
   const runsThisWeek = ui.PLAYBOOKS_MC.reduce((n, p) => n + p.runs_week, 0)
   const activePlaybooks = ui.PLAYBOOKS_MC.filter((p) => p.runs_week > 0)
   const env = [...ui.CAPABILITIES.providers, ...ui.CAPABILITIES.integrations]
@@ -728,25 +750,17 @@ export function Overview() {
         ))}
       </div>
 
-      <BriefingPanel
-        briefing={overview?.briefing}
-        onOpen={navigate}
-      />
-
       <div className="mc-cols">
         {/* ---- main column ---- */}
         <div className="mc-main">
-          {waiting.length > 0 && (
-            <section>
-              <div className="section-head">
-                <span className="eyebrow"><AlertTriangle size={13} /> Needs your attention</span>
-                <span className="section-count">{waiting.length}</span>
-              </div>
-              <div className="grid cards stagger">
-                {waiting.map((a) => <AgentCard key={a.slug} agent={a} />)}
-              </div>
-            </section>
-          )}
+          {/* The briefing's "Needs you" tier is the single attention surface;
+              waiting agents fold into Live sessions below rather than a separate
+              shelf. Keeping the briefing in the main column lets the analytics
+              rail sit at the top-right instead of being pushed below the fold. */}
+          <BriefingPanel
+            briefing={overview?.briefing}
+            onOpen={navigate}
+          />
 
           {crashed.length > 0 && (
             <section>
