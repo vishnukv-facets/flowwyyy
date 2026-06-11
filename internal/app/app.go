@@ -111,7 +111,7 @@ Create:
 
 Sessions:
   flow do                <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions]
-  flow do --auto         <ref> [--with "<instruction>"|--with-file <path>]  (headless autonomous run; no tab; claude-only)
+  flow do --auto         <ref> [--with "<instruction>"|--with-file <path>]  (headless autonomous run; no tab; Claude or Codex)
   flow done              <ref>
   flow hook session-start                      (SessionStart hook handler — wire via ~/.claude/settings.json)
   flow hook agent-event --provider claude|codex (forwards lifecycle hooks to the local UI)

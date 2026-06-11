@@ -4,6 +4,7 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/spawner"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -443,7 +444,7 @@ func TestE2EAutoRunRoundtrip(t *testing.T) {
 	var launchedSlug, launchedLog string
 	tabCount := 0
 	oldLauncher := autoLauncher
-	autoLauncher = func(slug, workDir, logPath, injection string, env []string) (int, error) {
+	autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
 		launchedSlug = slug
 		launchedLog = logPath
 		return fakePID, nil
@@ -558,5 +559,197 @@ func TestE2EAutoRunRoundtrip(t *testing.T) {
 	out = captureStdout(t, func() { cmdShow([]string{"task", "fix-slow-query"}) })
 	if !strings.Contains(out, "dead") {
 		t.Errorf("reconcile should promote to dead, show output:\n%s", out)
+	}
+}
+
+func TestE2ECodexAutoRunRoundtrip(t *testing.T) {
+	tmp := t.TempDir()
+	flowRoot := filepath.Join(tmp, "flow")
+	t.Setenv("FLOW_ROOT", flowRoot)
+	t.Setenv("HOME", tmp)
+	t.Setenv("CODEX_HOME", filepath.Join(tmp, ".codex"))
+
+	repo := filepath.Join(tmp, "code", "codex-auto-repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	oldOverride := spawner.Override
+	spawner.Override = spawner.BackendITerm
+	t.Cleanup(func() { spawner.Override = oldOverride })
+
+	oldOsa := iterm.Runner
+	iterm.Runner = func(args []string) error { return nil }
+	t.Cleanup(func() { iterm.Runner = oldOsa })
+
+	oldClaude := claudeRunner
+	claudeRunner = func(slug, prompt string) error { return nil }
+	t.Cleanup(func() { claudeRunner = oldClaude })
+
+	const fakePID = 29292
+	const orchestratorModel = "gpt-orchestrated-model"
+	var launchedSlug, launchedProvider, launchedPermission, launchedModel string
+	oldLauncher := autoLauncher
+	autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
+		launchedSlug = slug
+		launchedProvider = provider
+		launchedPermission = permissionMode
+		launchedModel = model
+		return fakePID, nil
+	}
+	t.Cleanup(func() { autoLauncher = oldLauncher })
+
+	const codexSessionID = "codex-e2e-thread"
+	oldRunner := autoRunner
+	autoRunner = func(req autoRunRequest) error {
+		if req.TaskSlug != "codex-auto-e2e" {
+			return fmt.Errorf("TaskSlug = %q, want codex-auto-e2e", req.TaskSlug)
+		}
+		if req.Provider != sessionProviderCodex {
+			return fmt.Errorf("Provider = %q, want codex", req.Provider)
+		}
+		if req.SessionID != "" {
+			return fmt.Errorf("SessionID = %q, want empty for fresh Codex auto run", req.SessionID)
+		}
+		if req.PermissionMode != "auto" {
+			return fmt.Errorf("PermissionMode = %q, want auto", req.PermissionMode)
+		}
+		if req.Model != orchestratorModel {
+			return fmt.Errorf("Model = %q, want %s", req.Model, orchestratorModel)
+		}
+		if req.FlowRoot != flowRoot {
+			return fmt.Errorf("FlowRoot = %q, want %s", req.FlowRoot, flowRoot)
+		}
+		gotWorkDir, err := filepath.EvalSymlinks(req.WorkDir)
+		if err != nil {
+			return fmt.Errorf("EvalSymlinks(%q): %w", req.WorkDir, err)
+		}
+		wantWorkDir, err := filepath.EvalSymlinks(repo)
+		if err != nil {
+			return fmt.Errorf("EvalSymlinks(%q): %w", repo, err)
+		}
+		if gotWorkDir != wantWorkDir {
+			return fmt.Errorf("WorkDir = %q, want %s", req.WorkDir, repo)
+		}
+		if !strings.Contains(req.Prompt, "flow done codex-auto-e2e") {
+			return fmt.Errorf("prompt missing closeout instruction")
+		}
+		t.Setenv("FLOW_TASK", req.TaskSlug)
+		t.Setenv("FLOW_SESSION_PROVIDER", sessionProviderCodex)
+		t.Setenv("CODEX_THREAD_ID", codexSessionID)
+		if rc := cmdDone([]string{req.TaskSlug}); rc != 0 {
+			return fmt.Errorf("cmdDone returned %d", rc)
+		}
+		return nil
+	}
+	t.Cleanup(func() { autoRunner = oldRunner })
+
+	oldVersion := codexExecVersion
+	codexExecVersion = func() string { return "codex-cli-exec e2e" }
+	t.Cleanup(func() { codexExecVersion = oldVersion })
+
+	step := func(name string, rc int) {
+		t.Helper()
+		if rc != 0 {
+			t.Fatalf("%s: rc=%d", name, rc)
+		}
+	}
+
+	step("init", cmdInit(nil))
+	step("add codex task", cmdAdd([]string{
+		"task", "Codex Auto E2E",
+		"--slug", "codex-auto-e2e",
+		"--agent", "codex",
+		"--model", orchestratorModel,
+		"--work-dir", repo,
+	}))
+
+	step("do --auto", cmdDo([]string{"codex-auto-e2e", "--auto"}))
+	if launchedSlug != "codex-auto-e2e" {
+		t.Fatalf("launchedSlug = %q, want codex-auto-e2e", launchedSlug)
+	}
+	if launchedProvider != sessionProviderCodex {
+		t.Fatalf("launchedProvider = %q, want codex", launchedProvider)
+	}
+	if launchedPermission != "auto" {
+		t.Fatalf("launchedPermission = %q, want auto", launchedPermission)
+	}
+	if launchedModel != orchestratorModel {
+		t.Fatalf("launchedModel = %q, want %s", launchedModel, orchestratorModel)
+	}
+
+	dbPath, _ := flowDBPath()
+	db, err := flowdb.OpenDB(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	task, err := flowdb.GetTask(db, "codex-auto-e2e")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if task.Status != "in-progress" {
+		t.Errorf("status = %q, want in-progress", task.Status)
+	}
+	if task.SessionProvider != sessionProviderCodex {
+		t.Errorf("session_provider = %q, want codex", task.SessionProvider)
+	}
+	if task.SessionID.Valid && task.SessionID.String != "" {
+		t.Errorf("fresh Codex auto run should not preallocate session_id, got %q", task.SessionID.String)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
+		t.Errorf("auto_run_status = %v, want running", task.AutoRunStatus)
+	}
+	if !task.AutoRunPID.Valid || task.AutoRunPID.Int64 != fakePID {
+		t.Errorf("auto_run_pid = %v, want %d", task.AutoRunPID, fakePID)
+	}
+
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(oldWD); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	}()
+	autoExecRC := -1
+	out := captureStdout(t, func() {
+		autoExecRC = cmdAutoExec([]string{
+			"codex-auto-e2e",
+			"--provider", "codex",
+			"--permission-mode", "auto",
+			"--model", orchestratorModel,
+		})
+	})
+	if autoExecRC != 0 {
+		t.Fatalf("__auto-exec: rc=%d\n%s", autoExecRC, out)
+	}
+	if !strings.Contains(out, "codex command:") {
+		t.Errorf("auto exec log missing codex command header, got:\n%s", out)
+	}
+	if !strings.Contains(out, "--model "+orchestratorModel) {
+		t.Errorf("auto exec log missing model %q, got:\n%s", orchestratorModel, out)
+	}
+
+	task, err = flowdb.GetTask(db, "codex-auto-e2e")
+	if err != nil {
+		t.Fatalf("GetTask after auto exec: %v", err)
+	}
+	if task.Status != "done" {
+		t.Errorf("status after auto exec = %q, want done", task.Status)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != codexSessionID {
+		t.Errorf("session_id = %v, want %s", task.SessionID, codexSessionID)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "completed" {
+		t.Errorf("auto_run_status = %v, want completed", task.AutoRunStatus)
+	}
+	if task.AutoRunPID.Valid {
+		t.Errorf("auto_run_pid should be NULL after completion, got %v", task.AutoRunPID)
 	}
 }

@@ -671,7 +671,7 @@ its own, it's the start of a two-or-more-step workflow.
        options: [
          { label: "Regular",          description: "Normal agent session with tool-approval prompts (safer)" },
          { label: "Skip permissions", description: "Pass --dangerously-skip-permissions (faster, no prompts)" },
-         { label: "Autonomous",       description: "Headless background run — no tab, no human; agent works end-to-end and calls flow done itself (--auto; claude-only)" }
+         { label: "Autonomous",       description: "Headless background run — no tab, no human; Claude or Codex works end-to-end and calls flow done itself (--auto)" }
        ],
        multiSelect: false
      }]
@@ -679,7 +679,9 @@ its own, it's the start of a two-or-more-step workflow.
    ```
 
    Trigger phrases for Autonomous: "run X headlessly", "background run", "autonomous", "unattended", "fire and forget".
-   If Autonomous is chosen and the task provider is codex, offer Regular or Skip instead (--auto is claude-only).
+   Autonomous mode uses the task's provider and resolved model. Claude runs
+   headlessly through `claude -p`; Codex runs non-interactively through
+   `codex exec`.
 
    If the user already specified a mode in their request (e.g. "do X
    with skip permissions", "do X normally", "auto mode"), use that —
@@ -693,10 +695,12 @@ its own, it's the start of a two-or-more-step workflow.
    flow do <slug> --auto --with-file <path>
    ```
    - Returns immediately; prints the supervisor PID and log path.
-   - Supervisor runs `flow __auto-exec <slug>` detached; claude runs headlessly with `--dangerously-skip-permissions`.
+   - Supervisor runs `flow __auto-exec <slug>` detached using the task's provider and resolved model.
+   - Claude runs headlessly with `--dangerously-skip-permissions`.
+   - Codex runs with `codex exec`, prompt on stdin, and Flow's provider-neutral permission modes. The default `auto` mode uses no approval prompts with a `workspace-write sandbox`; explicit `bypass` disables approvals and sandboxing.
    - Run lifecycle: `auto_run_status` ∈ {running, completed, dead}. Check progress with `flow show task <slug>`.
    - Block on completion with `flow wait <slug> --until done`.
-   - Constraints: claude-only (D1); no `--here`; in-flight guard (use `--force` to override).
+   - Constraints: no `--here`; in-flight guard (use `--force` to override).
    - After it returns, report the log path. Do NOT tail the log — leave that to the user.
 2. Run: `flow do <user's ref>`. Pass the slug the user gave as one
    positional argument. Resolution is exact slug match. Append
@@ -1425,14 +1429,16 @@ stop.
 
 **Recipe:**
 
-1. Ask session-mode (Regular vs Skip permissions) via AskUserQuestion —
-   reuses the §4.4 pattern. Skip if the user already specified. If the
-   user asks for Codex, append `--agent codex`.
+1. Ask session-mode (Regular vs Skip permissions vs Autonomous) via
+   AskUserQuestion — reuses the §4.4 pattern. Skip if the user already
+   specified. If the user asks for Codex, append `--agent codex`.
 2. Run: `flow run playbook <slug>` (with `--dangerously-skip-permissions`
-   if chosen, and `--agent codex` if requested).
-3. The command creates a kind=playbook_run task, snapshots the brief,
-   and spawns a terminal tab. The new tab will boot the flow skill via its
-   bootstrap prompt and execute against the snapshotted brief.
+   if chosen, `--auto` if Autonomous is chosen, and `--agent codex` if
+   requested). Forward `--with` / `--with-file` only with `--auto`.
+3. The command creates a kind=playbook_run task and snapshots the brief.
+   Regular and skip-permissions modes spawn a terminal tab. Autonomous mode
+   runs detached through the task provider (`claude -p` or `codex exec`) and
+   completes only when the run calls `flow done`.
 
 **Anti-pattern (per §8):** never auto-fire. Manual trigger only. Even if
 the user mentions a playbook name in passing, do not run it without an

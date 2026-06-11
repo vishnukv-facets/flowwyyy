@@ -12,8 +12,8 @@ package app
 //
 //	flow __auto-exec <slug>   (the detached supervisor; hidden subcommand)
 //	  ├─ builds the autonomous bootstrap prompt
-//	  ├─ runs claude headlessly: `claude --session-id <id> -p <prompt>
-//	  │  --dangerously-skip-permissions`, BLOCKING until it exits
+//	  ├─ runs the task's provider headlessly (`claude -p` or `codex exec`),
+//	  │  BLOCKING until it exits
 //	  └─ finalizes auto_run_status: 'completed' if the session marked the
 //	     task done, else 'dead'; clears the pid
 
@@ -34,9 +34,20 @@ import (
 // from the standard autonomous bootstrap prompt.
 const withInjectionMarker = "--- OPERATOR INSTRUCTION FOR THIS RUN ---"
 
+type autoRunRequest struct {
+	TaskSlug       string
+	Provider       string
+	SessionID      string
+	Prompt         string
+	WorkDir        string
+	FlowRoot       string
+	PermissionMode string
+	Model          string
+}
+
 // autoLauncher starts a detached `flow __auto-exec <slug>` process with its
 // stdout/stderr redirected to logPath. Overridable in tests.
-var autoLauncher = func(slug, workDir, logPath, injection string, env []string) (int, error) {
+var autoLauncher = func(slug, workDir, logPath, provider, permissionMode, model, injection string, env []string) (int, error) {
 	self, err := os.Executable()
 	if err != nil {
 		return 0, fmt.Errorf("locate flow binary: %w", err)
@@ -48,6 +59,15 @@ var autoLauncher = func(slug, workDir, logPath, injection string, env []string) 
 	defer logF.Close()
 
 	exArgs := []string{"__auto-exec", slug}
+	if provider != "" {
+		exArgs = append(exArgs, "--provider", provider)
+	}
+	if permissionMode != "" {
+		exArgs = append(exArgs, "--permission-mode", permissionMode)
+	}
+	if model != "" {
+		exArgs = append(exArgs, "--model", model)
+	}
 	if injection != "" {
 		// Forward the one-off instruction to the supervisor, which appends
 		// it (behind the marker) to the autonomous prompt. Passed as a
@@ -73,16 +93,41 @@ var autoLauncher = func(slug, workDir, logPath, injection string, env []string) 
 	return pid, nil
 }
 
-// autoRunner executes the headless autonomous run, blocking until claude
-// exits. stdout/stderr inherit the supervisor's (already pointed at the
+// autoRunner executes the headless autonomous run, blocking until the provider
+// CLI exits. stdout/stderr inherit the supervisor's (already pointed at the
 // run log by autoLauncher). Overridable in tests.
-var autoRunner = func(sessionID, prompt string) error {
-	argv := append([]string{"--session-id", sessionID, "-p", prompt},
-		claudePermissionArgs("bypass")...)
-	cmd := exec.Command("claude", argv...)
+var autoRunner = func(req autoRunRequest) error {
+	provider := req.Provider
+	if provider == "" {
+		provider = sessionProviderClaude
+	}
+	var cmd *exec.Cmd
+	if provider == sessionProviderCodex {
+		cmd = commandRunner("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model)...)
+		cmd.Stdin = strings.NewReader(req.Prompt)
+	} else {
+		argv := append([]string{"--session-id", req.SessionID}, claudeModelArgs(req.Model)...)
+		argv = append(argv, "-p", req.Prompt)
+		argv = append(argv, claudePermissionArgs(req.PermissionMode)...)
+		cmd = exec.Command("claude", argv...)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	cmd.Env = autoRunEnv(req.FlowRoot, req.TaskSlug, provider, req.PermissionMode)
 	return cmd.Run()
+}
+
+var codexExecVersion = func() string {
+	cmd := exec.Command("codex", "exec", "--version")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		text := strings.TrimSpace(string(out))
+		if text != "" {
+			return "unknown (" + text + ")"
+		}
+		return "unknown (" + err.Error() + ")"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // processAlive reports whether the process with the given pid is alive.
@@ -105,7 +150,7 @@ var processAlive = func(pid int) bool {
 	return errors.Is(err, syscall.EPERM)
 }
 
-func launchAutoRun(task *flowdb.Task, root, cwd, injection string) (int, string, error) {
+func launchAutoRun(task *flowdb.Task, root, cwd, provider, permissionMode, model, injection string) (int, string, error) {
 	runsDir := filepath.Join(root, "tasks", task.Slug, "auto-runs")
 	if err := os.MkdirAll(runsDir, 0o755); err != nil {
 		return 0, "", fmt.Errorf("mkdir %s: %w", runsDir, err)
@@ -115,7 +160,7 @@ func launchAutoRun(task *flowdb.Task, root, cwd, injection string) (int, string,
 	logName := time.Now().UTC().Format("2006-01-02-150405") + ".log"
 	logPath := filepath.Join(runsDir, logName)
 
-	pid, err := autoLauncher(task.Slug, cwd, logPath, injection, autoChildEnv())
+	pid, err := autoLauncher(task.Slug, cwd, logPath, provider, permissionMode, model, injection, autoChildEnv())
 	if err != nil {
 		return 0, "", err
 	}
@@ -178,6 +223,9 @@ func cmdAutoExec(args []string) int {
 	}
 	slug := args[0]
 	fs := flagSet("__auto-exec")
+	providerFlag := fs.String("provider", "", "session provider: claude or codex")
+	permissionModeFlag := fs.String("permission-mode", "", "agent permission mode: default|auto|bypass")
+	modelFlag := fs.String("model", "", "resolved session model")
 	withInstr := fs.String("with", "", "one-off instruction to append to the autonomous prompt")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -200,7 +248,32 @@ func cmdAutoExec(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: load task %q: %v\n", slug, err)
 		return 1
 	}
-	if !task.SessionID.Valid || task.SessionID.String == "" {
+	provider := task.SessionProvider
+	if provider == "" {
+		provider = sessionProviderClaude
+	}
+	if *providerFlag != "" {
+		var perr error
+		provider, perr = flowdb.NormalizeSessionProvider(*providerFlag)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", perr)
+			return 2
+		}
+	}
+	permissionMode := task.PermissionMode
+	if permissionMode == "" {
+		permissionMode = flowdb.DefaultPermissionMode
+	}
+	if *permissionModeFlag != "" {
+		var perr error
+		permissionMode, perr = flowdb.NormalizePermissionMode(*permissionModeFlag)
+		if perr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", perr)
+			return 2
+		}
+	}
+	model := flowdb.NormalizeModel(*modelFlag)
+	if provider != sessionProviderCodex && (!task.SessionID.Valid || task.SessionID.String == "") {
 		fmt.Fprintf(os.Stderr, "error: task %q has no session_id; cannot run headlessly\n", slug)
 		_ = finalizeAutoRun(db, slug, "dead")
 		return 1
@@ -224,7 +297,26 @@ func cmdAutoExec(args []string) int {
 		prompt += "\n\n" + withInjectionMarker + "\n" + *withInstr
 	}
 
-	runErr := autoRunner(task.SessionID.String, prompt)
+	sessionID := ""
+	if task.SessionID.Valid {
+		sessionID = task.SessionID.String
+	}
+	cwd, _ := os.Getwd()
+	root, _ := flowRoot()
+	req := autoRunRequest{
+		TaskSlug:       task.Slug,
+		Provider:       provider,
+		SessionID:      sessionID,
+		Prompt:         prompt,
+		WorkDir:        cwd,
+		FlowRoot:       root,
+		PermissionMode: permissionMode,
+		Model:          model,
+	}
+	if provider == sessionProviderCodex {
+		printCodexAutoHeader(req)
+	}
+	runErr := autoRunner(req)
 
 	// Re-read status: the session may have called `flow done` on itself.
 	// The self-done is the authoritative success signal.
@@ -245,16 +337,35 @@ func cmdAutoExec(args []string) int {
 	return 0
 }
 
+func printCodexAutoHeader(req autoRunRequest) {
+	fmt.Printf("codex version: %s\n", codexExecVersion())
+	fmt.Printf("codex command: %s\n", agentShellCommand("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model)))
+	fmt.Printf("prompt: stdin (%d bytes)\n\n", len(req.Prompt))
+}
+
 // autoChildEnv builds the environment for the detached supervisor process.
-// It strips CLAUDE_CODE_SESSION_ID (so `flow show task` inside the run
-// doesn't reverse-lookup the dispatch session) and overlays flowSessionEnv
-// so hook attribution (FLOW_ROOT, PATH, FLOW_HOOK_OWNED) works correctly.
+// It strips ambient task/session identity (so `flow show task` inside the run
+// doesn't reverse-lookup the dispatch session) and overlays flowSessionEnv so
+// hook attribution (FLOW_ROOT, PATH, FLOW_HOOK_OWNED) works correctly.
 func autoChildEnv() []string {
-	overlay := flowSessionEnv(os.Getenv("FLOW_ROOT"))
+	return autoRunEnv(os.Getenv("FLOW_ROOT"), "", "", "")
+}
+
+func autoRunEnv(root, taskSlug, provider, permissionMode string) []string {
+	overlay := flowSessionEnv(root)
+	if strings.TrimSpace(taskSlug) != "" {
+		overlay["FLOW_TASK"] = taskSlug
+	}
+	if strings.TrimSpace(provider) != "" {
+		overlay["FLOW_SESSION_PROVIDER"] = provider
+	}
+	if strings.TrimSpace(permissionMode) != "" {
+		overlay["FLOW_PERMISSION_MODE"] = permissionMode
+	}
 	out := make([]string, 0, len(os.Environ())+len(overlay))
 	for _, kv := range os.Environ() {
 		name, _, _ := strings.Cut(kv, "=")
-		if name == "CLAUDE_CODE_SESSION_ID" {
+		if isAmbientAgentContextEnv(name) {
 			continue
 		}
 		if _, shadowed := overlay[name]; shadowed {
@@ -266,6 +377,27 @@ func autoChildEnv() []string {
 		out = append(out, k+"="+v)
 	}
 	return out
+}
+
+func isAmbientAgentContextEnv(name string) bool {
+	switch name {
+	case "CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID",
+		"FLOW_TASK", "FLOW_SESSION_PROVIDER", "FLOW_PERMISSION_MODE":
+		return true
+	default:
+		return false
+	}
+}
+
+func codexExecCLIArgs(cwd, flowRootPath, permissionMode, model string) []string {
+	args := append([]string{}, codexPermissionArgs(permissionMode)...)
+	args = append(args, "exec", "--color", "never")
+	if cwd != "" {
+		args = append(args, "--cd", cwd)
+	}
+	args = appendCodexWritableRoots(args, cwd, flowRootPath)
+	args = append(args, codexModelArgs(model)...)
+	return append(args, "-")
 }
 
 // buildAutoBootstrapPrompt constructs the headless-run system prompt.
@@ -286,7 +418,7 @@ func buildAutoBootstrapPrompt(slug, kind, playbookSlug string) string {
 			"1. Invoke the flow skill via the Skill tool — it governs workflows, the bootstrap contract, KB discipline, and scope-creep detection.\n"+
 			showStep+"\n"+
 			"3. If a project is listed on the task, run: flow show project <slug> and read its brief + updates.\n"+
-			"4. Read CLAUDE.md in your work_dir and any nested CLAUDE.md under subtrees you will modify — they override the brief.\n\n"+
+			"4. Read AGENTS.md and/or CLAUDE.md in your work_dir and any nested convention files under subtrees you will modify — they override the brief.\n\n"+
 			"Operating rules for autonomous mode:\n"+
 			"- Do NOT use AskUserQuestion and do NOT wait for user input — there is no one to answer. Where the interactive workflow would ask, decide using best engineering judgment and proceed. Resolve any deferred/unclear brief sections yourself rather than stopping.\n"+
 			"- Follow the repo's conventions (build/test commands, TDD if the repo expects it). Verify your work by running the tests before considering the task complete.\n"+

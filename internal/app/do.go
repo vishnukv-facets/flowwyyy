@@ -67,7 +67,7 @@ func cmdDo(args []string) int {
 	force := fs.Bool("force", false, "open even if the task's Claude session is already running elsewhere")
 	here := fs.Bool("here", false, "bind THIS Claude/Codex session to the task (no new tab); requires running inside an agent session")
 	noWorktree := fs.Bool("no-worktree", false, "spawn the agent in the task's work_dir directly instead of a per-task git worktree")
-	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; claude-only). The session self-completes via `flow done`. Implies permission bypass")
+	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; Claude or Codex). The session self-completes via `flow done`")
 	withInstr := fs.String("with", "", "one-off instruction appended to the autonomous prompt (requires --auto)")
 	withFile := fs.String("with-file", "", "file whose contents are appended to the autonomous prompt (requires --auto)")
 	// Two-pass parse so the slug positional may appear before OR after
@@ -154,12 +154,6 @@ func cmdDo(args []string) int {
 		} else if captured != "" {
 			task.SessionID = sql.NullString{String: captured, Valid: true}
 		}
-	}
-
-	// D1: --auto is Claude-only for v1.
-	if *auto && provider == sessionProviderCodex {
-		fmt.Fprintln(os.Stderr, "error: --auto is claude-only for now; codex headless (codex exec) is a follow-up")
-		return 1
 	}
 
 	// Live-session guard: if this task's session_id is already running
@@ -472,7 +466,7 @@ func cmdDo(args []string) int {
 	if *dangerSkip {
 		permissionMode = "bypass"
 	}
-	if *auto {
+	if *auto && provider == sessionProviderClaude {
 		permissionMode = "bypass"
 	}
 	if changed, err := agenthooks.InstallLocalWithOptions(cwd, agenthooks.InstallOptions{
@@ -497,10 +491,10 @@ func cmdDo(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
-		pid, logPath, err := launchAutoRun(task, root, cwd, injectionText)
+		pid, logPath, err := launchAutoRun(task, root, cwd, provider, permissionMode, sessionModel, injectionText)
 		if err != nil {
 			if needsBootstrap {
-				rollbackPreallocatedSession(db, task.Slug, sessionID)
+				rollbackAutoLaunchSession(db, task.Slug, provider, sessionID)
 			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
@@ -619,23 +613,47 @@ func cmdDo(args []string) int {
 	return 0
 }
 
-// rollbackPreallocatedSession undoes the session claim + status flip written
-// in the pre-alloc TX when a subsequent launch fails (auto path: no tab was
-// spawned yet). The WHERE clause guards against a concurrent `flow do` having
-// mutated session_id between commit and now — only rolls back if we still own
-// the session. Claude-only; the auto path is always Claude (D1).
-func rollbackPreallocatedSession(db *sql.DB, slug, sessionID string) {
-	if _, err := db.Exec(
-		`UPDATE tasks SET
-			session_id        = NULL,
-			session_started   = NULL,
-			status            = 'backlog',
-			status_changed_at = NULL,
-			updated_at        = ?
-		 WHERE slug=? AND session_id=?`,
-		flowdb.NowISO(), slug, sessionID,
-	); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: rollback pre-allocated session: %v\n", err)
+// rollbackAutoLaunchSession undoes the session claim + status flip written
+// in the pre-alloc TX when a subsequent autonomous launch fails (no tab or
+// supervisor survived). The WHERE clause guards against a concurrent `flow do`
+// having mutated session state between commit and now.
+func rollbackAutoLaunchSession(db *sql.DB, slug, provider, sessionID string) {
+	now := flowdb.NowISO()
+	var err error
+	if provider == sessionProviderCodex {
+		_, err = db.Exec(
+			`UPDATE tasks SET
+				session_started    = NULL,
+				status             = 'backlog',
+				status_changed_at  = NULL,
+				auto_run_status    = NULL,
+				auto_run_pid       = NULL,
+				auto_run_started   = NULL,
+				auto_run_finished  = NULL,
+				auto_run_log       = NULL,
+				updated_at         = ?
+			 WHERE slug=? AND session_provider=? AND session_id IS NULL`,
+			now, slug, sessionProviderCodex,
+		)
+	} else {
+		_, err = db.Exec(
+			`UPDATE tasks SET
+				session_id         = NULL,
+				session_started    = NULL,
+				status             = 'backlog',
+				status_changed_at  = NULL,
+				auto_run_status    = NULL,
+				auto_run_pid       = NULL,
+				auto_run_started   = NULL,
+				auto_run_finished  = NULL,
+				auto_run_log       = NULL,
+				updated_at         = ?
+			 WHERE slug=? AND session_id=?`,
+			now, slug, sessionID,
+		)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: rollback auto launch session: %v\n", err)
 	}
 }
 

@@ -373,6 +373,30 @@ func TestSkillMentionsPlaybooks(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsCodexAutoRuns(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Headless background run",
+		"Claude or Codex",
+		"codex exec",
+		"workspace-write sandbox",
+		"task's provider and resolved model",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Codex auto-run guidance %q", want)
+		}
+	}
+	for _, stale := range []string{
+		"--auto is claude-only",
+		"claude-only (D1)",
+		"offer Regular or Skip instead",
+	} {
+		if strings.Contains(got, stale) {
+			t.Errorf("skill still contains stale Claude-only autonomous guidance %q", stale)
+		}
+	}
+}
+
 func TestSkillMentionsDMMonitoring(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{
