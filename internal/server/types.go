@@ -36,7 +36,7 @@ type Server struct {
 	// routes untracked messages into. Held on the server so the steerer
 	// backfill (ListenAndServe) can replay catch-up messages through the SAME
 	// cascade via ObserveBatch. Nil when no DB is configured.
-	cascade       *steering.Cascade
+	cascade *steering.Cascade
 	// steeringRuns holds the recent + in-flight cascade runs (the live CI-style
 	// stage view). Populated by the cascade's Progress hook; read by the inbox
 	// UI over /api/steering/runs + the steering_stage WS event. Always non-nil
@@ -192,6 +192,11 @@ type TaskView struct {
 	SessionPath         *string       `json:"session_path,omitempty"`
 	Live                bool          `json:"live"`
 	RuntimeStatus       *string       `json:"runtime_status,omitempty"`
+	AutoRunStatus       *string       `json:"auto_run_status,omitempty"`
+	AutoRunPID          *int64        `json:"auto_run_pid,omitempty"`
+	AutoRunStarted      *string       `json:"auto_run_started,omitempty"`
+	AutoRunFinished     *string       `json:"auto_run_finished,omitempty"`
+	AutoRunLog          *string       `json:"auto_run_log,omitempty"`
 	DaysInStatus        int           `json:"days_in_status"`
 	StaleDays           *int          `json:"stale_days"`
 	TemporalSummary     string        `json:"temporal_summary"`

@@ -44,6 +44,13 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	view.SessionStarted = nullStringPtr(t.SessionStarted)
 	view.SessionLastResumed = nullStringPtr(t.SessionLastResumed)
 	view.SessionPath = nullStringPtr(t.SessionPath)
+	view.AutoRunStatus = nullStringPtr(t.AutoRunStatus)
+	view.AutoRunStarted = nullStringPtr(t.AutoRunStarted)
+	view.AutoRunFinished = nullStringPtr(t.AutoRunFinished)
+	view.AutoRunLog = nullStringPtr(t.AutoRunLog)
+	if t.AutoRunPID.Valid {
+		view.AutoRunPID = &t.AutoRunPID.Int64
+	}
 	view.InboxSeenAt = nullStringPtr(t.InboxSeenAt)
 	view.ArchivedAt = nullStringPtr(t.ArchivedAt)
 	view.DeletedAt = nullStringPtr(t.DeletedAt)

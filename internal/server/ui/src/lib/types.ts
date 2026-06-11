@@ -54,6 +54,11 @@ export interface TaskView {
   session_last_resumed: string | null
   live: boolean
   runtime_status?: string
+  auto_run_status?: string
+  auto_run_pid?: number
+  auto_run_started?: string
+  auto_run_finished?: string
+  auto_run_log?: string
   days_in_status: number
   stale_days: number | null
   temporal_summary: string

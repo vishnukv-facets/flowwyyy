@@ -105,29 +105,21 @@ export function SessionDetail({ slug }: { slug: string }) {
 
   const { data: ui } = useUiData()
   const done = task?.status === 'done'
+  const autoRunRunning = task?.auto_run_status === 'running'
   // The orchestration tree is only meaningful when this task is part of a
   // spawn/tell/wait family — hide the tab otherwise so solo tasks stay clean.
   const hasFamily = !!(
     task &&
     (task.parent_slug || (task.parents?.length ?? 0) > 0 || (task.children?.length ?? 0) > 0)
   )
-  // If the tree tab was active and we land on a task with no family, fall back
-  // to the brief so the body doesn't render against a vanished tab. Gate on
-  // `task` being loaded: while the next task is still fetching, hasFamily is
-  // transiently false, and resetting then would wrongly drop the tree tab when
-  // clicking through a family.
-  useEffect(() => {
-    if (task && tab === 'tree' && !hasFamily) setTab('brief')
-  }, [task, tab, hasFamily])
+  const visibleTab: Tab = task && tab === 'tree' && !hasFamily ? 'brief' : tab
   // Once a done task has been "revisited", let the live terminal mount even
   // though task.status is still done — the backend resumes its prior session.
-  const canTerminal = open && (!done || reopened)
   const liveMode = agent?.terminal?.mode
-  useEffect(() => {
-    if (!done && (liveMode === 'browser' || liveMode === 'shared' || agent?.status === 'running')) {
-      setOpen(true)
-    }
-  }, [liveMode, agent?.status, done])
+  const terminalShouldAutoOpen =
+    !done && !autoRunRunning && (liveMode === 'browser' || liveMode === 'shared' || agent?.status === 'running')
+  const terminalVisible = open || terminalShouldAutoOpen
+  const canTerminal = terminalVisible && (!done || reopened) && !autoRunRunning
 
   // Esc exits fullscreen terminal.
   useEffect(() => {
@@ -332,7 +324,7 @@ export function SessionDetail({ slug }: { slug: string }) {
           )}
 
           <div className="toolbar" style={{ marginBottom: 4 }}>
-            {!done && !open && (
+            {!done && !terminalVisible && !autoRunRunning && (
               <button className="btn primary sm" disabled={busy === 'open'} onClick={() => setOpen(true)}>
                 <Play size={14} /> {task.session_id ? 'Resume session' : 'Start session'}
               </button>
@@ -375,11 +367,17 @@ export function SessionDetail({ slug }: { slug: string }) {
                     <button
                       key={t.id}
                       className="menu-item"
-                      disabled={!t.available}
-                      title={t.available ? `Open in ${t.label}` : t.reason || `${t.label} not available on this system`}
+                      disabled={!t.available || autoRunRunning}
+                      title={
+                        autoRunRunning
+                          ? 'Autonomous run is already active for this task'
+                          : t.available
+                            ? `Open in ${t.label}`
+                            : t.reason || `${t.label} not available on this system`
+                      }
                       onClick={(e) => {
                         closeMenu(e)
-                        if (t.available) run(t.id)
+                        if (t.available && !autoRunRunning) run(t.id)
                       }}
                     >
                       <TerminalIcon id={t.id} size={15} /> {t.label}
@@ -411,16 +409,26 @@ export function SessionDetail({ slug }: { slug: string }) {
                   </button>
                 )}
                 {!done && (
-                  <button className="menu-item" onClick={(e) => { closeMenu(e); setOpen(true); run('restart', {}, { reconnect: true }) }}>
+                  <button
+                    className="menu-item"
+                    disabled={autoRunRunning}
+                    title={autoRunRunning ? 'Autonomous run is already active for this task' : undefined}
+                    onClick={(e) => { closeMenu(e); if (!autoRunRunning) { setOpen(true); run('restart', {}, { reconnect: true }) } }}
+                  >
                     <RotateCcw size={14} /> Restart
                   </button>
                 )}
                 {!done && (
-                  <button className="menu-item" onClick={(e) => { closeMenu(e); setOpen(true); run('restart-fresh', {}, { reconnect: true }) }}>
+                  <button
+                    className="menu-item"
+                    disabled={autoRunRunning}
+                    title={autoRunRunning ? 'Autonomous run is already active for this task' : undefined}
+                    onClick={(e) => { closeMenu(e); if (!autoRunRunning) { setOpen(true); run('restart-fresh', {}, { reconnect: true }) } }}
+                  >
                     <Sparkles size={14} /> Restart with fresh session
                   </button>
                 )}
-                {!done && open && (
+                {!done && terminalVisible && (
                   <button className="menu-item" onClick={(e) => { closeMenu(e); run('pause', {}, { close: true }) }}>
                     <Pause size={14} /> Pause session
                   </button>
@@ -581,7 +589,25 @@ export function SessionDetail({ slug }: { slug: string }) {
             ) : (
               <div className="term-placeholder">
                 <TerminalSquare size={34} />
-                {done ? (
+                {autoRunRunning ? (
+                  <div className="col" style={{ alignItems: 'center', gap: 10 }}>
+                    <div className="col" style={{ alignItems: 'center', gap: 4 }}>
+                      <div className="dim">Autonomous run active</div>
+                      <div className="faint" style={{ fontSize: 12, maxWidth: 400, textAlign: 'center' }}>
+                        The detached {provider} run is working in the background. Interactive resume is locked until it finishes.
+                      </div>
+                    </div>
+                    <div className="row gap wrap" style={{ justifyContent: 'center' }}>
+                      {task.auto_run_pid && <span className="badge">pid {task.auto_run_pid}</span>}
+                      {task.auto_run_started && <span className="badge">started {dateTime(task.auto_run_started)}</span>}
+                    </div>
+                    {task.auto_run_log && (
+                      <div className="faint mono" style={{ fontSize: 11.5, maxWidth: 520, textAlign: 'center' }}>
+                        {task.auto_run_log}
+                      </div>
+                    )}
+                  </div>
+                ) : done ? (
                   <div className="col" style={{ alignItems: 'center', gap: 10 }}>
                     <div className="col" style={{ alignItems: 'center', gap: 4 }}>
                       <div className="dim">This task is done.</div>
@@ -623,26 +649,26 @@ export function SessionDetail({ slug }: { slug: string }) {
             <SideInfo task={task} agent={agent} />
             <div className="tabs" style={{ padding: '0 12px' }}>
               {(['brief', 'diff', 'transcript', 'updates', ...(hasFamily ? ['tree'] : [])] as Tab[]).map((t) => (
-                <button key={t} className={`tab${tab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
+                <button key={t} className={`tab${visibleTab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
                   {t === 'diff' && agent?.diff?.files ? `diff (${agent.diff.files})` : t}
                 </button>
               ))}
             </div>
             <div className="tab-body" style={{ padding: '14px 14px' }}>
-              {tab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} onExpand={() => setBriefModal(true)} />}
-              {tab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} slug={slug} trackLook />}
-              {tab === 'transcript' && (
+              {visibleTab === 'brief' && <BriefTab slug={slug} summary={agent?.summary} onExpand={() => setBriefModal(true)} />}
+              {visibleTab === 'diff' && <DiffTab files={agent?.diff_files} error={agentError} onExpand={() => setDiffModal(true)} slug={slug} trackLook />}
+              {visibleTab === 'transcript' && (
                 <TranscriptTab
                   slug={slug}
-                  active={tab === 'transcript'}
+                  active={visibleTab === 'transcript'}
                   fallback={agent?.transcript}
                   onExpand={() => setTranscriptModal(true)}
                 />
               )}
-              {tab === 'updates' && (
+              {visibleTab === 'updates' && (
                 <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} initialFile={updateParam} />
               )}
-              {tab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
+              {visibleTab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
             </div>
           </div>
         )}

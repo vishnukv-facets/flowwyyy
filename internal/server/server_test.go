@@ -67,6 +67,47 @@ func TestTaskAPIUsesFlowDataAndFiles(t *testing.T) {
 	}
 }
 
+func TestTaskAPIExposesAutoRunState(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	logPath := filepath.Join(root, "tasks", "build-ui", "auto-runs", "2026-05-12-043105.log")
+	if _, err := db.Exec(
+		`UPDATE tasks SET
+			auto_run_status = 'running',
+			auto_run_pid = ?,
+			auto_run_started = ?,
+			auto_run_log = ?
+		 WHERE slug = 'build-ui'`,
+		4242,
+		"2026-05-12T10:01:05+05:30",
+		logPath,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["auto_run_status"] != "running" {
+		t.Fatalf("auto_run_status = %#v, want running; body = %s", raw["auto_run_status"], rec.Body.String())
+	}
+	if raw["auto_run_pid"] != float64(4242) {
+		t.Fatalf("auto_run_pid = %#v, want 4242", raw["auto_run_pid"])
+	}
+	if raw["auto_run_log"] != logPath {
+		t.Fatalf("auto_run_log = %#v, want %q", raw["auto_run_log"], logPath)
+	}
+}
+
 func TestNewWiresGitHubListenerWhenDBAvailable(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, Version: "test"})
@@ -1776,6 +1817,51 @@ func TestPrepareTerminalLaunchResumesCodexSession(t *testing.T) {
 	}
 	if !task.SessionLastResumed.Valid {
 		t.Fatalf("session_last_resumed not recorded: %+v", task)
+	}
+}
+
+func TestPrepareTerminalLaunchRefusesRunningAutoRun(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	workDir := t.TempDir()
+	sessionID := "55555555-5555-4555-8555-555555555555"
+	if _, err := db.Exec(
+		`UPDATE tasks SET
+			status = 'in-progress',
+			session_provider = 'codex',
+			session_id = ?,
+			session_started = ?,
+			session_last_resumed = NULL,
+			work_dir = ?,
+			auto_run_status = 'running',
+			auto_run_pid = ?,
+			auto_run_started = ?,
+			auto_run_log = ?
+		 WHERE slug = 'build-ui'`,
+		sessionID,
+		"2026-05-12T10:01:00+05:30",
+		workDir,
+		os.Getpid(),
+		"2026-05-12T10:01:05+05:30",
+		filepath.Join(root, "tasks", "build-ui", "auto-runs", "2026-05-12-043105.log"),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	_, err := srv.prepareTerminalLaunch("build-ui")
+	if err == nil || !strings.Contains(err.Error(), "autonomous run is already running") {
+		t.Fatalf("prepareTerminalLaunch err = %v, want running auto-run blocker", err)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.SessionLastResumed.Valid {
+		t.Fatalf("refused launch should not record session_last_resumed: %+v", task)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
+		t.Fatalf("auto run should stay running after refused launch: %+v", task)
 	}
 }
 
