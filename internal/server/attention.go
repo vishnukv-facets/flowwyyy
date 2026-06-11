@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -310,6 +311,12 @@ func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
 			Label:       "Make task & start",
 			Description: "Creates the task and starts its agent session in the UI.",
 		},
+		{
+			Action:      "capture_kb",
+			Label:       "Save to KB",
+			Description: "Records the durable knowledge in this card into your KB (kb/*.md) via an agent — no task created.",
+			Primary:     attentionActionPrimary(it, "capture_kb"),
+		},
 	}
 	if matched != "" {
 		out = append(out, AttentionActionPreview{
@@ -456,6 +463,23 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "made task from " + id}, http.StatusOK
+	case "capture-kb", "capture_kb":
+		// A hidden bypass agent distills the card into a durable KB fact and writes
+		// it to kb/*.md — pure local filesystem work, so a headless `claude -p`
+		// handles it (no connector MCP, unlike send-reply on Slack). Run it in the
+		// background: capture can outlast the UI's RPC timeout, and the card flips
+		// to 'acted' once the agent confirms it wrote. No visible task is spawned.
+		kbDir := filepath.Join(s.cfg.FlowRoot, "kb")
+		go func(it flowdb.FeedItem) {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := steering.CaptureKBViaAgent(bctx, s.cfg.DB, it, kbDir); err != nil {
+				fmt.Fprintf(os.Stderr, "attention: capture-kb agent: %v\n", err)
+				return
+			}
+			s.publishUIChange("attention")
+		}(item)
+		return actionResponse{OK: true, Message: "saving to your KB via an agent — no task created"}, http.StatusOK
 	case "make-task-start", "make_task_start":
 		if err := attentionMakeTask(s, item); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError

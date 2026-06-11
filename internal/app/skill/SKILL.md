@@ -1214,9 +1214,17 @@ write one entry per item rather than cramming them into a single line.
    paraphrased) is already there, don't append a duplicate.
 3. **Never invent.** Only record what the user literally said or clearly
    implied. Do not embellish, extrapolate, or guess.
-4. **Never edit existing entries.** Append only. If a fact changes, add
-   a new dated entry noting the change — the file is an append-only log
-   so readers can see evolution.
+4. **Real-time scoop is append-only.** When scooping a fact live, never edit
+   existing entries; if a fact changes, add a new dated entry noting the change.
+   **Exception — close-out upgrade:** during the `flow done` close-out sweep,
+   when the completed work *settles a provisional entry* (a plan/intention now
+   executed, e.g. "X plans to do Y by Friday" once Y is done) or contradicts a
+   stated fact, you MAY **supersede that entry in place** — rewrite the plan into
+   the outcome, or remove it if now trivial — so the always-loaded KB stays
+   current instead of carrying stale plans into every future brief. Be
+   conservative: supersede ONLY what the work clearly settled; never touch
+   entries you're unsure about, and never delete facts that are still true. Git
+   history preserves the evolution.
 5. **One bucket per fact.** If a fact plausibly fits two categories, pick
    the more specific one. Do not cross-post.
 6. **Privacy.** KB files may contain personal or org-sensitive info. If

@@ -397,6 +397,8 @@ func outcomeForAction(action string) string {
 		return "dismissed"
 	case "mute_channel", "mute_sender", "mute_thread":
 		return "muted"
+	case "capture_kb":
+		return "captured"
 	case "retriage":
 		return "retriaged"
 	case "open_source", "open_session":

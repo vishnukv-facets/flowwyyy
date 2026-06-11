@@ -45,6 +45,15 @@ test('live triage row renders resolved origin, not the raw thread key', () => {
   assert.doesNotMatch(attentionSource, /\{run\.thread_key \|\| 'untracked event'\}/)
 })
 
+// Capture-to-KB: a card can route durable knowledge into the KB instead of a
+// task. The action button is always present and promoted to primary when the
+// steerer suggested capture_kb.
+test('attention card offers a Save to KB action wired to capture-kb', () => {
+  assert.match(attentionSource, /Save to KB/)
+  assert.match(attentionSource, /onAct\(item, 'capture-kb'\)/)
+  assert.match(attentionSource, /item\.suggested_action === 'capture_kb'/)
+})
+
 // SteeringConfig groups every relocated steering key (Triage scope / Autonomy /
 // Performance) and reuses the shared picker + autonomy components.
 test('steering config consolidates every steering key', () => {

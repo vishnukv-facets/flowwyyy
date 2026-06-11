@@ -16,6 +16,8 @@ func TestParseAction(t *testing.T) {
 		{"reply", ActionReply, true},
 		{"afk_reply", ActionAFKReply, true},
 		{"digest_only", ActionDigestOnly, true},
+		{"capture_kb", ActionCaptureKB, true},
+		{"  CAPTURE_KB ", ActionCaptureKB, true},
 		{"drop", ActionDrop, true},
 		{"MAKE_TASK", ActionMakeTask, true},
 		{"  forward  ", ActionForward, true},

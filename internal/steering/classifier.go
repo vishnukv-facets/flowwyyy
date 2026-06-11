@@ -210,8 +210,9 @@ func stage2Prime(taskIndex string) string {
 
 You are scoring one incoming message for an operator. Using the message and the operator's current task/project index, decide the best single action and how confident you are.
 
-Allowed suggested_action values: make_task, forward, reply, afk_reply, digest_only, drop.
-- make_task: this should become a tracked task.
+Allowed suggested_action values: make_task, capture_kb, forward, reply, afk_reply, digest_only, drop.
+- make_task: this should become a tracked task (there is work for the operator to do).
+- capture_kb: durable KNOWLEDGE the operator should remember long-term — a decision, a plan, an org/process/product fact, a "how things work" detail — that needs NO action from them. Mutually exclusive with make_task: if there is work to do, prefer make_task; choose capture_kb only when the value is the fact itself, not a follow-up.
 - forward: it belongs to an existing task (set matched_task to that slug). Forward ONLY on concrete linkage — same thread/DM, same participants, or an explicit reference to that task's specific work. A shared topic alone ("a migration", "a release", "a deploy") is NOT a match; when the link is only thematic, use digest_only or make_task instead.
 - reply: it needs a reply from the operator.
 - digest_only: noteworthy but not actionable now.
@@ -220,7 +221,7 @@ Allowed suggested_action values: make_task, forward, reply, afk_reply, digest_on
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
 
 Respond with ONLY a minified JSON object, no prose, no code fences:
-{"suggested_action":"...","matched_task":"<slug or empty>","suggested_project":"<slug or empty>","suggested_priority":"high|medium|low","urgency":"urgent|normal|low","confidence":0.0,"summary":"<= 140 chars","reason":"<why>"}
+{"suggested_action":"make_task|capture_kb|forward|reply|afk_reply|digest_only|drop","matched_task":"<slug or empty>","suggested_project":"<slug or empty>","suggested_priority":"high|medium|low","urgency":"urgent|normal|low","confidence":0.0,"summary":"<= 140 chars","reason":"<why>"}
 
 Operator task/project index:
 ` + taskIndex

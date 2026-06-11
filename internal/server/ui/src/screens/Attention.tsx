@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
-import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -375,6 +375,8 @@ function AttentionCard({
   const busy = !!retriaging || !!item.retriaging
   const [, navigate] = useLocation()
   const channelLabel = item.channel_name || item.channel || ''
+  // The steerer suggested capturing this as durable knowledge rather than a task.
+  const kbPrimary = item.suggested_action === 'capture_kb'
   const linkLabel =
     item.source === 'slack' ? 'View in Slack' : item.source === 'github' ? 'View on GitHub' : 'Open source'
   // Clicking the card body opens the decision detail; the origin link and the
@@ -453,7 +455,7 @@ function AttentionCard({
             </>
           ) : (
             <>
-              <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
+              <button type="button" className={`btn ${kbPrimary ? '' : 'primary'} sm`} disabled={disabled} onClick={() => onAct(item, 'make-task')}>
                 <ListPlus size={13} /> Make task
               </button>
               <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
@@ -461,6 +463,17 @@ function AttentionCard({
               </button>
             </>
           )}
+          {/* Capture durable knowledge into the KB instead of a task. Always
+              available; promoted to primary when the steerer suggested it. */}
+          <button
+            type="button"
+            className={`btn ${kbPrimary ? 'primary' : 'sm'} sm`}
+            disabled={disabled}
+            title="Distill this into a durable KB fact (kb/*.md) — no task created"
+            onClick={() => onAct(item, 'capture-kb')}
+          >
+            <BookMarked size={13} /> Save to KB
+          </button>
           {item.draft ? (
             // Opens the detail modal (review/edit before sending) rather than
             // blind-sending — the action row already stopPropagation's the

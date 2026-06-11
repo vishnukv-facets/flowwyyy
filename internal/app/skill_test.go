@@ -620,6 +620,22 @@ func TestSkillEmphasizesCloseOutValue(t *testing.T) {
 	}
 }
 
+// TestSkillDocumentsCloseoutKBUpgrade pins §4.10's scoped exception to append-only:
+// at close-out, completed work may supersede a provisional KB entry (a plan now
+// executed) in place, so the always-loaded KB doesn't carry stale plans forever.
+func TestSkillDocumentsCloseoutKBUpgrade(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Real-time scoop is append-only",
+		"Exception — close-out upgrade",
+		"supersede that entry in place",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing close-out KB-upgrade rule: %q", want)
+		}
+	}
+}
+
 // TestSkillHasAccessibilityErrorRecipe pins the §4.4 recipe for
 // handling the macOS Accessibility error from the Terminal.app
 // backend: name Terminal definitively (not Claude/flow), open the

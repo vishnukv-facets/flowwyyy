@@ -20,7 +20,12 @@ const (
 	ActionReply      Action = "reply"
 	ActionAFKReply   Action = "afk_reply"
 	ActionDigestOnly Action = "digest_only"
-	ActionDrop       Action = "drop"
+	// ActionCaptureKB records the event as durable knowledge in the operator's KB
+	// (kb/*.md) rather than as a task — for decisions, plans, and org/process
+	// facts worth remembering long-term. Mutually exclusive with make_task at the
+	// classifier level; operator-approved (never auto-acted) like outward replies.
+	ActionCaptureKB Action = "capture_kb"
+	ActionDrop      Action = "drop"
 )
 
 // ParseAction parses a triage action string (trimmed, case-insensitive).
@@ -38,6 +43,8 @@ func ParseAction(s string) (Action, bool) {
 		return ActionAFKReply, true
 	case ActionDigestOnly:
 		return ActionDigestOnly, true
+	case ActionCaptureKB:
+		return ActionCaptureKB, true
 	case ActionDrop:
 		return ActionDrop, true
 	default:

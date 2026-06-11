@@ -582,6 +582,19 @@ func TestCmdDoneCloseoutSweepSkipsProjectStepForFloating(t *testing.T) {
 	}
 }
 
+// TestCloseoutSweepPromptUpgradesOutdatedKB verifies the close-out sweep is told
+// to UPGRADE existing KB entries this work made stale (a captured plan now
+// executed), not only append — so the always-loaded KB stays current.
+func TestCloseoutSweepPromptUpgradesOutdatedKB(t *testing.T) {
+	setupFlowRoot(t)
+	p := buildCloseoutSweepPrompt("some-slug", "")
+	for _, want := range []string{"supersede", "outdated", "in place"} {
+		if !contains(p, want) {
+			t.Errorf("close-out prompt missing KB-upgrade cue %q", want)
+		}
+	}
+}
+
 // TestCmdDoneSweepFailureStillSucceeds verifies that a non-zero exit
 // from the sweep runner does NOT fail the done command — the status
 // flip is the durability boundary, the sweep is best-effort.

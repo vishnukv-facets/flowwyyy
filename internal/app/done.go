@@ -235,15 +235,17 @@ func buildCloseoutSweepPrompt(slug, projectSlug string) string {
 			"   Most task transcripts contribute nothing to the KB. Mechanical work, narrow bug fixes, local refactors, routine debugging — these almost never produce KB entries. The expected answer for most files on most tasks is 'no'. Don't reach.\n\n"+
 			"4. Writing KB entries — INTERPRET the essence; do not transcribe.\n\n"+
 			"   This is the close-out mode of §4.10 and is DIFFERENT from real-time scoop. In real-time scoop you capture what the user just said, mostly verbatim, because it's a single fresh fact. Here you've read the whole conversation — your job is to SYNTHESIZE: pull out the durable insight in compact paraphrase, in your own words, capturing the essence and (where helpful) the why. Avoid quote dumps. One concise dated bullet per insight.\n\n"+
-			"   For each KB file you decide needs an entry, Read it first to check for duplicates (in any form — paraphrase, near-duplicate, superset). If something similar already exists, skip; do not append. Append using the §4.10 entry format: one dated bullet per insight, your own paraphrase capturing the essence, never invent or embellish beyond what the transcript supports.\n\n",
+			"   For each KB file you decide needs an entry, Read it first to check for duplicates (in any form — paraphrase, near-duplicate, superset). If something similar already exists, skip; do not append. Append using the §4.10 entry format: one dated bullet per insight, your own paraphrase capturing the essence, never invent or embellish beyond what the transcript supports.\n\n"+
+			"5. UPGRADE outdated entries — keep the KB current, don't just pile on.\n\n"+
+			"   The KB loads into EVERY future task brief, so a stale fact misleads every future session. As you read each KB file, check whether THIS completed work makes an existing entry outdated — most often a provisional fact captured earlier (a plan/intention, e.g. \"X plans to do Y by Friday\") whose work this session actually finished, or a decision this work changed. When it does, UPDATE that entry in place to the settled reality (rewrite the plan into the outcome), or remove it if the settled fact is now trivial/obvious. This supersede-in-place is the ONE exception to §4.10's append-only rule and applies ONLY here at close-out. Be conservative: supersede ONLY entries THIS work clearly settled or contradicted; never touch entries you're unsure about, and never delete durable facts that are still true. Git history preserves what changed.\n\n",
 		slug, mindset, slug, root, root, root, root, root,
 	)
 
-	tailNum := "5"
+	tailNum := "6"
 	projectStep := ""
 	if projectSlug != "" {
 		projectStep = fmt.Sprintf(
-			"5. Project update — looser bar, narrative OK.\n\n"+
+			"6. Project update — looser bar, narrative OK.\n\n"+
 				"   This task is attached to project %q. The project log is local and lives next to the work, so a richer entry is fine — capture what got decided, what shipped, what was tried, what's now open. Sibling-task sessions will read this to catch up.\n\n"+
 				"   Write ONE file at:\n"+
 				"     %s/projects/%s/updates/YYYY-MM-DD-<kebab-title>.md\n"+
@@ -251,7 +253,7 @@ func buildCloseoutSweepPrompt(slug, projectSlug string) string {
 				"   The (still real, but looser) bar: write ONLY if the session moved the project forward — a decision was made, something shipped, a learning emerged, a blocker was added/removed, an approach was chosen, etc. Skip when the work was purely mechanical with no project-level narrative (e.g. a single typo fix). Do NOT write a template or a 'task X was marked done' summary. The goal is something a sibling-task session would actually want to read; if you can't picture that, skip.\n\n",
 			projectSlug, root, projectSlug,
 		)
-		tailNum = "6"
+		tailNum = "7"
 	}
 
 	tail := fmt.Sprintf(
