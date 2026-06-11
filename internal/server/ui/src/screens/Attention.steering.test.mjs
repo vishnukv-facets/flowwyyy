@@ -15,7 +15,7 @@ const pickerSource = read('../components/ChannelPicker.tsx')
 // Steering (attention-router) config moved off the Settings page onto a third
 // `config` view of the Attention screen, co-located with the feed it governs.
 test('attention screen hosts a config view that renders SteeringConfig', () => {
-  assert.match(attentionSource, /VIEWS = \['feed', 'trace', 'config'\]/)
+  assert.match(attentionSource, /VIEWS = \['feed', 'live', 'trace', 'config'\]/)
   assert.match(attentionSource, /import \{ SteeringConfig \}/)
   assert.match(attentionSource, /<SteeringConfig \/>/)
   // The third segment is reachable + deep-linkable via ?view=config.
@@ -30,6 +30,19 @@ test('settings page no longer renders steering controls', () => {
   assert.doesNotMatch(settingsSource, /AutonomyPanel/)
   assert.doesNotMatch(settingsSource, /title="Steering"/)
   assert.match(settingsSource, /f\.group !== 'Steering'/)
+})
+
+// The live triage row renders the RESOLVED origin (channel name / repo + author)
+// instead of the raw thread key, so the operator can tell which Slack channel or
+// GitHub repo a run belongs to. Guards against regressing to the bare ID.
+test('live triage row renders resolved origin, not the raw thread key', () => {
+  assert.match(attentionSource, /function SteeringRunWhere/)
+  assert.match(attentionSource, /run\.channel_name \|\|/)
+  // GitHub runs surface the PR/issue ref + a click-through permalink.
+  assert.match(attentionSource, /function githubRef/)
+  assert.match(attentionSource, /run\.permalink/)
+  // The old bare "{run.thread_key || 'untracked event'}" line is gone.
+  assert.doesNotMatch(attentionSource, /\{run\.thread_key \|\| 'untracked event'\}/)
 })
 
 // SteeringConfig groups every relocated steering key (Triage scope / Autonomy /

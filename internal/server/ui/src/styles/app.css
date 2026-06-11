@@ -6100,11 +6100,35 @@ a.orch-pr:hover {
   align-items: center;
   gap: 8px;
 }
-.srun-thread {
+/* Resolved origin line: brand mark + "#channel" / "owner/repo" + ref + author. */
+.srun-where {
   min-width: 0;
-  font-family: var(--font-mono);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
   font-size: 12px;
   color: var(--text-2);
+  text-decoration: none;
+}
+.srun-chan {
+  font-family: var(--font-mono);
+}
+a.srun-where:hover .srun-chan {
+  text-decoration: underline;
+}
+.srun-ref {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.srun-from {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.srun-from::before {
+  content: '· ';
 }
 .srun-status {
   flex: 0 0 auto;

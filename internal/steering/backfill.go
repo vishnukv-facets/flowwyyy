@@ -24,24 +24,38 @@ const backfillInaccessibleCooldown = 15 * time.Minute
 // + the cascade's verdict cache + attention_feed coalescing prevent
 // re-surfacing.
 //
-// v1 scope (documented bounds, NOT silent): it sweeps TOP-LEVEL channel/DM
-// messages only. Thread replies in watched channels during downtime are not
-// swept here (the reaction pipeline's SlackBackfill already reconciles replies
-// for TRACKED threads). Mentions in UNWATCHED channels during downtime are not
-// discoverable without a full-workspace scan and are out of scope.
+// It sweeps TOP-LEVEL channel/DM messages AND follows active threads: any parent
+// in the catch-up window whose latest reply is newer than the watermark has its
+// replies fetched (conversations.replies) and replayed too, so a reply that
+// landed in a watched-channel thread while the socket was down — the laptop-sleep
+// case — is recovered, not just top-level posts.
+//
+// Documented bounds (NOT silent): a reply to a thread whose PARENT predates the
+// watermark won't be discovered during a SHORT gap, because conversations.history
+// (oldest=watermark) doesn't return the old parent — only a longer downtime
+// pushes the parent into the window. Mentions in UNWATCHED channels during
+// downtime need a full-workspace scan and are out of scope. Per-channel volume is
+// capped at FLOW_STEERING_BACKFILL_LIMIT (loudly logged when hit).
 type SteeringBackfill struct {
 	db       *sql.DB
 	observe  func(ctx context.Context, evs []monitor.InboundEvent) error
 	channels monitor.SlackHistory  // bot token — watched channels; nil → channel sweep skipped
 	dms      monitor.SlackHistory  // user token — DMs; nil → DM sweep skipped
 	ims      monitor.SlackIMLister // user token — enumerates DM channels; nil → DM sweep skipped
-	configFn func() WatchConfig
-	interval time.Duration
-	lookback time.Duration
-	limit    int
-	now      func() time.Time
-	logFn    func(string, ...any)
-	skipTill map[string]time.Time
+	// replies / dmReplies fetch a thread's replies so the sweep can recover
+	// messages that arrived as thread replies during downtime — which a top-level
+	// history sweep never surfaces. `replies` uses the bot token (watched
+	// channels); `dmReplies` uses the user token (the bot can't read the
+	// operator's DMs). nil → thread-reply following is skipped for that surface.
+	replies   monitor.SlackThreadReplies
+	dmReplies monitor.SlackThreadReplies
+	configFn  func() WatchConfig
+	interval  time.Duration
+	lookback  time.Duration
+	limit     int
+	now       func() time.Time
+	logFn     func(string, ...any)
+	skipTill  map[string]time.Time
 }
 
 // NewSteeringBackfill builds the runner. Zero interval/lookback/limit fall back
@@ -71,6 +85,22 @@ func (b *SteeringBackfill) SetLogger(fn func(string, ...any)) {
 	if fn != nil {
 		b.logFn = fn
 	}
+}
+
+// SetRepliesClient installs the bot-token client used to fetch thread replies
+// for active threads discovered during the WATCHED-CHANNEL sweep. Optional —
+// when unset, the channel sweep recovers top-level messages only (its prior
+// behavior). Kept a setter (not a constructor arg) so existing callers and tests
+// don't have to thread it through.
+func (b *SteeringBackfill) SetRepliesClient(c monitor.SlackThreadReplies) {
+	b.replies = c
+}
+
+// SetDMRepliesClient installs the user-token client used to fetch thread replies
+// inside DM threads (the bot can't read the operator's DMs). Optional — when
+// unset, DM thread replies are not recovered by this sweep.
+func (b *SteeringBackfill) SetDMRepliesClient(c monitor.SlackThreadReplies) {
+	b.dmReplies = c
 }
 
 // Run does an immediate pass then repeats every interval until ctx is done.
@@ -154,15 +184,40 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 	if len(msgs) == 0 {
 		return
 	}
-	if cold && len(msgs) >= b.limit {
-		b.logFn("steering backfill %s: hit cap %d in cold-start lookback %s; older messages in the gap are not covered", channel, b.limit, b.lookback)
+	if len(msgs) >= b.limit {
+		// Truncated: there were at least as many messages as the cap. Loud, not
+		// silent — older messages in the gap aren't covered this sweep.
+		if cold {
+			b.logFn("steering backfill %s: hit cap %d in cold-start lookback %s; older messages not covered", channel, b.limit, b.lookback)
+		} else {
+			b.logFn("steering backfill %s: hit cap %d catching up since watermark; older gap messages not covered — raise FLOW_STEERING_BACKFILL_LIMIT", channel, b.limit)
+		}
+	}
+	// Pick the replies client matching this surface: bot token for watched
+	// channels, user token for DMs (the bot can't read the operator's DMs).
+	repliesClient := b.replies
+	if channelType == "im" {
+		repliesClient = b.dmReplies
 	}
 	maxTS := wm
 	var evs []monitor.InboundEvent
+	seen := map[string]bool{} // ts already queued this sweep — dedup across top-level + replies
+	var followRoots []string  // thread roots that gained replies newer than the cursor
 	for _, m := range msgs {
 		ts := strings.TrimSpace(m.TS)
 		if ts == "" {
 			continue
+		}
+		// A thread parent that gained replies newer than the cursor is followed
+		// below — even if the parent's own ts predates the cursor — because those
+		// replies are NOT top-level messages and a history sweep never returns
+		// them. This is the path that recovers replies missed during downtime.
+		if repliesClient != nil && m.ReplyCount > 0 && slackTSGreater(m.LatestReply, wm) {
+			root := strings.TrimSpace(m.ThreadTS)
+			if root == "" {
+				root = ts
+			}
+			followRoots = append(followRoots, root)
 		}
 		if !cold && !slackTSGreater(ts, wm) {
 			continue // not newer than our cursor
@@ -177,12 +232,18 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 		if threadTS == "" {
 			threadTS = ts
 		}
+		seen[ts] = true
 		evs = append(evs, monitor.InboundEvent{
 			Kind: "message", Channel: channel, ChannelType: channelType,
 			TS: ts, ThreadTS: threadTS,
 			UserID: strings.TrimSpace(m.User), Text: strings.TrimSpace(m.DisplayText()),
 		})
 	}
+	// Recover replies on active threads. The channel watermark deliberately tracks
+	// only top-level ts (so a parent stays discoverable for follow-up sweeps), so
+	// replies are deduped here by `seen` + the cursor and downstream by the
+	// cascade's verdict cache — not by advancing the channel watermark past them.
+	evs = append(evs, b.followThreadReplies(ctx, repliesClient, channel, channelType, wm, followRoots, seen)...)
 	if len(evs) > 0 {
 		if err := b.observe(ctx, evs); err != nil {
 			b.logFn("steering backfill %s: observe %d event(s): %v", channel, len(evs), err)
@@ -195,6 +256,44 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 			b.logFn("steering backfill %s: set watermark: %v", channel, err)
 		}
 	}
+}
+
+// followThreadReplies fetches replies for each active thread root and returns
+// the ones newer than the cursor (skipping the thread root itself, which the
+// caller already saw as a top-level message, and any ts already queued). A
+// missing replies client or empty root list is a no-op. Errors per-thread are
+// logged and skipped so one inaccessible thread doesn't abort the channel sweep.
+func (b *SteeringBackfill) followThreadReplies(ctx context.Context, replies monitor.SlackThreadReplies, channel, channelType, cursor string, roots []string, seen map[string]bool) []monitor.InboundEvent {
+	if replies == nil || len(roots) == 0 {
+		return nil
+	}
+	var out []monitor.InboundEvent
+	for _, root := range uniqueStrings(roots) {
+		msgs, err := replies.Replies(ctx, channel, root, cursor, b.limit)
+		if err != nil {
+			b.logFn("steering backfill %s: thread %s replies: %v", channel, root, err)
+			continue
+		}
+		for _, m := range msgs {
+			ts := strings.TrimSpace(m.TS)
+			if ts == "" || ts == root || seen[ts] {
+				continue // root already counted as top-level; dedup repeats
+			}
+			if !slackTSGreater(ts, cursor) {
+				continue // a prior sweep already covered this reply
+			}
+			if !acceptBackfillMessage(m) {
+				continue
+			}
+			seen[ts] = true
+			out = append(out, monitor.InboundEvent{
+				Kind: "message", Channel: channel, ChannelType: channelType,
+				TS: ts, ThreadTS: root,
+				UserID: strings.TrimSpace(m.User), Text: strings.TrimSpace(m.DisplayText()),
+			})
+		}
+	}
+	return out
 }
 
 // --- small local helpers (monitor's equivalents are unexported) ---
@@ -339,11 +438,15 @@ func backfillLookback() time.Duration {
 	return time.Hour
 }
 
+// backfillLimit is the total messages a single channel sweep pulls (paged under
+// the hood). Default 200 so a multi-hour sleep gap is recovered in one pass
+// rather than truncated at one page; raise FLOW_STEERING_BACKFILL_LIMIT for very
+// long downtimes in busy channels.
 func backfillLimit() int {
 	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL_LIMIT")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
 	}
-	return 50
+	return 200
 }

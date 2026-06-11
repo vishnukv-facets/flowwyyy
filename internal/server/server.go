@@ -303,6 +303,16 @@ func (s *Server) ListenAndServe(addr string) int {
 		ims := monitor.NewSlackUserIMLister()
 		if ch != nil || (dm != nil && ims != nil) {
 			sbf := steering.NewSteeringBackfill(s.cfg.DB, s.cascade.ObserveBatch, ch, dm, ims, steering.WatchConfigFromEnv, 0, 0, 0)
+			// Follow active threads so replies that landed in a watched channel /
+			// DM while the socket was down (e.g. the laptop slept) are recovered —
+			// a top-level history sweep alone never returns thread replies. Bot
+			// token reads channel threads; user token reads DM threads.
+			if rc := monitor.NewSlackRepliesClient(); rc != nil {
+				sbf.SetRepliesClient(rc)
+			}
+			if drc := monitor.NewSlackUserRepliesClient(); drc != nil {
+				sbf.SetDMRepliesClient(drc)
+			}
 			sbf.SetLogger(func(format string, args ...any) {
 				fmt.Fprintf(os.Stderr, "[steering backfill] "+format+"\n", args...)
 			})

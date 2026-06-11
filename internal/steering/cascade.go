@@ -908,14 +908,20 @@ func (c *Cascade) stage(tr *flowdb.SteeringTrace, start time.Time, stage, status
 	}
 	now := c.now()
 	c.Progress(StageEvent{
-		RunID:     tr.ID,
-		ThreadKey: tr.ThreadKey,
-		Source:    tr.Source,
-		Stage:     stage,
-		Status:    status,
-		Detail:    detail,
-		At:        now.UTC().Format(time.RFC3339),
-		ElapsedMs: now.Sub(start).Milliseconds(),
+		RunID:       tr.ID,
+		ThreadKey:   tr.ThreadKey,
+		Source:      tr.Source,
+		Channel:     tr.Channel,
+		ChannelType: tr.ChannelType,
+		Author:      tr.Author,
+		TS:          tr.TS,
+		TeamID:      tr.TeamID,
+		URL:         tr.URL,
+		Stage:       stage,
+		Status:      status,
+		Detail:      detail,
+		At:          now.UTC().Format(time.RFC3339),
+		ElapsedMs:   now.Sub(start).Milliseconds(),
 	})
 }
 

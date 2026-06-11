@@ -82,6 +82,17 @@ type StageEvent struct {
 	RunID     string `json:"run_id"`
 	ThreadKey string `json:"thread_key,omitempty"`
 	Source    string `json:"source,omitempty"`
+	// Origin metadata, carried so the server can resolve human-readable labels
+	// (Slack channel/DM name, GitHub repo) for the live triage view — the same
+	// enrichment the feed/trace already get. Set from the trace at every stage,
+	// so they are present even on a Stage 0 drop (where ThreadKey is still empty).
+	// For GitHub, Channel is already "owner/repo" and URL is the canonical link.
+	Channel     string `json:"channel,omitempty"`
+	ChannelType string `json:"channel_type,omitempty"`
+	Author      string `json:"author,omitempty"`
+	TS          string `json:"ts,omitempty"`
+	TeamID      string `json:"team_id,omitempty"`
+	URL         string `json:"url,omitempty"`
 	// Stage is one of: received | stage0 | stage1 | stage2 | stage3 | verdict.
 	Stage string `json:"stage"`
 	// Status is one of: running | passed | surfaced | dropped | error.

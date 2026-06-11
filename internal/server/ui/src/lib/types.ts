@@ -225,6 +225,13 @@ export interface SteeringRun {
   done: boolean
   started_at: string
   updated_at: string
+  // Resolved origin (server-side, no raw IDs) — same enrichment the feed/trace
+  // tabs use, so the live row reads "#general" / "DM · Alice" / "owner/repo".
+  channel?: string
+  channel_type?: string
+  channel_name?: string
+  author_name?: string
+  permalink?: string
 }
 
 export interface SteeringRunsResponse {

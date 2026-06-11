@@ -47,6 +47,14 @@ type SlackMessage struct {
 	ThreadTS string
 	SubType  string
 	Files    []SlackFile
+	// Thread metadata, set on the top-level (parent) message by
+	// conversations.history. ReplyCount > 0 marks a thread; LatestReply is the
+	// ts of its most recent reply. The steering backfill uses these to detect
+	// threads that gained replies during downtime (which a top-level history
+	// sweep alone never surfaces) and fetch those replies. Zero/"" for replies
+	// and for messages that aren't thread parents.
+	ReplyCount  int
+	LatestReply string
 }
 
 // SlackFile is the file metadata needed to make file-only Slack messages

@@ -117,6 +117,54 @@ function LiveTriageView() {
   )
 }
 
+// The PR/issue number for a GitHub run, from its thread_key ("gh-pr:owner/repo#550")
+// or, when the run dropped before a thread_key was set, its permalink (".../pull/550").
+function githubRef(run: SteeringRun): string {
+  const tk = (run.thread_key || '').match(/#(\d+)\s*$/)
+  if (tk) return `#${tk[1]}`
+  const url = (run.permalink || '').match(/\/(?:pull|issues)\/(\d+)/)
+  return url ? `#${url[1]}` : ''
+}
+
+// The resolved origin for a live run: "#general" / "DM · Alice" / "owner/repo #550"
+// plus who triggered it, as a click-through when a permalink resolved. Falls back
+// to the raw thread key, then a source-appropriate placeholder — so a run whose
+// origin never resolved still reads better than the old bare thread key.
+function SteeringRunWhere({ run }: { run: SteeringRun }) {
+  const ref = run.source === 'github' ? githubRef(run) : ''
+  const where =
+    run.channel_name ||
+    run.channel ||
+    run.thread_key ||
+    (run.source === 'github' ? 'GitHub event' : 'untracked event')
+  const body = (
+    <>
+      <span className="srun-chan clip">{where}</span>
+      {ref ? <span className="srun-ref">{ref}</span> : null}
+      {run.author_name ? <span className="srun-from">{run.author_name}</span> : null}
+    </>
+  )
+  if (run.permalink) {
+    return (
+      <a
+        className="srun-where"
+        href={run.permalink}
+        target="_blank"
+        rel="noreferrer"
+        title={where}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {body}
+      </a>
+    )
+  }
+  return (
+    <span className="srun-where" title={where}>
+      {body}
+    </span>
+  )
+}
+
 function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string | null; setOpen: (k: string | null) => void }) {
   // Last event per stage (a stage can be re-emitted as it streams; latest wins).
   const byStage = new Map<string, SteeringStageEvent>()
@@ -129,7 +177,7 @@ function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string
     <div className={`srun${run.done ? '' : ' active'}`}>
       <div className="srun-head">
         <SourceIcon source={run.source} size={13} />
-        <span className="srun-thread clip">{run.thread_key || 'untracked event'}</span>
+        <SteeringRunWhere run={run} />
         <div className="spacer" />
         <span className={`srun-status ${run.done ? run.status : 'running'}`}>{run.done ? run.status : 'running'}</span>
         <span className="faint mono" style={{ fontSize: 10.5 }}>{ago(run.updated_at)}</span>

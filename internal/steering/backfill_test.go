@@ -44,6 +44,28 @@ type fakeIMs struct {
 
 func (f *fakeIMs) ListIMs(ctx context.Context) ([]string, error) { return f.ids, f.err }
 
+// fakeReplies is a stand-in SlackThreadReplies returning canned replies per
+// thread and recording each Replies call's args.
+type fakeReplies struct {
+	byThread    map[string][]monitor.SlackMessage
+	errByThread map[string]error
+	calls       []struct {
+		Channel, ThreadTS, Oldest string
+		Limit                     int
+	}
+}
+
+func (f *fakeReplies) Replies(ctx context.Context, ch, threadTS, oldest string, limit int) ([]monitor.SlackMessage, error) {
+	f.calls = append(f.calls, struct {
+		Channel, ThreadTS, Oldest string
+		Limit                     int
+	}{ch, threadTS, oldest, limit})
+	if f.errByThread != nil && f.errByThread[threadTS] != nil {
+		return nil, f.errByThread[threadTS]
+	}
+	return f.byThread[threadTS], nil
+}
+
 func backfillTestDB(t *testing.T) *sql.DB {
 	t.Helper()
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
@@ -222,6 +244,102 @@ func TestBackfillSkipsSystemSubtypes(t *testing.T) {
 	}
 	if wm != "400.000000" {
 		t.Fatalf("watermark = %q, want %q (advance past filtered system msg)", wm, "400.000000")
+	}
+}
+
+// The reported failure mode: a reply lands in a watched-channel thread while the
+// laptop is asleep. A top-level history sweep never surfaces it (replies aren't
+// top-level messages), so the backfill must follow active threads — parents with
+// new replies — and recover the reply. The thread root must not be double-counted.
+func TestBackfillFollowsActiveThreadReplies(t *testing.T) {
+	db := backfillTestDB(t)
+	if err := flowdb.SetSteeringWatermark(db, "C1", "100.000000", fixedNow.Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetSteeringWatermark: %v", err)
+	}
+	// The thread parent is newer than the (stale, pre-gap) watermark, so it's in
+	// the catch-up window; its latest reply is newer still.
+	hist := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
+		"C1": {
+			{TS: "150.000000", ThreadTS: "150.000000", ReplyCount: 1, LatestReply: "200.000000", User: "U1", Text: "GCP node type?"},
+		},
+	}}
+	reps := &fakeReplies{byThread: map[string][]monitor.SlackMessage{
+		"150.000000": {
+			{TS: "150.000000", ThreadTS: "150.000000", User: "U1", Text: "GCP node type?"},    // thread root — already seen as top-level
+			{TS: "200.000000", ThreadTS: "150.000000", User: "U2", Text: "go with core_nano"}, // missed during sleep
+		},
+	}}
+	var got [][]monitor.InboundEvent
+	observe := func(ctx context.Context, evs []monitor.InboundEvent) error { got = append(got, evs); return nil }
+	bf := NewSteeringBackfill(db, observe, hist, nil, nil, watchOne("C1"), time.Minute, time.Hour, 50)
+	bf.SetRepliesClient(reps)
+	bf.now = func() time.Time { return fixedNow }
+
+	bf.runOnce(context.Background())
+
+	var evs []monitor.InboundEvent
+	for _, b := range got {
+		evs = append(evs, b...)
+	}
+	var sawParent, sawReply bool
+	for _, e := range evs {
+		if e.TS == "150.000000" {
+			sawParent = true
+		}
+		if e.TS == "200.000000" {
+			sawReply = true
+			if e.ThreadTS != "150.000000" {
+				t.Fatalf("reply ThreadTS = %q, want 150.000000", e.ThreadTS)
+			}
+			if !strings.Contains(e.Text, "core_nano") {
+				t.Fatalf("reply text = %q, want it to carry the reply body", e.Text)
+			}
+		}
+	}
+	if !sawParent {
+		t.Fatalf("parent message not observed; events=%+v", evs)
+	}
+	if !sawReply {
+		t.Fatalf("missed thread reply not recovered; events=%+v", evs)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("observed %d events, want 2 (parent + reply, root deduped)", len(evs))
+	}
+	if len(reps.calls) != 1 || reps.calls[0].ThreadTS != "150.000000" || reps.calls[0].Channel != "C1" {
+		t.Fatalf("replies calls = %+v, want one for C1 thread 150.000000", reps.calls)
+	}
+}
+
+// A thread whose latest reply is no newer than the watermark was already caught
+// up: the sweep must NOT spend a conversations.replies call on it.
+func TestBackfillSkipsRepliesWhenNoneNewer(t *testing.T) {
+	db := backfillTestDB(t)
+	if err := flowdb.SetSteeringWatermark(db, "C1", "250.000000", fixedNow.Format(time.RFC3339)); err != nil {
+		t.Fatalf("SetSteeringWatermark: %v", err)
+	}
+	hist := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
+		"C1": {
+			// Old thread parent, fully caught up: latest reply (240) predates the
+			// watermark (250), so there is nothing new to fetch.
+			{TS: "100.000000", ThreadTS: "100.000000", ReplyCount: 3, LatestReply: "240.000000", User: "U1", Text: "old thread"},
+		},
+	}}
+	reps := &fakeReplies{byThread: map[string][]monitor.SlackMessage{
+		"100.000000": {{TS: "240.000000", ThreadTS: "100.000000", User: "U2", Text: "stale"}},
+	}}
+	var got [][]monitor.InboundEvent
+	observe := func(ctx context.Context, evs []monitor.InboundEvent) error { got = append(got, evs); return nil }
+	bf := NewSteeringBackfill(db, observe, hist, nil, nil, watchOne("C1"), time.Minute, time.Hour, 50)
+	bf.SetRepliesClient(reps)
+	bf.now = func() time.Time { return fixedNow }
+
+	bf.runOnce(context.Background())
+
+	if len(reps.calls) != 0 {
+		t.Fatalf("replies calls = %d, want 0 (no replies newer than watermark)", len(reps.calls))
+	}
+	if len(got) != 0 {
+		t.Fatalf("observe batches = %d, want 0 (nothing new)", len(got))
 	}
 }
 

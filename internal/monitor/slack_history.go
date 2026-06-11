@@ -19,32 +19,54 @@ type SlackIMLister interface {
 	ListIMs(ctx context.Context) ([]string, error)
 }
 
-// slackHistoryFn hits conversations.history; swapped in tests.
+// slackHistoryPageSize is how many messages we ask for per conversations.history
+// call. Slack allows up to 1000 but recommends <=200; we page until we reach the
+// caller's total `limit` or the channel has no more messages since `oldest`.
+const slackHistoryPageSize = 200
+
+// slackHistoryFn hits conversations.history; swapped in tests. It pages through
+// the cursor until it has gathered `limit` messages (the total cap, NOT a
+// per-page count) or Slack reports no more since `oldest`. This lets a catch-up
+// after a long downtime (e.g. the laptop slept for days) recover the whole gap
+// instead of only the newest page. Mirrors slackIMListFn's cursor loop.
 var slackHistoryFn = func(ctx context.Context, token, channelID, oldest string, limit int) ([]SlackMessage, error) {
 	if limit <= 0 {
 		limit = 100
 	}
 	api := slack.New(token)
-	resp, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
-		ChannelID: normalizeSlackChannelID(channelID),
-		Oldest:    strings.TrimSpace(oldest),
-		Inclusive: false,
-		Limit:     limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]SlackMessage, 0, len(resp.Messages))
-	for _, m := range resp.Messages {
-		files := slackFilesFromAPIWithContent(ctx, api, m.Files)
-		out = append(out, SlackMessage{
-			User:     firstNonEmpty(m.User, m.Username),
-			Text:     strings.TrimSpace(m.Text),
-			TS:       m.Timestamp,
-			ThreadTS: m.ThreadTimestamp,
-			SubType:  m.SubType,
-			Files:    files,
+	oldest = strings.TrimSpace(oldest)
+	channelID = normalizeSlackChannelID(channelID)
+	out := make([]SlackMessage, 0, limit)
+	cursor := ""
+	for len(out) < limit {
+		pageLimit := min(limit-len(out), slackHistoryPageSize)
+		resp, err := api.GetConversationHistoryContext(ctx, &slack.GetConversationHistoryParameters{
+			ChannelID: channelID,
+			Oldest:    oldest,
+			Inclusive: false,
+			Limit:     pageLimit,
+			Cursor:    cursor,
 		})
+		if err != nil {
+			return nil, err
+		}
+		for _, m := range resp.Messages {
+			files := slackFilesFromAPIWithContent(ctx, api, m.Files)
+			out = append(out, SlackMessage{
+				User:        firstNonEmpty(m.User, m.Username),
+				Text:        strings.TrimSpace(m.Text),
+				TS:          m.Timestamp,
+				ThreadTS:    m.ThreadTimestamp,
+				SubType:     m.SubType,
+				Files:       files,
+				ReplyCount:  m.ReplyCount,
+				LatestReply: m.LatestReply,
+			})
+		}
+		cursor = strings.TrimSpace(resp.ResponseMetaData.NextCursor)
+		if cursor == "" || !resp.HasMore {
+			break
+		}
 	}
 	return out, nil
 }

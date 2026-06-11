@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
@@ -25,6 +26,23 @@ type steeringRun struct {
 	Done      bool                  `json:"done"`
 	StartedAt string                `json:"started_at"`
 	UpdatedAt string                `json:"updated_at"`
+
+	// Raw origin (folded from the stage events; constant across a run). ChannelType
+	// drives the UI's channel/DM/repo glyph; Channel is the resolver input + a
+	// fallback when no name resolves. TS/TeamID/URL are resolver inputs only.
+	Channel     string `json:"channel,omitempty"`
+	ChannelType string `json:"channel_type,omitempty"`
+	Author      string `json:"author,omitempty"`
+	TS          string `json:"-"`
+	TeamID      string `json:"-"`
+	URL         string `json:"-"`
+
+	// Resolved at snapshot/serve time (never stored) so the live view shows the
+	// same human-readable origin the feed/trace tabs do: "#general" / "DM · Alice"
+	// / "owner/repo", a display name, and a deep link — never a raw ID.
+	ChannelName string `json:"channel_name,omitempty"`
+	AuthorName  string `json:"author_name,omitempty"`
+	Permalink   string `json:"permalink,omitempty"`
 }
 
 // steeringRunStore is a small ring of recent cascade runs keyed by RunID. It is
@@ -60,6 +78,28 @@ func (s *steeringRunStore) record(e steering.StageEvent) steeringRun {
 	if e.Source != "" {
 		run.Source = e.Source
 	}
+	// Fold origin onto the run (it's constant across a run's stages and present
+	// from the first "received" event, so even a Stage 0 drop carries it). Strip
+	// it from the per-stage copy below so it isn't repeated on every stage row.
+	if e.Channel != "" {
+		run.Channel = e.Channel
+	}
+	if e.ChannelType != "" {
+		run.ChannelType = e.ChannelType
+	}
+	if e.Author != "" {
+		run.Author = e.Author
+	}
+	if e.TS != "" {
+		run.TS = e.TS
+	}
+	if e.TeamID != "" {
+		run.TeamID = e.TeamID
+	}
+	if e.URL != "" {
+		run.URL = e.URL
+	}
+	e.Channel, e.ChannelType, e.Author, e.TS, e.TeamID, e.URL = "", "", "", "", "", ""
 	// Streaming delta: a stage re-emitted with accumulated text updates its row in
 	// place rather than appending a row per chunk.
 	if e.Stream != "" {
@@ -143,5 +183,83 @@ func (s *Server) handleSteeringRuns(w http.ResponseWriter, r *http.Request) {
 	if s.steeringRuns != nil {
 		runs = s.steeringRuns.snapshot()
 	}
+	s.enrichSteeringRuns(r.Context(), runs)
 	writeJSON(w, map[string]any{"runs": runs})
+}
+
+// enrichSteeringRuns resolves each run's raw origin into the human-readable
+// channel name / author / permalink the feed and trace tabs already show, so the
+// live view never renders a raw Slack ID (or "untracked event" when the repo is
+// known). It warms the Slack name cache once for the whole snapshot so per-run
+// resolution is all cache hits (mirrors the trace handler). Mutates runs in place.
+func (s *Server) enrichSteeringRuns(ctx context.Context, runs []steeringRun) {
+	if len(runs) == 0 {
+		return
+	}
+	var users, chans []string
+	for _, run := range runs {
+		if run.Source == "github" {
+			continue // already-human fields; no resolver needed
+		}
+		if ch := steeringRunChannel(run); ch != "" {
+			chans = append(chans, ch)
+		}
+		if run.Author != "" {
+			users = append(users, run.Author)
+		}
+	}
+	s.warmSlackNames(ctx, users, chans)
+	for i := range runs {
+		s.resolveSteeringRunOrigin(ctx, &runs[i])
+	}
+}
+
+// steeringRunChannel returns the Slack channel id for a run, deriving it from the
+// thread_key ("<channel>:<ts>") when the raw Channel field is empty.
+func steeringRunChannel(run steeringRun) string {
+	if run.Channel != "" {
+		return run.Channel
+	}
+	ch, _ := splitThreadKey(run.ThreadKey)
+	return ch
+}
+
+// resolveSteeringRunOrigin fills a run's ChannelName/AuthorName/Permalink from
+// its raw origin, mirroring steeringTraceView so the live, trace, and feed tabs
+// stay visually consistent. GitHub fields are already human; Slack IDs go through
+// the name resolver with a DM fallback, and the cheap slack:// deep link (not a
+// per-row network getPermalink) keeps the live snapshot fast.
+func (s *Server) resolveSteeringRunOrigin(ctx context.Context, run *steeringRun) {
+	if run.Source == "github" {
+		run.ChannelName = run.Channel // owner/repo
+		run.AuthorName = run.Author   // login
+		run.Permalink = run.URL
+		return
+	}
+	ch, ts := run.Channel, run.TS
+	if ch == "" || ts == "" {
+		tkChan, tkTS := splitThreadKey(run.ThreadKey)
+		if ch == "" {
+			ch = tkChan
+		}
+		if ts == "" {
+			ts = tkTS
+		}
+	}
+	if run.Channel == "" {
+		run.Channel = ch // so the UI's channel_name || channel fallback shows something
+	}
+	if s.nameResolver != nil {
+		run.ChannelName = s.nameResolver.ChannelName(ctx, ch)
+		run.AuthorName = s.nameResolver.UserName(ctx, run.Author)
+	}
+	// DMs have no channel name — label by the person instead.
+	if run.ChannelName == "" && (run.ChannelType == "im" || run.ChannelType == "mpim") {
+		if run.AuthorName != "" {
+			run.ChannelName = "DM · " + run.AuthorName
+		} else {
+			run.ChannelName = "Direct message"
+		}
+	}
+	run.Permalink = connectorPermalink(run.Source, run.TeamID, ch, ts, run.URL)
 }
