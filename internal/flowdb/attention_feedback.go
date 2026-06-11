@@ -322,12 +322,19 @@ func learnSuppressions(db *sql.DB, col string, opts LearnedAttentionPolicyOption
 	if err != nil {
 		return err
 	}
+	// Exclude direct conversations (Slack im/mpim) from learned suppression:
+	// a DM is an intentional 1:1 with a human, so dismissing a few of its cards
+	// means "I don't need flow to act", NOT "never surface this channel/person".
+	// Auto-muting a teammate's DM from card dismissals was a real bug. Broadcast-
+	// channel noise (and its authors) is still learnable. NULL/empty thread_type
+	// (e.g. GitHub) is treated as non-DM and stays eligible.
 	rows, err := db.Query(`
 		SELECT ` + expr + ` AS value,
 		       COUNT(*) AS total,
 		       SUM(CASE WHEN outcome IN ('dismissed','muted') THEN 1 ELSE 0 END) AS negative
 		FROM attention_feedback
 		WHERE ` + col + ` IS NOT NULL AND ` + col + ` != ''
+		  AND COALESCE(thread_type, '') NOT IN ('im', 'mpim')
 		GROUP BY value`)
 	if err != nil {
 		return fmt.Errorf("flowdb: learn attention suppressions by %s: %w", col, err)

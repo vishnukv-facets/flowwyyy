@@ -82,6 +82,39 @@ func TestAttentionFeedbackReportByChannelAndConfidenceBand(t *testing.T) {
 	}
 }
 
+// A teammate's DM (thread_type im/mpim) must NEVER be auto-suppressed from card
+// dismissals — dismissing a few low-value cards is "I don't need to act", not
+// "silence this person". The learned policy is for broadcast-channel noise only,
+// so DM feedback drives neither channel nor author suppression.
+func TestLearnedAttentionPolicyNeverSuppressesDirectMessages(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	// 4/4 dismissed in a DM — well past the total>=3 & 0.8 dismiss-rate threshold
+	// that would suppress a broadcast channel.
+	for i := 0; i < 4; i++ {
+		if err := RecordAttentionFeedback(db, AttentionFeedback{
+			ID: "dm-dismiss-" + string(rune('a'+i)), FeedItemID: "fdm", Source: "slack",
+			Channel: "D_TEAMMATE", Author: "U_TEAMMATE", ThreadType: "im", ThreadKey: "D_TEAMMATE:1",
+			SuggestedAction: "digest_only", FinalAction: "dismiss", Outcome: "dismissed",
+			Confidence: 0.5, ConfidenceBand: "0.50-0.59", CreatedAt: "2026-06-10T10:00:00Z",
+		}); err != nil {
+			t.Fatalf("record dm dismiss %d: %v", i, err)
+		}
+	}
+
+	policy, err := LearnedAttentionPolicyFromFeedback(db, LearnedAttentionPolicyOptions{MinFeedback: 3})
+	if err != nil {
+		t.Fatalf("LearnedAttentionPolicyFromFeedback: %v", err)
+	}
+	if policy.SuppressChannels["D_TEAMMATE"] {
+		t.Errorf("a DM channel must never be learned-suppressed (would silence the teammate): %+v", policy.SuppressChannels)
+	}
+	if policy.SuppressAuthors["U_TEAMMATE"] {
+		t.Errorf("an author must not be learned-suppressed from DM-only dismissals: %+v", policy.SuppressAuthors)
+	}
+}
+
 func TestLearnedAttentionPolicySuppressesDismissedSourcesAndAdjustsThresholds(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()
