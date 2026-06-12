@@ -178,7 +178,16 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 		return nil, fmt.Errorf("flowdb: list feed items: %w", err)
 	}
 	defer rows.Close()
+	return scanFeedItemRows(rows)
+}
 
+const feedItemColumns = `id, source, thread_key, summary, suggested_action, matched_task,
+	suggested_project, suggested_priority, urgency, is_vip, confidence,
+	draft, reason, context_json, channel, channel_type, author, ts, team_id, url,
+	status, snooze_until, linked_task, retriaging_at, created_at, acted_at`
+
+// scanFeedItemRows scans rows selected with feedItemColumns into FeedItems.
+func scanFeedItemRows(rows *sql.Rows) ([]FeedItem, error) {
 	var out []FeedItem
 	for rows.Next() {
 		var it FeedItem
@@ -213,6 +222,43 @@ func ListFeedItems(db *sql.DB, status string) ([]FeedItem, error) {
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// ListOpenClubCandidates returns open ('new') feed cards in `channel` that an
+// incoming standalone message might continue: same channel, created at/after
+// `since` (RFC3339; empty = no lower bound), excluding `excludeThreadKey` (the
+// incoming message's own thread_key), newest first, capped at `limit`. The
+// cascade's context-aware clubbing uses this to find existing cards a new
+// top-level message belongs to. An empty channel never clubs (returns nil): a
+// card without a channel anchor has no conversation to join.
+func ListOpenClubCandidates(db *sql.DB, channel, excludeThreadKey, since string, limit int) ([]FeedItem, error) {
+	if strings.TrimSpace(channel) == "" {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	q := `SELECT ` + feedItemColumns + `
+	      FROM attention_feed
+	      WHERE status = 'new' AND channel = ?`
+	args := []any{channel}
+	if since != "" {
+		q += ` AND created_at >= ?`
+		args = append(args, since)
+	}
+	if excludeThreadKey != "" {
+		q += ` AND thread_key <> ?`
+		args = append(args, excludeThreadKey)
+	}
+	q += ` ORDER BY created_at DESC, id DESC LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("flowdb: list club candidates: %w", err)
+	}
+	defer rows.Close()
+	return scanFeedItemRows(rows)
 }
 
 // ResolveOpenFeedItemsByThread marks every still-'new' feed item for a thread as

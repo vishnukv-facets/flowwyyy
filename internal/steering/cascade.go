@@ -79,22 +79,30 @@ type Cascade struct {
 	// means context fetching is unavailable; the cascade writes an explicit
 	// event-only fallback pack rather than asking the model to fetch context.
 	FetchContext func(context.Context, monitor.InboundEvent) (ThreadContext, error)
+
+	// MatchConversation powers context-aware card clubbing: when a standalone
+	// message can't coalesce via thread_key, it judges whether the message
+	// continues an existing open conversation in the same channel. NewCascade
+	// defaults it to a cheap Haiku matcher; tests swap it. Nil disables clubbing
+	// (every standalone message gets its own card — the pre-clubbing behavior).
+	MatchConversation ConversationMatcher
 }
 
 // NewCascade builds a Cascade with production defaults (real clock, random IDs,
 // a 10-minute verdict TTL, and an env-configurable hourly deep-triage budget).
 func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 	return &Cascade{
-		DB:               db,
-		Config:           cfg,
-		now:              time.Now,
-		newID:            randomID,
-		cache:            newVerdictCache(10 * time.Minute),
-		budget:           newBudgetGuard(deepBudgetPerHour()),
-		classifierBudget: newBudgetGuard(classifierBudgetPerHour()),
-		log:              func(f string, a ...any) { fmt.Fprintf(os.Stderr, "[steering] "+f+"\n", a...) },
-		trace:            func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
-		Autonomy:         DefaultAutonomy(),
+		DB:                db,
+		Config:            cfg,
+		now:               time.Now,
+		newID:             randomID,
+		cache:             newVerdictCache(10 * time.Minute),
+		budget:            newBudgetGuard(deepBudgetPerHour()),
+		classifierBudget:  newBudgetGuard(classifierBudgetPerHour()),
+		log:               monitor.NewStderrLogger("[steering] "),
+		trace:             func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		Autonomy:          DefaultAutonomy(),
+		MatchConversation: defaultConversationMatcher,
 	}
 }
 
@@ -333,7 +341,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		if note := gateWeakSemanticForward(&v2, det2); note != "" {
 			tr.Error = appendCascadeError(tr.Error, note)
 		}
-		id, surfaced, werr := c.writeFeed(v2, ev, pack)
+		id, surfaced, werr := c.writeFeed(ctx, v2, ev, pack)
 		if werr == nil && !surfaced {
 			tr.Disposition, tr.StageReached = "dropped", "stage2"
 			tr.DropReason = "operator dismissed this thread"
@@ -377,7 +385,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		c.emitTrace(tr, start)
 		return nil
 	}
-	id, surfaced, werr := c.writeFeed(v3, ev, pack)
+	id, surfaced, werr := c.writeFeed(ctx, v3, ev, pack)
 	if werr == nil && !surfaced {
 		// Operator already dismissed this thread/message; re-observation must not
 		// resurrect the card or auto-act on it. Record an honest trace and stop.
@@ -1007,7 +1015,7 @@ func preview(s string) string {
 // returns the upserted item's id plus whether it actually surfaced a live card.
 // surfaced == false means the operator already dismissed this thread/message and
 // the upsert left it dismissed — the caller must not re-surface or auto-act.
-func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
+func (c *Cascade) writeFeed(ctx context.Context, v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
 	item := flowdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
@@ -1035,6 +1043,13 @@ func (c *Cascade) writeFeed(v Verdict, ev monitor.InboundEvent, pack ThreadConte
 	if item.SuggestedAction == "" {
 		item.SuggestedAction = string(ActionDrop)
 	}
+	// Context-aware clubbing: a standalone top-level message anchors its own
+	// thread_key, so the deterministic coalesce can never group it with the rest
+	// of its conversation (true for every DM message, and for fresh channel
+	// posts). maybeClub asks the matcher whether it continues an existing open
+	// card and, on a match, rewrites item.ThreadKey so the upsert below merges
+	// them into one card. It fails open (no rewrite) on any error.
+	c.maybeClub(ctx, &item)
 	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(c.DB, item)
 	if err != nil {
 		return "", false, fmt.Errorf("steering: write feed item: %w", err)

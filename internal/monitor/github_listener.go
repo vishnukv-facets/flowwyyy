@@ -2,8 +2,6 @@ package monitor
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"sync"
 	"time"
 )
@@ -34,9 +32,7 @@ func NewGitHubListener(d *GitHubDispatcher) *GitHubListener {
 	return &GitHubListener{
 		dispatcher:   d,
 		linkInterval: GitHubPollInterval(),
-		logFn: func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, "[github listener] "+format+"\n", args...)
-		},
+		logFn:        NewStderrLogger("[github listener] "),
 	}
 }
 

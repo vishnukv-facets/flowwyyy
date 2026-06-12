@@ -379,6 +379,81 @@ func TestGetFeedItem(t *testing.T) {
 	}
 }
 
+func TestListOpenClubCandidates(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	seed := func(id, channel, threadKey, status, createdAt string) {
+		t.Helper()
+		if _, err := UpsertFeedItem(db, FeedItem{
+			ID: id, Source: "slack", ThreadKey: threadKey, SuggestedAction: "reply",
+			Summary: id, Channel: channel, ChannelType: "im", Status: status, CreatedAt: createdAt,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+
+	// Three open cards in the target DM, one dismissed, one in another channel,
+	// and one open card older than the window.
+	seed("c1", "D1", "D1:100.1", "new", "2026-06-05T10:00:00Z")
+	seed("c2", "D1", "D1:200.1", "new", "2026-06-05T10:05:00Z")
+	seed("c3", "D1", "D1:300.1", "new", "2026-06-05T10:10:00Z")
+	seed("dismissed", "D1", "D1:400.1", "new", "2026-06-05T10:12:00Z")
+	if err := SetFeedItemStatus(db, "dismissed", "dismissed", "2026-06-05T10:13:00Z"); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	seed("other", "D2", "D2:100.1", "new", "2026-06-05T10:06:00Z")
+	seed("stale", "D1", "D1:050.1", "new", "2026-06-04T10:00:00Z")
+
+	// Incoming standalone message is D1:300.1 (c3); it must be excluded from its
+	// own candidate set. Window cutoff drops "stale"; channel filter drops
+	// "other"; status filter drops "dismissed".
+	got, err := ListOpenClubCandidates(db, "D1", "D1:300.1", "2026-06-05T09:00:00Z", 10)
+	if err != nil {
+		t.Fatalf("ListOpenClubCandidates: %v", err)
+	}
+	var ids []string
+	for _, it := range got {
+		ids = append(ids, it.ID)
+	}
+	// Newest-first, excluding c3 (the incoming itself).
+	want := []string{"c2", "c1"}
+	if len(ids) != len(want) {
+		t.Fatalf("candidate ids = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("candidate ids = %v, want %v", ids, want)
+		}
+	}
+
+	// limit caps the result count (newest kept).
+	capped, err := ListOpenClubCandidates(db, "D1", "", "2026-06-05T09:00:00Z", 2)
+	if err != nil {
+		t.Fatalf("ListOpenClubCandidates capped: %v", err)
+	}
+	if len(capped) != 2 || capped[0].ID != "c3" || capped[1].ID != "c2" {
+		t.Fatalf("capped = %v, want [c3 c2]", feedIDs(capped))
+	}
+
+	// An empty channel can never club.
+	none, err := ListOpenClubCandidates(db, "", "", "2026-06-05T09:00:00Z", 10)
+	if err != nil {
+		t.Fatalf("ListOpenClubCandidates empty channel: %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("empty channel candidates = %v, want none", feedIDs(none))
+	}
+}
+
+func feedIDs(items []FeedItem) []string {
+	out := make([]string, len(items))
+	for i, it := range items {
+		out[i] = it.ID
+	}
+	return out
+}
+
 func TestAttentionHandoffCreateExpireAndLatest(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

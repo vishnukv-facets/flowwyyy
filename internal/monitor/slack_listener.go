@@ -3,7 +3,6 @@ package monitor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -113,9 +112,7 @@ func NewSlackListener(d *Dispatcher) *SlackListener {
 	}
 	return &SlackListener{
 		dispatcher: d,
-		logFn: func(format string, args ...any) {
-			fmt.Fprintf(os.Stderr, "[slack listener] "+format+"\n", args...)
-		},
+		logFn: NewStderrLogger("[slack listener] "),
 	}
 }
 

@@ -281,9 +281,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			if dh := monitor.NewSlackUserRepliesClient(); dh != nil {
 				backfill.SetDMRepliesClient(dh)
 			}
-			backfill.SetLogger(func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, format+"\n", args...)
-			})
+			backfill.SetLogger(monitor.NewStderrLogger(""))
 			bfCtx, bfCancel := context.WithCancel(context.Background())
 			defer bfCancel()
 			go backfill.Run(bfCtx)
@@ -313,9 +311,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			if drc := monitor.NewSlackUserRepliesClient(); drc != nil {
 				sbf.SetDMRepliesClient(drc)
 			}
-			sbf.SetLogger(func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "[steering backfill] "+format+"\n", args...)
-			})
+			sbf.SetLogger(monitor.NewStderrLogger("[steering backfill] "))
 			sbfCtx, sbfCancel := context.WithCancel(context.Background())
 			defer sbfCancel()
 			go sbf.Run(sbfCtx)
@@ -328,9 +324,7 @@ func (s *Server) ListenAndServe(addr string) int {
 	// stored feed rows (no network), so existing data starts routing too.
 	if s.cfg.DB != nil {
 		go func() {
-			n, err := steering.BackfillFeedTaskThreadTags(s.cfg.DB, func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "[thread-tag backfill] "+format+"\n", args...)
-			})
+			n, err := steering.BackfillFeedTaskThreadTags(s.cfg.DB, monitor.NewStderrLogger("[thread-tag backfill] "))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[thread-tag backfill] %v\n", err)
 			} else if n > 0 {
@@ -339,9 +333,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			// Then re-check open make_task cards: any whose thread now resolves to
 			// an existing (incl. archived) task flips to forward instead of nagging
 			// to create a duplicate.
-			m, rerr := steering.ReconcileOpenFeedMatches(s.cfg.DB, func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "[feed reconcile] "+format+"\n", args...)
-			})
+			m, rerr := steering.ReconcileOpenFeedMatches(s.cfg.DB, monitor.NewStderrLogger("[feed reconcile] "))
 			if rerr != nil {
 				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", rerr)
 			} else if m > 0 {
@@ -349,13 +341,32 @@ func (s *Server) ListenAndServe(addr string) int {
 			}
 			// Clear any 'drop'-verdict cards that an earlier bug surfaced — they're
 			// cascade-classified noise and shouldn't sit in the active feed.
-			d, derr := steering.DismissSurfacedDropCards(s.cfg.DB, func(format string, args ...any) {
-				fmt.Fprintf(os.Stderr, "[feed reconcile] "+format+"\n", args...)
-			})
+			d, derr := steering.DismissSurfacedDropCards(s.cfg.DB, monitor.NewStderrLogger("[feed reconcile] "))
 			if derr != nil {
 				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", derr)
 			} else if d > 0 {
 				fmt.Fprintf(os.Stderr, "[feed reconcile] dismissed %d stale drop-verdict card(s)\n", d)
+			}
+		}()
+	}
+	// One-shot conversation dedupe: collapse open cards that fragmented into many
+	// because each standalone message (every DM message, fresh channel post)
+	// anchored its own thread_key before context-aware clubbing existed. Replays
+	// each channel's open cards through the same matcher used live and merges
+	// same-conversation cards into one (dismissing the rest — reversible). Runs
+	// after EnableClassifierSessions so it shares the primed Haiku session.
+	// Idempotent: once a conversation is collapsed there's nothing left to merge.
+	// Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
+	if s.cfg.DB != nil && s.cascade != nil && steeringDedupeEnabled() {
+		go func() {
+			res, err := s.cascade.DedupeOpenFeedConversations(context.Background())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[feed dedupe] %v\n", err)
+				return
+			}
+			if res.Merged > 0 {
+				fmt.Fprintf(os.Stderr, "[feed dedupe] collapsed %d duplicate card(s) into their conversations\n", res.Merged)
+				s.publishUIChange("attention")
 			}
 		}()
 	}
@@ -409,6 +420,17 @@ func (s *Server) ListenAndServe(addr string) int {
 // rest of the steerer wired.
 func steeringBackfillEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL"))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
+// steeringDedupeEnabled reports whether the one-shot conversation-dedupe pass
+// should run at boot. Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
+func steeringDedupeEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_DEDUPE"))) {
 	case "0", "false", "no", "off":
 		return false
 	default:
