@@ -172,24 +172,40 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 	if used := rec.Message.Usage.total(); used > 0 {
 		stats.TokensUsed = used // context occupancy = latest turn's full total
 	}
-	// Session usage = cumulative "work done", EXCLUDING cache reads AND
-	// cache-creation churn (both inflate a long session; see freshTotal).
-	fresh := rec.Message.Usage.freshTotal()
-	stats.TokensSession += fresh
-	// Per-day attribution for the token-cost trend: bucket this turn's fresh
-	// work by the local day of its timestamp. Same freshTotal() basis as
-	// TokensSession, so the trend and the session pill stay consistent.
-	if fresh > 0 {
-		if day := localDay(rec.Timestamp); day != "" {
-			if stats.TokensByDay == nil {
-				stats.TokensByDay = map[string]int{}
+	// Dedup: Claude Code appends intermediate AND final usage snapshots for the
+	// SAME request (same message.id + requestId, identical counts). Counting
+	// every line double-counts work and cost ~2-3x on a long session. Count each
+	// request once (first snapshot wins). An empty key (Codex events, or test
+	// lines without ids) is never a dup, so it always counts.
+	dup := false
+	if key := rec.usageDedupKey(); key != "" {
+		if _, seen := stats.claudeSeen[key]; seen {
+			dup = true
+		} else {
+			if stats.claudeSeen == nil {
+				stats.claudeSeen = map[string]struct{}{}
 			}
-			stats.TokensByDay[day] += fresh
-			// Price this Claude turn at its own model's rate and accrue the
-			// dollar estimate for the same day. freshInput/freshOutput carry
-			// the cache-excluded split the rate table expects.
-			u := rec.Message.Usage
-			if cost := turnCostUSD(u.freshInput(), u.freshOutput(), modelTokenRate(stats.Model)); cost > 0 {
+			stats.claudeSeen[key] = struct{}{}
+		}
+	}
+	if !dup {
+		// Session tokens = cumulative input + output + cache CREATION, EXCLUDING
+		// cache reads — the basis Claude Code's /stats uses (see processedTokens).
+		fresh := rec.Message.Usage.processedTokens()
+		stats.TokensSession += fresh
+		if day := localDay(rec.Timestamp); day != "" {
+			// Per-day tokens, same basis as TokensSession.
+			if fresh > 0 {
+				if stats.TokensByDay == nil {
+					stats.TokensByDay = map[string]int{}
+				}
+				stats.TokensByDay[day] += fresh
+			}
+			// Per-day cost is the FULL bill (cache reads + creation included),
+			// priced at this turn's own model rate — that's what makes the
+			// dollar figure track Claude Code's /cost, since cache reads
+			// dominate a long session's bill.
+			if cost := rec.Message.Usage.billedCostUSD(modelTokenRate(stats.Model)); cost > 0 {
 				if stats.CostByDay == nil {
 					stats.CostByDay = map[string]float64{}
 				}
@@ -225,9 +241,9 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 	} else if used := payload.Info.TotalTokenUsage.total(); used > 0 {
 		stats.TokensUsed = used
 	}
-	if fresh := payload.Info.TotalTokenUsage.freshTotal(); fresh > 0 {
+	if fresh := payload.Info.TotalTokenUsage.processedTokens(); fresh > 0 {
 		firstEvent := stats.lastCodexFreshTotal == 0
-		stats.TokensSession = fresh // Codex: running total, cache-excluded
+		stats.TokensSession = fresh // Codex: running total (no cache-creation)
 		delta := fresh
 		if !firstEvent {
 			delta = fresh - stats.lastCodexFreshTotal
@@ -252,13 +268,26 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		}
 		stats.lastCodexFreshInput = freshIn
 		stats.lastCodexFreshOutput = freshOut
+		// Cached input is billed too (0.1x input — e.g. gpt-5.5's $0.50/MTok),
+		// just excluded from the work metric. Track the running cached total so
+		// its per-event delta can be priced at the cache-read rate.
+		cachedNow := payload.Info.TotalTokenUsage.cacheReadTokens()
+		deltaCached := cachedNow
+		if !firstEvent {
+			if d := cachedNow - stats.lastCodexCached; d >= 0 {
+				deltaCached = d
+			}
+		}
+		stats.lastCodexCached = cachedNow
 		if delta > 0 {
 			if day := localDay(rec.Timestamp); day != "" {
 				if stats.TokensByDay == nil {
 					stats.TokensByDay = map[string]int{}
 				}
 				stats.TokensByDay[day] += delta
-				if cost := turnCostUSD(deltaIn, deltaOut, modelTokenRate(stats.Model)); cost > 0 {
+				rate := modelTokenRate(stats.Model)
+				cost := turnCostUSD(deltaIn, deltaOut, rate) + cacheReadCostUSD(deltaCached, rate)
+				if cost > 0 {
 					if stats.CostByDay == nil {
 						stats.CostByDay = map[string]float64{}
 					}

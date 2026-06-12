@@ -19,7 +19,7 @@ func TestAccumulateTranscriptUsageBucketsTokensByDay(t *testing.T) {
 	// Two turns at the SAME instant (fresh 150 + 30 = 180) — identical timestamps
 	// land on the same local day in any timezone — and one a full week later
 	// (fresh 90), which is always a distinct local day. cache_read_input_tokens
-	// is large but must be EXCLUDED from the per-day work total (freshTotal).
+	// is large but must be EXCLUDED from the per-day token total (processedTokens).
 	const sameDay = "2026-06-01T12:00:00Z"
 	const weekLater = "2026-06-08T12:00:00Z"
 	accumulateTranscriptUsage(&stats, usageLine(sameDay, 100, 50000, 50))

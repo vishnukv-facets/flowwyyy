@@ -198,9 +198,10 @@ type uiTokenDay struct {
 	Tasks     []uiTokenTask `json:"tasks,omitempty"`
 }
 
-// uiTokenTask is one task's token contribution on a single day. CostUSD is the
-// estimated dollar cost of that task's fresh work tokens for the day (see
-// pricing.go); it is the same per-day, cache-excluded basis as Tokens.
+// uiTokenTask is one task's token contribution on a single day. Tokens is the
+// cache-excluded "work" count; CostUSD is the estimated FULL billed cost (cache
+// reads + creation included — see pricing.go), so the two are not proportional
+// (cache dominates the bill but not the work count).
 type uiTokenTask struct {
 	Name    string  `json:"name"`
 	Tokens  int     `json:"tokens"`
@@ -1324,7 +1325,7 @@ type taskSessionInsights struct {
 	TokensUsed    int     // current context-window occupancy (latest turn)
 	TokensMax     int
 	TokensSession int     // cumulative tokens used this session (the CLI's Σ)
-	CostSession   float64 // estimated USD for this session's fresh work tokens (all-time)
+	CostSession   float64 // estimated USD for this session's full billed usage, cache included (all-time)
 }
 
 func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript []uiTranscript) taskSessionInsights {
@@ -1360,8 +1361,10 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	if stats.TokensSession > 0 {
 		insights.TokensSession = stats.TokensSession
 	}
-	// All-time estimated cost = sum over every day the session was active. Same
-	// cache-excluded basis as TokensSession, so the two stay in lockstep.
+	// All-time estimated cost = sum over every day the session was active. This
+	// is the full billed cost (cache included), so it does NOT track
+	// TokensSession (cache-excluded work) one-to-one — cache reads cost money but
+	// aren't counted as work.
 	for _, c := range stats.CostByDay {
 		insights.CostSession += c
 	}
@@ -1836,8 +1839,9 @@ func localDay(ts string) string {
 	return t.In(time.Local).Format("2006-01-02")
 }
 
-// buildTokenSeries sums per-day "work" tokens (cache-excluded freshTotal; see
-// transcriptUsageStats.TokensByDay) across every tracked session into a 12-week
+// buildTokenSeries sums per-day tokens (input+output+cache_creation, cache
+// reads excluded — processedTokens; see transcriptUsageStats.TokensByDay)
+// across every tracked session into a 12-week
 // daily grid — the token-cost-over-time trend. It reuses the cached transcript
 // usage, so for sessions already parsed this tick the lookups are warm; done
 // sessions never change and stay cached. The window and Sunday alignment match

@@ -65,7 +65,7 @@ import { Modal } from '../components/Modal'
 import { AgentPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
-import { compact, compactTokens, dateTime, fromMinutes, fromSeconds } from '../lib/format'
+import { compact, compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
 
 type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree' | 'auto'
 
@@ -289,9 +289,12 @@ export function SessionDetail({ slug }: { slug: string }) {
             {agent && agent.tokens_session > 0 && (
               <span
                 className="tag tok-pill"
-                title={`${agent.tokens_session.toLocaleString()} tokens used this session · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
+                title={`${agent.tokens_session.toLocaleString()} tokens this session (input + output + cache writes; cache reads excluded)${
+                  agent.cost_session ? ` · est. ${fmtUSD(agent.cost_session)} full bill incl. cache` : ''
+                } · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
               >
                 <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
+                {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
               </span>
             )}
             {monitored && (

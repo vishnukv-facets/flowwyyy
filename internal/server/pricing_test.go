@@ -17,6 +17,7 @@ func TestModelTokenRate(t *testing.T) {
 		wantOut float64
 	}{
 		// Claude families, matched by family token regardless of suffix.
+		{"claude-fable-5", 10.0 / m, 50.0 / m},
 		{"claude-opus-4-8", 5.0 / m, 25.0 / m},
 		{"claude-opus-4-8[1m]", 5.0 / m, 25.0 / m},
 		{"claude-sonnet-4-6", 3.0 / m, 15.0 / m},
@@ -40,36 +41,87 @@ func TestModelTokenRate(t *testing.T) {
 }
 
 // Claude turns carry message.model, so cost is priced per-turn from that model's
-// rate. cache_read tokens are excluded from the work basis AND from cost (the
-// estimate is the cost of fresh work, consistent with the token figures).
+// rate. Unlike the work-token metric, cost is the FULL bill: cache reads are
+// included at 0.1x the input rate.
 func TestAccumulateTranscriptUsageBucketsClaudeCostByDay(t *testing.T) {
 	var stats transcriptUsageStats
 	const day = "2026-06-01T12:00:00Z"
-	// opus-4-8 = $5/MTok in, $25/MTok out. 1M fresh input + 1M output = $30.
-	// cache_read of 9M is excluded from both tokens and cost.
+	// opus-4-8 = $5/MTok in, $25/MTok out, cache read = $0.50/MTok (0.1x in).
+	// 1M fresh input ($5) + 1M output ($25) + 9M cache_read ($4.50) = $34.50.
 	accumulateTranscriptUsage(&stats, usageLine(day, 1_000_000, 9_000_000, 1_000_000))
 
 	d := localDay(day)
-	if got := stats.CostByDay[d]; !ratesClose(got, 30.0) {
-		t.Errorf("CostByDay[%s] = %g, want 30.00 (cache reads excluded)", d, got)
+	if got := stats.CostByDay[d]; !ratesClose(got, 34.5) {
+		t.Errorf("CostByDay[%s] = %g, want 34.50 (cache reads billed at 0.1x)", d, got)
+	}
+}
+
+// Cache-creation tokens bill at a premium on the input rate: 1.25x for the
+// 5-minute TTL, 2x for the 1-hour TTL. The breakdown must be priced separately.
+func TestAccumulateTranscriptUsageClaudeCacheCreationCost(t *testing.T) {
+	var stats transcriptUsageStats
+	const day = "2026-06-01T12:00:00Z"
+	// opus-4-8 in=$5/MTok. 1M output ($25) + 2M 5m-creation (2M×$6.25/MTok=$12.50)
+	// + 1M 1h-creation (1M×$10/MTok=$10) = $47.50. No fresh input, no cache reads.
+	line := []byte(`{"type":"assistant","timestamp":"` + day + `","requestId":"req_1",` +
+		`"message":{"id":"msg_1","model":"claude-opus-4-8","usage":{` +
+		`"output_tokens":1000000,"cache_creation_input_tokens":3000000,` +
+		`"cache_creation":{"ephemeral_5m_input_tokens":2000000,"ephemeral_1h_input_tokens":1000000}}}}`)
+	accumulateTranscriptUsage(&stats, line)
+
+	d := localDay(day)
+	if got := stats.CostByDay[d]; !ratesClose(got, 47.5) {
+		t.Errorf("CostByDay[%s] = %g, want 47.50 (5m@1.25x + 1h@2x)", d, got)
+	}
+}
+
+// Claude Code writes the SAME request's usage to the jsonl multiple times
+// (intermediate + final snapshots, identical counts). Each request must be
+// counted once for both work tokens and cost — keyed by (message.id, requestId).
+func TestAccumulateTranscriptUsageDedupsClaudeSnapshots(t *testing.T) {
+	var stats transcriptUsageStats
+	const day = "2026-06-01T12:00:00Z"
+	line := []byte(`{"type":"assistant","timestamp":"` + day + `","requestId":"req_A",` +
+		`"message":{"id":"msg_A","model":"claude-opus-4-8","usage":{` +
+		`"input_tokens":1000000,"output_tokens":1000000}}}`)
+	// Same (message.id, requestId) three times — a final snapshot plus two repeats.
+	accumulateTranscriptUsage(&stats, line)
+	accumulateTranscriptUsage(&stats, line)
+	accumulateTranscriptUsage(&stats, line)
+	// A genuinely different request must still count.
+	other := []byte(`{"type":"assistant","timestamp":"` + day + `","requestId":"req_B",` +
+		`"message":{"id":"msg_B","model":"claude-opus-4-8","usage":{` +
+		`"input_tokens":500000,"output_tokens":0}}}`)
+	accumulateTranscriptUsage(&stats, other)
+
+	// Work tokens: 2M (req_A, once) + 0.5M (req_B) = 2.5M, NOT 6.5M.
+	if got := stats.TokensSession; got != 2_500_000 {
+		t.Errorf("TokensSession = %d, want 2,500,000 (req_A counted once)", got)
+	}
+	// Cost: req_A $30 (1M in + 1M out, once) + req_B $2.50 (0.5M in) = $32.50.
+	d := localDay(day)
+	if got := stats.CostByDay[d]; !ratesClose(got, 32.5) {
+		t.Errorf("CostByDay[%s] = %g, want 32.50 (duplicate snapshots not double-counted)", d, got)
 	}
 }
 
 // Codex token_count events carry no model; the model comes from a preceding
 // turn_context record. Cost uses the input/output split of the running-total
-// delta so the higher Codex output rate is applied correctly.
+// delta so the higher Codex output rate is applied correctly, plus the
+// cached-input portion billed at the cache-read rate.
 func TestAccumulateTranscriptUsageBucketsCodexCostByDay(t *testing.T) {
 	var stats transcriptUsageStats
 	const day = "2026-06-01T12:00:00Z"
 	// turn_context sets the active model.
 	accumulateTranscriptUsage(&stats, []byte(`{"type":"turn_context","timestamp":"`+day+`","payload":{"model":"gpt-5.5"}}`))
-	// gpt-5.5 = $5/MTok in, $30/MTok out. First running total: fresh in = 1M
-	// (2M input - 1M cached), fresh out = 1M → $5 + $30 = $35.
+	// gpt-5.5 = $5/MTok in, $30/MTok out, cached = $0.50/MTok (0.1x in). First
+	// running total: fresh in = 1M (2M input - 1M cached) = $5, fresh out = 1M
+	// = $30, cached 1M = $0.50 → $35.50.
 	accumulateTranscriptUsage(&stats, codexUsageLine(day, 2_000_000, 1_000_000, 1_000_000, 0))
 
 	d := localDay(day)
-	if got := stats.CostByDay[d]; !ratesClose(got, 35.0) {
-		t.Errorf("CostByDay[%s] = %g, want 35.00", d, got)
+	if got := stats.CostByDay[d]; !ratesClose(got, 35.5) {
+		t.Errorf("CostByDay[%s] = %g, want 35.50 (cached input billed at 0.1x)", d, got)
 	}
 }
 

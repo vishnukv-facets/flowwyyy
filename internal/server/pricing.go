@@ -20,18 +20,24 @@ type modelPrice struct {
 	outPerM   float64
 }
 
-// modelPrices is the per-family $/MTok table used to turn fresh work tokens
-// into an estimated dollar cost for the Mission Control charts. The numbers are
-// published list prices, not a billed invoice — the cost shown in the UI is an
-// estimate of fresh-work cost (cache reads/creation excluded), consistent with
-// the token figures it sits beside.
+// modelPrices is the per-family $/MTok table used to turn billed tokens into an
+// estimated dollar cost for the Mission Control charts. The numbers are
+// published list prices, not a billed invoice — but unlike the token "work"
+// figures it sits beside (which exclude caching), the dollar estimate counts
+// the FULL bill: fresh input + output PLUS cache reads and cache creation
+// priced at their cache multipliers (see billedCostUSD). On a long agentic
+// session cache reads dominate the bill, so excluding them understated cost by
+// multiples — this table + billedCostUSD is what makes the figure track Claude
+// Code's own /cost.
 //
-// Sources (captured 2026-06): Anthropic model pricing (Opus 4.6/4.7/4.8 $5/$25,
-// Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5) and OpenAI API pricing (GPT-5.5 $5/$30,
-// GPT-5 $1.75/$14). Codex variants without a published rate fall back to the
-// GPT-5 family rate. Order matters: most-specific family first.
+// Sources (captured 2026-06): Anthropic model pricing (Fable 5 $10/$50, Opus
+// 4.6/4.7/4.8 $5/$25, Sonnet 4.6 $3/$15, Haiku 4.5 $1/$5) and OpenAI API
+// pricing (GPT-5.5 $5/$30, GPT-5.2-Codex $1.75/$14). Codex variants without a
+// published rate fall back to the gpt-5 family rate. Order matters:
+// most-specific family first ("fable" before nothing, "gpt-5.5" before "gpt-5").
 var modelPrices = []modelPrice{
 	// Anthropic
+	{match: "fable", inPerM: 10.0, outPerM: 50.0},
 	{match: "opus", inPerM: 5.0, outPerM: 25.0},
 	{match: "sonnet", inPerM: 3.0, outPerM: 15.0},
 	{match: "haiku", inPerM: 1.0, outPerM: 5.0},
@@ -39,6 +45,17 @@ var modelPrices = []modelPrice{
 	{match: "gpt-5.5", inPerM: 5.0, outPerM: 30.0},
 	{match: "gpt-5", inPerM: 1.75, outPerM: 14.0},
 }
+
+// Cache multipliers on the input rate. Cache reads bill at 0.1x the input rate
+// (Anthropic prompt-cache reads and OpenAI's 90%-discounted cached input both
+// land here); Anthropic cache WRITES bill at 1.25x for the 5-minute TTL and 2x
+// for the 1-hour TTL. OpenAI has no cache-write surcharge, so Codex never hits
+// the write multipliers (it reports no cache_creation tokens).
+const (
+	cacheReadMultiplier    = 0.1
+	cacheWrite5mMultiplier = 1.25
+	cacheWrite1hMultiplier = 2.0
+)
 
 // modelTokenRate returns the per-token USD rate for a model id. Matching is by
 // lowercased family substring (so "claude-opus-4-8[1m]", "claude-opus-4-8", and
@@ -58,7 +75,36 @@ func modelTokenRate(model string) tokenRate {
 	return tokenRate{}
 }
 
-// turnCostUSD prices one turn's fresh input + output tokens at the given rate.
+// turnCostUSD prices fresh input + output tokens at the given rate. Used by the
+// Codex path, which prices the input/output portion of a running-total delta;
+// the Codex cached-read portion is added separately via cacheReadCostUSD.
 func turnCostUSD(freshInput, freshOutput int, rate tokenRate) float64 {
 	return float64(freshInput)*rate.inputPerToken + float64(freshOutput)*rate.outputPerToken
+}
+
+// cacheReadCostUSD prices cache-hit tokens at 0.1x the input rate.
+func cacheReadCostUSD(cacheReadTokens int, rate tokenRate) float64 {
+	return float64(cacheReadTokens) * rate.inputPerToken * cacheReadMultiplier
+}
+
+// billedCostUSD prices a turn's FULL billed usage at the given rate — fresh
+// input + output PLUS cache reads and cache creation. The token metric
+// (processedTokens) excludes cache READS; the bill does not. Cache reads
+// bill at 0.1x input, 5-minute cache writes at 1.25x, 1-hour writes at 2x.
+// Used by the Claude path, where each assistant turn carries its own complete
+// usage. (Codex prices deltas of a running total, so it uses turnCostUSD +
+// cacheReadCostUSD instead.)
+func (u transcriptTokenUsage) billedCostUSD(rate tokenRate) float64 {
+	in := rate.inputPerToken
+	cost := float64(u.freshInput())*in + float64(u.freshOutput())*rate.outputPerToken
+	cost += cacheReadCostUSD(u.cacheReadTokens(), rate)
+	cost += float64(u.CacheCreation.Ephemeral5m) * in * cacheWrite5mMultiplier
+	cost += float64(u.CacheCreation.Ephemeral1h) * in * cacheWrite1hMultiplier
+	// Older transcripts report cache_creation_input_tokens without the 5m/1h
+	// breakdown; price any unattributed remainder at the 5-minute (default-TTL)
+	// rate so a missing breakdown under-prices rather than over-prices.
+	if extra := u.CacheCreationInputTokens - (u.CacheCreation.Ephemeral5m + u.CacheCreation.Ephemeral1h); extra > 0 {
+		cost += float64(extra) * in * cacheWrite5mMultiplier
+	}
+	return cost
 }

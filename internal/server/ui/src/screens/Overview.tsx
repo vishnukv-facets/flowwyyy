@@ -50,8 +50,9 @@ function dayTip(d: ActivityDay): ReactNode {
 }
 
 // Themed tooltip body for the 12-week token-usage heatmap: the day's total
-// fresh "work" tokens, the estimated dollar cost of that work, plus which task
-// burned how many tokens / dollars. The "~$" signals an estimate (see fmtUSD).
+// tokens (input + output + cache creation, cache reads excluded — the /stats
+// basis), the estimated full-bill dollar cost, plus which task burned how many
+// tokens / dollars. The "~$" signals an estimate (see fmtUSD).
 function tokenDayTip(d: TokenDay): ReactNode {
   const head = (
     <div className="ftip-head">
@@ -272,7 +273,7 @@ function StatsPanel({ stats }: { stats: UiStats }) {
           <div className="stats-sub">active · 12 wk</div>
         </div>
       </div>
-      <div className="stats-tok-cap">tokens &amp; est. cost · all sessions</div>
+      <div className="stats-tok-cap" title="Only sessions flow launched and tracks — not your full Claude Code / Codex history. Tokens match each tool's /stats basis (input + output + cache creation, cache reads excluded); cost is the full bill incl. cache.">tokens &amp; est. cost · flow-managed sessions</div>
       <div className="stats-tokens">
         <div className="stats-tok-row">
           <span className="stats-tok-name"><ProviderIcon provider="claude" size={14} /> Claude</span>

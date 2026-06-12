@@ -606,6 +606,7 @@ export interface UiAgent {
   tokens_used: number
   tokens_max: number
   tokens_session: number
+  cost_session?: number
   activity: number[]
   tags: string[]
   summary: string

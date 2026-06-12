@@ -202,32 +202,43 @@ type transcriptUsageStats struct {
 	// window).
 	TokensUsed int
 	TokensMax  int
-	// TokensSession is the cumulative "work done" this session: tokens the model
-	// actually generated plus genuinely-fresh input — EXCLUDING both cache
-	// re-reads AND cache-creation churn. Accumulated per turn via freshTotal().
+	// TokensSession is the cumulative token count this session, defined to MATCH
+	// Claude Code's own `/stats` "total tokens": fresh input + output + cache
+	// CREATION, EXCLUDING cache READS. Accumulated per turn via processedTokens().
 	// This is the header pill ("tokens used this session") and what the Mission
-	// Control "tokens · all sessions" panel sums, so the two correlate.
+	// Control tokens panel sums, so the two correlate.
 	//
-	// Why exclude cache_creation: Claude's prompt cache has a 5-minute TTL, so a
-	// long session re-writes the SAME context to cache dozens of times. Summing
-	// cache_creation counts that churn as fresh work and inflates a session ~10x
-	// (e.g. a 236k-context session showed 20M). Cache reads inflate even worse
-	// (~538M). Both are real billed cost but not "work"; we report work.
+	// Why this basis: cache reads (re-reading already-cached context every turn)
+	// run to billions over a busy history and would inflate this ~25x past what
+	// /stats shows — they're real billed cost (priced at 0.1x in CostByDay) but
+	// not new tokens, so we exclude them here. Cache CREATION is new tokens
+	// written to cache and IS counted by /stats, so we include it (excluding it
+	// was the main reason this metric used to read ~7x low vs Claude Code).
 	TokensSession int
 	Model         string
 	LastTimestamp string
-	// TokensByDay attributes each turn's freshTotal() (work tokens) to the
-	// local calendar day (YYYY-MM-DD) of its timestamp — the basis for the
-	// token-cost-over-time trend. Claude reports per-turn fresh input+output in
-	// message.usage. Codex reports running totals via payload.Info, so the
-	// accumulator buckets the delta between successive totals.
+	// TokensByDay attributes each turn's processedTokens() to the local calendar
+	// day (YYYY-MM-DD) of its timestamp — the basis for the token trend. Claude
+	// reports per-turn usage in message.usage. Codex reports running totals via
+	// payload.Info, so the accumulator buckets the delta between successive
+	// totals.
 	TokensByDay map[string]int
-	// CostByDay is the estimated USD cost of each day's fresh work tokens, on
-	// the same cache-excluded basis as TokensByDay. Each turn is priced at its
-	// own model's input/output rate (see pricing.go), so a day's figure blends
+	// CostByDay is the estimated USD cost of each day's BILLED tokens. Unlike
+	// TokensByDay (cache-excluded "work"), cost counts the full bill — fresh
+	// input + output PLUS cache reads and cache creation at their cache
+	// multipliers (see billedCostUSD) — because that is what's actually charged
+	// and what makes the figure track Claude Code's own /cost. Each turn is
+	// priced at its own model's rate (see pricing.go), so a day's figure blends
 	// however many models/providers were active that day. Turns whose model has
 	// no published rate contribute 0, so this is a floor, not an invoice.
 	CostByDay map[string]float64
+	// claudeSeen dedups Claude usage by (message.id, requestId). Claude Code
+	// appends intermediate AND final usage snapshots for the SAME request to the
+	// jsonl (identical token counts), so summing every line double-counts work
+	// and cost ~2-3x on a long session. We count each request once (first
+	// snapshot wins; in practice all snapshots of a request are identical). nil
+	// until the first dedup-eligible Claude turn.
+	claudeSeen map[string]struct{}
 	// lastCodexFreshTotal is internal accumulator state for deriving per-event
 	// Codex deltas from cumulative total_token_usage records.
 	lastCodexFreshTotal int
@@ -236,16 +247,32 @@ type transcriptUsageStats struct {
 	// separately (Codex output is priced well above input).
 	lastCodexFreshInput  int
 	lastCodexFreshOutput int
+	// lastCodexCached tracks the cumulative cached-input portion so the
+	// per-event delta can be priced at the cache-read rate (Codex's cached input
+	// is billed at 0.1x, not free).
+	lastCodexCached int
 }
 
 type transcriptUsageRecord struct {
 	Type      string          `json:"type"`
 	Timestamp string          `json:"timestamp"`
+	RequestID string          `json:"requestId"`
 	Payload   json.RawMessage `json:"payload"`
 	Message   struct {
+		ID    string               `json:"id"`
 		Model string               `json:"model"`
 		Usage transcriptTokenUsage `json:"usage"`
 	} `json:"message"`
+}
+
+// usageDedupKey identifies a Claude request for snapshot dedup. Empty when the
+// record lacks both ids (e.g. Codex events, synthetic test lines) — callers
+// treat an empty key as "don't dedup", counting the line normally.
+func (r transcriptUsageRecord) usageDedupKey() string {
+	if r.Message.ID == "" || r.RequestID == "" {
+		return ""
+	}
+	return r.Message.ID + "|" + r.RequestID
 }
 
 type transcriptTokenUsage struct {
@@ -257,6 +284,13 @@ type transcriptTokenUsage struct {
 	ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
 	TotalTokens              int `json:"total_tokens"`
 	ModelContextWindow       int `json:"model_context_window"`
+	// CacheCreation is Claude's per-TTL breakdown of CacheCreationInputTokens.
+	// 5-minute writes bill at 1.25x input, 1-hour writes at 2x, so the split
+	// matters for cost. Codex doesn't emit this (no cache-write charge).
+	CacheCreation struct {
+		Ephemeral5m int `json:"ephemeral_5m_input_tokens"`
+		Ephemeral1h int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
 }
 
 func sessionTranscriptUsageStats(path string) transcriptUsageStats {
@@ -291,22 +325,25 @@ func (u transcriptTokenUsage) total() int {
 		u.ReasoningOutputTokens
 }
 
-// freshTotal is a turn's "work done": tokens the model generated plus
-// genuinely-fresh input, EXCLUDING both cache reads and cache-creation.
+// processedTokens is the per-turn token count we report, defined to MATCH what
+// Claude Code's own `/stats` calls "total tokens": fresh input + output + cache
+// CREATION (cache writes), EXCLUDING cache READS.
 //
-//   - Cache reads: re-reading already-counted context every turn. Summing them
-//     double-counts the whole window each turn (~538M for a long session).
-//   - Cache creation: re-writing the SAME context to cache when Claude's 5-min
-//     cache TTL lapses. Summing it counts the same context dozens of times and
-//     inflates a session ~10x (a 236k-context session summed to 20M).
+//   - Cache reads ARE excluded: re-reading already-cached context every turn is
+//     repetitive (a long session re-reads the whole window thousands of times —
+//     7B+ tokens across a busy history). Counting them would inflate the figure
+//     ~25x past what /stats shows; they're priced into cost (at 0.1x), not work.
+//   - Cache creation IS included: those are genuinely new tokens written to the
+//     cache, and /stats counts them. Excluding them (the old behaviour) made
+//     this metric ~7x smaller than /stats — the single biggest reason flow's
+//     token numbers read low against Claude Code.
 //
-// Both are real billed tokens but represent caching mechanics, not work, so we
-// drop them and report (fresh input + output + reasoning). Claude reports fresh
-// input in InputTokens (cache reads are separate in CacheReadInputTokens); Codex
-// bundles the cached portion into InputTokens, exposed as CachedInputTokens, so
-// subtract it.
-func (u transcriptTokenUsage) freshTotal() int {
-	return u.freshInput() + u.freshOutput()
+// Codex has no cache-creation tokens, so for Codex this is just fresh in+out.
+// Claude reports fresh input in InputTokens (cache reads are separate in
+// CacheReadInputTokens); Codex bundles the cached portion into InputTokens,
+// exposed as CachedInputTokens, so freshInput subtracts it.
+func (u transcriptTokenUsage) processedTokens() int {
+	return u.freshInput() + u.freshOutput() + u.CacheCreationInputTokens
 }
 
 // freshInput is the genuinely-fresh input for a turn: InputTokens minus the
@@ -325,6 +362,14 @@ func (u transcriptTokenUsage) freshInput() int {
 // reasoning tokens. Both are billed at the model's output rate.
 func (u transcriptTokenUsage) freshOutput() int {
 	return u.OutputTokens + u.ReasoningOutputTokens
+}
+
+// cacheReadTokens is the cache-hit input for a turn, billed at the reduced
+// cache-read rate. Claude reports it in CacheReadInputTokens; Codex bundles the
+// cached portion into InputTokens and exposes it as CachedInputTokens. Only one
+// of the two is ever populated for a given provider, so summing unifies both.
+func (u transcriptTokenUsage) cacheReadTokens() int {
+	return u.CacheReadInputTokens + u.CachedInputTokens
 }
 
 func parseTranscriptLine(line []byte, offset int64) []TranscriptEntry {

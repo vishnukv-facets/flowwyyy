@@ -1268,6 +1268,10 @@
 .tok-pill svg {
   opacity: 0.85;
 }
+.tok-pill-cost {
+  opacity: 0.72;
+  font-variant-numeric: tabular-nums;
+}
 .fork-tag {
   display: inline-flex;
   align-items: center;
