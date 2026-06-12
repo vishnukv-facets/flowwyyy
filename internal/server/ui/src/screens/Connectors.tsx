@@ -264,7 +264,8 @@ function ConnectorSetup({ def }: { def: ConnectorDef }) {
   if (def.id === 'github') {
     // The App-manifest wizard is the primary path (App auth + auto webhook
     // config). Live webhook transport status sits below it; the gh-CLI identity
-    // panel remains for the legacy polling path until it's retired.
+    // panel powers event polling (polling transport) and branch→PR linking
+    // (always), and labels itself accordingly.
     return (
       <>
         <GitHubConnect framed={false} />
@@ -304,13 +305,18 @@ function GitHubWebhookTransport() {
   )
 }
 
-// GitHub auth runs through the `gh` CLI (no first-party OAuth yet — see brief).
-// Surfaces the live identity flow polls as, plus a switcher across every gh
-// account when more than one exists and the active one isn't env-pinned.
+// GitHubAuth surfaces the live `gh` CLI identity and an account switcher. The
+// `gh` CLI serves two distinct roles depending on transport: under polling it
+// fetches your assigned/mentioned issues & PRs, but under webhook those arrive
+// over the webhook above — so the CLI is used ONLY to link PRs you open on task
+// branches (GitHub sends no webhook for a self-authored PR). The label reflects
+// which role is active so it never implies event polling that isn't happening.
 function GitHubAuth() {
   const { data: gh } = useGitHubAuth()
+  const { data: wh } = useGitHubWebhookStatus()
   const qc = useQueryClient()
   const [busy, setBusy] = useState<string | null>(null)
+  const webhooky = wh?.transport === 'webhook' || wh?.transport === 'hybrid'
 
   if (!gh) {
     return (
@@ -360,9 +366,14 @@ function GitHubAuth() {
       <span className="connector-auth-icon"><Check size={15} /></span>
       <div className="connector-auth-main">
         <div>
-          Polling as <strong>@{gh.active_login}</strong> via the <code>gh</code> CLI
+          {webhooky ? 'PR linking' : 'Polling'} as <strong>@{gh.active_login}</strong> via the <code>gh</code> CLI
           {gh.active_source && <span className="connector-auth-src"> ({gh.active_source})</span>}.
         </div>
+        {webhooky && (
+          <div className="connector-auth-src">
+            Events arrive over the webhook above — the <code>gh</code> CLI is used only to link PRs you open on task branches.
+          </div>
+        )}
         {gh.path && <div className="connector-auth-path mono">{gh.path}</div>}
 
         {gh.accounts.length > 1 && (
