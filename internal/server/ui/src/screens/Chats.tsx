@@ -119,7 +119,6 @@ function ChatRow({ chat }: { chat: Chat }) {
               <SourceIcon source="slack" size={11} /> Slack
             </span>
           ) : null}
-          <span className="spacer" />
           <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
         </div>
       </div>

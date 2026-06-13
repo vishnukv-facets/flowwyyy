@@ -29,6 +29,9 @@ type Server struct {
 	terminals      *terminalHub
 	events         *eventHub
 	reconcile      *livenessReconciler
+	kbDistiller    *kbDistiller
+	kbDreamer      *kbDreamer
+	kbWatcher      *kbWatcher
 	transcripts    *transcriptCache
 	caches         *uiCaches
 	slackListener  *monitor.SlackListener

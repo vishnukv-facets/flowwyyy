@@ -444,6 +444,10 @@ export function usePlaybook(slug: string | undefined) {
 }
 
 export function useKB() {
+  // No polling: the server's kb file watcher pushes a "kb" ui_change over SSE on
+  // any kb/*.md write (agent capture, dreamer prune, UI edit), which
+  // focus-invalidates this ['kb'] query (see liveInvalidation.ts). So the
+  // Knowledge screen updates live, consistent with the rest of the app.
   return useQuery({ queryKey: ['kb'], queryFn: () => apiGet<KBFileView[]>('/api/kb') })
 }
 export function useMemorySources() {

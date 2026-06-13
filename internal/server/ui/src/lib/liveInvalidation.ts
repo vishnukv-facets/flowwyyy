@@ -15,6 +15,8 @@ export function focusedLiveInvalidationKeys(env: { type?: string; data?: unknown
   if (env.type === 'ui_change') {
     const kind = (env.data as { kind?: string } | undefined)?.kind
     if (kind === 'chats') return ['chats']
+    // A kb/*.md change (capture, prune, edit) only touches the Knowledge view.
+    if (kind === 'kb') return ['kb']
   }
   return null
 }

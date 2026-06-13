@@ -52,6 +52,9 @@ func New(cfg Config) *Server {
 	s.events = newEventHub()
 	s.steeringRuns = newSteeringRunStore()
 	s.reconcile = newLivenessReconciler(s)
+	s.kbDistiller = newKBDistiller(s)
+	s.kbDreamer = newKBDreamer(s)
+	s.kbWatcher = newKBWatcher(s)
 	s.transcripts = newTranscriptCache()
 	s.caches = newUICaches()
 	s.dbWatcher = newDBWatcher(s)
@@ -250,6 +253,27 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.reconcile != nil {
 		s.reconcile.start()
 		defer s.reconcile.stop()
+	}
+	// Start the KB distiller: periodically capture durable knowledge from idle
+	// live sessions (in-progress tasks + chats) into kb/*.md, mid-flight. Gated
+	// off cleanly on shutdown via the deferred stop().
+	if s.kbDistiller != nil {
+		s.kbDistiller.start()
+		defer s.kbDistiller.stop()
+	}
+	// Start the KB dreamer: periodic hygiene pass that flags stale KB entries
+	// into each file's "Pending removal" section and auto-prunes ones left
+	// flagged past the max age.
+	if s.kbDreamer != nil {
+		s.kbDreamer.start()
+		defer s.kbDreamer.stop()
+	}
+	// Start the KB file watcher: pushes a live "kb" invalidation over SSE when
+	// any kb/*.md changes (agent capture, dreamer prune, UI edit), so the
+	// Knowledge screen updates without polling.
+	if s.kbWatcher != nil {
+		s.kbWatcher.start()
+		defer s.kbWatcher.stop()
 	}
 	// Start the persistent-monitor reconciler: restore background monitors for
 	// Slack/GitHub/branch-linked tasks on boot, recreate any that die, and

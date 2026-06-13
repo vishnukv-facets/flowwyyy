@@ -126,6 +126,13 @@ var settingsRegistry = []settingSpec{
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
+	{Key: "FLOW_KB_DISTILL_ENABLED", Label: "Auto KB capture from sessions", Group: "General", Type: settingBool, Default: "true", Help: "Periodically capture durable knowledge from live tasks/chats into your KB while they run. Only fires when a session has gone idle (never interrupts a working agent), and only on new activity. Disable to capture KB only at task close-out."},
+	{Key: "FLOW_KB_DISTILL_IDLE", Label: "Auto KB capture — idle wait", Group: "General", Type: settingString, Default: "8m", Help: "Go duration (e.g. 8m). A session is only swept for KB once its transcript has been quiet this long — so a working agent is never interrupted."},
+	{Key: "FLOW_KB_DISTILL_COOLDOWN", Label: "Auto KB capture — cooldown", Group: "General", Type: settingString, Default: "30m", Help: "Go duration (e.g. 30m). Minimum time between KB captures for the same session."},
+	{Key: "FLOW_KB_DISTILL_INTERVAL", Label: "Auto KB capture — check interval", Group: "General", Type: settingString, Default: "5m", Help: "Go duration (e.g. 5m). How often the distiller checks live sessions for eligible KB capture."},
+	{Key: "FLOW_KB_DREAM_ENABLED", Label: "KB hygiene (dreaming)", Group: "General", Type: settingBool, Default: "true", Help: "Periodically review the KB for stale/superseded/incorrect entries and move them into a 'Pending removal' section in each file. You review and Keep/remove them; anything left flagged past the max age below is auto-removed."},
+	{Key: "FLOW_KB_DREAM_MAX_AGE", Label: "KB hygiene — auto-remove after", Group: "General", Type: settingString, Default: "720h", Help: "Go duration (e.g. 720h = 30 days). Entries left in 'Pending removal' longer than this are permanently deleted."},
+	{Key: "FLOW_KB_DREAM_INTERVAL", Label: "KB hygiene — run every", Group: "General", Type: settingString, Default: "24h", Help: "Go duration (e.g. 24h). How often the hygiene pass reviews the KB and prunes expired flagged entries."},
 }
 
 // missionQuoteEnabled reports whether the Mission Control anime quote should be

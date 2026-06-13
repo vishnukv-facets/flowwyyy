@@ -476,6 +476,14 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chats_last_activity ON chats(last_activity_at DESC);
+
+CREATE TABLE IF NOT EXISTS kb_capture (
+    session_id   TEXT PRIMARY KEY,
+    slug         TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    cursor       INTEGER NOT NULL DEFAULT 0,
+    captured_at  TEXT NOT NULL
+);
 	`
 
 // indexesPostMigrate are indexes that depend on columns added by
