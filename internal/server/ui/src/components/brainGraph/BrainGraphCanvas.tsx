@@ -452,27 +452,15 @@ export function BrainGraphCanvas({
 }) {
   const [instance, setInstance] = useState<ReactFlowInstance<FlowNode, FlowEdge> | null>(null)
   const fittedRef = useRef(false)
-  // Latest edges held in a ref so the focus-fit effect can read them without
-  // depending on `edges` (a live refresh must not cancel a pending fit).
-  const edgesRef = useRef(edges)
-  edgesRef.current = edges
 
   // The dagre layout depends only on graph shape, never on selection — so
   // clicking a node neither relayouts nor moves the viewport.
   const baseLayout = useMemo(() => layoutNodes(nodes, edges, owners), [nodes, edges, owners])
 
-  // 1-hop focus set: the selected node plus everything it directly connects to.
-  const incident = useMemo(() => {
-    if (!selectedId) return null
-    const set = new Set<string>([selectedId])
-    for (const edge of edges) {
-      if (edge.source === selectedId) set.add(edge.target)
-      else if (edge.target === selectedId) set.add(edge.source)
-    }
-    return set
-  }, [edges, selectedId])
-
   const selectedOwnerId = selectedOwner ? `owner-boundary:${selectedOwner}` : null
+  // Selecting a node only marks it selected (highlight ring) — it never dims the
+  // other nodes nor reframes the viewport. Clicking a task must keep the whole
+  // graph in view; the detail opens in the drawer, the canvas stays put.
   const flowNodes = useMemo(
     () =>
       baseLayout.nodes.map((node) => {
@@ -481,14 +469,12 @@ export function BrainGraphCanvas({
           return node.selected === selected ? node : { ...node, selected }
         }
         const selected = node.id === selectedId
-        const dimmed = Boolean(incident) && !incident!.has(node.id)
-        const className = dimmed ? 'rf-dim' : undefined
-        if (node.selected === selected && node.className === className) return node
-        return { ...node, selected, className }
+        if (node.selected === selected && !node.className) return node
+        return { ...node, selected, className: undefined }
       }),
-    [baseLayout.nodes, selectedId, selectedOwnerId, incident],
+    [baseLayout.nodes, selectedId, selectedOwnerId],
   )
-  const flowEdgeList = useMemo(() => flowEdges(edges, baseLayout.routes, incident), [edges, baseLayout.routes, incident])
+  const flowEdgeList = useMemo(() => flowEdges(edges, baseLayout.routes, null), [edges, baseLayout.routes])
 
   useEffect(() => {
     // Fit once when the graph first populates. Never auto-refit afterwards —
@@ -499,25 +485,6 @@ export function BrainGraphCanvas({
     const timer = window.setTimeout(() => instance.fitView({ padding: 0.16, duration: 240 }), 60)
     return () => window.clearTimeout(timer)
   }, [instance, baseLayout.nodes.length])
-
-  useEffect(() => {
-    // Focus-fit: when a node is selected, gently bring it and its directly
-    // connected dependencies into view. Fits to that neighborhood (real content)
-    // — never to empty space — so selecting reveals the family instead of
-    // blanking the canvas. Depends only on selectedId so a live data refresh
-    // does not cancel the pending fit or refit on every poll.
-    if (!instance || !selectedId) return
-    const focusIds = new Set<string>([selectedId])
-    for (const edge of edgesRef.current) {
-      if (edge.source === selectedId) focusIds.add(edge.target)
-      else if (edge.target === selectedId) focusIds.add(edge.source)
-    }
-    const timer = window.setTimeout(
-      () => instance.fitView({ nodes: [...focusIds].map((id) => ({ id })), padding: 0.32, duration: 320, maxZoom: 1.05 }),
-      120,
-    )
-    return () => window.clearTimeout(timer)
-  }, [instance, selectedId])
 
   const onNodeClick: NodeMouseHandler<FlowNode> = (_event, node) => {
     if (node.type === 'ownerGroup') {

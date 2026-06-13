@@ -1,5 +1,5 @@
 import { useMemo, useReducer } from 'react'
-import { Boxes } from 'lucide-react'
+import { AlertTriangle, Boxes } from 'lucide-react'
 import { BrainGraphCanvas } from '../components/brainGraph/BrainGraphCanvas'
 import { BrainGraphInspector } from '../components/brainGraph/BrainGraphInspector'
 import { BrainGraphLegend } from '../components/brainGraph/BrainGraphLegend'
@@ -24,6 +24,9 @@ interface BrainGraphState {
   expanded: Set<string>
   selectedId: string | null
   selectedOwner: string | null
+  // warningsOpen surfaces graph-wide warnings in the drawer when no node is
+  // selected (the drawer is otherwise driven by node selection).
+  warningsOpen: boolean
 }
 
 type BrainGraphAction =
@@ -31,6 +34,7 @@ type BrainGraphAction =
   | { type: 'includeDone'; includeDone: boolean }
   | { type: 'selectNode'; id: string; ownerSlug: string; expandTask: boolean }
   | { type: 'selectOwner'; ownerSlug: string }
+  | { type: 'viewWarnings' }
   | { type: 'clearSelection' }
 
 const initialBrainGraphState: BrainGraphState = {
@@ -39,6 +43,7 @@ const initialBrainGraphState: BrainGraphState = {
   expanded: new Set(),
   selectedId: null,
   selectedOwner: null,
+  warningsOpen: false,
 }
 
 function brainGraphReducer(state: BrainGraphState, action: BrainGraphAction): BrainGraphState {
@@ -48,15 +53,17 @@ function brainGraphReducer(state: BrainGraphState, action: BrainGraphAction): Br
     case 'includeDone':
       return { ...state, includeDone: action.includeDone }
     case 'selectOwner':
-      return { ...state, selectedId: null, selectedOwner: action.ownerSlug }
+      return { ...state, selectedId: null, selectedOwner: action.ownerSlug, warningsOpen: false }
+    case 'viewWarnings':
+      return { ...state, selectedId: null, warningsOpen: true }
     case 'clearSelection':
-      return { ...state, selectedId: null, selectedOwner: null }
+      return { ...state, selectedId: null, selectedOwner: null, warningsOpen: false }
     case 'selectNode': {
       const expanded =
         action.expandTask && !state.expanded.has(action.id)
           ? new Set([...state.expanded, action.id])
           : state.expanded
-      return { ...state, selectedId: action.id, selectedOwner: action.ownerSlug, expanded }
+      return { ...state, selectedId: action.id, selectedOwner: action.ownerSlug, warningsOpen: false, expanded }
     }
   }
 }
@@ -64,7 +71,7 @@ function brainGraphReducer(state: BrainGraphState, action: BrainGraphAction): Br
 export function BrainGraph() {
   useDocumentTitle('Graph')
   const [state, dispatch] = useReducer(brainGraphReducer, initialBrainGraphState)
-  const { q, includeDone, expanded, selectedId, selectedOwner } = state
+  const { q, includeDone, expanded, selectedId, selectedOwner, warningsOpen } = state
   const expand = useMemo(() => [...expanded].sort(), [expanded])
   const { data, isLoading, error, isFetching } = useBrainGraph({ q, includeDone, expand })
 
@@ -74,11 +81,15 @@ export function BrainGraph() {
   )
 
   const selectNode = (node: BrainGraphNode) => {
+    // Selecting a task only opens the drawer — it must NOT auto-expand the task.
+    // Expanding refetched the graph with the task's run nodes, which relayouts
+    // the whole owner subgraph (every node moves), and at a zoomed-in view the
+    // other tasks slide out of sight — that's the "tasks vanish on click" report.
     dispatch({
       type: 'selectNode',
       id: node.id,
       ownerSlug: data ? nodeOwnerSlug(node, data.nodes) : node.owner_slug || 'unowned',
-      expandTask: node.type === 'task',
+      expandTask: false,
     })
   }
 
@@ -108,6 +119,17 @@ export function BrainGraph() {
                   <span className={`dot ${isFetching ? 'waiting' : 'done'}`} />
                   {isFetching ? 'refreshing' : data.freshness}
                 </div>
+                {data.warnings.length > 0 ? (
+                  <button
+                    type="button"
+                    className="brain-warning-pill"
+                    onClick={() => dispatch({ type: 'viewWarnings' })}
+                    title="Review graph warnings"
+                  >
+                    <AlertTriangle size={13} />
+                    {data.warnings.length} warning{data.warnings.length === 1 ? '' : 's'}
+                  </button>
+                ) : null}
               </div>
               <BrainGraphCanvas
                 nodes={data.nodes}
@@ -126,9 +148,11 @@ export function BrainGraph() {
           </div>
 
           <BrainGraphInspector
+            open={Boolean(selected) || warningsOpen}
             selected={selected}
             actions={data.selected_actions}
             warnings={data.warnings}
+            onClose={() => dispatch({ type: 'clearSelection' })}
           />
         </div>
       )}

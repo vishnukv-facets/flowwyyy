@@ -566,7 +566,10 @@ export function SessionDetail({ slug }: { slug: string }) {
                     word; surface termStatus only for errors/close reasons. */}
                 {termDisplayStatus}
               </span>
-              {canTerminal && (
+              {/* Keep the toggle when in fullscreen even if the terminal itself
+                  is gone (task closed mid-fullscreen) — otherwise there's no
+                  button to minimize back out, only Esc. */}
+              {(canTerminal || full) && (
                 <button
                   className="btn icon ghost sm"
                   title={full ? 'Exit full view (Esc)' : 'Full view'}

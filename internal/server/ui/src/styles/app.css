@@ -6324,8 +6324,9 @@ a.srun-where:hover .srun-chan {
   accent-color: var(--accent);
 }
 .brain-shell {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   min-height: 0;
   height: min(760px, calc(100vh - 162px));
@@ -6438,6 +6439,8 @@ a.srun-where:hover .srun-chan {
   fill: currentColor;
 }
 .brain-canvas .react-flow__minimap {
+  width: 138px;
+  height: 94px;
   background: color-mix(in srgb, var(--bg-2) 88%, transparent);
 }
 .brain-canvas .react-flow__edge-path {
@@ -6666,13 +6669,32 @@ a.srun-where:hover .srun-chan {
 .brain-edge-key.blocks {
   color: var(--danger);
 }
+/* Inspector is a slide-in right drawer overlaying the (full-width) canvas. It
+   opens on node select (or the warnings pill) and closes via its X or a pane
+   click — the graph keeps its full width whether the drawer is open or not. */
 .brain-inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  width: min(372px, calc(100% - 24px));
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-1);
+  box-shadow: -18px 0 44px -28px rgba(0, 0, 0, 0.7);
+  transform: translateX(calc(100% + 28px));
+  opacity: 0;
+  transition: transform 0.22s ease, opacity 0.22s ease;
+  pointer-events: none;
+}
+.brain-inspector.open {
+  transform: none;
+  opacity: 1;
+  pointer-events: auto;
 }
 .brain-inspector-section {
   border: 1px solid var(--border);
@@ -6684,16 +6706,84 @@ a.srun-where:hover .srun-chan {
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 38px;
-  padding: 0 12px;
+  min-height: 42px;
+  padding: 0 8px 0 13px;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
   font-weight: 650;
+}
+.brain-inspector-head > span {
+  margin-right: auto;
+}
+.brain-inspector-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+}
+.brain-inspector-close:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+  border-color: var(--border);
+}
+.brain-inspector-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* Reserve the scrollbar gutter so the scroll affordance is always present
+     (macOS overlay scrollbars otherwise stay hidden until mid-scroll, which
+     reads as "the panel won't scroll"). */
+  scrollbar-gutter: stable;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 12px;
+}
+.brain-inspector-scroll::-webkit-scrollbar {
+  width: 12px;
+}
+.brain-inspector-scroll::-webkit-scrollbar-track {
+  background: var(--bg-2);
+  border-left: 1px solid var(--border);
+}
+.brain-inspector-scroll::-webkit-scrollbar-thumb {
+  background: rgba(215, 212, 205, 0.3);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+.brain-inspector-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(215, 212, 205, 0.5);
+  background-clip: content-box;
 }
 .brain-inspector-body {
   display: grid;
   gap: 12px;
   padding: 12px;
+}
+/* Warnings count pill in the surface header — opens the drawer in warnings view. */
+.brain-warning-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--warn-line, var(--border-strong));
+  border-radius: var(--r-pill);
+  background: var(--warn-soft, var(--bg-1));
+  color: var(--warn);
+  font-size: 12px;
+  cursor: pointer;
+}
+.brain-warning-pill:hover {
+  border-color: var(--warn);
 }
 .brain-inspector-empty {
   padding: 28px 12px;
@@ -7029,14 +7119,10 @@ a.srun-where:hover .srun-chan {
     width: min(420px, 100%);
   }
   .brain-shell {
-    grid-template-columns: 1fr;
-    height: auto;
+    height: min(620px, calc(100vh - 150px));
   }
   .brain-main {
-    min-height: 620px;
-  }
-  .brain-inspector {
-    overflow: visible;
+    min-height: 0;
   }
 }
 

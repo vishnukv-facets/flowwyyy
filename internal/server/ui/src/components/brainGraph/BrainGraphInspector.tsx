@@ -10,6 +10,7 @@ import {
   ScrollText,
   SendHorizontal,
   TerminalSquare,
+  X,
 } from 'lucide-react'
 import { StatusDot } from '../ui'
 import { Modal } from '../Modal'
@@ -52,13 +53,17 @@ function errorText(error: unknown) {
 }
 
 export function BrainGraphInspector({
+  open,
   selected,
   actions,
   warnings,
+  onClose,
 }: {
+  open: boolean
   selected: BrainGraphNode | null
   actions: BrainGraphActionSpec[]
   warnings: BrainGraphWarning[]
+  onClose: () => void
 }) {
   const nodeWarnings = selected ? warnings.filter((warning) => warning.node_id === selected.id) : []
   const detailQuery = useBrainGraphNodeDetail(selected?.id ?? null)
@@ -66,25 +71,29 @@ export function BrainGraphInspector({
   const detailLoading = Boolean(selected) && (detailQuery.isLoading || (detailQuery.isFetching && !detail))
 
   return (
-    <aside className="brain-inspector">
-      <div className="brain-inspector-section">
-        <div className="brain-inspector-head">
-          <Info size={15} />
-          <span>Inspector</span>
-        </div>
+    <aside className={`brain-inspector ${open ? 'open' : ''}`} aria-hidden={!open}>
+      <div className="brain-inspector-head">
+        {selected ? <Info size={15} /> : <AlertTriangle size={15} />}
+        <span>{selected ? 'Inspector' : 'Warnings'}</span>
+        <button type="button" className="brain-inspector-close" onClick={onClose} aria-label="Close inspector">
+          <X size={16} />
+        </button>
+      </div>
+      <div className="brain-inspector-scroll">
         {selected ? (
-          <div className="brain-inspector-body">
+          <>
             <NodeSummary selected={selected} actions={actions} warnings={nodeWarnings} />
             <DetailState loading={detailLoading} error={detailQuery.error} />
             {detail?.task ? <TaskDetail detail={detail.task} /> : null}
             {detail?.evidence ? <EvidenceDetail detail={detail.evidence} /> : null}
-          </div>
+            {warnings.length > 0 ? <WarningsSummary warnings={warnings} /> : null}
+          </>
+        ) : warnings.length > 0 ? (
+          <Warnings warnings={warnings} />
         ) : (
           <div className="brain-inspector-empty">No node selected</div>
         )}
       </div>
-
-      {warnings.length > 0 ? <WarningsSummary warnings={warnings} /> : null}
     </aside>
   )
 }
