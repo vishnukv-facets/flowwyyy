@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
+import { AlertTriangle, Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
 import { apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
 import { useGitHubInstallations, useGitHubOrgs, useGitHubSetupStatus } from '../lib/query'
@@ -307,6 +307,17 @@ function FinishedSummary({ st, onChange }: { st: GitHubSetupStatus; onChange: ()
 
   return (
     <div className="slack-wizard-done">
+      {!st.self_logins_set ? (
+        <div className="gh-selflogins-warn" role="alert">
+          <AlertTriangle size={15} />
+          <div>
+            <strong>Your GitHub login isn't set.</strong> Until you add it under{' '}
+            <em>Your GitHub logins</em> in Settings, Flow drops every webhook event
+            as out-of-scope — including your own PRs and issues. Set it so Flow acts
+            only on items that involve you.
+          </div>
+        </div>
+      ) : null}
       <div className="slack-wizard-done-head">
         <Check size={15} />
         <div>
