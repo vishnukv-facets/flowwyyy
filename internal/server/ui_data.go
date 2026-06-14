@@ -1151,7 +1151,6 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		status = "idle"
 		runtimeSource = "task"
 	}
-	var hookWaiting *uiWaitingFor
 	transcriptWaiting := s.codexTranscriptWaitingFor(tv, provider)
 	if !staleOverviewSession && tv.Status == "in-progress" {
 		if hookRuntime != nil && hookRuntime.Status != "" {
@@ -1168,10 +1167,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 				runtimeEvent = hookRuntime.EventKind + ":stale"
 			}
 		}
-		if hookWaiting != nil {
-			status = "waiting"
-			runtimeSource = "hook"
-		} else if transcriptWaiting != nil {
+		if transcriptWaiting != nil {
 			status = "waiting"
 			runtimeSource = "transcript"
 			runtimeEvent = "request_user_input"
@@ -1288,8 +1284,6 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	}
 	if tv.WaitingOn != nil {
 		agent.WaitingFor = &uiWaitingFor{Kind: "flow", Cmd: "flow update task " + tv.Slug + " --clear-waiting", Why: *tv.WaitingOn}
-	} else if hookWaiting != nil {
-		agent.WaitingFor = hookWaiting
 	} else if transcriptWaiting != nil {
 		agent.WaitingFor = transcriptWaiting
 	}

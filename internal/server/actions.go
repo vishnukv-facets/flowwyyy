@@ -690,7 +690,8 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	if err == nil {
 		return s.createFlowFromExisting(req, existing, provider, permissionMode, priority, project, workDir)
 	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	// err is guaranteed non-nil here (the err == nil case returned above).
+	if !errors.Is(err, sql.ErrNoRows) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 
