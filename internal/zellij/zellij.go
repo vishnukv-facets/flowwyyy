@@ -34,6 +34,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"flow/internal/termutil"
 )
 
 // Runner is the function used to execute zellij.
@@ -164,8 +166,5 @@ func paneIDForClaudeSession(jsonBytes []byte, sessionID string) (int, bool, erro
 	return 0, false, nil
 }
 
-// ShellQuote wraps s in single quotes with proper escaping. Same
-// implementation as iterm.ShellQuote and terminal.ShellQuote.
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+// ShellQuote delegates to termutil; see that package.
+func ShellQuote(s string) string { return termutil.ShellQuote(s) }

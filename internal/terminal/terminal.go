@@ -16,6 +16,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"flow/internal/termutil"
 )
 
 // Runner is the function used to execute osascript. Tests override
@@ -116,27 +118,7 @@ end tell
 // is recoverable; false negatives mean the user gets a cryptic
 // osascript error and has to figure out the fix on their own, which
 // is the whole problem we're solving.
-func isAccessibilityDenied(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, pat := range []string{
-		"not allowed assistive access",
-		"is not allowed to send keystrokes",
-		"is not allowed sending keystrokes",
-		"not authorized to send Apple events",
-		"(-1002)",
-		"(-1719)",
-		"(-1743)",
-		"(-25211)",
-	} {
-		if strings.Contains(msg, pat) {
-			return true
-		}
-	}
-	return false
-}
+func isAccessibilityDenied(err error) bool { return termutil.AccessibilityDenied(err) }
 
 // wrapAccessibilityError returns a multi-line error explaining what's
 // missing and how to fix it. The Claude session that ran `flow do`
@@ -262,12 +244,6 @@ end tell
 }
 
 // ShellQuote wraps s in single quotes with proper escaping.
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+func ShellQuote(s string) string { return termutil.ShellQuote(s) }
 
-func escapeAppleScriptString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
-}
+func escapeAppleScriptString(s string) string { return termutil.EscapeAppleScript(s) }

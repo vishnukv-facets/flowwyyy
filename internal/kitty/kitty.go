@@ -37,6 +37,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"flow/internal/termutil"
 )
 
 // Runner is the function used to execute kitty for side-effect calls
@@ -204,9 +206,5 @@ func windowIDForClaudeSession(jsonBytes []byte, sessionID string) (int, bool, er
 	return 0, false, nil
 }
 
-// ShellQuote wraps s in single quotes with proper escaping. Same
-// implementation as iterm.ShellQuote / terminal.ShellQuote /
-// zellij.ShellQuote.
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+// ShellQuote delegates to termutil; see that package.
+func ShellQuote(s string) string { return termutil.ShellQuote(s) }

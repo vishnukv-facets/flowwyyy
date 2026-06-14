@@ -30,6 +30,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"flow/internal/termutil"
 )
 
 // Runner runs osascript. Tests override this to capture the AppleScript
@@ -121,11 +123,8 @@ func SpawnTab(title, cwd, command string, envVars map[string]string) error {
 	return nil
 }
 
-// ShellQuote wraps s in single quotes with proper escaping. Identical
-// to iterm.ShellQuote / terminal.ShellQuote / zellij.ShellQuote.
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+// ShellQuote delegates to termutil; see that package.
+func ShellQuote(s string) string { return termutil.ShellQuote(s) }
 
 // buildScript produces the bash script body that the keystroked
 // `bash <path>` line invokes. Shape:
@@ -231,31 +230,8 @@ func tempScriptPath() (string, error) {
 	return filepath.Join(os.TempDir(), name), nil
 }
 
-// isAccessibilityDenied reports whether an osascript failure looks
-// like a missing-Accessibility-permission error. Matches the same
-// fragments as internal/terminal.isAccessibilityDenied — macOS uses
-// the same wording regardless of the target app being scripted.
-func isAccessibilityDenied(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	for _, pat := range []string{
-		"not allowed assistive access",
-		"is not allowed to send keystrokes",
-		"is not allowed sending keystrokes",
-		"not authorized to send Apple events",
-		"(-1002)",
-		"(-1719)",
-		"(-1743)",
-		"(-25211)",
-	} {
-		if strings.Contains(msg, pat) {
-			return true
-		}
-	}
-	return false
-}
+// isAccessibilityDenied delegates to termutil; see that package.
+func isAccessibilityDenied(err error) bool { return termutil.AccessibilityDenied(err) }
 
 // wrapAccessibilityError returns a Warp-specific multi-line error
 // pointing at the right System Settings pane and naming "Warp" (not
@@ -275,11 +251,5 @@ After the grant, future "flow do" invocations from Warp spawn tabs silently with
 Underlying osascript error: %w`, err)
 }
 
-// escapeAppleScriptString escapes a string for safe embedding in a
-// double-quoted AppleScript string literal. Same implementation as
-// the sibling packages — duplicated to avoid cross-package coupling.
-func escapeAppleScriptString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
-}
+// escapeAppleScriptString delegates to termutil; see that package.
+func escapeAppleScriptString(s string) string { return termutil.EscapeAppleScript(s) }

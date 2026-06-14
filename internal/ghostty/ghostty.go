@@ -20,6 +20,8 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+
+	"flow/internal/termutil"
 )
 
 // Runner is the function used to execute osascript. Tests override
@@ -77,12 +79,6 @@ end tell
 }
 
 // ShellQuote wraps s in single quotes with proper escaping.
-func ShellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
+func ShellQuote(s string) string { return termutil.ShellQuote(s) }
 
-func escapeAppleScriptString(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `"`, `\"`)
-	return s
-}
+func escapeAppleScriptString(s string) string { return termutil.EscapeAppleScript(s) }

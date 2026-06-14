@@ -91,28 +91,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     CHECK (status IN ('backlog','done') OR session_id IS NOT NULL OR (session_provider = 'codex' AND status = 'in-progress'))
 );
 
-CREATE TABLE IF NOT EXISTS brain_plans (
-    id             TEXT PRIMARY KEY,
-    title          TEXT NOT NULL,
-    query          TEXT NOT NULL DEFAULT '',
-    summary        TEXT NOT NULL DEFAULT '',
-    source         TEXT NOT NULL DEFAULT '',
-    status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','approved','executing','blocked','completed','cancelled','rejected','deferred','failed')),
-    project_slug   TEXT REFERENCES projects(slug),
-    work_dir       TEXT,
-    branch_policy  TEXT,
-    error          TEXT,
-    approved_at    TEXT,
-    executed_at    TEXT,
-    completed_at   TEXT,
-    cancelled_at   TEXT,
-    rejected_at    TEXT,
-    blocked_at     TEXT,
-    created_at     TEXT NOT NULL,
-    updated_at     TEXT NOT NULL,
-    plan_json      TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS brain_runs (
     run_id          TEXT PRIMARY KEY,
     family_slug     TEXT NOT NULL,
@@ -136,25 +114,6 @@ CREATE TABLE IF NOT EXISTS brain_runs (
     finished_at     TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS brain_policy (
-    action     TEXT PRIMARY KEY,
-    mode       TEXT NOT NULL CHECK (mode IN ('auto','approval_required')),
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS brain_action_audit (
-    id            TEXT PRIMARY KEY,
-    action        TEXT NOT NULL,
-    target_type   TEXT NOT NULL,
-    target_id     TEXT NOT NULL,
-    actor         TEXT NOT NULL,
-    policy        TEXT NOT NULL,
-    evidence_json TEXT NOT NULL DEFAULT '{}',
-    result        TEXT NOT NULL,
-    error_text    TEXT,
-    created_at    TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workdirs (
@@ -443,7 +402,6 @@ CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_family_started ON brain_runs(family_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_task_started ON brain_runs(task_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_status_updated ON brain_runs(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_brain_action_audit_target ON brain_action_audit(target_type, target_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);
@@ -451,9 +409,6 @@ CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering
 CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
-CREATE INDEX IF NOT EXISTS idx_brain_plans_status_updated ON brain_plans(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_brain_plans_created ON brain_plans(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_brain_plans_project ON brain_plans(project_slug);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
@@ -1160,6 +1115,11 @@ func runMigrations(db *sql.DB) error {
 		"automation_rules",
 		"task_pr_links",
 		"slack_oauth_tokens",
+		// Brain orchestration remnants (removed in #34); brain_runs is
+		// still the live autonomous-run ledger and is intentionally kept.
+		"brain_plans",
+		"brain_policy",
+		"brain_action_audit",
 	} {
 		if _, err := db.Exec("DROP TABLE IF EXISTS " + t); err != nil {
 			_, _ = db.Exec(`PRAGMA foreign_keys = ON`)
@@ -2886,8 +2846,9 @@ func affectedPlaybookRow(res sql.Result, err error, op, slug string) error {
 var ErrSlugTaken = errors.New("slug already taken")
 
 // RenameProject changes a project's slug and cascades the change to every
-// table that references projects(slug): tasks.project_slug and
-// playbooks.project_slug. No-op if old == new.
+// table that references projects(slug): tasks.project_slug,
+// playbooks.project_slug, and owners.project_slug.
+// No-op if old == new.
 func RenameProject(db *sql.DB, oldSlug, newSlug string) error {
 	if oldSlug == newSlug {
 		return nil
@@ -2923,6 +2884,9 @@ func RenameProject(db *sql.DB, oldSlug, newSlug string) error {
 	}
 	if _, err := tx.Exec(`UPDATE playbooks SET project_slug=?, updated_at=? WHERE project_slug=?`, newSlug, now, oldSlug); err != nil {
 		return fmt.Errorf("cascade playbooks.project_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE owners SET project_slug=?, updated_at=? WHERE project_slug=?`, newSlug, now, oldSlug); err != nil {
+		return fmt.Errorf("cascade owners.project_slug: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
