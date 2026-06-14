@@ -33,6 +33,9 @@ func init() {
 
 func New(cfg Config) *Server {
 	s := &Server{cfg: cfg}
+	// Mint the data-plane session token before anything can serve. Gates every
+	// WS handshake and state-changing /api/* route (audit P0-1).
+	s.sessionToken = mintSessionToken()
 	// Export persisted settings (config.json) into the process env before any
 	// listener reads them, so UI-managed config is authoritative.
 	s.applyConfigToEnv()
@@ -40,11 +43,17 @@ func New(cfg Config) *Server {
 	// so it survives a restart launched without those exports (otherwise e.g.
 	// GitHub polling silently reverts to off).
 	s.seedConfigFromEnv()
+	// Move any keyring-routed secret still living in config.json plaintext (an
+	// install created before secrets were keyring-backed) into the OS keyring and
+	// strip the plaintext copy, before the hydration below reads it (audit P2-2).
+	s.migrateConfigSecretsToKeyring()
 	// Hydrate GitHub App credentials (PEM, client + webhook secrets) from the OS
 	// keyring into the process env. Runs after applyConfigToEnv so the keyring —
 	// the authoritative at-rest store — wins over a stale config/shell value,
 	// while an absent entry preserves the env fallback.
 	loadGitHubSecretsFromKeyring()
+	// Same for the Slack bot token, operator user token, and OAuth client secret.
+	loadSlackSecretsFromKeyring()
 	s.terminals = newTerminalHub(s)
 	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
 	// process, so the Ask Flow tray survives a flow-server restart.
@@ -227,10 +236,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ws/rpc", s.handleRPCWebSocket)
 	mux.HandleFunc("/ws", s.handleWebSocketPlaceholder)
 	mux.HandleFunc("/", s.handleStatic)
-	return mux
+	// Gate the direct-HTTP /api/* data plane (cross-origin reject + session
+	// token on state-changing routes). The WS handlers and apiHandler() do
+	// their own auth, so this only affects direct HTTP. See session_token.go.
+	return s.dataPlaneAuth(mux)
 }
 
 func (s *Server) ListenAndServe(addr string) int {
+	// Persist the minted token (0600) so trusted local CLIs (flow wait, slack
+	// send, attention sent) can authenticate to the data plane. Written before
+	// serving so the file matches the in-memory token by the time we accept
+	// connections.
+	s.writeSessionTokenFile()
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),
@@ -531,6 +548,12 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	// Hand the same-origin SPA its session token (window.__FLOW_TOKEN__) so it
+	// can authenticate its /ws/* sockets. Unreadable cross-origin; only the
+	// served HTML document carries it.
+	if path == "index.html" {
+		data = injectSessionToken(data, s.sessionToken)
+	}
 	if r.Method == http.MethodHead {
 		return
 	}

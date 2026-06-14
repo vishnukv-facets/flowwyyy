@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 func githubSetupTestServer(t *testing.T) (*Server, *sql.DB) {
@@ -244,9 +246,25 @@ func TestGitHubAppManifest_IncludesSetupURLForInstallRedirect(t *testing.T) {
 	}
 }
 
+// stubGitHubInstallationVerifier replaces the App-API installation verifier with
+// an allowlist so the unauthenticated install callback can be tested without a
+// real connected App. Restored on cleanup.
+func stubGitHubInstallationVerifier(t *testing.T, allowed ...string) {
+	t.Helper()
+	prev := verifyGitHubInstallation
+	allow := map[string]bool{}
+	for _, id := range allowed {
+		allow[id] = true
+	}
+	verifyGitHubInstallation = func(_ context.Context, id string) bool { return allow[id] }
+	t.Cleanup(func() { verifyGitHubInstallation = prev })
+}
+
 func TestHandleGitHubSetupCallback_CapturesInstallationID(t *testing.T) {
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "") // isolate from captureInstallationID's process-global os.Setenv
 	srv, _ := githubSetupTestServer(t)
 	t.Setenv("FLOW_GH_APP_SLUG", "flow-dev") // App already exists from a prior step
+	stubGitHubInstallationVerifier(t, "555", "556")
 
 	// Post-install redirect: installation_id + setup_action, no code, no state.
 	rec := httptest.NewRecorder()
@@ -263,6 +281,26 @@ func TestHandleGitHubSetupCallback_CapturesInstallationID(t *testing.T) {
 	srv.handleGitHubSetupCallback(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/github/setup/callback?installation_id=555&setup_action=install", nil))
 	if cfg := loadConfigFile(srv.configPath()); cfg["FLOW_GH_INSTALLATION_IDS"] != "555,556" {
 		t.Errorf("installation ids = %q, want 555,556", cfg["FLOW_GH_INSTALLATION_IDS"])
+	}
+}
+
+// TestHandleGitHubSetupCallback_RejectsUnverifiedInstallationID is the P2-3
+// security property: an installation_id that does not belong to this App (the
+// verifier returns false — the fail-closed default for an attacker-supplied id
+// on the public callback) must NOT be persisted.
+func TestHandleGitHubSetupCallback_RejectsUnverifiedInstallationID(t *testing.T) {
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "") // isolate from captureInstallationID's process-global os.Setenv
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_APP_SLUG", "flow-dev")
+	stubGitHubInstallationVerifier(t /* allow nothing */)
+
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupCallback(rec, httptest.NewRequest("GET", "/api/github/setup/callback?installation_id=99999&setup_action=install", nil))
+	if cfg := loadConfigFile(srv.configPath()); cfg["FLOW_GH_INSTALLATION_IDS"] != "" {
+		t.Errorf("unverified installation id was persisted: %q", cfg["FLOW_GH_INSTALLATION_IDS"])
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "verify") {
+		t.Errorf("expected a verification-error page, got: %s", rec.Body.String())
 	}
 }
 
@@ -372,5 +410,108 @@ func TestHandleGitHubSetupDisconnect_RejectsGET(t *testing.T) {
 	srv.handleGitHubSetupDisconnect(rec, httptest.NewRequest("GET", "/api/github/setup/disconnect", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("GET should be 405, got %d", rec.Code)
+	}
+}
+
+// --- P0-2: auto-populate FLOW_GH_SELF_LOGINS on connect -----------------------
+
+func TestSelfLoginsFromInstallations(t *testing.T) {
+	got := selfLoginsFromInstallations([]monitor.GitHubInstallation{
+		{ID: 1, Account: "octocat", Type: "User"},
+		{ID: 2, Account: "acme-corp", Type: "Organization"}, // org skipped
+		{ID: 3, Account: "OctoCat", Type: "User"},           // dup (case-fold) skipped
+		{ID: 4, Account: "", Type: "User"},                  // empty skipped
+		{ID: 5, Account: "octodev", Type: "User"},
+	})
+	want := []string{"octocat", "octodev"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("selfLoginsFromInstallations = %v, want %v", got, want)
+	}
+}
+
+// stubInstallations swaps the package-level lister for the duration of a test.
+func stubInstallations(t *testing.T, installs []monitor.GitHubInstallation, ok bool, err error) {
+	t.Helper()
+	prev := listGitHubAppInstallations
+	listGitHubAppInstallations = func(context.Context) ([]monitor.GitHubInstallation, bool, error) {
+		return installs, ok, err
+	}
+	t.Cleanup(func() { listGitHubAppInstallations = prev })
+}
+
+func TestAutoPopulateGitHubSelfLogins_SeedsFromUserInstall(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_SELF_LOGINS", "") // unset; cleanup restores
+	stubInstallations(t, []monitor.GitHubInstallation{
+		{ID: 1, Account: "octocat", Type: "User"},
+	}, true, nil)
+
+	srv.autoPopulateGitHubSelfLogins(context.Background())
+
+	if got := os.Getenv("FLOW_GH_SELF_LOGINS"); got != "octocat" {
+		t.Errorf("env FLOW_GH_SELF_LOGINS = %q, want %q", got, "octocat")
+	}
+	if cfg := loadConfigFile(srv.configPath()); cfg["FLOW_GH_SELF_LOGINS"] != "octocat" {
+		t.Errorf("config FLOW_GH_SELF_LOGINS = %q, want %q", cfg["FLOW_GH_SELF_LOGINS"], "octocat")
+	}
+}
+
+func TestAutoPopulateGitHubSelfLogins_NoClobber(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_SELF_LOGINS", "manual-login")
+	stubInstallations(t, []monitor.GitHubInstallation{
+		{ID: 1, Account: "octocat", Type: "User"},
+	}, true, nil)
+
+	srv.autoPopulateGitHubSelfLogins(context.Background())
+
+	if got := os.Getenv("FLOW_GH_SELF_LOGINS"); got != "manual-login" {
+		t.Errorf("auto-populate clobbered operator value: got %q, want %q", got, "manual-login")
+	}
+}
+
+func TestAutoPopulateGitHubSelfLogins_OrgOnlyLeavesEmpty(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_SELF_LOGINS", "")
+	stubInstallations(t, []monitor.GitHubInstallation{
+		{ID: 1, Account: "acme-corp", Type: "Organization"},
+	}, true, nil)
+
+	srv.autoPopulateGitHubSelfLogins(context.Background())
+
+	if got := os.Getenv("FLOW_GH_SELF_LOGINS"); got != "" {
+		t.Errorf("org-only install should leave self-logins empty, got %q", got)
+	}
+}
+
+func TestGitHubSetupStatus_HardWarnsWhenSelfLoginsEmpty(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_APP_ID", "77")
+	t.Setenv("FLOW_GH_APP_PEM", "PEM")
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "555") // installed
+	t.Setenv("FLOW_GH_SELF_LOGINS", "")         // but identity unknown
+
+	st := srv.githubSetupStatus()
+	if st.SelfLoginsSet {
+		t.Errorf("SelfLoginsSet = true, want false")
+	}
+	if !strings.Contains(st.Summary, "⚠") || !strings.Contains(strings.ToLower(st.Summary), "login") {
+		t.Errorf("expected a hard warning about the missing login, got summary %q", st.Summary)
+	}
+}
+
+func TestGitHubSetupStatus_NoWarnWhenSelfLoginsSet(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_APP_ID", "77")
+	t.Setenv("FLOW_GH_APP_PEM", "PEM")
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "555")
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat")
+
+	st := srv.githubSetupStatus()
+	if !st.SelfLoginsSet {
+		t.Errorf("SelfLoginsSet = false, want true")
+	}
+	if strings.Contains(st.Summary, "⚠") {
+		t.Errorf("did not expect a warning when self-logins is set, got %q", st.Summary)
 	}
 }

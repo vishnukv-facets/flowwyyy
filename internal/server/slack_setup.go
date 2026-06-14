@@ -432,22 +432,48 @@ func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecre
 func (s *Server) persistSlackSettings(values map[string]string) error {
 	cfg := loadConfigFile(s.configPath())
 	var changed []string
+	cfgDirty := false
 	for key, val := range values {
 		val = strings.TrimSpace(val)
-		if val == "" || cfg[key] == val {
+		if val == "" {
+			continue
+		}
+		// Secrets (bot token, user token, client secret) go to the OS keyring,
+		// never config.json — matching the GitHub App secret handling.
+		if account, ok := slackSecretAccountForEnv(key); ok {
+			if os.Getenv(key) != val {
+				if err := storeSlackSecret(account, val); err != nil {
+					return err
+				}
+				changed = append(changed, key)
+			}
+			// Migrate any legacy plaintext secret out of config.json so it no
+			// longer lives at rest in the config file after an upgrade.
+			if _, present := cfg[key]; present {
+				delete(cfg, key)
+				cfgDirty = true
+			}
+			continue
+		}
+		if cfg[key] == val {
 			continue
 		}
 		cfg[key] = val
 		os.Setenv(key, val)
 		changed = append(changed, key)
+		cfgDirty = true
 	}
-	if len(changed) == 0 {
+	if len(changed) == 0 && !cfgDirty {
 		return nil
 	}
-	if err := saveConfigFile(s.configPath(), cfg); err != nil {
-		return err
+	if cfgDirty {
+		if err := saveConfigFile(s.configPath(), cfg); err != nil {
+			return err
+		}
 	}
-	s.applySettingsRestart(changed)
+	if len(changed) > 0 {
+		s.applySettingsRestart(changed)
+	}
 	s.publishUIChange("settings")
 	return nil
 }
@@ -960,6 +986,14 @@ func (s *Server) handleSlackSetupReset(w http.ResponseWriter, r *http.Request) {
 	for _, k := range slackAppConfigKeys {
 		if _, ok := cfg[k]; ok {
 			delete(cfg, k)
+			changed = append(changed, k)
+		}
+		// Secrets live in the keyring, not config.json — clear them there too.
+		if account, ok := slackSecretAccountForEnv(k); ok {
+			if err := storeSlackSecret(account, ""); err != nil {
+				writeJSONStatus(w, map[string]any{"ok": false, "error": err.Error()}, http.StatusInternalServerError)
+				return
+			}
 			changed = append(changed, k)
 		}
 		os.Unsetenv(k)

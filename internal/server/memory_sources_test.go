@@ -33,7 +33,7 @@ func TestMemorySourcesEndpointIncludesAgentMemorySourceContent(t *testing.T) {
 	writeTestFile(t, filepath.Join(root, "internal", "server", "CLAUDE.md"), "# Nested Claude memory\nnested-claude-marker\n")
 	writeTestFile(t, filepath.Join(claudeAutoMemoryDir(root), "MEMORY.md"), "# Claude auto memory\nclaude-auto-marker\n")
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/memory/sources", nil)
 	srv.ServeHTTP(rec, req)
@@ -107,7 +107,7 @@ func TestUIDataIncludesAgentMemorySourceMetadataWithoutContent(t *testing.T) {
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 	writeTestFile(t, filepath.Join(codexHome, "AGENTS.md"), "# Codex user memory\ncodex-user-marker\n")
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
 	srv.ServeHTTP(rec, req)
@@ -142,7 +142,7 @@ func TestUIDataIncludesMissingAgentMemorySources(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, ".claude"))
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
 	srv.ServeHTTP(rec, req)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,13 @@ import (
 )
 
 const defaultContextFetchLimit = 50
+
+// githubSlugSegment bounds an owner/repo segment to the chars GitHub itself
+// allows. It exists so a tag-derived owner/repo can't smuggle a `..` or a `/`
+// into the `gh api -X GET repos/<owner>/<repo>/...` endpoint and redirect the
+// read-only context fetch at an unintended resource. Anchored, so `..` (and any
+// path separator) is rejected outright.
+var githubSlugSegment = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // NewDefaultContextFetcher builds the production deterministic context fetcher
 // used by the Attention Router. Slack uses Web API thread reads; GitHub uses
@@ -227,6 +235,9 @@ func parseGitHubContextRef(ev monitor.InboundEvent) (githubContextRef, error) {
 	owner, repo, ok := strings.Cut(repoKey, "/")
 	if !ok {
 		return githubContextRef{}, fmt.Errorf("github context fetch unavailable: malformed repo %q", repoKey)
+	}
+	if !githubSlugSegment.MatchString(owner) || !githubSlugSegment.MatchString(repo) {
+		return githubContextRef{}, fmt.Errorf("github context fetch unavailable: invalid owner/repo %q/%q", owner, repo)
 	}
 	n, err := strconv.Atoi(numText)
 	if err != nil || n <= 0 {

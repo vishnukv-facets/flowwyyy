@@ -5885,6 +5885,23 @@ a.orch-pr:hover {
   color: var(--warn);
   font-size: 12px;
 }
+.gh-selflogins-warn {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.gh-selflogins-warn svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
 .att-action-preview {
   display: flex;
   flex-direction: column;

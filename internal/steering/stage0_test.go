@@ -175,14 +175,32 @@ func TestStage0GitHubPassesWhenTaskLinked(t *testing.T) {
 	}
 }
 
-func TestStage0GitHubFailsOpenWhenIdentityUnset(t *testing.T) {
-	// Without the operator's GitHub login we can't judge involvement — don't
-	// silently drop everything; preserve prior behavior (pass).
+func TestStage0GitHubFailsClosedWhenIdentityUnsetWebhook(t *testing.T) {
+	// P0-2: without the operator's GitHub login configured, an uninvolved webhook
+	// event (carries Participants) must DROP out-of-scope rather than flood the
+	// cascade with the whole org's PR churn. The fail-open here was the bug.
 	cfg := githubCfg()
 	cfg.GitHubIdentity = nil
-	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), cfg)
+	ev := ghEvent("o/r", "reviewer", "please take a look")
+	ev.Participants = []string{"reviewer", "someone-else"} // webhook event; operator unknown
+	got := Stage0(ev, cfg)
+	if got.Pass {
+		t.Fatalf("Pass = true, want dropped out-of-scope when identity unset for a webhook event")
+	}
+	if got.DropReason != "out of scope (operator not involved)" {
+		t.Errorf("DropReason = %q, want out-of-scope", got.DropReason)
+	}
+}
+
+func TestStage0GitHubParticipantlessFailsOpenEvenWithoutIdentity(t *testing.T) {
+	// The no-participant carve-out applies regardless of identity: a (retired)
+	// poller event has no Participants and was pre-filtered to involve the
+	// operator, so it still passes. Webhook events never reach here.
+	cfg := githubCfg()
+	cfg.GitHubIdentity = nil
+	got := Stage0(ghEvent("o/r", "reviewer", "please take a look"), cfg) // no Participants
 	if !got.Pass {
-		t.Fatalf("Pass = false (reason %q), want pass (fail open) when identity unset", got.DropReason)
+		t.Fatalf("Pass = false (reason %q), want pass for a no-participant (poller) event", got.DropReason)
 	}
 }
 

@@ -98,15 +98,18 @@ func githubTaskLinked(ev monitor.InboundEvent, cfg WatchConfig) bool {
 // githubInScope reports whether a GitHub event involves the operator enough to
 // warrant attention: the PR/issue is already tracked by a task, the operator is
 // @-mentioned, or the operator is a participant (subject author / assignee /
-// requested reviewer). Fails OPEN when the operator's GitHub identity is
-// unconfigured — without knowing who the operator is, we can't judge
-// involvement, so we preserve prior behavior rather than silently drop
-// everything.
+// requested reviewer).
+//
+// SECURITY: this mirrors monitor.gitHubEventInvolvesOperator. When the
+// operator's GitHub identity is unconfigured we fail CLOSED for webhook events
+// rather than flooding the cascade with the whole org's PR churn (P0-2):
+// webhook events always carry the subject author in Participants, so they're
+// judged by the mention/participant checks above and drop here when the
+// operator isn't among them. The no-participant carve-out below is the only
+// remaining fail-open, scoped to the retired poller path; webhook events never
+// reach it.
 func githubInScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
 	if githubTaskLinked(ev, cfg) {
-		return true
-	}
-	if len(cfg.GitHubIdentity) == 0 {
 		return true
 	}
 	if monitor.MentionsLogin(ev.Text, cfg.GitHubIdentity) {
@@ -117,10 +120,10 @@ func githubInScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
 			return true
 		}
 	}
-	// No participant data → not a webhook firehose event. Poller-sourced events
-	// are pre-filtered to involve the operator (the search query did the
-	// filtering) and don't carry Participants — fail open rather than drop them.
-	// Webhook events always carry the subject author, so the gate above applies.
+	// No participant data → not a webhook firehose event. The (now-retired)
+	// poller's events were pre-filtered to involve the operator and don't carry
+	// Participants, so we fail open rather than drop them. Webhook events always
+	// carry the subject author, so the gate above applies and fails closed.
 	if len(ev.Participants) == 0 {
 		return true
 	}

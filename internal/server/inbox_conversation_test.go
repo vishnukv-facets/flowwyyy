@@ -182,7 +182,7 @@ func TestInboxConversationWithoutTokenFallsBackNoRawIDs(t *testing.T) {
 func TestInboxConversationErrors(t *testing.T) {
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/inbox/conversation", nil))

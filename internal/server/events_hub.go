@@ -236,6 +236,9 @@ func (s *Server) handleEventWebSocket(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeWSHandshake(w, r) {
+		return
+	}
 	if s.events == nil {
 		http.Error(w, "events hub unavailable", http.StatusServiceUnavailable)
 		return

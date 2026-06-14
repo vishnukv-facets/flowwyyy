@@ -2,6 +2,8 @@
 // rides this socket to /ws/rpc; the server replays it through the REST handler
 // mux and returns a correlated response. No fetch() anywhere in the app.
 
+import { wsURL } from './wsurl'
+
 export type ConnStatus = 'connecting' | 'open' | 'closed'
 
 export interface RpcResponse {
@@ -47,11 +49,6 @@ type Pending = {
   resolve: (r: RpcResponse) => void
   reject: (e: unknown) => void
   timer: ReturnType<typeof setTimeout>
-}
-
-function wsURL(path: string): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${location.host}${path}`
 }
 
 class RpcClient {

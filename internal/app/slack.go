@@ -34,6 +34,9 @@ var postSlackSendFn = func(channel, text, identity, file string) (status int, bo
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if tok := uiSessionToken(); tok != "" {
+		req.Header.Set("X-Flow-Session-Token", tok)
+	}
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {

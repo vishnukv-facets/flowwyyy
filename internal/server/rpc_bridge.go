@@ -100,6 +100,9 @@ func (s *Server) handleRPCWebSocket(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeWSHandshake(w, r) {
+		return
+	}
 	conn, err := terminalUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return

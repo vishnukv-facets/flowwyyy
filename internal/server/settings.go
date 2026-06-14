@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -248,6 +249,48 @@ func (s *Server) seedConfigFromEnv() {
 	}
 }
 
+// migrateConfigSecretsToKeyring moves any keyring-routed secret that is still
+// sitting in config.json (from an install created before the secret was
+// keyring-backed) into the OS keyring, then strips the plaintext from
+// config.json. One-shot and idempotent: once migrated the key is gone from
+// config, so later boots are no-ops. Runs at boot after applyConfigToEnv/
+// seedConfigFromEnv and before the keyring hydration, so the migrated value is
+// what subsequent loads pick up. Without this, an existing install that merely
+// upgrades would keep its plaintext Slack token at rest in config.json
+// indefinitely (security audit P2-2).
+func (s *Server) migrateConfigSecretsToKeyring() {
+	path := s.configPath()
+	if path == "" {
+		return
+	}
+	cfg := loadConfigFile(path)
+	if len(cfg) == 0 {
+		return
+	}
+	changed := false
+	for key, val := range cfg {
+		if strings.TrimSpace(val) == "" {
+			continue
+		}
+		service, account, routed := secretKeyringRouteForEnv(key)
+		if !routed {
+			continue
+		}
+		if err := storeKeyringSecret(service, account, key, val); err != nil {
+			log.Printf("flow: could not migrate secret %s from config.json to keyring: %v", key, err)
+			continue // leave it in config rather than lose the secret
+		}
+		delete(cfg, key)
+		changed = true
+		log.Printf("flow: migrated %s from config.json to the OS keyring", key)
+	}
+	if changed {
+		if err := saveConfigFile(path, cfg); err != nil {
+			log.Printf("flow: could not rewrite config.json after secret migration: %v", err)
+		}
+	}
+}
+
 type uiSettingField struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
@@ -312,6 +355,7 @@ func (s *Server) updateSettings(req actionRequest) (actionResponse, int) {
 	}
 	cfg := loadConfigFile(s.configPath())
 	var changed []string
+	cfgDirty := false
 	for key, val := range req.Settings {
 		sp, ok := settingSpecFor(key)
 		if !ok {
@@ -324,18 +368,37 @@ func (s *Server) updateSettings(req actionRequest) (actionResponse, int) {
 		if err := validateSettingValue(sp, val); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 		}
+		// Keyring-backed secrets (Slack/GitHub tokens, client/webhook secrets)
+		// must never be persisted to config.json in plaintext — route them to the
+		// OS keyring (which also exports them to the env) and strip any prior
+		// plaintext copy from config (security audit P2-2). Without this, editing
+		// such a secret in the Settings UI would defeat the keyring migration.
+		if service, account, routed := secretKeyringRouteForEnv(key); routed {
+			if err := storeKeyringSecret(service, account, key, val); err != nil {
+				return actionResponse{OK: false, Message: "store secret: " + err.Error()}, http.StatusInternalServerError
+			}
+			if _, had := cfg[key]; had {
+				delete(cfg, key)
+				cfgDirty = true
+			}
+			changed = append(changed, key)
+			continue
+		}
 		if cfg[key] == val {
 			continue
 		}
 		cfg[key] = val
 		os.Setenv(key, val)
+		cfgDirty = true
 		changed = append(changed, key)
 	}
 	if len(changed) == 0 {
 		return actionResponse{OK: true, Message: "no changes"}, http.StatusOK
 	}
-	if err := saveConfigFile(s.configPath(), cfg); err != nil {
-		return actionResponse{OK: false, Message: "save settings: " + err.Error()}, http.StatusInternalServerError
+	if cfgDirty {
+		if err := saveConfigFile(s.configPath(), cfg); err != nil {
+			return actionResponse{OK: false, Message: "save settings: " + err.Error()}, http.StatusInternalServerError
+		}
 	}
 	s.applySettingsRestart(changed)
 	s.publishUIChange("settings")

@@ -854,8 +854,13 @@ func TestGitHubDispatcher_ProcessesTrackedPRRegardlessOfInvolvement(t *testing.T
 	}
 }
 
-func TestGitHubDispatcher_FailsOpenWhenSelfLoginsUnset(t *testing.T) {
-	t.Setenv("FLOW_GH_SELF_LOGINS", "") // identity unknown → can't gate → fail open
+func TestGitHubDispatcher_FailsClosedWhenSelfLoginsUnset(t *testing.T) {
+	// P0-2: a webhook is internet-reachable and org-wide. With no operator
+	// identity configured, an uninvolved webhook event (which always carries the
+	// subject author in Participants) must NOT spawn a task/session — failing
+	// open here let any participant in any installed repo trigger a spawn seeded
+	// with their PR/issue text.
+	t.Setenv("FLOW_GH_SELF_LOGINS", "")
 	db := dispatcherTestDB(t)
 	spawns, _, _, restore := stubDispatcherIO(t)
 	defer restore()
@@ -868,8 +873,32 @@ func TestGitHubDispatcher_FailsOpenWhenSelfLoginsUnset(t *testing.T) {
 	if err := d.Dispatch(context.Background(), ev); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
+	if len(*spawns) != 0 {
+		t.Fatalf("fail-closed (no self logins) must NOT create a task for an uninvolved webhook event, spawned %d", len(*spawns))
+	}
+}
+
+func TestGitHubDispatcher_ParticipantlessEventFailsOpen(t *testing.T) {
+	// The no-participant carve-out: a (now-retired) poller event carries no
+	// Participants and was pre-filtered to involve the operator, so it must
+	// still pass even with self-logins unset. Locks in the carve-out so a future
+	// refactor doesn't silently drop a reintroduced poller's events. Webhook
+	// events never hit this path (they always carry the subject author).
+	t.Setenv("FLOW_GH_SELF_LOGINS", "")
+	db := dispatcherTestDB(t)
+	spawns, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind: GitHubEventPRMentioned, Owner: "o", Repo: "r", Number: 7,
+		Author:   "alice", // no Participants → poller-shaped discovery event
+		EventKey: "gh-pr:o/r#7:pr_mentioned",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
 	if len(*spawns) != 1 {
-		t.Fatalf("fail-open (no self logins) must preserve task creation, spawned %d", len(*spawns))
+		t.Fatalf("participant-less (poller) event must still create a task, spawned %d", len(*spawns))
 	}
 }
 

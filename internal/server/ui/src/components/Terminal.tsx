@@ -6,6 +6,7 @@ import { ArrowDownToLine } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
 import { uploadTerminalAttachments } from '../lib/api'
+import { sessionToken } from '../lib/wsurl'
 
 // Live PTY terminal powered by xterm.js, bound to flow's terminal JSON
 // protocol: server pushes {type:"output"|"status"|"error"}, client sends
@@ -97,7 +98,11 @@ function termWsURL(slug: string, cols: number, rows: number, kind: 'task' | 'flo
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   const key = kind === 'floating' ? 'id' : 'slug'
   const path = kind === 'floating' ? '/ws/floating-terminal' : '/ws/terminal'
-  return `${proto}//${location.host}${path}?${key}=${encodeURIComponent(slug)}&cols=${cols}&rows=${rows}`
+  // The token gate on the WS handshake (audit P0-1) reads ?token=; browsers
+  // can't set custom headers on a WebSocket. See lib/wsurl.ts.
+  const tok = sessionToken()
+  const tokenParam = tok ? `&token=${encodeURIComponent(tok)}` : ''
+  return `${proto}//${location.host}${path}?${key}=${encodeURIComponent(slug)}&cols=${cols}&rows=${rows}${tokenParam}`
 }
 
 export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: Props) {

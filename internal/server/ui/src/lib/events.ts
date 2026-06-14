@@ -2,6 +2,8 @@
 // invalidation so the UI stays live without polling. Pure push; all
 // request/response traffic goes through rpc.ts instead.
 
+import { wsURL } from './wsurl'
+
 export interface EventEnvelope {
   type: string
   timestamp?: string
@@ -12,11 +14,6 @@ export interface EventEnvelope {
   hook?: Record<string, unknown>
   liveness?: { provider: string; slug?: string; status: string; reason?: string }
   runtime?: { provider: string; status: string; kind?: string }
-}
-
-function wsURL(path: string): string {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
-  return `${proto}//${location.host}${path}`
 }
 
 class EventsClient {

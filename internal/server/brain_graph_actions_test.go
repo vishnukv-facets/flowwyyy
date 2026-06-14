@@ -138,7 +138,7 @@ func postBrainGraphAction(t *testing.T, s *Server, req BrainGraphActionRequest) 
 	}
 	rec := httptest.NewRecorder()
 	httpReq := httptest.NewRequest(http.MethodPost, "/api/brain/graph/actions", bytes.NewReader(body))
-	s.Handler().ServeHTTP(rec, httpReq)
+	authedTestHandler(s).ServeHTTP(rec, httpReq)
 	var got BrainGraphActionResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode response status=%d body=%s: %v", rec.Code, rec.Body.String(), err)

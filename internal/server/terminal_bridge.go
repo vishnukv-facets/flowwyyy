@@ -67,11 +67,12 @@ func positiveIntEnv(key string, def, minValue, maxValue int) int {
 	return n
 }
 
+// terminalUpgrader is shared by every /ws/* endpoint. CheckOrigin is the strict
+// same-origin gate from audit P0-1: it rejects an empty Origin and requires an
+// exact host match (no substring). The token half of the handshake auth is
+// enforced per-handler via authorizeWSHandshake. See session_token.go.
 var terminalUpgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		origin := r.Header.Get("Origin")
-		return origin == "" || strings.Contains(origin, r.Host)
-	},
+	CheckOrigin: checkLocalWSOrigin,
 }
 
 type terminalHub struct {
@@ -169,6 +170,9 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.authorizeWSHandshake(w, r) {
+		return
+	}
 	slug := strings.TrimSpace(r.URL.Query().Get("slug"))
 	if err := validateSlug(slug); err != nil {
 		writeError(w, err, http.StatusBadRequest)
@@ -202,6 +206,9 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.authorizeWSHandshake(w, r) {
 		return
 	}
 	id := strings.TrimSpace(r.URL.Query().Get("id"))

@@ -66,15 +66,19 @@ func loginInSet(logins []string, login string) bool {
 
 // gitHubEventInvolvesOperator reports whether the operator (FLOW_GH_SELF_LOGINS)
 // is a party to this event: a participant in its subject (author / assignee /
-// requested reviewer) or @-mentioned in its body. Fails OPEN when no operator
-// login is configured — without knowing who the operator is we can't judge
-// involvement, so preserve prior behavior rather than drop everything. Task
-// linkage is checked by the caller (an already-tracked PR is always in scope).
+// requested reviewer) or @-mentioned in its body. Task linkage is checked by the
+// caller (an already-tracked PR is always in scope).
+//
+// SECURITY: webhook deliveries are internet-reachable and org-wide — a fail-open
+// gate here means any participant in any installed repo can spawn a task/session
+// seeded with their PR/issue text (P0-2). So when no operator login is
+// configured we fail CLOSED for webhook events: they always carry at least the
+// subject author in Participants, so they're judged by the participant/mention
+// checks above and drop here when the operator isn't among them. The
+// no-participant carve-out below is the ONLY remaining fail-open, scoped to the
+// retired poller path (see SchedulesPolling); webhook events never hit it.
 func gitHubEventInvolvesOperator(ev GitHubEvent) bool {
 	logins := GitHubSelfLogins()
-	if len(logins) == 0 {
-		return true
-	}
 	for _, p := range ev.Participants {
 		if loginInSet(logins, p) {
 			return true
@@ -84,10 +88,10 @@ func gitHubEventInvolvesOperator(ev GitHubEvent) bool {
 		return true
 	}
 	// No participant data means this is NOT a webhook firehose event — the
-	// poller's discovery events (review-requested/assigned/mentioned/involved)
-	// are pre-filtered to involve the operator by the search query, and don't
-	// carry Participants. Can't gate them here, so fail open. Webhook events
-	// always carry at least the subject author, so the gate above applies.
+	// (now-retired) poller's discovery events were pre-filtered to involve the
+	// operator by the search query and don't carry Participants, so we can't
+	// gate them here and fail open. Webhook events always carry at least the
+	// subject author, so they're judged above and fail closed when uninvolved.
 	if len(ev.Participants) == 0 {
 		return true
 	}

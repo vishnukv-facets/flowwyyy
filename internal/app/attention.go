@@ -264,6 +264,9 @@ func closeFloatingTerminalBestEffort(id string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if tok := uiSessionToken(); tok != "" {
+		req.Header.Set("X-Flow-Session-Token", tok)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return

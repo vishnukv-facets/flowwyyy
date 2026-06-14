@@ -1069,6 +1069,8 @@ export interface GitHubSetupStatus {
   install_url?: string
   installation_ids?: string
   installed: boolean
+  self_logins?: string
+  self_logins_set: boolean
   transport: string
   summary: string
 }

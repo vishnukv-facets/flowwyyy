@@ -3,6 +3,7 @@ package app
 import (
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/server"
 	"fmt"
 	"net/http"
 	"os"
@@ -171,6 +172,24 @@ func flowServerURL(path string) string {
 		endpoint = "http://127.0.0.1:8787"
 	}
 	return strings.TrimRight(endpoint, "/") + path
+}
+
+// uiSessionToken reads the data-plane session token the running flow server
+// minted (<FlowRoot>/.ui-session-token, 0600). Trusted local CLIs send it as
+// the X-Flow-Session-Token header (or ?token= on a WS handshake) to reach
+// token-gated routes (audit P0-1). Returns "" when the server isn't running or
+// the file isn't readable, in which case the caller degrades gracefully (the
+// gated request just gets a 403).
+func uiSessionToken() string {
+	root, err := flowRoot()
+	if err != nil {
+		return ""
+	}
+	b, err := os.ReadFile(filepath.Join(root, server.SessionTokenFileName))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func truncateInboxPreview(s string, n int) string {
