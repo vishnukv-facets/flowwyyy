@@ -3,8 +3,8 @@ import { useEffect } from 'react'
 // The product name kept as the tab suffix so every flow tab is still
 // recognizable at a glance among many open tabs, while the page/entity name
 // leads (browsers truncate from the right, so the specific part stays visible).
-const SUFFIX = 'flow'
-const FALLBACK = 'flow · operator console'
+const SUFFIX = 'flowwyyy'
+const FALLBACK = 'flowwyyy · operator console'
 
 /**
  * Sets document.title to `<title> · flow` for the lifetime of the calling

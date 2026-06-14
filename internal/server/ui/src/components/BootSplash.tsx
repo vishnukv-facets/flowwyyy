@@ -36,9 +36,9 @@ function BootSplash({ leaving }: { leaving: boolean }) {
       <div className="boot-glow" />
       <div className="boot-inner">
         <div className="boot-brand">
-          <img src="/flow-mark.svg" width={34} height={34} alt="flow" className="boot-mark" />
+          <img src="/flow-mark.svg" width={34} height={34} alt="flowwyyy" className="boot-mark" />
           <span className="boot-word">
-            flow<span className="accent">.</span>
+            flowwyyy<span className="accent">.</span>
           </span>
         </div>
         <div className="boot-status">

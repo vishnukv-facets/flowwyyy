@@ -71,6 +71,15 @@ type uiUser struct {
 }
 
 func currentUIUser() uiUser {
+	// FLOW_GREETING_NAME overrides the OS-derived name — useful when the OS
+	// account name isn't how you want to be greeted (and for demo captures).
+	if override := strings.TrimSpace(os.Getenv("FLOW_GREETING_NAME")); override != "" {
+		first := override
+		if fields := strings.Fields(override); len(fields) > 0 {
+			first = fields[0]
+		}
+		return uiUser{Name: first, FullName: override, Username: first}
+	}
 	u, err := user.Current()
 	if err != nil || u == nil {
 		return uiUser{Name: "there"}

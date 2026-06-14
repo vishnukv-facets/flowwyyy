@@ -1,14 +1,15 @@
-# Contributing to flow
+# Contributing to flowwyyy
 
-Thanks for your interest in flow. This is a small, opinionated CLI; the
+Thanks for your interest in flowwyyy. This is a small, opinionated CLI (the
+binary is `flow`) plus a browser UI; the
 contribution surface is correspondingly small. Bug reports, fixes, and
 focused improvements are very welcome.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/Facets-cloud/flow.git
-cd flow
+git clone https://github.com/vishnukv-facets/flowwyyy.git
+cd flowwyyy
 make build      # produces ./flow in the repo dir
 make test       # runs go test ./...
 ```
