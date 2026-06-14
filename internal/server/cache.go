@@ -47,12 +47,6 @@ func (c *ttlCache[K, V]) invalidate(key K) {
 	c.mu.Unlock()
 }
 
-func (c *ttlCache[K, V]) reset() {
-	c.mu.Lock()
-	c.items = map[K]ttlEntry[V]{}
-	c.mu.Unlock()
-}
-
 // snapshotCache memoizes a single computed value for a TTL window and collapses
 // concurrent rebuilds into one: an atomic-pointer fast path serves a fresh value
 // lock-free, while a mutex serializes refreshes so a request storm after expiry
@@ -97,10 +91,6 @@ func (c *snapshotCache[V]) load(now time.Time, refresh func() (V, error)) (V, er
 // state immediately rather than waiting out the TTL).
 func (c *snapshotCache[V]) store(now time.Time, value V, err error) {
 	c.val.Store(&snapshotEntry[V]{value: value, err: err, expiresAt: now.Add(c.ttl)})
-}
-
-func (c *snapshotCache[V]) reset() {
-	c.val.Store(nil)
 }
 
 // uiCaches bundles per-server TTL caches for the read-mostly data that

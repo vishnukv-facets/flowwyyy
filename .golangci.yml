@@ -1,0 +1,27 @@
+version: "2"
+
+# Introduced as a quality gate on an existing codebase. CI runs this with
+# `only-new-issues: true`, so a PR cannot ADD lint debt while the pre-existing
+# backlog (mostly idiomatic ignored-error returns + dead code that needs
+# per-item review before removal) is burned down deliberately, not in one risky
+# mass edit. Default v2 linters (errcheck, govet, ineffassign, staticcheck,
+# unused) are enabled; misspell is added.
+linters:
+  enable:
+    - misspell
+  settings:
+    errcheck:
+      # Conventionally-ignored returns. Real error handling is still required
+      # everywhere else.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+  exclusions:
+    rules:
+      # Tests routinely ignore Close/Setenv on throwaway fixtures.
+      - path: _test\.go
+        linters:
+          - errcheck
