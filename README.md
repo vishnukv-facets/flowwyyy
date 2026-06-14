@@ -338,6 +338,11 @@ consistent view. Mission Control is a peer to the CLI, not a replacement.
   task-local monitor wakes the *same* session with a short prompt instead of
   spawning a separate solver. Slack, GitHub, and future sources all use the same
   append-to-inbox contract.
+- **Provider capability honesty.** Flow does not rely on host-native background
+  runners. Claude Code's native background sessions are separate from Flow's monitor,
+  and Codex currently exposes experimental app-server/remote-control building blocks
+  that Flow does not depend on. Both providers are driven the same way: the
+  task-local inbox monitor + Flow-owned terminal wake.
 
 A tour of the rest of Mission Control:
 
