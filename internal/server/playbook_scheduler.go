@@ -58,9 +58,12 @@ func (p *playbookScheduler) start() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	p.cancel = cancel
-	p.done = make(chan struct{})
-	go p.loop(ctx)
+	p.done = done
+	// Pass the channel into loop rather than reading p.done there: stop() nils
+	// p.done, so a racing `defer close(p.done)` could close(nil) and panic.
+	go p.loop(ctx, done)
 }
 
 func (p *playbookScheduler) stop() {
@@ -78,8 +81,8 @@ func (p *playbookScheduler) stop() {
 	}
 }
 
-func (p *playbookScheduler) loop(ctx context.Context) {
-	defer close(p.done)
+func (p *playbookScheduler) loop(ctx context.Context, done chan struct{}) {
+	defer close(done)
 	// Tick immediately on boot so schedules that came due while the server was
 	// down fire once on startup (catch-up), then follow the cadence.
 	p.tick(ctx)

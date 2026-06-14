@@ -72,6 +72,7 @@ func New(cfg Config) *Server {
 	s.inboxMonitors = newInboxMonitorManager(inboxWakeTarget{server: s})
 	s.monitorReconcile = newMonitorReconciler(s)
 	s.playbookSched = newPlaybookScheduler(s)
+	s.ownerSched = newOwnerScheduler(s)
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
@@ -306,6 +307,13 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.playbookSched != nil {
 		s.playbookSched.start()
 		defer s.playbookSched.stop()
+	}
+	// Owner twin: fires due owner ticks via `flow owner tick-due`, with a boot
+	// tick so owners that came due while the server was down (or the laptop
+	// asleep) catch up on startup.
+	if s.ownerSched != nil {
+		s.ownerSched.start()
+		defer s.ownerSched.stop()
 	}
 	// Watch SQLite data_version so writes from external processes
 	// (notably the flow CLI) trigger an SSE refresh within ~1s without

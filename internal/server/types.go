@@ -68,6 +68,10 @@ type Server struct {
 	// playbook runs by shelling out to `flow playbook tick-due`. Nil when
 	// disabled or when there's no flow binary to invoke.
 	playbookSched *playbookScheduler
+	// ownerSched is the owner twin of playbookSched: it fires due owner ticks by
+	// shelling out to `flow owner tick-due`. Nil when disabled or when there's
+	// no flow binary to invoke.
+	ownerSched *ownerScheduler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
