@@ -1508,7 +1508,7 @@ func TestClearWaitingActionClearsWaitingOnAndReturnsAgent(t *testing.T) {
 
 func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	root, db := testRootDB(t)
-	t.Setenv("FLOW_MODEL_TIER", "medium") // deterministic default tier → sonnet
+	t.Setenv("FLOW_MODEL_TIER", "medium") // baseline medium; build-ui is high-priority so it upshifts → opus
 	insertProjectTask(t, db, root)
 
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -1519,12 +1519,13 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	if !launch.Created || launch.Slug != "build-ui" || launch.SessionID == "" || launch.WorkDir != root {
 		t.Fatalf("launch = %+v", launch)
 	}
-	// Bootstrap now resolves the session model (no explicit pin → default medium
-	// tier → sonnet), mirroring `flow do`, so --model is threaded into the launch.
+	// Bootstrap resolves the session model like `flow do`: no explicit pin →
+	// baseline medium tier, upshifted one rung to large for this high-priority
+	// task → opus. --model is threaded into the launch.
 	if len(launch.Args) != 7 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
 		t.Fatalf("args = %#v", launch.Args)
 	}
-	if launch.Args[2] != "--model" || launch.Args[3] != "sonnet" {
+	if launch.Args[2] != "--model" || launch.Args[3] != "opus" {
 		t.Fatalf("default model args = %#v", launch.Args)
 	}
 	if launch.Args[4] != "--permission-mode" || launch.Args[5] != "auto" {
@@ -1913,7 +1914,7 @@ func TestPrepareTerminalLaunchAppliesPermissionMode(t *testing.T) {
 
 func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	root, db := testRootDB(t)
-	t.Setenv("FLOW_MODEL_TIER", "medium") // deterministic default tier → gpt-5.4
+	t.Setenv("FLOW_MODEL_TIER", "medium") // baseline medium; build-ui is high-priority so it upshifts → gpt-5.5
 	insertProjectTask(t, db, root)
 	workDir := t.TempDir()
 	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex', work_dir = ? WHERE slug = 'build-ui'`, workDir); err != nil {
@@ -1928,9 +1929,10 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	if !launch.Created || launch.Provider != "codex" || launch.SessionID != "" || !launch.NeedsCapture {
 		t.Fatalf("codex launch = %+v", launch)
 	}
-	// --model (default medium tier → gpt-5.4) is threaded after the writable-root
-	// and before the permission flags, mirroring `flow do`'s codex arg order.
-	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--model", "gpt-5.4", "--ask-for-approval", "never", "--sandbox", "workspace-write"}
+	// --model is threaded after the writable-root and before the permission
+	// flags, mirroring `flow do`'s codex arg order. Baseline medium upshifts one
+	// rung to large for this high-priority task → gpt-5.5.
+	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--model", "gpt-5.5", "--ask-for-approval", "never", "--sandbox", "workspace-write"}
 	if len(launch.Args) < len(wantPrefix)+1 {
 		t.Fatalf("codex args too short: %#v", launch.Args)
 	}
