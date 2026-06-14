@@ -12,6 +12,9 @@ func TestEnumerateAuxFiles(t *testing.T) {
 
 	// Files we expect to be excluded.
 	mustWriteAux(t, filepath.Join(dir, "brief.md"), "brief")
+	// inbox.md is flow's coordination mirror (surfaced via the Inbox screen), not
+	// a user artifact — it must not appear under other:/artifacts.
+	mustWriteAux(t, filepath.Join(dir, "inbox.md"), "inbox")
 	if err := os.MkdirAll(filepath.Join(dir, "updates"), 0o755); err != nil {
 		t.Fatal(err)
 	}

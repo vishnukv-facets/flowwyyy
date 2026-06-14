@@ -17,6 +17,7 @@ package schedule
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -107,10 +108,37 @@ var weekdays = map[string]int{
 	"saturday": 6, "sat": 6,
 }
 
+var months = map[string]int{
+	"january": 1, "jan": 1,
+	"february": 2, "feb": 2,
+	"march": 3, "mar": 3,
+	"april": 4, "apr": 4,
+	"may":  5,
+	"june": 6, "jun": 6,
+	"july": 7, "jul": 7,
+	"august": 8, "aug": 8,
+	"september": 9, "sep": 9, "sept": 9,
+	"october": 10, "oct": 10,
+	"november": 11, "nov": 11,
+	"december": 12, "dec": 12,
+}
+
 var (
 	everyNRe  = regexp.MustCompile(`^every\s+(\d+)\s+([a-z]+)$`)
 	dailyAtRe = regexp.MustCompile(`^(?:every day|daily|each day) at (.+)$`)
-	dayAtRe   = regexp.MustCompile(`^(?:every |on )?([a-z]+?)s? at (.+)$`)
+	// dayListAtRe captures the day portion (one or more weekdays, in any
+	// separator style) and the time portion of a "<days> at <time>" phrase.
+	// The day portion is validated by parseWeekdayList, not by this regex.
+	dayListAtRe = regexp.MustCompile(`^(?:every |on )?(.+?) at (.+)$`)
+	// weekdaySplitRe matches the separators between days in a list:
+	// commas, ampersands, plus signs, and the word "and".
+	weekdaySplitRe = regexp.MustCompile(`[,&+]|\band\b`)
+	// weekdayRangeRe captures the two endpoints of a weekday range, e.g.
+	// "mon-fri", "monday to friday", "tuesday through thursday".
+	weekdayRangeRe = regexp.MustCompile(`^([a-z]+)\s*(?:-|to|through|thru|until|–|—)\s*([a-z]+)$`)
+	// ordinalRe matches a day-of-month number with an optional ordinal
+	// suffix: "1", "1st", "22nd", "15th".
+	ordinalRe = regexp.MustCompile(`^(\d{1,2})(?:st|nd|rd|th)?$`)
 	clockRe   = regexp.MustCompile(`^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$`)
 	hourUnits = map[string]bool{"hours": true, "hour": true, "hrs": true, "hr": true, "h": true}
 	minUnits  = map[string]bool{"minutes": true, "minute": true, "mins": true, "min": true, "m": true}
@@ -130,6 +158,10 @@ func normalizeEnglish(s string) (canonical, kind string, ok bool) {
 		return "@daily", KindPreset, true
 	case "every week", "weekly", "weekly once", "once a week", "once weekly", "every 1 week":
 		return "@weekly", KindPreset, true
+	case "every month", "monthly", "monthly once", "once a month", "once monthly", "every 1 month":
+		return "@monthly", KindPreset, true
+	case "every year", "yearly", "annually", "once a year", "every 1 year":
+		return "@yearly", KindPreset, true
 	}
 
 	if m := everyNRe.FindStringSubmatch(s); m != nil {
@@ -153,17 +185,201 @@ func normalizeEnglish(s string) (canonical, kind string, ok bool) {
 		return "", "", false
 	}
 
-	// "[every|on] <weekday>[s] at <time>"
-	if m := dayAtRe.FindStringSubmatch(s); m != nil {
-		if dow, found := weekdays[m[1]]; found {
+	// "[every|on] <day-spec> at <time>" — the day-spec is a weekday, a
+	// weekday list/range, "weekdays"/"weekends", a day-of-month list, or a
+	// month+day. parseCalendarSpec resolves it to cron's dom/month/dow fields.
+	if m := dayListAtRe.FindStringSubmatch(s); m != nil {
+		if dom, month, dow, ok := parseCalendarSpec(m[1]); ok {
 			if h, min, ok := parseClock(m[2]); ok {
-				return fmt.Sprintf("%d %d * * %d", min, h, dow), KindDaytime, true
+				return fmt.Sprintf("%d %d %s %s %s", min, h, dom, month, dow), KindDaytime, true
 			}
 		}
 		return "", "", false
 	}
 
 	return "", "", false
+}
+
+// parseCalendarSpec interprets the day portion of a "<day> at <time>" phrase
+// and returns cron's day-of-month, month, and day-of-week fields (each
+// defaulting to "*"). ok=false when the phrase is not a recognized calendar
+// spec, so the caller falls through to other interpretations / raw cron.
+func parseCalendarSpec(s string) (dom, month, dow string, ok bool) {
+	s = strings.TrimSpace(s)
+
+	switch s {
+	case "weekday", "weekdays", "every weekday":
+		return "*", "*", "1-5", true
+	case "weekend", "weekends", "every weekend":
+		return "*", "*", "0,6", true
+	}
+
+	// Weekday range: "monday to friday", "mon-fri".
+	if d, ok := parseWeekdayRange(s); ok {
+		return "*", "*", d, true
+	}
+	// Weekday list: "monday, wednesday and friday".
+	if dows, ok := parseWeekdayList(s); ok {
+		return "*", "*", joinInts(dows), true
+	}
+	// Month + day-of-month: "january 1", "1st of january".
+	if d, mo, ok := parseMonthDay(s); ok {
+		return d, mo, "*", true
+	}
+	// Day-of-month list: "the 1st", "the 1st and 15th", "15th of every month".
+	if d, ok := parseDayOfMonthList(s); ok {
+		return d, "*", "*", true
+	}
+	return "*", "*", "*", false
+}
+
+// lookupWeekday resolves a single weekday token (tolerating a plural "s",
+// e.g. "mondays") to its cron day-of-week number.
+func lookupWeekday(tok string) (int, bool) {
+	if d, ok := weekdays[tok]; ok {
+		return d, true
+	}
+	d, ok := weekdays[strings.TrimSuffix(tok, "s")]
+	return d, ok
+}
+
+// parseWeekdayList turns a weekday phrase ("monday, wednesday and friday",
+// "mon, wed, fri", "saturday") into a sorted, de-duplicated list of cron
+// day-of-week numbers (Sunday=0 .. Saturday=6). ok=false if the phrase
+// contains any token that is not a recognized weekday — callers treat that
+// as "not a weekday list" and fall through to other interpretations.
+func parseWeekdayList(s string) (dows []int, ok bool) {
+	fields := strings.Fields(weekdaySplitRe.ReplaceAllString(s, " "))
+	seen := make(map[int]bool, len(fields))
+	for _, f := range fields {
+		dow, found := lookupWeekday(f)
+		if !found {
+			return nil, false
+		}
+		if !seen[dow] {
+			seen[dow] = true
+			dows = append(dows, dow)
+		}
+	}
+	if len(dows) == 0 {
+		return nil, false
+	}
+	sort.Ints(dows)
+	return dows, true
+}
+
+// parseWeekdayRange turns "monday to friday" / "mon-fri" into a cron
+// day-of-week field. A forward range (mon→fri) renders as "1-5"; a
+// wrap-around range (fri→mon) expands to an explicit sorted list.
+func parseWeekdayRange(s string) (string, bool) {
+	m := weekdayRangeRe.FindStringSubmatch(s)
+	if m == nil {
+		return "", false
+	}
+	a, okA := lookupWeekday(m[1])
+	b, okB := lookupWeekday(m[2])
+	if !okA || !okB {
+		return "", false
+	}
+	if a == b {
+		return strconv.Itoa(a), true
+	}
+	if a < b {
+		return fmt.Sprintf("%d-%d", a, b), true
+	}
+	// Wrap-around (e.g. fri→mon): walk forward mod 7 into an explicit list.
+	seen := map[int]bool{}
+	var days []int
+	for d := a; ; d = (d + 1) % 7 {
+		if !seen[d] {
+			seen[d] = true
+			days = append(days, d)
+		}
+		if d == b {
+			break
+		}
+	}
+	sort.Ints(days)
+	return joinInts(days), true
+}
+
+// parseDayOfMonthList turns a day-of-month phrase ("the 1st", "1st and 15th",
+// "15th of every month") into a sorted, de-duplicated cron day-of-month
+// field. ok=false if any token is not a valid 1–31 day.
+func parseDayOfMonthList(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "the ")
+	for _, suf := range []string{" of every month", " of each month", " of the month"} {
+		s = strings.TrimSuffix(s, suf)
+	}
+	s = strings.TrimPrefix(s, "days ")
+	s = strings.TrimPrefix(s, "day ")
+	fields := strings.Fields(weekdaySplitRe.ReplaceAllString(s, " "))
+	seen := make(map[int]bool, len(fields))
+	var doms []int
+	for _, f := range fields {
+		if f == "the" {
+			continue
+		}
+		n, ok := parseDayNum(f)
+		if !ok {
+			return "", false
+		}
+		if !seen[n] {
+			seen[n] = true
+			doms = append(doms, n)
+		}
+	}
+	if len(doms) == 0 {
+		return "", false
+	}
+	sort.Ints(doms)
+	return joinInts(doms), true
+}
+
+// parseMonthDay turns "<month> <day>" ("january 1", "jan 1st") or
+// "<day> of <month>" ("1st of january") into cron day-of-month and month
+// fields. ok=false if the phrase is not that shape.
+func parseMonthDay(s string) (dom, month string, ok bool) {
+	fields := strings.Fields(strings.TrimPrefix(strings.TrimSpace(s), "the "))
+	switch {
+	case len(fields) == 2: // "<month> <day>"
+		if mo, okM := months[fields[0]]; okM {
+			if d, okD := parseDayNum(fields[1]); okD {
+				return strconv.Itoa(d), strconv.Itoa(mo), true
+			}
+		}
+	case len(fields) == 3 && fields[1] == "of": // "<day> of <month>"
+		if d, okD := parseDayNum(fields[0]); okD {
+			if mo, okM := months[fields[2]]; okM {
+				return strconv.Itoa(d), strconv.Itoa(mo), true
+			}
+		}
+	}
+	return "", "", false
+}
+
+// parseDayNum parses a 1–31 day-of-month token with an optional ordinal
+// suffix ("1", "1st", "22nd", "31st").
+func parseDayNum(tok string) (int, bool) {
+	m := ordinalRe.FindStringSubmatch(tok)
+	if m == nil {
+		return 0, false
+	}
+	n, _ := strconv.Atoi(m[1])
+	if n < 1 || n > 31 {
+		return 0, false
+	}
+	return n, true
+}
+
+// joinInts renders a cron day-of-week list field, e.g. []int{1,3,5} -> "1,3,5".
+func joinInts(ns []int) string {
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
 }
 
 // parseClock parses a clock phrase ("1pm", "1:30pm", "13:00", "9am", "noon",

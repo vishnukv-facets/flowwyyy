@@ -14,8 +14,10 @@ import {
   ChevronsDownUp,
   Circle,
   Coins,
+  FileText,
   GitBranch,
   GitFork,
+  Inbox,
   Loader2,
   Maximize2,
   Minimize2,
@@ -49,7 +51,7 @@ import { apiAction } from '../lib/api'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { pushToast } from '../lib/toast'
 import { confirmAction } from '../lib/confirm'
-import type { DiffFile, TranscriptEntry, UiAgent } from '../lib/types'
+import type { DiffFile, FileRef, TranscriptEntry, UiAgent } from '../lib/types'
 import {
   buildFamilyTree,
   countNodes,
@@ -67,9 +69,9 @@ import { TerminalIcon } from '../components/TerminalIcon'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
 import { compact, compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
 
-type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'tree' | 'auto'
+type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'artifacts' | 'tree' | 'auto'
 
-const TABS: readonly Tab[] = ['brief', 'diff', 'transcript', 'updates', 'tree', 'auto']
+const TABS: readonly Tab[] = ['brief', 'diff', 'transcript', 'updates', 'artifacts', 'tree', 'auto']
 function isTab(v: string | null): v is Tab {
   return v != null && (TABS as readonly string[]).includes(v)
 }
@@ -98,6 +100,7 @@ export function SessionDetail({ slug }: { slug: string }) {
   const [diffModal, setDiffModal] = useState(false)
   const [transcriptModal, setTranscriptModal] = useState(false)
   const [updatesModal, setUpdatesModal] = useState(false)
+  const [artifactsModal, setArtifactsModal] = useState(false)
   const [treeModal, setTreeModal] = useState(false)
   const [reopened, setReopened] = useState(false) // user revisited a done task → allow the live terminal to mount
   const [doneRunning, setDoneRunning] = useState(false) // flow-done close-out in progress → show inline step panel
@@ -115,13 +118,19 @@ export function SessionDetail({ slug }: { slug: string }) {
     (task.parent_slug || (task.parents?.length ?? 0) > 0 || (task.children?.length ?? 0) > 0)
   )
   const hasAutoRuns = !!(agent?.auto_run_status)
-  // If the tree/auto tab was active and we land on a task without that surface, fall back
-  // to the brief so the body doesn't render against a vanished tab. Gate on
-  // `task` being loaded: while the next task is still fetching, hasFamily is
-  // transiently false, and resetting then would wrongly drop the tree tab when
-  // clicking through a family.
+  // Artifacts = standalone *.md files an agent wrote into the task dir (reports,
+  // notes), surfaced from task.aux_files. Hide the tab when there are none so a
+  // task with just a brief stays clean.
+  const hasArtifacts = (task?.aux_files?.length ?? 0) > 0
+  // If the tree/auto/artifacts tab was active and we land on a task without that
+  // surface, fall back to the brief so the body doesn't render against a vanished
+  // tab. Gate on `task` being loaded: while the next task is still fetching,
+  // hasFamily is transiently false, and resetting then would wrongly drop the
+  // tree tab when clicking through a family.
   const visibleTab: Tab =
-    task && ((tab === 'tree' && !hasFamily) || (tab === 'auto' && !hasAutoRuns)) ? 'brief' : tab
+    task && ((tab === 'tree' && !hasFamily) || (tab === 'auto' && !hasAutoRuns) || (tab === 'artifacts' && !hasArtifacts))
+      ? 'brief'
+      : tab
   // Once a done task has been "revisited", let the live terminal mount even
   // though task.status is still done — the backend resumes its prior session.
   const liveMode = agent?.terminal?.mode
@@ -675,9 +684,13 @@ export function SessionDetail({ slug }: { slug: string }) {
           <div className="session-side card" style={{ padding: 0 }}>
             <SideInfo task={task} agent={agent} />
             <div className="tabs" style={{ padding: '0 12px' }}>
-              {(['brief', 'diff', 'transcript', 'updates', ...(hasFamily ? ['tree'] : []), ...(hasAutoRuns ? ['auto'] : [])] as Tab[]).map((t) => (
+              {(['brief', 'diff', 'transcript', 'updates', ...(hasArtifacts ? ['artifacts'] : []), ...(hasFamily ? ['tree'] : []), ...(hasAutoRuns ? ['auto'] : [])] as Tab[]).map((t) => (
                 <button key={t} className={`tab${visibleTab === t ? ' active' : ''}`} onClick={() => setTab(t)}>
-                  {t === 'diff' && agent?.diff?.files ? `diff (${agent.diff.files})` : t}
+                  {t === 'diff' && agent?.diff?.files
+                    ? `diff (${agent.diff.files})`
+                    : t === 'artifacts'
+                      ? `artifacts (${task.aux_files?.length ?? 0})`
+                      : t}
                 </button>
               ))}
             </div>
@@ -694,6 +707,9 @@ export function SessionDetail({ slug }: { slug: string }) {
               )}
               {visibleTab === 'updates' && (
                 <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} initialFile={updateParam} />
+              )}
+              {visibleTab === 'artifacts' && hasArtifacts && (
+                <ArtifactsTab slug={slug} files={task.aux_files ?? []} onExpand={() => setArtifactsModal(true)} />
               )}
               {visibleTab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
               {visibleTab === 'auto' && hasAutoRuns && <AutoRunsTab slug={slug} active={visibleTab === 'auto'} agent={agent} />}
@@ -716,6 +732,10 @@ export function SessionDetail({ slug }: { slug: string }) {
 
       <Modal open={updatesModal} onClose={() => setUpdatesModal(false)} title="Updates" width={900}>
         <UpdatesTab slug={slug} updates={task.updates} startOpen />
+      </Modal>
+
+      <Modal open={artifactsModal} onClose={() => setArtifactsModal(false)} title="Artifacts" width={900}>
+        <ArtifactsTab slug={slug} files={task.aux_files ?? []} startOpen />
       </Modal>
 
       <Modal open={treeModal} onClose={() => setTreeModal(false)} title="Orchestration tree" width={760}>
@@ -943,11 +963,12 @@ function AgentDiagnostics({ agent }: { agent: UiAgent }) {
 }
 
 function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; agent?: UiAgent }) {
+  const [, navigate] = useLocation()
   if (!task) return null
   const provider = task.session_provider || agent?.provider || 'claude'
   const harness = task.harness || provider
   return (
-    <div style={{ padding: 14, borderBottom: '1px solid var(--border)' }}>
+    <div className="session-info" style={{ padding: 14, borderBottom: '1px solid var(--border)' }}>
       <div className="meta-grid">
         <div className="meta-cell">
           <div className="meta-k">work dir</div>
@@ -983,6 +1004,20 @@ function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; a
         </div>
       )}
       {agent && <AgentDiagnostics agent={agent} />}
+      {/* inbox.md isn't a generic artifact — it's flow's coordination mirror.
+          Surface it as a link to this task's conversation in the Inbox screen
+          (the dedicated structured view) rather than a raw markdown blob. */}
+      {task.inbox_path && (
+        <button
+          type="button"
+          className="btn ghost sm"
+          style={{ marginTop: 12, width: '100%', justifyContent: 'flex-start' }}
+          onClick={() => navigate(`/inbox?slug=${encodeURIComponent(task.slug)}`)}
+          title="Open this task's inbox (messages routed from Slack / GitHub / flow tell)"
+        >
+          <Inbox size={13} /> Inbox{task.inbox_unread_count > 0 ? ` · ${task.inbox_unread_count} unread` : ''}
+        </button>
+      )}
       {task.tags?.length > 0 && (
         <div className="row gap wrap" style={{ gap: 6, marginTop: 12 }}>
           {task.tags.map((t) => <span key={t} className="tag">{t}</span>)}
@@ -1293,6 +1328,68 @@ function UpdateBody({ slug, filename }: { slug: string; filename: string }) {
     `/api/tasks/${encodeURIComponent(slug)}/updates/${encodeURIComponent(filename)}`,
   )
   if (isLoading) return <Loading label="update" />
+  return <TaskMarkdown source={data || ''} />
+}
+
+// ArtifactsTab renders the standalone *.md files an agent wrote into the task
+// directory (reports, design notes, decision trees) — task.aux_files, the same
+// set `flow show task` lists under `other:`, excluding brief.md. It mirrors
+// UpdatesTab: a collapsible list whose bodies lazy-load from the per-file aux
+// content route and render as markdown.
+function ArtifactsTab({
+  slug,
+  files,
+  onExpand,
+  startOpen,
+}: {
+  slug: string
+  files: FileRef[]
+  onExpand?: () => void
+  startOpen?: boolean
+}) {
+  const [openFile, setOpenFile] = useState<string | null>(startOpen ? null : files[0]?.filename ?? null)
+  if (!files || files.length === 0) {
+    return <div className="faint">No artifact files for this task. Markdown files an agent writes into the task directory show up here.</div>
+  }
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      {onExpand && (
+        <div className="row" style={{ marginBottom: 2 }}>
+          <span className="faint mono" style={{ fontSize: 11 }}>{files.length} file{files.length === 1 ? '' : 's'}</span>
+          <div className="spacer" />
+          <button className="btn ghost sm" onClick={onExpand}>
+            <Maximize2 size={13} /> Full view
+          </button>
+        </div>
+      )}
+      {files.map((f) => (
+        <div key={f.filename} className="card" style={{ overflow: 'hidden' }}>
+          <button
+            type="button"
+            className="row gap"
+            style={{ width: '100%', padding: '9px 12px', justifyContent: 'flex-start' }}
+            onClick={() => setOpenFile(openFile === f.filename ? null : f.filename)}
+          >
+            <FileText size={13} className="faint" />
+            <span className="mono clip" style={{ flex: 1, fontSize: 12, textAlign: 'left' }}>{f.filename}</span>
+            <span className="faint" style={{ fontSize: 11 }}>{dateTime(f.mtime)}</span>
+          </button>
+          {(startOpen || openFile === f.filename) && (
+            <div style={{ padding: '4px 12px 12px', borderTop: '1px solid var(--border-faint)' }}>
+              <ArtifactBody slug={slug} filename={f.filename} />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function ArtifactBody({ slug, filename }: { slug: string; filename: string }) {
+  const { data, isLoading } = useMarkdown(
+    `/api/tasks/${encodeURIComponent(slug)}/aux/${encodeURIComponent(filename)}`,
+  )
+  if (isLoading) return <Loading label="artifact" />
   return <TaskMarkdown source={data || ''} />
 }
 

@@ -27,6 +27,33 @@ func SlackBotToken() string {
 	)
 }
 
+// slackBotOnlyToken returns a genuine bot token (xoxb-) from the write- or
+// bot-token env slots, or "" if none is set. Write-token slots come first
+// because flow POSTS with that token (see slackToken()), so the echoes it must
+// recognize as self carry that bot's user id.
+//
+// Unlike SlackBotToken(), it deliberately does NOT fall back to the user token:
+// a user token (xoxp-) authenticates as the OPERATOR, so resolving flow's "own
+// bot user id" from it would return the operator — poisoning self-echo detection
+// (flow would then mistake the operator for itself and never recognize its own
+// bot's echoes). Self-recognition must key on the bot, never the operator. When
+// this returns "", self-echo detection falls back to the operator-configured
+// SelfBotUserIDs().
+func slackBotOnlyToken() string {
+	for _, t := range []string{
+		os.Getenv("FLOW_SLACK_WRITE_TOKEN"),
+		os.Getenv("SLACK_WRITE_TOKEN"),
+		os.Getenv("SLACK_BOT_TOKEN"),
+		os.Getenv("FLOW_SLACK_TOKEN"),
+		os.Getenv("SLACK_TOKEN"),
+	} {
+		if t = strings.TrimSpace(t); strings.HasPrefix(t, "xoxb-") {
+			return t
+		}
+	}
+	return ""
+}
+
 // SlackUserToken resolves the xoxp- user token. Used when the listener
 // needs to act on behalf of the user (chat.postMessage as them, not as
 // a bot). Falls back to SlackBotToken's token family for single-token
@@ -63,6 +90,29 @@ func slackToken() string {
 		SlackBotToken(),
 		SlackUserToken(),
 	)
+}
+
+// parseSlackIDList splits a comma/space/tab/newline-separated list of Slack IDs
+// into a trimmed, de-duplicated slice (first-seen order). Returns nil for empty
+// input. Shared by the operator (SelfUserIDs) and bot (SelfBotUserIDs) identity
+// lists so both parse identically.
+func parseSlackIDList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	}) {
+		id := strings.TrimSpace(part)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // firstNonEmpty returns the first trimmed-nonempty string in values,

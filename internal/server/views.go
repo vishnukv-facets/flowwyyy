@@ -756,7 +756,10 @@ func auxFiles(dir string) []FileRef {
 	}
 	var out []FileRef
 	for _, entry := range entries {
-		if entry.IsDir() || entry.Name() == "brief.md" || filepath.Ext(entry.Name()) != ".md" {
+		// brief.md and inbox.md are flow-managed files, not user artifacts:
+		// brief.md has its own tab; inbox.md is flow's coordination mirror surfaced
+		// via the Inbox screen (linked from the task drawer). Exclude both.
+		if entry.IsDir() || entry.Name() == "brief.md" || entry.Name() == "inbox.md" || filepath.Ext(entry.Name()) != ".md" {
 			continue
 		}
 		info, err := entry.Info()

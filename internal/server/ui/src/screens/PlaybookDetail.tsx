@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useLocation } from 'wouter'
-import { ArrowLeft, CalendarClock, Check, ChevronLeft, ChevronRight, Clock, Loader2, Pause, Pencil, Play, Trash2, X } from 'lucide-react'
+import { ArrowLeft, CalendarClock, Check, ChevronLeft, ChevronRight, HelpCircle, Loader2, Pause, Pencil, Play, Trash2, X } from 'lucide-react'
 import { usePlaybook, useAction } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { BriefPanel } from '../components/BriefPanel'
@@ -52,12 +52,78 @@ function RunBars({ days }: { days: number[] }) {
   )
 }
 
+// The schedule grammar mirrors internal/schedule/schedule.go — keep these
+// examples in sync with what Parse() actually accepts. Each is clickable and
+// fills the editor, so they double as quick-pick presets.
+const SCHEDULE_HELP: { label: string; examples: string[] }[] = [
+  { label: 'Every', examples: ['every hour', 'every 6 hours', 'every 30 minutes'] },
+  { label: 'Presets', examples: ['daily', 'weekly', 'monthly', 'yearly'] },
+  { label: 'Time of day', examples: ['daily at 9am', 'every day at 18:00', 'daily at midnight'] },
+  { label: 'Weekdays', examples: ['Wednesday at 1pm', 'mon, wed, fri at 5pm', 'monday to friday at 9am'] },
+  { label: 'Shorthands', examples: ['weekdays at 9am', 'weekends at 10am'] },
+  { label: 'Day of month', examples: ['on the 1st at 9am', 'the 1st and 15th at 9am', '15th of every month at midnight'] },
+  { label: 'Specific date', examples: ['January 1 at midnight', 'Dec 25 at 8am'] },
+  { label: 'Raw cron', examples: ['0 13 * * 1-5', '*/15 * * * *'] },
+]
+
+// ScheduleHelp is the click-toggled reference of accepted schedule phrasings.
+// Clicking an example hands it back via onPick so the editor is pre-filled.
+function ScheduleHelp({ onPick }: { onPick: (example: string) => void }) {
+  return (
+    <div
+      style={{
+        marginTop: 10,
+        padding: '12px 14px',
+        background: 'var(--bg-2)',
+        border: '1px solid var(--border)',
+        borderRadius: 'var(--r)',
+        boxShadow: 'var(--shadow-pop)',
+      }}
+    >
+      <div className="faint" style={{ fontSize: 11.5, marginBottom: 10 }}>
+        Type plain English or a cron expression. Click an example to use it.
+      </div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {SCHEDULE_HELP.map((row) => (
+          <div key={row.label} style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+            <span
+              className="eyebrow"
+              style={{ flex: '0 0 92px', fontSize: 10, textAlign: 'right', paddingTop: 2 }}
+            >
+              {row.label}
+            </span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {row.examples.map((ex) => (
+                <button
+                  key={ex}
+                  type="button"
+                  className="kbd"
+                  style={{ cursor: 'pointer', background: 'var(--bg-1)' }}
+                  onClick={() => onPick(ex)}
+                  title={`Use "${ex}"`}
+                >
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="faint" style={{ fontSize: 11, marginTop: 10 }}>
+        Cron fields: <span className="mono">minute hour day-of-month month day-of-week</span>. Names like{' '}
+        <span className="mono">MON-FRI</span> and <span className="mono">JAN</span> work in raw cron too.
+      </div>
+    </div>
+  )
+}
+
 // SchedulePanel shows and edits a playbook's recurring schedule. All mutations
 // route through the set-playbook-schedule action, which shells out to
 // `flow update playbook` so parsing + next-fire computation stay server-side.
 function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<typeof useAction> }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState('')
+  const [showHelp, setShowHelp] = useState(false)
   const scheduled = !!pb.schedule
 
   const save = () => {
@@ -74,10 +140,27 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
   const op = (schedule_op: 'clear' | 'pause' | 'resume') =>
     action.mutate({ kind: 'set-playbook-schedule', target: pb.slug, schedule_op })
 
+  // Clicking a help example pre-fills the editor and opens it.
+  const pick = (example: string) => {
+    setValue(example)
+    setEditing(true)
+    setShowHelp(false)
+  }
+
   return (
     <section className="card" style={{ padding: '16px 18px', marginBottom: 24 }}>
       <div className="bento-head" style={{ marginBottom: 12 }}>
         <span className="eyebrow">Schedule</span>
+        <button
+          className="btn icon ghost sm"
+          aria-label="Schedule format help"
+          aria-expanded={showHelp}
+          title="What can I type here?"
+          onClick={() => setShowHelp((v) => !v)}
+          style={{ marginLeft: 4, color: showHelp ? 'var(--accent)' : undefined }}
+        >
+          <HelpCircle size={14} />
+        </button>
         <div className="spacer" />
         {scheduled && !editing && (
           <span className={`badge ${pb.schedule_paused ? 'warn' : 'ok'}`}>
@@ -85,6 +168,8 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
           </span>
         )}
       </div>
+
+      {showHelp && <ScheduleHelp onPick={pick} />}
 
       {editing ? (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>

@@ -538,7 +538,8 @@ Slack vars), but the Settings UI always reads/writes the `FLOW_SLACK_*` key.
 | `FLOW_SLACK_TOKEN` | `SLACK_BOT_TOKEN`, `SLACK_TOKEN` | — | Bot token (`xoxb-…`) for Web API reads; **required** |
 | `FLOW_SLACK_USER_TOKEN` | `SLACK_USER_TOKEN` | — | User token (`xoxp-…`); required for DM following / DM backfill |
 | `FLOW_SLACK_WRITE_TOKEN` | `SLACK_WRITE_TOKEN` | — | Optional dedicated "post on my behalf" token; falls back to the bot/user token |
-| `FLOW_SLACK_SELF_USER_IDS` | — | — | Comma-separated Slack member IDs whose reactions/messages count as *you* |
+| `FLOW_SLACK_SELF_USER_IDS` | — | — | Comma-separated Slack member IDs whose reactions/messages count as *you* (the operator) |
+| `FLOW_SLACK_SELF_BOT_USER_IDS` | `FLOW_SLACK_SELF_BOT_USER_ID` | — | Comma-separated Slack user IDs of flow's **own bot** (`U…`). Pins self-echo detection so flow drops its own posted messages (acks, digests, status) instead of surfacing them in the steerer. Auto-resolved from a `xoxb-` write/bot token; set explicitly only in user-token-only deployments where it can't be |
 | `FLOW_SLACK_TRIGGER_EMOJI` | — | `claude` | Reaction shortname(s) that spawn a session; comma-separate for routing, e.g. `claude,codex` |
 | `FLOW_SLACK_SOCKET_MODE` | — | `true` | Set `0`/`false` to leave tokens configured but not connect |
 | `FLOW_SLACK_OPEN_TARGET` | — | `ui` | `ui` (browser terminal) or `iterm` (legacy iTerm tab) |

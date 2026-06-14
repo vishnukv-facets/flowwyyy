@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useLocation } from 'wouter'
+import { useLocation, useSearch } from 'wouter'
 import { CheckCheck, ExternalLink, Play } from 'lucide-react'
 import { useAction, useInbox, useInboxConversation, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -67,9 +67,15 @@ interface Convo {
 export function InboxScreen() {
   useDocumentTitle('Inbox')
   const [, navigate] = useLocation()
+  const search = useSearch()
+  // Deep-link support: /inbox?slug=<task> opens straight to that task's
+  // conversation (e.g. the "Inbox" link in the task drawer). The Conversation
+  // pane loads independently of the feed, so it renders even when the task has
+  // no unread feed entry.
+  const slugParam = useMemo(() => new URLSearchParams(search).get('slug') || undefined, [search])
   const { data, isLoading, error } = useInbox()
   const { data: workEvents } = useWorkEvents({ limit: 200 })
-  const [selected, setSelected] = useState<string | null>(null)
+  const [selected, setSelected] = useState<string | null>(slugParam ?? null)
 
   const convos = useMemo<Convo[]>(() => {
     const map = new Map<string, Convo>()
@@ -95,9 +101,14 @@ export function InboxScreen() {
   }, [data])
   const eventByTask = useMemo(() => strongestEventByTask(workEvents?.items), [workEvents])
 
+  // A ?slug= deep-link always wins (incl. when it changes under a mounted
+  // screen); otherwise fall back to the most recent conversation.
   useEffect(() => {
-    if (!selected && convos.length) setSelected(convos[0].slug)
-  }, [convos, selected])
+    if (slugParam) setSelected(slugParam)
+  }, [slugParam])
+  useEffect(() => {
+    if (!selected && !slugParam && convos.length) setSelected(convos[0].slug)
+  }, [convos, selected, slugParam])
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
   if (error) return <div className="page"><ErrorNote error={error} /></div>

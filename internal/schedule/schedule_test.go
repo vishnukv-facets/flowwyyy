@@ -38,6 +38,40 @@ func TestParseEnglish(t *testing.T) {
 		{"tue at 13:45", "45 13 * * 2", KindDaytime},
 		{"every day at 9am", "0 9 * * *", KindDaytime},
 		{"daily at 18:00", "0 18 * * *", KindDaytime},
+		// day-and-time with weekday lists
+		{"every monday, wednesday, friday at 5pm", "0 17 * * 1,3,5", KindDaytime},
+		{"monday, wednesday and friday at 5pm", "0 17 * * 1,3,5", KindDaytime},
+		{"mon, wed, fri at 17:00", "0 17 * * 1,3,5", KindDaytime},
+		{"on tuesday and thursday at 9am", "0 9 * * 2,4", KindDaytime},
+		{"saturday and sunday at noon", "0 12 * * 0,6", KindDaytime}, // sorted: sun=0, sat=6
+		{"mon & tue at 9am", "0 9 * * 1,2", KindDaytime},
+		{"monday, monday and tuesday at 9am", "0 9 * * 1,2", KindDaytime}, // de-duplicated
+		// weekday ranges
+		{"monday to friday at 9am", "0 9 * * 1-5", KindDaytime},
+		{"mon-fri at 9am", "0 9 * * 1-5", KindDaytime},
+		{"tuesday through thursday at 9am", "0 9 * * 2-4", KindDaytime},
+		{"friday to monday at 9am", "0 9 * * 0,1,5,6", KindDaytime}, // wrap-around → list
+		// weekdays / weekends shorthands
+		{"weekdays at 9am", "0 9 * * 1-5", KindDaytime},
+		{"every weekday at 9am", "0 9 * * 1-5", KindDaytime},
+		{"weekends at 10am", "0 10 * * 0,6", KindDaytime},
+		// day-of-month
+		{"on the 1st at 9am", "0 9 1 * *", KindDaytime},
+		{"the 1st and 15th at 9am", "0 9 1,15 * *", KindDaytime},
+		{"the 15th of every month at midnight", "0 0 15 * *", KindDaytime},
+		{"1st of the month at 9am", "0 9 1 * *", KindDaytime},
+		// month + day-of-month
+		{"january 1 at midnight", "0 0 1 1 *", KindDaytime},
+		{"jan 1st at 9am", "0 9 1 1 *", KindDaytime},
+		{"the 1st of january at 9am", "0 9 1 1 *", KindDaytime},
+		{"december 25 at 8am", "0 8 25 12 *", KindDaytime},
+		// monthly / yearly presets
+		{"monthly", "@monthly", KindPreset},
+		{"every month", "@monthly", KindPreset},
+		{"once a month", "@monthly", KindPreset},
+		{"yearly", "@yearly", KindPreset},
+		{"annually", "@yearly", KindPreset},
+		{"every year", "@yearly", KindPreset},
 		// raw cron passthrough
 		{"0 13 * * 1-5", "0 13 * * 1-5", KindCron},
 		{"@every 90m", "@every 90m", KindCron},
@@ -71,8 +105,15 @@ func TestParseRejects(t *testing.T) {
 		"wednesday at 25pm",
 		"monday at 99:99",
 		"every banana",
-		"thursday", // no time
-		"at 5pm",   // no day
+		"thursday",                // no time
+		"at 5pm",                  // no day
+		"monday, banana at 5pm",   // invalid weekday in list
+		"mon, wed, fri at 25pm",   // invalid time on a valid list
+		"the 32nd at 9am",         // day-of-month out of range
+		"january 40 at 9am",       // day out of range for month
+		"weekdays",                // no time
+		"the 1st",                 // no time
+		"monday to banana at 9am", // invalid range endpoint
 	}
 	for _, in := range bad {
 		t.Run(in, func(t *testing.T) {

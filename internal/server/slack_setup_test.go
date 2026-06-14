@@ -23,7 +23,7 @@ func clearSlackSetupEnv(t *testing.T) {
 		"FLOW_SLACK_APP_TOKEN", "SLACK_APP_TOKEN",
 		"FLOW_SLACK_TOKEN", "SLACK_BOT_TOKEN", "SLACK_TOKEN",
 		"FLOW_SLACK_USER_TOKEN", "SLACK_USER_TOKEN",
-		"FLOW_SLACK_SELF_USER_IDS", "FLOW_SLACK_OAUTH_PORT",
+		"FLOW_SLACK_SELF_USER_IDS", "FLOW_SLACK_SELF_BOT_USER_IDS", "FLOW_SLACK_OAUTH_PORT",
 		"FLOW_SLACK_API_BASE_URL", "FLOW_SLACK_MANIFEST_REV",
 		// Ingress vars must not affect the localhost-only Slack callback URL.
 		"FLOW_INGRESS_PROVIDER", "FLOW_PUBLIC_BASE_URL",
@@ -318,7 +318,7 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 		if r.PostForm.Get("code") != "thecode" {
 			t.Errorf("code not forwarded: %v", r.PostForm)
 		}
-		fmt.Fprint(w, `{"ok":true,"access_token":"xoxb-new","authed_user":{"id":"UNEWUSER","access_token":"xoxp-new"},"team":{"name":"Testers"}}`)
+		fmt.Fprint(w, `{"ok":true,"access_token":"xoxb-new","bot_user_id":"UBOTNEW","authed_user":{"id":"UNEWUSER","access_token":"xoxp-new"},"team":{"name":"Testers"}}`)
 	})
 
 	dance, err := srv.startSlackOAuthDance("client-1", "secret-1", 0)
@@ -372,6 +372,12 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 	}
 	if got := os.Getenv("FLOW_SLACK_SELF_USER_IDS"); got != "UEXISTING,UNEWUSER" {
 		t.Fatalf("self user IDs merge = %q, want UEXISTING,UNEWUSER", got)
+	}
+	// Linking must also auto-capture flow's OWN bot user id (oauth bot_user_id)
+	// so self-echo detection works without any manual env config — see
+	// monitor.IsSelfAuthoredSlack.
+	if got := os.Getenv("FLOW_SLACK_SELF_BOT_USER_IDS"); got != "UBOTNEW" {
+		t.Fatalf("self bot user IDs = %q, want UBOTNEW", got)
 	}
 
 	cfg := loadConfigFile(srv.configPath())

@@ -68,6 +68,47 @@ func TestTaskAPIUsesFlowDataAndFiles(t *testing.T) {
 	}
 }
 
+// TestTaskAPIExposesAuxFilesAsArtifacts verifies that standalone *.md files an
+// agent writes into a task directory (e.g. SECURITY-AUDIT-REPORT.md) surface as
+// aux_files (the "artifacts" tab in the UI), excluding brief.md, and that each
+// is readable through the per-file content route.
+func TestTaskAPIExposesAuxFilesAsArtifacts(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	report := filepath.Join(root, "tasks", "build-ui", "SECURITY-AUDIT-REPORT.md")
+	if err := os.WriteFile(report, []byte("# Security Audit Report\n\nfindings-marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// inbox.md is flow's coordination mirror, surfaced via the Inbox screen — it
+	// must NOT appear as an artifact even though it's a top-level *.md.
+	if err := os.WriteFile(filepath.Join(root, "tasks", "build-ui", "inbox.md"), []byte("- a routed message\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var task TaskView
+	if err := json.Unmarshal(rec.Body.Bytes(), &task); err != nil {
+		t.Fatal(err)
+	}
+	if len(task.AuxFiles) != 1 || task.AuxFiles[0].Filename != "SECURITY-AUDIT-REPORT.md" {
+		t.Fatalf("aux_files = %#v, want one SECURITY-AUDIT-REPORT.md (brief.md must be excluded)", task.AuxFiles)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/aux/SECURITY-AUDIT-REPORT.md", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("aux content status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "findings-marker") {
+		t.Fatalf("aux body = %q", rec.Body.String())
+	}
+}
+
 func TestTaskAPIExposesSessionProviderAndNormalizedHarness(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

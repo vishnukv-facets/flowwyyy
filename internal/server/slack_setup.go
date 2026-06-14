@@ -384,6 +384,7 @@ type slackOAuthResult struct {
 	BotToken  string
 	UserToken string
 	UserID    string
+	BotUserID string
 	Team      string
 }
 
@@ -391,6 +392,7 @@ func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecre
 	var out struct {
 		slackAPIEnvelope
 		AccessToken string `json:"access_token"`
+		BotUserID   string `json:"bot_user_id"`
 		AuthedUser  struct {
 			ID          string `json:"id"`
 			AccessToken string `json:"access_token"`
@@ -415,6 +417,7 @@ func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecre
 		BotToken:  out.AccessToken,
 		UserToken: out.AuthedUser.AccessToken,
 		UserID:    out.AuthedUser.ID,
+		BotUserID: out.BotUserID,
 		Team:      out.Team.Name,
 	}, nil
 }
@@ -449,10 +452,11 @@ func (s *Server) persistSlackSettings(values map[string]string) error {
 	return nil
 }
 
-// mergeSelfUserIDs unions the OAuth-discovered operator ID into any existing
-// comma-separated FLOW_SLACK_SELF_USER_IDS value, preserving order. The
-// operator may legitimately hold multiple workspace identities — never drop
-// the ones already configured.
+// mergeSelfUserIDs unions an OAuth-discovered Slack user ID into an existing
+// comma-separated identity list, preserving order and de-duplicating. Used for
+// both FLOW_SLACK_SELF_USER_IDS (the operator) and FLOW_SLACK_SELF_BOT_USER_IDS
+// (flow's own bot): either may legitimately hold multiple workspace identities,
+// so the ones already configured are never dropped.
 func mergeSelfUserIDs(existing, discovered string) string {
 	discovered = strings.TrimSpace(discovered)
 	if discovered == "" {
@@ -681,10 +685,11 @@ func (s *Server) handleSlackOAuthCallback(w http.ResponseWriter, r *http.Request
 	}
 
 	values := map[string]string{
-		"FLOW_SLACK_TOKEN":         tokens.BotToken,
-		"FLOW_SLACK_USER_TOKEN":    tokens.UserToken,
-		"FLOW_SLACK_SELF_USER_IDS": mergeSelfUserIDs(os.Getenv("FLOW_SLACK_SELF_USER_IDS"), tokens.UserID),
-		"FLOW_SLACK_MANIFEST_REV":  slackManifestRev,
+		"FLOW_SLACK_TOKEN":             tokens.BotToken,
+		"FLOW_SLACK_USER_TOKEN":        tokens.UserToken,
+		"FLOW_SLACK_SELF_USER_IDS":     mergeSelfUserIDs(os.Getenv("FLOW_SLACK_SELF_USER_IDS"), tokens.UserID),
+		"FLOW_SLACK_SELF_BOT_USER_IDS": mergeSelfUserIDs(os.Getenv("FLOW_SLACK_SELF_BOT_USER_IDS"), tokens.BotUserID),
+		"FLOW_SLACK_MANIFEST_REV":      slackManifestRev,
 	}
 	if err := s.persistSlackSettings(values); err != nil {
 		fail(http.StatusInternalServerError, "saving tokens failed: "+err.Error(), err.Error())

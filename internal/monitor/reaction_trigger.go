@@ -83,28 +83,12 @@ func ProviderForEmoji(emoji string) string {
 // configuration than to fan out replies for every workspace member's
 // reaction.
 func SelfUserIDs() []string {
-	raw := firstNonEmpty(
+	return parseSlackIDList(firstNonEmpty(
 		os.Getenv("FLOW_SLACK_SELF_USER_IDS"),
 		os.Getenv("FLOW_SLACK_SELF_USER_ID"),
 		os.Getenv("FLOW_SLACK_USER_ID"),
 		os.Getenv("SLACK_USER_ID"),
-	)
-	if raw == "" {
-		return nil
-	}
-	out := []string{}
-	seen := map[string]bool{}
-	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t' || r == '\n'
-	}) {
-		id := strings.TrimSpace(part)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
+	))
 }
 
 // ThreadKey returns the partition key flow uses to find or create a task

@@ -198,6 +198,94 @@ func TestIsSelfAuthoredSlack(t *testing.T) {
 	}
 }
 
+// TestSelfBotUserIDs verifies the operator-configured bot-id set parses like
+// the operator self-id list (comma/space split, trim, dedupe) and is nil when
+// unset.
+func TestSelfBotUserIDs(t *testing.T) {
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", " U_bot1 , U_bot2 U_bot1 ")
+	got := SelfBotUserIDs()
+	if len(got) != 2 || got[0] != "U_bot1" || got[1] != "U_bot2" {
+		t.Errorf("SelfBotUserIDs() = %v, want [U_bot1 U_bot2] (trimmed, split, deduped)", got)
+	}
+
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", "")
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_ID", "U_solo")
+	if got := SelfBotUserIDs(); len(got) != 1 || got[0] != "U_solo" {
+		t.Errorf("SelfBotUserIDs() singular fallback = %v, want [U_solo]", got)
+	}
+
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", "")
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_ID", "")
+	if got := SelfBotUserIDs(); got != nil {
+		t.Errorf("SelfBotUserIDs() with unset env = %v, want nil", got)
+	}
+}
+
+// TestSlackBotOnlyToken verifies that the bot-id resolver token source accepts
+// ONLY genuine bot tokens (xoxb-) and never the operator's user token (xoxp-).
+// This is the fix for the user-token-only bug: SlackBotToken() falls back to the
+// user token, so auth.test on it returns the OPERATOR, poisoning self-echo
+// detection. Filtering by the xoxb- prefix keeps the bot-id resolution honest.
+func TestSlackBotOnlyToken(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"dedicated bot token", map[string]string{"SLACK_BOT_TOKEN": "xoxb-bot"}, "xoxb-bot"},
+		{"flow token holding a bot token", map[string]string{"FLOW_SLACK_TOKEN": "xoxb-flowbot"}, "xoxb-flowbot"},
+		{"write token holding a bot token", map[string]string{"FLOW_SLACK_WRITE_TOKEN": "xoxb-write"}, "xoxb-write"},
+		{"write token wins (flow posts with it)", map[string]string{"FLOW_SLACK_WRITE_TOKEN": "xoxb-write", "SLACK_BOT_TOKEN": "xoxb-bot"}, "xoxb-write"},
+		{"user token only is ignored", map[string]string{"SLACK_USER_TOKEN": "xoxp-user"}, ""},
+		{"user token in the bot slot is ignored", map[string]string{"FLOW_SLACK_TOKEN": "xoxp-user"}, ""},
+		{"user write token is ignored", map[string]string{"SLACK_WRITE_TOKEN": "xoxp-user"}, ""},
+		{"nothing configured", map[string]string{}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, k := range []string{"FLOW_SLACK_WRITE_TOKEN", "SLACK_WRITE_TOKEN", "SLACK_BOT_TOKEN", "FLOW_SLACK_TOKEN", "SLACK_TOKEN", "SLACK_USER_TOKEN"} {
+				t.Setenv(k, "")
+			}
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			if got := slackBotOnlyToken(); got != tc.want {
+				t.Errorf("slackBotOnlyToken() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIsSelfAuthoredSlack_ConfiguredBotID is the regression test for the
+// user-token-only deployment bug. When auth.test can't resolve the bot id (it
+// returns "" because the only token is the operator's user token), the operator
+// can pin FLOW_SLACK_SELF_BOT_USER_IDS so flow still recognizes and drops its own
+// bot's echoes — without mistaking the OPERATOR for itself (which would drop the
+// operator's own command DMs).
+func TestIsSelfAuthoredSlack_ConfiguredBotID(t *testing.T) {
+	orig := selfBotUserIDFn
+	defer func() {
+		selfBotUserIDFn = orig
+		resetCommandChannelCache()
+	}()
+	// auth.test resolution unavailable/wrong (user-token-only) → "".
+	selfBotUserIDFn = func() string { return "" }
+	resetCommandChannelCache()
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", "U0BA6B7DQKV, U_bot2")
+
+	if !IsSelfAuthoredSlack(InboundEvent{Kind: "message", ChannelType: "im", Channel: "D1", UserID: "U0BA6B7DQKV"}) {
+		t.Errorf("configured self-bot id must be recognized as self even when auth.test is unresolved")
+	}
+	if !IsSelfAuthoredSlack(InboundEvent{Kind: "message", Channel: "C1", UserID: "U_bot2"}) {
+		t.Errorf("every configured self-bot id must be recognized as self")
+	}
+	// The operator (NOT in the bot set) must never be treated as self — otherwise
+	// the dispatcher's self-echo drop would swallow the operator's own command DMs.
+	if IsSelfAuthoredSlack(InboundEvent{Kind: "message", ChannelType: "im", Channel: "D1", UserID: "U03HNAFLVAN"}) {
+		t.Errorf("operator id must NOT be self-authored (would break the command channel)")
+	}
+}
+
 // TestResetCommandChannelCache_ClearsSelfBotID verifies the bot user id is
 // memoized once and that ResetCommandChannelCache() forces re-resolution
 // (the bot token changes on reinstall).

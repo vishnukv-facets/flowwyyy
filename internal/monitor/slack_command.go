@@ -85,17 +85,23 @@ func operatorUserID() string {
 	return operatorIDCache
 }
 
-// selfBotUserIDFn resolves flow's OWN bot user id via auth.test on the BOT
-// token. The bot token authenticates as the flow app's bot user, so its
+// selfBotUserIDFn resolves flow's OWN bot user id via auth.test on a genuine BOT
+// token (xoxb-). A bot token authenticates as the flow app's bot user, so its
 // auth.test owner is the bot itself (e.g. U0BA6B7DQKV). Used to recognize and
 // drop flow's own outbound Slack messages when Slack echoes them back through
 // the listener — otherwise the bot's acks / agent replies are re-ingested as
 // inbound traffic (declined by the command channel as a "non-operator",
-// surfaced as bogus self-acknowledgment attention). Package var for tests;
-// fail-safe "" on empty token or any error.
+// surfaced as bogus self-acknowledgment attention).
+//
+// It resolves from slackBotOnlyToken(), NOT SlackBotToken(): the latter falls
+// back to the user token, and auth.test on a user token returns the OPERATOR,
+// not the bot — which would invert self-echo detection (drop the operator's own
+// DMs, process the bot's echoes). When no bot token is configured this returns
+// "" and self-echo detection relies on the operator-pinned SelfBotUserIDs().
+// Package var for tests; fail-safe "" on empty token or any error.
 var selfBotUserIDFn = func() string {
-	token := SlackBotToken()
-	if strings.TrimSpace(token) == "" {
+	token := slackBotOnlyToken()
+	if token == "" {
 		return ""
 	}
 	resp, err := slack.New(token).AuthTest() // AuthTest() (*AuthTestResponse, error); resp.UserID is the bot user
@@ -103,6 +109,23 @@ var selfBotUserIDFn = func() string {
 		return ""
 	}
 	return strings.TrimSpace(resp.UserID)
+}
+
+// SelfBotUserIDs returns flow's OWN Slack bot user id(s), configured by the
+// operator via FLOW_SLACK_SELF_BOT_USER_IDS (comma/space-separated; singular
+// FLOW_SLACK_SELF_BOT_USER_ID accepted). This is the no-API source of truth for
+// self-echo detection: it lets flow recognize and drop its own bot's messages
+// even when the bot user id cannot be resolved from a token — e.g. a
+// user-token-only deployment, where auth.test on the bot-token slot resolves to
+// the OPERATOR, not the bot. Kept DISTINCT from SelfUserIDs (the operator) on
+// purpose: a bot id here must never authorize itself in the command channel, and
+// the operator's id must never be treated as a self-echo (that would silently
+// drop their own command DMs).
+func SelfBotUserIDs() []string {
+	return parseSlackIDList(firstNonEmpty(
+		os.Getenv("FLOW_SLACK_SELF_BOT_USER_IDS"),
+		os.Getenv("FLOW_SLACK_SELF_BOT_USER_ID"),
+	))
 }
 
 var (
@@ -134,16 +157,22 @@ func selfBotUserID() string {
 // "non-operator" in its own command DM (a spurious reject AT the operator) and
 // surfaces meaningless self-acknowledgment attention cards. Detection matches
 // the inbound author against the resolved bot user id. FAIL SAFE: when the bot
-// id can't be resolved this returns false, so real traffic is processed rather
-// than silently swallowed. This is the Slack analogue of the GitHub self-echo
-// stand-down.
+// id can't be resolved this falls back to the operator-pinned SelfBotUserIDs(),
+// and only when BOTH are empty does it return false (so real traffic is
+// processed rather than silently swallowed). This is the Slack analogue of the
+// GitHub self-echo stand-down.
 func IsSelfAuthoredSlack(ev InboundEvent) bool {
 	author := strings.TrimSpace(ev.UserID)
 	if author == "" {
 		return false
 	}
-	self := selfBotUserID()
-	return self != "" && author == self
+	if self := selfBotUserID(); self != "" && author == self {
+		return true
+	}
+	// Configured fallback: the operator-pinned bot id(s). Holds even when
+	// auth.test can't resolve the bot (user-token-only deployments), where the
+	// resolved id above is "". See SelfBotUserIDs.
+	return containsUserID(SelfBotUserIDs(), author)
 }
 
 // conversationIsBotIMFn reports whether `channel` is an IM the flow BOT is a

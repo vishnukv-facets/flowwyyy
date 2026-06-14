@@ -2456,6 +2456,17 @@ select.input {
   min-height: 0;
   overflow: hidden;
 }
+/* The meta header (work dir, diagnostics, inbox link, tags) can grow tall —
+   e.g. a task with many slack-thread tags or long diagnostics. Cap it and let
+   it scroll internally so it never crowds the tabs/tab-body off the panel
+   (flex items otherwise refuse to shrink below content height, clipping the
+   tab body). Short headers keep their natural height; only tall ones scroll. */
+.session-info {
+  flex: 0 0 auto;
+  min-height: 0;
+  max-height: 45%;
+  overflow-y: auto;
+}
 .term-shell {
   flex: 1;
   min-height: 0;
