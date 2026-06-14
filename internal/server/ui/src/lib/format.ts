@@ -38,6 +38,28 @@ export function until(iso: string | null | undefined): string {
   return `in ${fromSeconds(sec)}`
 }
 
+// Forward countdown with two units of precision, for a ticking "next tick"
+// readout: "in 23h 47m", "in 4m 12s", "in 38s". Returns "due now" once the
+// instant has passed (the scheduler hasn't fired it yet) and "—" when unset.
+// Pair with a per-second re-render (see useNow) to make it count down live.
+export function countdown(iso: string | null | undefined): string {
+  if (!iso) return '—'
+  const t = Date.parse(iso)
+  if (Number.isNaN(t)) return '—'
+  let sec = Math.floor((t - Date.now()) / 1000)
+  if (sec <= 0) return 'due now'
+  const d = Math.floor(sec / 86400)
+  sec -= d * 86400
+  const h = Math.floor(sec / 3600)
+  sec -= h * 3600
+  const m = Math.floor(sec / 60)
+  const s = sec - m * 60
+  if (d > 0) return `in ${d}d ${h}h`
+  if (h > 0) return `in ${h}h ${m}m`
+  if (m > 0) return `in ${m}m ${s}s`
+  return `in ${s}s`
+}
+
 export function shortDate(iso: string | null | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)

@@ -1,14 +1,17 @@
-import { useEffect, useMemo, useState } from 'react'
-import { BookText, Plus } from 'lucide-react'
-import { useKB } from '../lib/query'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { AlertTriangle, BookText, Check, Loader2, Moon, Plus, Sparkles } from 'lucide-react'
+import { useKB, useKBDream } from '../lib/query'
 import { queryClient } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
-import { apiPutText } from '../lib/api'
+import { apiPost, apiPutText } from '../lib/api'
+import { pushToast } from '../lib/toast'
+import { ago, countdown, dateTime } from '../lib/format'
+import { useNow } from '../lib/useNow'
 import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, wikiRefs, type Backlink } from '../components/DocEditor'
 import { clickable } from '../lib/a11y'
 import { CreateKBModal } from '../components/modals'
-import type { KBFileView } from '../lib/types'
+import type { KBDreamStatus, KBFileView } from '../lib/types'
 
 const baseName = (filename: string) => filename.replace(/\.md$/, '')
 
@@ -36,6 +39,7 @@ export function KnowledgeBase() {
             <Plus size={15} /> New document
           </button>
         </div>
+        <DreamPanel />
         <EmptyState icon={<BookText size={30} />} title="Knowledge base empty" hint="flow seeds KB files under ~/.flow/kb." />
         <CreateKBModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={setSelected} />
       </div>
@@ -52,6 +56,9 @@ export function KnowledgeBase() {
         <button type="button" className="btn primary" onClick={() => setCreateOpen(true)}>
           <Plus size={15} /> New document
         </button>
+      </div>
+      <div style={{ padding: '14px 28px 0' }}>
+        <DreamPanel />
       </div>
       <div className="twopane">
         <div className="pane-list">
@@ -119,6 +126,122 @@ function KBDoc({ files, filename, onSelect }: { files: KBFileView[]; filename: s
         onWikiLink={onWikiLink}
         backlinks={backlinks}
       />
+    </div>
+  )
+}
+
+// DreamPanel surfaces the KB "dreaming" hygiene worker: when the next pass
+// runs (live countdown), what recent passes did, and a manual trigger. The
+// dreamer flags stale KB entries for removal and prunes ones left flagged too
+// long — invisible background work that the operator otherwise can't see.
+function DreamPanel() {
+  const { data, isLoading } = useKBDream()
+  const [showHistory, setShowHistory] = useState(false)
+  const [busy, setBusy] = useState(false)
+  useNow(1000) // tick the countdown live
+
+  if (isLoading || !data) return null
+  const d: KBDreamStatus = data
+  const history = d.history ?? []
+
+  const dreamNow = async () => {
+    setBusy(true)
+    try {
+      await apiPost<KBDreamStatus>('/api/kb/dream', {})
+      pushToast('ok', 'dream pass started')
+      await queryClient.invalidateQueries({ queryKey: ['kb-dream'] })
+    } catch {
+      pushToast('error', 'a dream pass is already running')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Primary status line.
+  let statusChip: ReactNode
+  let line: ReactNode
+  if (!d.enabled) {
+    statusChip = <span className="chip">off</span>
+    line = <>KB hygiene is disabled (<code>FLOW_KB_DREAM_ENABLED</code>).</>
+  } else if (d.running || busy) {
+    statusChip = <span className="chip active">dreaming</span>
+    line = (
+      <>
+        <Loader2 size={12} className="spin" /> Dreaming now — flagging stale entries…
+      </>
+    )
+  } else if (d.next_run_at) {
+    statusChip = <span className="chip ok">active</span>
+    line = (
+      <>
+        Next pass <strong>{countdown(d.next_run_at)}</strong>
+        {d.last_run_at && <span className="dim"> · last pass {ago(d.last_run_at)}</span>}
+      </>
+    )
+  } else {
+    statusChip = <span className="chip">idle</span>
+    line = <span className="dim">No pass scheduled.</span>
+  }
+
+  return (
+    <div className="kb-dream">
+      <div className="kb-dream-row">
+        <span className="kb-dream-icon">
+          <Moon size={15} />
+        </span>
+        <div className="kb-dream-text">
+          <div className="kb-dream-title">
+            Dreaming {statusChip}
+            <span className="dim kb-dream-cadence">every {Math.round(d.interval_ms / 3_600_000)}h · prunes after {d.max_age_days}d flagged</span>
+          </div>
+          <div className="kb-dream-sub">{line}</div>
+        </div>
+        <div className="kb-dream-actions">
+          <button type="button" className="btn ghost sm" onClick={() => setShowHistory((v) => !v)}>
+            History{history.length ? ` · ${history.length}` : ''}
+          </button>
+          {d.enabled && (
+            <button type="button" className="btn ok sm" onClick={dreamNow} disabled={busy || d.running}>
+              {busy || d.running ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />} Dream now
+            </button>
+          )}
+        </div>
+      </div>
+
+      {showHistory && (
+        <div className="kb-dream-history">
+          {history.length === 0 ? (
+            <div className="kb-dream-empty">
+              <Moon size={22} />
+              <div className="kb-dream-empty-title">No dream passes yet</div>
+              <div className="kb-dream-empty-hint">
+                {d.enabled
+                  ? <>The first hygiene pass runs <strong>{d.next_run_at ? countdown(d.next_run_at) : 'soon'}</strong>. It flags stale or superseded KB entries for removal and prunes ones left flagged over {d.max_age_days} days — completed passes will be logged here.</>
+                  : <>Enable dreaming (<code>FLOW_KB_DREAM_ENABLED</code>) to have flow tidy the knowledge base on a {Math.round(d.interval_ms / 3_600_000)}h cadence.</>}
+              </div>
+            </div>
+          ) : (
+            <ul className="kb-dream-list">
+              {history.map((rec, i) => (
+                <li key={`${rec.at}-${i}`} className="kb-dream-item">
+                  <span className={`kb-dream-status ${rec.status}`} title={rec.status}>
+                    {rec.status === 'error' ? <AlertTriangle size={13} /> : <Check size={13} />}
+                  </span>
+                  <span className="kb-dream-when" title={dateTime(rec.at)}>{ago(rec.at)}</span>
+                  <span className="kb-dream-detail">
+                    {rec.status === 'error'
+                      ? rec.detail || 'pass failed'
+                      : rec.pruned > 0
+                        ? `pruned ${rec.pruned} stale entr${rec.pruned === 1 ? 'y' : 'ies'}`
+                        : 'no stale entries to prune'}
+                  </span>
+                  {rec.duration_ms > 0 && <span className="dim kb-dream-dur">{(rec.duration_ms / 1000).toFixed(1)}s</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   )
 }

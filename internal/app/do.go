@@ -933,12 +933,14 @@ func resolveLaunchModel(provider string, task *flowdb.Task, needsBootstrap bool)
 			briefText = string(b)
 		}
 	}
-	r := flowdb.ResolveSessionModel(provider, explicit, briefText)
+	r := flowdb.ResolveSessionModel(provider, explicit, briefText, task.Priority)
 	switch {
 	case r.Model == "":
 		// no resolution (shouldn't happen with a non-biggest default tier)
 	case r.Explicit:
 		fmt.Fprintf(os.Stderr, "flow: session model %s (explicit)\n", r.Model)
+	case r.Upshifted:
+		fmt.Fprintf(os.Stderr, "flow: session model %s (auto-upshifted to %s tier — high priority)\n", r.Model, r.Tier)
 	case r.Downshifted:
 		fmt.Fprintf(os.Stderr, "flow: session model %s (auto-downshifted to %s tier — descriptive brief)\n", r.Model, r.Tier)
 	default:

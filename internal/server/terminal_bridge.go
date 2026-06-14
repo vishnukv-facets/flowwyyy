@@ -1911,7 +1911,7 @@ func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fres
 			briefText = string(b)
 		}
 	}
-	return flowdb.ResolveSessionModel(provider, explicit, briefText).Model
+	return flowdb.ResolveSessionModel(provider, explicit, briefText, task.Priority).Model
 }
 
 func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *flowdb.Task) error {

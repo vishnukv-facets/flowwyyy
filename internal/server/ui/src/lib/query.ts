@@ -25,6 +25,7 @@ import type {
   InboxConversation,
   InboxFeed,
   KBFileView,
+  KBDreamStatus,
   MemorySource,
   OwnerView,
   OwnerDetailView,
@@ -322,11 +323,15 @@ export function useTaskBridge(slug: string | undefined, enabled = true) {
     queryFn: () => apiGet<UiAgent>(`/api/tasks/${encodeURIComponent(slug!)}/bridge`),
   })
 }
-export function useTaskTranscript(slug: string | undefined, enabled = true) {
+export function useTaskTranscript(slug: string | undefined, enabled = true, pollMs?: number) {
   return useQuery({
     queryKey: ['task-transcript', slug],
     enabled: !!slug && enabled,
     queryFn: () => apiGet<TranscriptResponse>(`/api/tasks/${encodeURIComponent(slug!)}/transcript`),
+    // While a session is live the JSONL grows continuously between push
+    // events — a light poll keeps the chat view tailing smoothly. Idle
+    // transcripts rely on the broad live-invalidation only (pollMs unset).
+    refetchInterval: pollMs && enabled ? pollMs : false,
   })
 }
 
@@ -449,6 +454,12 @@ export function useKB() {
   // focus-invalidates this ['kb'] query (see liveInvalidation.ts). So the
   // Knowledge screen updates live, consistent with the rest of the app.
   return useQuery({ queryKey: ['kb'], queryFn: () => apiGet<KBFileView[]>('/api/kb') })
+}
+export function useKBDream() {
+  // The dreamer's next-run is 24h out, so a slow poll suffices; the client-side
+  // countdown ticks every second locally (useNow). A manual "dream now" trigger
+  // invalidates ['kb-dream'] directly so the running state shows immediately.
+  return useQuery({ queryKey: ['kb-dream'], queryFn: () => apiGet<KBDreamStatus>('/api/kb/dream'), refetchInterval: 30_000 })
 }
 export function useMemorySources() {
   return useQuery({ queryKey: ['memory-sources'], queryFn: () => apiGet<MemorySource[]>('/api/memory/sources') })

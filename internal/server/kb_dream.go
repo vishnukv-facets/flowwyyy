@@ -26,11 +26,21 @@ type kbDreamer struct {
 	mu     sync.Mutex
 	cancel context.CancelFunc
 	done   chan struct{}
+
+	// Observable state for the KB UI (separate lock: read from HTTP goroutines
+	// while the loop goroutine writes). nextRun is owned by the scheduling loop;
+	// lastRun/running/history are updated by tick() (scheduled or manual).
+	stateMu sync.Mutex
+	running bool
+	lastRun time.Time
+	nextRun time.Time
+	history []KBDreamRecord // most-recent-first, capped at kbDreamHistoryCap
 }
 
 const (
 	defaultKBDreamInterval = 24 * time.Hour
 	defaultKBDreamMaxAge   = 30 * 24 * time.Hour // 30 days flagged → auto-remove
+	kbDreamHistoryCap      = 12
 )
 
 func newKBDreamer(srv *Server) *kbDreamer { return &kbDreamer{srv: srv} }
@@ -55,6 +65,9 @@ func (d *kbDreamer) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	d.done = make(chan struct{})
+	d.stateMu.Lock()
+	d.nextRun = time.Now().Add(kbDreamInterval())
+	d.stateMu.Unlock()
 	go d.loop(ctx)
 }
 
@@ -88,8 +101,28 @@ func (d *kbDreamer) loop(ctx context.Context) {
 				interval = ni
 				tick.Reset(ni)
 			}
+			d.stateMu.Lock()
+			d.nextRun = time.Now().Add(interval)
+			d.stateMu.Unlock()
 		}
 	}
+}
+
+// triggerDream runs a dream pass out of band (operator-initiated from the KB
+// UI). It is a no-op if a pass is already running. Returns false if it could
+// not start (already running or disabled).
+func (d *kbDreamer) triggerDream() bool {
+	if d.srv == nil || !kbDreamEnabled() {
+		return false
+	}
+	d.stateMu.Lock()
+	if d.running {
+		d.stateMu.Unlock()
+		return false
+	}
+	d.stateMu.Unlock()
+	go d.tick(context.Background())
+	return true
 }
 
 func (d *kbDreamer) tick(ctx context.Context) {
@@ -100,22 +133,69 @@ func (d *kbDreamer) tick(ctx context.Context) {
 	if root == "" {
 		return
 	}
+	// Guard against overlapping passes (the scheduled tick and a manual trigger
+	// racing). Whoever wins flips running; the loser bails.
+	d.stateMu.Lock()
+	if d.running {
+		d.stateMu.Unlock()
+		return
+	}
+	d.running = true
+	d.stateMu.Unlock()
+
+	start := time.Now()
+	rec := KBDreamRecord{Status: "ok"}
 	// 1) Flagging pass (agent judgment): move newly-stale entries into each
 	//    file's Pending removal section. Sequential before the prune so the prune
 	//    sees the agent's output.
 	kbDir := filepath.Join(root, "kb")
 	if _, err := steering.DreamKBViaAgent(ctx, kbDir); err != nil {
 		fmt.Fprintf(os.Stderr, "kb dreamer: dream pass: %v\n", err)
+		rec.Status = "error"
+		rec.Detail = truncate(err.Error(), 300)
 		// fall through — still run the deterministic prune below
 	}
 	// 2) Prune pass (deterministic): permanently remove entries flagged longer
 	//    than maxAge.
-	d.pruneStaleKBFiles(time.Now(), kbDreamMaxAge())
+	rec.Pruned = d.pruneStaleKBFiles(time.Now(), kbDreamMaxAge())
+	rec.At = start.UTC().Format(time.RFC3339)
+	rec.DurationMs = time.Since(start).Milliseconds()
+
+	d.stateMu.Lock()
+	d.running = false
+	d.lastRun = time.Now()
+	d.history = append([]KBDreamRecord{rec}, d.history...)
+	if len(d.history) > kbDreamHistoryCap {
+		d.history = d.history[:kbDreamHistoryCap]
+	}
+	d.stateMu.Unlock()
+}
+
+// dreamStatus returns the observable dreamer state for the KB UI.
+func (d *kbDreamer) dreamStatus() KBDreamStatus {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+	st := KBDreamStatus{
+		Enabled:    kbDreamEnabled(),
+		Running:    d.running,
+		IntervalMs: kbDreamInterval().Milliseconds(),
+		MaxAgeDays: int(kbDreamMaxAge().Hours() / 24),
+		History:    append([]KBDreamRecord(nil), d.history...),
+	}
+	if !d.lastRun.IsZero() {
+		st.LastRunAt = d.lastRun.UTC().Format(time.RFC3339)
+	}
+	if st.Enabled && !d.nextRun.IsZero() {
+		st.NextRunAt = d.nextRun.UTC().Format(time.RFC3339)
+	}
+	return st
 }
 
 // pruneStaleKBFiles rewrites each KB file, deleting Pending-removal bullets whose
-// [flagged YYYY-MM-DD] date is older than maxAge. Best-effort per file.
-func (d *kbDreamer) pruneStaleKBFiles(now time.Time, maxAge time.Duration) {
+// [flagged YYYY-MM-DD] date is older than maxAge. Best-effort per file. Returns
+// the total number of bullets removed across all files.
+func (d *kbDreamer) pruneStaleKBFiles(now time.Time, maxAge time.Duration) int {
+	total := 0
 	for _, path := range kbFiles(d.srv.cfg.FlowRoot) {
 		raw, err := os.ReadFile(path)
 		if err != nil {
@@ -129,8 +209,32 @@ func (d *kbDreamer) pruneStaleKBFiles(now time.Time, maxAge time.Duration) {
 			fmt.Fprintf(os.Stderr, "kb dreamer: prune write %s: %v\n", path, err)
 			continue
 		}
+		total += removed
 		fmt.Fprintf(os.Stderr, "kb dreamer: pruned %d expired entr%s from %s\n", removed, plural(removed), filepath.Base(path))
 	}
+	return total
+}
+
+// KBDreamStatus is the observable state of the KB "dreaming" hygiene worker,
+// surfaced on the Knowledge page so the operator can see when the next pass
+// runs and what recent passes did.
+type KBDreamStatus struct {
+	Enabled    bool            `json:"enabled"`
+	Running    bool            `json:"running"`
+	IntervalMs int64           `json:"interval_ms"`
+	MaxAgeDays int             `json:"max_age_days"`
+	LastRunAt  string          `json:"last_run_at,omitempty"`
+	NextRunAt  string          `json:"next_run_at,omitempty"`
+	History    []KBDreamRecord `json:"history"`
+}
+
+// KBDreamRecord is one completed dream pass.
+type KBDreamRecord struct {
+	At         string `json:"at"`
+	Status     string `json:"status"` // "ok" | "error"
+	Pruned     int    `json:"pruned"`
+	DurationMs int64  `json:"duration_ms"`
+	Detail     string `json:"detail,omitempty"`
 }
 
 // flaggedBulletRe matches a Pending-removal bullet carrying its flagged date,

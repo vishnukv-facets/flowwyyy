@@ -432,10 +432,21 @@ func reconcileOwnerTick(db *sql.DB, o *flowdb.Owner) {
 	o.TickStarted = sql.NullString{}
 }
 
+// ownerModelGuidance tells a dispatching owner how to pick `--model` for the
+// tasks it creates, so autonomous work runs on a model matched to its
+// difficulty instead of always the default tier. The model names are
+// provider-specific (the dispatched tasks inherit the owner's harness).
+func ownerModelGuidance(agentFlag string) string {
+	if agentFlag == "codex" {
+		return "Match the model to the work with `--model`: `gpt-5.5` for hard, risky, or architectural tasks; omit `--model` for routine work (defaults to gpt-5.4); `gpt-5.4-mini` for trivial mechanical edits. High-priority tasks (`--priority high`) auto-upgrade one tier when you do not pin a model."
+	}
+	return "Match the model to the work with `--model`: `opus` for hard, risky, or architectural tasks; omit `--model` for routine work (defaults to sonnet); `haiku` for trivial mechanical edits. High-priority tasks (`--priority high`) auto-upgrade one tier when you do not pin a model."
+}
+
 func buildOwnerTickPromptInteractive(slug, ownerDir string) string {
 	return fmt.Sprintf(
-		"You are running one interactive tick of flow owner %q with the user present. Invoke the flow skill first. Read %s/charter.md and recent notes under %s/updates/. Review current owned work with `flow owner show %s`. Orchestrate work through flow tasks and playbooks; do not perform durable work inline. Use `flow add task \"<what>\" --agent claude --tag owner:%s` for one-time work, add `--tag question` for human decisions, and `flow do --auto <task>` when it can run unattended. Before finishing, write a short journal note under %s/updates/ and self-pace with `flow owner next %s --in <duration>`.",
-		slug, ownerDir, ownerDir, slug, slug, ownerDir, slug,
+		"You are running one interactive tick of flow owner %q with the user present. Invoke the flow skill first. Read %s/charter.md and recent notes under %s/updates/. Review current owned work with `flow owner show %s`. Orchestrate work through flow tasks and playbooks; do not perform durable work inline. Use `flow add task \"<what>\" --agent claude --tag owner:%s` for one-time work, add `--tag question` for human decisions, and `flow do --auto <task>` when it can run unattended. %s Before finishing, write a short journal note under %s/updates/ and self-pace with `flow owner next %s --in <duration>`.",
+		slug, ownerDir, ownerDir, slug, slug, ownerModelGuidance("claude"), ownerDir, slug,
 	)
 }
 
@@ -447,8 +458,8 @@ func buildOwnerTickPrompt(slug, ownerDir, harnessName string) string {
 	return fmt.Sprintf(
 		"You are the autonomous owner %q running one headless tick. Invoke the flow skill first. No human is watching: do not ask for input and do not wait.\n\n"+
 			"Read your charter at %s/charter.md and recent journal notes under %s/updates/. Review all owned work with `flow owner show %s` so you do not duplicate in-progress tasks or playbook runs.\n\n"+
-			"Orchestrate only. Do not execute substantive work inline in this tick. Dispatch one-time work with `flow add task \"<what>\" --agent %s --tag owner:%s` then `flow do --auto <task>`. Park human decisions with `flow add task \"<question>\" --agent %s --tag question --tag owner:%s`. Trigger recurring work through playbooks and tag any run owner:%s.\n\n"+
+			"Orchestrate only. Do not execute substantive work inline in this tick. Dispatch one-time work with `flow add task \"<what>\" --agent %s --tag owner:%s` then `flow do --auto <task>`. %s Park human decisions with `flow add task \"<question>\" --agent %s --tag question --tag owner:%s`. Trigger recurring work through playbooks and tag any run owner:%s.\n\n"+
 			"Before exiting, write a concise journal note under %s/updates/ with observations, dispatched slugs, and what to check next. Then self-pace with `flow owner next %s --in <duration>` or `--at <RFC3339>`. Keep the tick short and exit.",
-		slug, ownerDir, ownerDir, slug, agentFlag, slug, agentFlag, slug, slug, ownerDir, slug,
+		slug, ownerDir, ownerDir, slug, agentFlag, slug, ownerModelGuidance(agentFlag), agentFlag, slug, slug, ownerDir, slug,
 	)
 }

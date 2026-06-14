@@ -737,7 +737,9 @@ type TranscriptEntry struct {
 	Text             string `json:"text,omitempty"`
 	ToolName         string `json:"tool_name,omitempty"`
 	ToolInputSummary string `json:"tool_input_summary,omitempty"`
+	ToolInput        string `json:"tool_input,omitempty"`
 	ToolResultText   string `json:"tool_result_text,omitempty"`
+	ToolUseID        string `json:"tool_use_id,omitempty"`
 	IsError          bool   `json:"is_error,omitempty"`
 	ByteOffset       int64  `json:"byte_offset"`
 	Timestamp        string `json:"timestamp,omitempty"`

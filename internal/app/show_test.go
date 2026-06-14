@@ -138,9 +138,10 @@ func TestCmdShowTaskAutoModel(t *testing.T) {
 	t.Setenv("FLOW_MODEL_TIER", "")
 	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
 	root, db := showListEditDB(t)
-	insertTask(t, db, "auto-show", "Auto show", "backlog", "high", filepath.Join(root, "repo"), nil)
-	// No explicit model and no descriptive brief on disk -> default medium tier
-	// previews as sonnet (claude default).
+	insertTask(t, db, "auto-show", "Auto show", "backlog", "medium", filepath.Join(root, "repo"), nil)
+	// No explicit model, medium priority, and no descriptive brief on disk ->
+	// default medium tier previews as sonnet (claude default). (High priority
+	// would upshift to opus — covered in flowdb.TestResolveSessionModel.)
 	out := captureStdout(t, func() {
 		if rc := cmdShow([]string{"task", "auto-show"}); rc != 0 {
 			t.Errorf("rc=%d", rc)

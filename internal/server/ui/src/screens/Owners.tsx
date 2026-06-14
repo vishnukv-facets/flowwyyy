@@ -6,7 +6,8 @@ import { queryClient, useOwner, useOwners } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { confirmAction } from '../lib/confirm'
 import { pushToast } from '../lib/toast'
-import { ago, dateTime } from '../lib/format'
+import { ago, countdown, dateTime } from '../lib/format'
+import { useNow } from '../lib/useNow'
 import { EmptyState, ErrorNote, Loading, ProviderIcon } from '../components/ui'
 import type { OwnerTaskRow, OwnerTickRecord, OwnerView } from '../lib/types'
 
@@ -92,15 +93,15 @@ export function Owners() {
         <EmptyState icon={<Bot size={30} />} title="No owners match" hint="Adjust the filter." />
       ) : (
         <div className="card" style={{ padding: '6px 14px 4px' }}>
-          <table className="tbl fixed">
+          <table className="tbl fixed compact">
             <colgroup>
               <col />
+              <col style={{ width: 92 }} />
+              <col style={{ width: 70 }} />
               <col style={{ width: 104 }} />
-              <col style={{ width: 86 }} />
-              <col style={{ width: 130 }} />
-              <col style={{ width: 130 }} />
-              <col style={{ width: 150 }} />
-              <col style={{ width: 158 }} />
+              <col style={{ width: 144 }} />
+              <col style={{ width: 124 }} />
+              <col style={{ width: 132 }} />
             </colgroup>
             <thead>
               <tr>
@@ -108,7 +109,7 @@ export function Owners() {
                 <th>Status</th>
                 <th>Cadence</th>
                 <th>Harness</th>
-                <th>Next</th>
+                <th>Next tick</th>
                 <th>Last tick</th>
                 <th />
               </tr>
@@ -191,10 +192,7 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
         </div>
       </td>
       <td>
-        <div className="col" style={{ gap: 4, alignItems: 'flex-start' }}>
-          <span className={`chip${owner.next_due ? ' warn' : ''}`}>{owner.status}</span>
-          {tickRunning ? <span className="chip active">tick running</span> : null}
-        </div>
+        <span className={`chip${owner.next_due ? ' warn' : ''}`}>{owner.status}</span>
       </td>
       <td>{owner.every || '—'}</td>
       <td>
@@ -204,7 +202,7 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
         </span>
       </td>
       <td title={owner.next_wake_at ? dateTime(owner.next_wake_at) : undefined}>
-        <span className={owner.next_due ? 'warn-text' : ''}>{owner.next_wake_at ? ago(owner.next_wake_at) : '—'}</span>
+        <NextTick owner={owner} tickRunning={tickRunning} />
       </td>
       <td title={tickRunning ? `pid ${owner.tick_pid}` : owner.last_tick_at ? dateTime(owner.last_tick_at) : undefined}>
         {tickRunning ? (
@@ -220,24 +218,24 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
         )}
       </td>
       <td>
-        <div className="row wrap" style={{ justifyContent: 'flex-end', gap: 6 }}>
+        <div className="owner-actions">
           {owner.status === 'active' ? (
-            <button className="btn ghost sm" title="Pause owner" onClick={() => mutate('pause')} disabled={!!busy}>
-              {busy === 'pause' ? <Loader2 size={14} className="spin" /> : <Pause size={14} />} Pause
+            <button className="btn icon ghost sm" title="Pause owner" aria-label="Pause owner" onClick={() => mutate('pause')} disabled={!!busy}>
+              {busy === 'pause' ? <Loader2 size={14} className="spin" /> : <Pause size={14} />}
             </button>
           ) : (
-            <button className="btn ghost sm" title="Start owner" onClick={() => mutate('start')} disabled={!!busy}>
-              {busy === 'start' ? <Loader2 size={14} className="spin" /> : <Play size={14} />} Start
+            <button className="btn icon ghost sm" title="Start owner" aria-label="Start owner" onClick={() => mutate('start')} disabled={!!busy}>
+              {busy === 'start' ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
             </button>
           )}
-          <button className="btn ghost sm" title="Next tick in 1 hour" onClick={() => mutate('next', { in: '1h' })} disabled={!!busy}>
-            {busy === 'next' ? <Loader2 size={14} className="spin" /> : <TimerReset size={14} />} +1h
+          <button className="btn icon ghost sm" title="Push next tick +1 hour" aria-label="Push next tick +1 hour" onClick={() => mutate('next', { in: '1h' })} disabled={!!busy}>
+            {busy === 'next' ? <Loader2 size={14} className="spin" /> : <TimerReset size={14} />}
           </button>
-          <button className="btn ok sm" title="Dispatch a headless owner tick now" onClick={() => mutate('tick')} disabled={!!busy || owner.status !== 'active' || tickRunning}>
-            {busy === 'tick' ? <Loader2 size={14} className="spin" /> : <Zap size={14} />} Tick now
+          <button className="btn icon ok sm" title="Dispatch a headless owner tick now" aria-label="Tick now" onClick={() => mutate('tick')} disabled={!!busy || owner.status !== 'active' || tickRunning}>
+            {busy === 'tick' ? <Loader2 size={14} className="spin" /> : <Zap size={14} />}
           </button>
-          <button className="btn ghost sm danger" title="Retire owner" onClick={retire} disabled={!!busy || owner.status === 'retired'}>
-            {busy === 'retire' ? <Loader2 size={14} className="spin" /> : <Archive size={14} />} Retire
+          <button className="btn icon ghost sm danger" title="Retire owner" aria-label="Retire owner" onClick={retire} disabled={!!busy || owner.status === 'retired'}>
+            {busy === 'retire' ? <Loader2 size={14} className="spin" /> : <Archive size={14} />}
           </button>
         </div>
       </td>
@@ -250,6 +248,25 @@ function OwnerRow({ owner }: { owner: OwnerView }) {
       </tr>
     ) : null}
     </>
+  )
+}
+
+// Live "next tick" readout. Self-ticks every second so the countdown counts
+// down in place; the absolute fire time sits underneath so you get both "when"
+// and "in how long" at a glance.
+function NextTick({ owner, tickRunning }: { owner: OwnerView; tickRunning: boolean }) {
+  useNow(1000)
+  if (tickRunning) return <span className="warn-text">running…</span>
+  if (owner.status === 'retired') return <span className="subtle">retired</span>
+  if (owner.status !== 'active') return <span className="subtle">paused</span>
+  if (!owner.next_wake_at) return <span>—</span>
+  const text = countdown(owner.next_wake_at)
+  const due = text === 'due now' || owner.next_due
+  return (
+    <div className="owner-next">
+      <span className={`owner-next-cd${due ? ' warn-text' : ''}`}>{text}</span>
+      <span className="owner-next-abs subtle truncate">{dateTime(owner.next_wake_at)}</span>
+    </div>
   )
 }
 

@@ -1067,6 +1067,31 @@ func (s *Server) handleKB(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, views)
 }
 
+// handleKBDream serves the KB "dreaming" hygiene worker's state (GET) and
+// triggers an out-of-band dream pass (POST). The POST is operator-initiated
+// from the Knowledge page; it spawns a headless agent pass, so it's a no-op
+// while one is already running.
+func (s *Server) handleKBDream(w http.ResponseWriter, r *http.Request) {
+	if s.kbDreamer == nil {
+		writeJSON(w, KBDreamStatus{History: []KBDreamRecord{}})
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		writeJSON(w, s.kbDreamer.dreamStatus())
+	case http.MethodPost:
+		started := s.kbDreamer.triggerDream()
+		st := s.kbDreamer.dreamStatus()
+		w.Header().Set("Content-Type", "application/json")
+		if !started {
+			w.WriteHeader(http.StatusConflict)
+		}
+		writeJSON(w, st)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
 func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPut {
 		w.WriteHeader(http.StatusMethodNotAllowed)

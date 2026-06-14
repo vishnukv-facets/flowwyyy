@@ -453,12 +453,15 @@ func codexPayloadEntries(rec codexTranscriptRecord, offset int64) []TranscriptEn
 			Type:             "tool_use",
 			ToolName:         rec.Name,
 			ToolInputSummary: truncate(rec.Arguments, 220),
+			ToolInput:        truncate(rec.Arguments, toolInputCap),
+			ToolUseID:        rec.CallID,
 			ByteOffset:       offset,
 		}}
 	case "function_call_output":
 		return []TranscriptEntry{{
 			Type:           "tool_result",
-			ToolResultText: truncate(rawJSONAsText(rec.Output), 500),
+			ToolResultText: truncate(rawJSONAsText(rec.Output), 4000),
+			ToolUseID:      rec.CallID,
 			ByteOffset:     offset,
 		}}
 	case "local_shell_call":
@@ -466,6 +469,7 @@ func codexPayloadEntries(rec codexTranscriptRecord, offset int64) []TranscriptEn
 			Type:             "tool_use",
 			ToolName:         "local_shell",
 			ToolInputSummary: strings.Join(rec.Action.Command, " "),
+			ToolInput:        truncate(string(rec.Payload), toolInputCap),
 			ByteOffset:       offset,
 		}}
 	default:
@@ -648,6 +652,7 @@ func parseUserRecord(raw json.RawMessage, offset int64) []TranscriptEntry {
 				Type:           "tool_result",
 				ToolResultText: toolResultText(b),
 				IsError:        b.IsError,
+				ToolUseID:      b.ToolUseID,
 				ByteOffset:     offset,
 			})
 		}
@@ -680,12 +685,19 @@ func parseAssistantRecord(raw json.RawMessage, offset int64) []TranscriptEntry {
 				Type:             "tool_use",
 				ToolName:         b.Name,
 				ToolInputSummary: formatToolInput(b.Name, b.Input),
+				ToolInput:        truncate(string(b.Input), toolInputCap),
+				ToolUseID:        b.ID,
 				ByteOffset:       offset,
 			})
 		}
 	}
 	return entries
 }
+
+// toolInputCap bounds the raw tool input carried to the UI. Generous enough
+// for typical Edit/MultiEdit/Write payloads (so diffs render in full) while
+// preventing a pathological large Write from bloating the transcript response.
+const toolInputCap = 24 * 1024
 
 func toolResultText(b contentBlock) string {
 	var text string

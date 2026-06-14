@@ -225,42 +225,67 @@ func TestResolveSessionModel(t *testing.T) {
 	t.Setenv("FLOW_MODEL_TIER", "") // default medium
 	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
 
-	// Explicit choice always wins and is never downshifted.
-	r := ResolveSessionModel("claude", "opus", descriptiveBrief)
-	if r.Model != "opus" || !r.Explicit || r.Downshifted {
-		t.Errorf("explicit: got %+v, want Model=opus Explicit=true Downshifted=false", r)
+	// Explicit choice always wins and is never adjusted (even at high priority).
+	r := ResolveSessionModel("claude", "opus", descriptiveBrief, "high")
+	if r.Model != "opus" || !r.Explicit || r.Downshifted || r.Upshifted {
+		t.Errorf("explicit: got %+v, want Model=opus Explicit=true adjusted=false", r)
 	}
 
 	// Auto, non-descriptive brief -> default tier (medium -> sonnet).
-	r = ResolveSessionModel("claude", "", shortBrief)
-	if r.Model != "sonnet" || r.Explicit || r.Downshifted {
-		t.Errorf("auto default: got %+v, want Model=sonnet Explicit=false Downshifted=false", r)
+	r = ResolveSessionModel("claude", "", shortBrief, "medium")
+	if r.Model != "sonnet" || r.Explicit || r.Downshifted || r.Upshifted {
+		t.Errorf("auto default: got %+v, want Model=sonnet Explicit=false adjusted=false", r)
 	}
 
-	// Auto, descriptive brief -> downshift medium -> small (haiku).
-	r = ResolveSessionModel("claude", "", descriptiveBrief)
+	// Auto, descriptive brief, non-high priority -> downshift medium -> small (haiku).
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "medium")
 	if r.Model != "haiku" || r.Explicit || !r.Downshifted {
 		t.Errorf("auto downshift: got %+v, want Model=haiku Explicit=false Downshifted=true", r)
 	}
 
 	// Codex auto downshift -> gpt-5.4-mini.
-	r = ResolveSessionModel("codex", "", descriptiveBrief)
+	r = ResolveSessionModel("codex", "", descriptiveBrief, "low")
 	if r.Model != "gpt-5.4-mini" || !r.Downshifted {
 		t.Errorf("codex downshift: got %+v, want Model=gpt-5.4-mini Downshifted=true", r)
 	}
 
+	// High priority upshifts the default tier (medium -> large -> opus) and is
+	// never downshifted, even when the brief is descriptive.
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "high")
+	if r.Model != "opus" || r.Explicit || !r.Upshifted || r.Downshifted {
+		t.Errorf("high upshift: got %+v, want Model=opus Upshifted=true Downshifted=false", r)
+	}
+
+	// Codex high priority upshifts medium -> large -> gpt-5.5.
+	r = ResolveSessionModel("codex", "", descriptiveBrief, "high")
+	if r.Model != "gpt-5.5" || !r.Upshifted {
+		t.Errorf("codex upshift: got %+v, want Model=gpt-5.5 Upshifted=true", r)
+	}
+
 	// Downshift disabled -> stays at default tier even for a descriptive brief.
 	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "off")
-	r = ResolveSessionModel("claude", "", descriptiveBrief)
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "medium")
 	if r.Model != "sonnet" || r.Downshifted {
 		t.Errorf("downshift off: got %+v, want Model=sonnet Downshifted=false", r)
+	}
+
+	// Disabling downshift does not disable the high-priority upshift.
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "high")
+	if r.Model != "opus" || !r.Upshifted {
+		t.Errorf("downshift off + high: got %+v, want Model=opus Upshifted=true", r)
 	}
 
 	// Large default tier + descriptive brief -> downshift one step to medium.
 	t.Setenv("FLOW_MODEL_AUTODOWNSHIFT", "on")
 	t.Setenv("FLOW_MODEL_TIER", "large")
-	r = ResolveSessionModel("claude", "", descriptiveBrief)
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "medium")
 	if r.Model != "sonnet" || !r.Downshifted {
 		t.Errorf("large+downshift: got %+v, want Model=sonnet Downshifted=true", r)
+	}
+
+	// Large default tier + high priority -> already at ceiling, no upshift.
+	r = ResolveSessionModel("claude", "", descriptiveBrief, "high")
+	if r.Model != "opus" || r.Upshifted || r.Downshifted {
+		t.Errorf("large+high ceiling: got %+v, want Model=opus no adjustment", r)
 	}
 }

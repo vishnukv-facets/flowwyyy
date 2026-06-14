@@ -11,10 +11,12 @@ import (
 // A task may carry an explicit model (the literal value passed to
 // `claude --model` / `codex --model`). When it doesn't, flow picks one from a
 // small tier ladder: a baseline tier (configurable, default medium) that is
-// downshifted one rung when the task's brief is descriptive enough that a
-// cheaper model can do the job. The DB stores only the explicit choice;
-// resolution happens at launch time in `flow do` so a brief edit changes the
-// auto-pick on the next bootstrap without a migration.
+// upshifted one rung for high-priority work (so important autonomous tasks get
+// the stronger model) and downshifted one rung when the task's brief is
+// descriptive enough that a cheaper model can do the job. The DB stores only
+// the explicit choice; resolution happens at launch time in `flow do` so a
+// brief edit or priority change moves the auto-pick on the next bootstrap
+// without a migration.
 
 // Model tiers, smallest to largest.
 const (
@@ -63,6 +65,19 @@ func DownshiftTier(tier string) string {
 		return ModelTierSmall
 	default:
 		return ModelTierSmall
+	}
+}
+
+// UpshiftTier returns the tier one rung above the given tier. large is the
+// ceiling (it cannot upshift further).
+func UpshiftTier(tier string) string {
+	switch tier {
+	case ModelTierSmall:
+		return ModelTierMedium
+	case ModelTierMedium:
+		return ModelTierLarge
+	default:
+		return ModelTierLarge
 	}
 }
 
@@ -170,27 +185,42 @@ func countDoneWhenBullets(brief string) int {
 type ResolvedModel struct {
 	Model       string // the value passed to --model (never empty after resolution)
 	Explicit    bool   // the task carried an explicit model choice
+	Upshifted   bool   // priority upshift fired (only possible when !Explicit)
 	Downshifted bool   // auto-downshift fired (only possible when !Explicit)
 	Tier        string // the tier chosen when !Explicit (empty when Explicit)
 }
 
 // ResolveSessionModel decides the model a session should launch with.
 //
-//   - An explicit per-task model always wins and is never downshifted.
-//   - Otherwise the baseline tier (FLOW_MODEL_TIER, default medium) is used,
-//     downshifted one rung when auto-downshift is enabled and the brief is
-//     descriptive. The resulting tier is mapped to a provider model.
-func ResolveSessionModel(provider, explicitModel, briefText string) ResolvedModel {
+//   - An explicit per-task model always wins and is never adjusted. This is the
+//     real "appropriate model for the work" lever: whoever creates the task
+//     (a person, or an autonomous agent reading the work) passes `--model` and
+//     it's honored verbatim.
+//   - Otherwise the baseline tier (FLOW_MODEL_TIER, default medium) is the
+//     starting point, then nudged by the task's nature:
+//       - high priority upshifts one rung — important autonomous work gets the
+//         stronger model even when the creator didn't pin one — and is never
+//         downshifted;
+//       - for non-high priority, a descriptive brief downshifts one rung when
+//         auto-downshift is enabled (a well-specified routine task runs cheaply).
+//     The resulting tier is mapped to a provider model (Claude or Codex).
+func ResolveSessionModel(provider, explicitModel, briefText, priority string) ResolvedModel {
 	if m := NormalizeModel(explicitModel); m != "" {
 		return ResolvedModel{Model: m, Explicit: true}
 	}
 	tier := ModelTierFromEnv()
+	upshifted := false
 	downshifted := false
-	if AutoDownshiftEnabled() && BriefIsDescriptive(briefText) {
+	if strings.EqualFold(strings.TrimSpace(priority), "high") {
+		if next := UpshiftTier(tier); next != tier {
+			tier = next
+			upshifted = true
+		}
+	} else if AutoDownshiftEnabled() && BriefIsDescriptive(briefText) {
 		if next := DownshiftTier(tier); next != tier {
 			tier = next
 			downshifted = true
 		}
 	}
-	return ResolvedModel{Model: ModelForTier(provider, tier), Downshifted: downshifted, Tier: tier}
+	return ResolvedModel{Model: ModelForTier(provider, tier), Upshifted: upshifted, Downshifted: downshifted, Tier: tier}
 }

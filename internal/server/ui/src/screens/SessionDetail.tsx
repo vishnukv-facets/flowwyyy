@@ -63,6 +63,7 @@ import {
 import { changedSinceLook, commitLook } from '../lib/difflook'
 import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
+import { Transcript } from '../components/Transcript'
 import { Modal } from '../components/Modal'
 import { AgentPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
@@ -703,6 +704,8 @@ export function SessionDetail({ slug }: { slug: string }) {
                   active={visibleTab === 'transcript'}
                   fallback={agent?.transcript}
                   onExpand={() => setTranscriptModal(true)}
+                  live={status === 'running'}
+                  agentName={agent?.name}
                 />
               )}
               {visibleTab === 'updates' && (
@@ -727,7 +730,7 @@ export function SessionDetail({ slug }: { slug: string }) {
       </Modal>
 
       <Modal open={transcriptModal} onClose={() => setTranscriptModal(false)} title="Transcript" width={1000}>
-        <TranscriptTab slug={slug} active={transcriptModal} fallback={agent?.transcript} full />
+        <TranscriptTab slug={slug} active={transcriptModal} fallback={agent?.transcript} full live={status === 'running'} agentName={agent?.name} />
       </Modal>
 
       <Modal open={updatesModal} onClose={() => setUpdatesModal(false)} title="Updates" width={900}>
@@ -1154,39 +1157,53 @@ function DiffTab({
   )
 }
 
+// Map the lightweight bootstrap transcript (UiAgent.transcript) onto the
+// richer TranscriptEntry shape so the chat renderer can show it as a
+// placeholder until the live fetch lands. The bootstrap lacks raw tool input,
+// so its tool cards render as summaries (no diffs) — fine for a pre-fetch flash.
+function fallbackToEntries(fb: NonNullable<UiAgent['transcript']>): TranscriptEntry[] {
+  return fb.map((e, i) => {
+    if (e.tool && e.type === 'tool_use') {
+      return { type: 'tool_use', tool_name: e.tool, tool_input_summary: e.input, byte_offset: i, timestamp: e.time }
+    }
+    if (e.type === 'tool_result') {
+      return { type: 'tool_result', tool_result_text: e.preview || e.summary, byte_offset: i, timestamp: e.time }
+    }
+    return { type: e.type, text: e.text || e.summary || '', byte_offset: i, timestamp: e.time }
+  })
+}
+
 function TranscriptTab({
   slug,
   active,
   fallback,
   onExpand,
   full,
+  live,
+  agentName,
 }: {
   slug: string
   active: boolean
   fallback?: UiAgent['transcript']
   onExpand?: () => void
   full?: boolean
+  live?: boolean
+  agentName?: string
 }) {
-  const { data, isLoading, error } = useTaskTranscript(slug, active)
+  // Poll only while live + visible so the modal tails between push events.
+  const { data, isLoading, error } = useTaskTranscript(slug, active, live ? 2500 : undefined)
   if (isLoading && !fallback) return <Loading label="transcript" />
   if (error) return <ErrorNote error={error} />
-  const entries: TranscriptEntry[] = data?.available ? data.entries : []
+  let entries: TranscriptEntry[] = data?.available ? data.entries : []
   if (entries.length === 0) {
     if (fallback && fallback.length) {
-      return (
-        <div className="tx">
-          {fallback.map((e, i) => (
-            <div key={i} className={`tx-entry ${e.type}`}>
-              <div className="tx-role">{e.type}</div>
-              {e.tool ? <div className="tx-tool">{e.tool}({e.input})</div> : <Md source={e.text || e.summary || ''} className="tx-md" />}
-            </div>
-          ))}
-        </div>
-      )
+      entries = fallbackToEntries(fallback)
+    } else {
+      return <div className="faint">{data?.message || 'No transcript captured yet.'}</div>
     }
-    return <div className="faint">{data?.message || 'No transcript captured yet.'}</div>
   }
-  // Compact (side panel) shows the tail; full view (modal) shows everything.
+  // Compact (side panel) shows the tail and flows in the panel's own scroll;
+  // the full modal owns its scroll and tails to the bottom.
   const shown = full ? entries : entries.slice(-80)
   return (
     <div>
@@ -1201,20 +1218,7 @@ function TranscriptTab({
           </button>
         </div>
       )}
-      <div className="tx">
-        {shown.map((e, i) => (
-          <div key={i} className={`tx-entry ${e.type}`}>
-            <div className="tx-role">{e.type}{e.timestamp ? ` · ${dateTime(e.timestamp)}` : ''}</div>
-            {e.type === 'tool_use' ? (
-              <div className="tx-tool">{e.tool_name} {e.tool_input_summary}</div>
-            ) : e.type === 'tool_result' ? (
-              <pre className="mono" style={{ fontSize: 11.5, whiteSpace: 'pre-wrap', color: e.is_error ? 'var(--danger)' : 'var(--text-2)' }}>{(e.tool_result_text || '').slice(0, 1200)}</pre>
-            ) : (
-              <Md source={e.text || ''} className="tx-md" />
-            )}
-          </div>
-        ))}
-      </div>
+      <Transcript entries={shown} live={live} agentName={agentName} scrollSelf={!!full} />
     </div>
   )
 }

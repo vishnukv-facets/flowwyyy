@@ -84,7 +84,9 @@ an intent, follow the matching recipe instead of re-asking via §1a.
   `~/.flow/tasks/<slug>/workspace/` for explicitly adhoc tasks), a
   priority, a status (`backlog`, `in-progress`, `done`), an optional
   `project_slug`, an optional `waiting_on` freeform note, and a
-  `brief.md`. Tasks also carry a `session_provider` (`claude` or `codex`)
+  `brief.md`. Tasks also carry a `session_provider` (`claude` or `codex`),
+  an optional `model` (the value passed to `claude --model` / `codex --model`;
+  empty means flow auto-picks one at launch — see **Picking a model** below),
   and a `session_id` once `flow do` has bootstrapped or captured a session
   for them. Codex may briefly be `in-progress` with an empty `session_id`
   while flow captures the id from Codex's session store. New task intake must choose an
@@ -125,6 +127,35 @@ an intent, follow the matching recipe instead of re-asking via §1a.
   "delete/remove/trash this entity from normal flow views, but keep it
   recoverable." Use `flow archive` for set-aside history and
   `flow delete` for delete/remove/trash requests.
+
+### Picking a model
+
+Every task can pin a model with `--model` (on `flow add task` or `flow do`);
+leave it off and flow resolves one at launch. **Resolution order:**
+
+1. An explicit `--model` always wins and is never adjusted — this is the real
+   "match the model to the work" lever.
+2. Otherwise the baseline tier (default **medium**, `FLOW_MODEL_TIER`) is
+   **upshifted** one rung for `--priority high` work, or **downshifted** one
+   rung when the brief is descriptive (≥80 words, ≥2 "Done when" bullets) and
+   priority isn't high.
+
+Tier → model: **Claude** `haiku` / `sonnet` / `opus`; **Codex** `gpt-5.4-mini`
+/ `gpt-5.4` / `gpt-5.5`. (Both Codex tiers are strong enough to run work
+unattended; `gpt-5.5` for the hard end, `gpt-5.4` as the workhorse default.)
+
+**When you dispatch autonomous (`--auto`) work — for yourself or as an owner —
+set `--model` to match the task** instead of leaving it on the default:
+
+- **Strong** (`opus` / `gpt-5.5`) — hard, risky, ambiguous, security-sensitive,
+  or architectural work; anything where a wrong call is expensive.
+- **Default** (omit `--model`, or `sonnet` / `gpt-5.4`) — routine,
+  well-scoped implementation and fixes.
+- **Small** (`haiku` / `gpt-5.4-mini`) — trivial, mechanical, high-volume edits
+  (renames, formatting, doc tweaks).
+
+Don't leave a hard task on the default just because you didn't choose. If you
+genuinely can't judge, set `--priority high` so the resolver upshifts for you.
 
 ## 3. First-run detection (once per session)
 
@@ -681,7 +712,10 @@ its own, it's the start of a two-or-more-step workflow.
    Trigger phrases for Autonomous: "run X headlessly", "background run", "autonomous", "unattended", "fire and forget".
    Autonomous mode uses the task's provider and resolved model. Claude runs
    headlessly through `claude -p`; Codex runs non-interactively through
-   `codex exec`.
+   `codex exec`. Because no human is watching, **match the model to the task
+   when you create it** — pin `--model` (strong for hard work, small for
+   trivial) or set `--priority high` so the resolver upshifts. See
+   **Picking a model** in §2.
 
    If the user already specified a mode in their request (e.g. "do X
    with skip permissions", "do X normally", "auto mode"), use that —

@@ -351,10 +351,12 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 		if b, rerr := os.ReadFile(filepath.Join(root, "tasks", t.Slug, "brief.md")); rerr == nil {
 			briefText = string(b)
 		}
-		rm := flowdb.ResolveSessionModel(t.SessionProvider, explicitModel, briefText)
+		rm := flowdb.ResolveSessionModel(t.SessionProvider, explicitModel, briefText, t.Priority)
 		switch {
 		case rm.Explicit:
 			fmt.Printf("model:         %s  [explicit]\n", rm.Model)
+		case rm.Upshifted:
+			fmt.Printf("model:         %s  [auto: %s tier — high priority]\n", rm.Model, rm.Tier)
 		case rm.Downshifted:
 			fmt.Printf("model:         %s  [auto: %s tier — descriptive brief]\n", rm.Model, rm.Tier)
 		default:
