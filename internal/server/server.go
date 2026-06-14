@@ -5,7 +5,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"mime"
 	"net/http"
 	"os"
@@ -566,9 +565,4 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(data)
-}
-
-func embeddedStaticExists(name string) bool {
-	_, err := fs.Stat(staticFS, "static/"+name)
-	return err == nil
 }

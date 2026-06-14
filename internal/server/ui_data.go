@@ -1717,10 +1717,6 @@ func (s *Server) uiKBFiles() []uiKBFile {
 	return out
 }
 
-func (s *Server) uiTranscriptForTask(tv TaskView) []uiTranscript {
-	return s.uiTranscriptForTaskLimit(tv, 24)
-}
-
 func (s *Server) fullUITranscriptForTask(tv TaskView) []uiTranscript {
 	return s.uiTranscriptForTaskLimit(tv, 0)
 }

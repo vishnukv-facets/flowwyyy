@@ -293,26 +293,6 @@ type transcriptTokenUsage struct {
 	} `json:"cache_creation"`
 }
 
-func sessionTranscriptUsageStats(path string) transcriptUsageStats {
-	f, err := os.Open(path)
-	if err != nil {
-		return transcriptUsageStats{}
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	var stats transcriptUsageStats
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		accumulateTranscriptUsage(&stats, line)
-	}
-	return stats
-}
-
 func (u transcriptTokenUsage) total() int {
 	if u.TotalTokens > 0 {
 		return u.TotalTokens
@@ -517,68 +497,6 @@ type codexPendingUserInput struct {
 	Question  string
 	RawJSON   string
 	Seq       int
-}
-
-func pendingCodexUserInput(path string) (*codexPendingUserInput, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-	pending := map[string]codexPendingUserInput{}
-	seq := 0
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
-		seq++
-		rec, ok := codexPayloadRecord(line)
-		if !ok {
-			continue
-		}
-		switch rec.Type {
-		case "message":
-			if rec.Role == "user" {
-				pending = map[string]codexPendingUserInput{}
-			}
-		case "function_call":
-			if !codexRequestUserInputTool(rec.Name) {
-				continue
-			}
-			pending = map[string]codexPendingUserInput{}
-			callID := strings.TrimSpace(rec.CallID)
-			if callID == "" {
-				callID = fmt.Sprintf("offset-%d", seq)
-			}
-			question := codexUserInputQuestion(rec.Arguments)
-			if question == "" {
-				question = "The Codex session is waiting for your input."
-			}
-			pending[callID] = codexPendingUserInput{
-				CallID:    callID,
-				Timestamp: rec.Timestamp,
-				Question:  question,
-				RawJSON:   string(line),
-				Seq:       seq,
-			}
-		case "function_call_output":
-			if callID := strings.TrimSpace(rec.CallID); callID != "" {
-				delete(pending, callID)
-			}
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	var latest *codexPendingUserInput
-	for _, item := range pending {
-		item := item
-		if latest == nil || item.Seq > latest.Seq {
-			latest = &item
-		}
-	}
-	return latest, nil
 }
 
 func codexPayloadRecord(line []byte) (codexTranscriptRecord, bool) {

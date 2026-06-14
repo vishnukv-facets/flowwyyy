@@ -807,25 +807,6 @@ func (h *terminalHub) submitAfterSharedPaste(name string) {
 	}
 }
 
-func (h *terminalHub) scrollbackText(slug string, limit int) (string, bool) {
-	h.mu.Lock()
-	sess := h.sessions[slug]
-	h.mu.Unlock()
-	if sess == nil {
-		return "", false
-	}
-	sess.mu.Lock()
-	data := append([]byte(nil), sess.scrollback...)
-	sess.mu.Unlock()
-	if len(data) == 0 {
-		return "", true
-	}
-	if limit > 0 && len(data) > limit {
-		data = data[len(data)-limit:]
-	}
-	return string(stripTerminalAltScreenControls(data)), true
-}
-
 func (h *terminalHub) lastOutputAt(slug string) (time.Time, bool) {
 	h.mu.Lock()
 	sess := h.sessions[slug]

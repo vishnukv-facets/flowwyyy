@@ -184,10 +184,6 @@ func (s *Server) agentHookHealth(tv TaskView, provider string, transcript []uiTr
 	}
 }
 
-func codexManagedHooksInstalled(workDir string) bool {
-	return codexLocalHookStatus(workDir).installed
-}
-
 type codexHookStatus struct {
 	installed bool
 	stale     bool

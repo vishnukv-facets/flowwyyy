@@ -1722,13 +1722,6 @@ func taskStartErrorStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-func (s *Server) spawnNativeTerminal(kind string, task *flowdb.Task, launch terminalLaunch) error {
-	command := agentShellCommand(launch.Provider, launch.Args)
-	env := s.nativeTerminalEnv()
-	title := nativeTerminalTitle(task)
-	return s.spawnNativeTerminalCommand(kind, title, launch.WorkDir, command, env)
-}
-
 func (s *Server) spawnNativeTerminalCommand(kind, title, workDir, command string, env map[string]string) error {
 	switch kind {
 	case "iterm":

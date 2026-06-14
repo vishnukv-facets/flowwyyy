@@ -16,14 +16,6 @@ var claudeSessionArgRe = regexp.MustCompile(
 	`(?:--session-id|--resume)[ =]([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12})`,
 )
 
-func liveClaudeSessions() (map[string]bool, error) {
-	live, err := liveAgentSessions()
-	if err != nil {
-		return nil, err
-	}
-	return live, nil
-}
-
 func liveAgentSessions() (map[string]bool, error) {
 	out, err := psRunner()
 	if err != nil {
