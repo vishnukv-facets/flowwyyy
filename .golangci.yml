@@ -14,14 +14,40 @@ linters:
       # Conventionally-ignored returns. Real error handling is still required
       # everywhere else.
       exclude-functions:
-        - (io.Closer).Close
-        - (*os.File).Close
         - fmt.Fprint
         - fmt.Fprintf
         - fmt.Fprintln
+        - os.Setenv
+        - os.Unsetenv
+        - os.Remove
+    staticcheck:
+      checks:
+        - all
+        # QF* are opinionated "quickfix" refactor hints (De Morgan rewrites,
+        # redundant type elision) — off as too pedantic for the value.
+        - -QF1001
+        - -QF1011
+        # ST1000/ST1020/ST1022 enforce Go-doc *comment form* (package and
+        # exported-symbol comment phrasing). Package architecture is documented
+        # in CLAUDE.md; the comment-phrasing rules are stylistic. SA bug checks
+        # and S simplify checks stay on.
+        - -ST1000
+        - -ST1020
+        - -ST1022
   exclusions:
     rules:
       # Tests routinely ignore Close/Setenv on throwaway fixtures.
       - path: _test\.go
         linters:
           - errcheck
+      # Deferred resource Close()/Rollback() on read/network handles (conn,
+      # stmt, rows, listener) and post-commit tx cleanup — not actionable.
+      - linters:
+          - errcheck
+        source: '\.(Close|Rollback)\(\)'
+      # The terminal/warp accessibility errors are multi-line, user-facing CLI
+      # messages shown verbatim (never wrapped) — leading capital is intentional.
+      - path: internal/(terminal|warp)/
+        text: ST1005
+        linters:
+          - staticcheck

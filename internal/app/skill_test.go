@@ -320,7 +320,7 @@ func TestSkillUninstallRemovesSessionStartHook(t *testing.T) {
 	}
 	settings := readSettings(t, filepath.Join(home, ".claude", "settings.json"))
 	hooks, _ := settings["hooks"].(map[string]any)
-	if hooks != nil && len(hooks) != 0 {
+	if len(hooks) != 0 {
 		t.Errorf("expected hooks map empty or absent after uninstall, got %#v", hooks)
 	}
 }

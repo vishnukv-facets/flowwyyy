@@ -1116,7 +1116,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	}
 	insights := s.sessionInsightsForTask(tv, provider, fullTranscript)
 	hookRuntime := s.agentHookRuntimeState(tv, provider)
-	status := "idle"
+	var status string // assigned on every path of the switch below
 	runtimeSource := "task"
 	runtimeEvent := ""
 	switch tv.Status {
@@ -2618,7 +2618,8 @@ func gitDiffHunks(dir, file string, cached bool) []uiDiffHunk {
 		if len(hunks[len(hunks)-1].Lines) >= 120 {
 			continue
 		}
-		kind, num, code := "ctx", "", line
+		kind, num := "ctx", ""
+		var code string // assigned on every path of the switch below
 		switch {
 		case strings.HasPrefix(line, "+"):
 			kind = "add"

@@ -474,7 +474,7 @@ func (h *terminalHub) startFloatingDetached(id string) error {
 		h.mu.Unlock()
 		return nil
 	}
-	launch, ok := h.floatingLaunches[id]
+	_, ok := h.floatingLaunches[id]
 	h.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("floating terminal not found: %s", id)
@@ -488,7 +488,7 @@ func (h *terminalHub) startFloatingDetached(id string) error {
 		h.mu.Unlock()
 		return nil
 	}
-	launch, ok = h.floatingLaunches[id]
+	launch, ok := h.floatingLaunches[id]
 	h.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("floating terminal not found: %s", id)
@@ -515,7 +515,7 @@ func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSessio
 		h.mu.Unlock()
 		return sess, nil
 	}
-	launch, ok := h.floatingLaunches[id]
+	_, ok := h.floatingLaunches[id]
 	h.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("floating terminal not found: %s", id)
@@ -529,7 +529,7 @@ func (h *terminalHub) attachFloating(id string, cols, rows int) (*terminalSessio
 		h.mu.Unlock()
 		return sess, nil
 	}
-	launch, ok = h.floatingLaunches[id]
+	launch, ok := h.floatingLaunches[id]
 	h.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("floating terminal not found: %s", id)
