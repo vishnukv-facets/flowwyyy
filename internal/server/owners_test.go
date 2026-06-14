@@ -28,7 +28,7 @@ func TestOwnersAPIListAndDetail(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/owners", nil))
 	if rec.Code != http.StatusOK {
@@ -74,7 +74,7 @@ func TestOwnersAPILifecycle(t *testing.T) {
 	if err := os.WriteFile(flowScript, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > "+argFile+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test", CommandPath: flowScript}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test", CommandPath: flowScript}))
 	post := func(path, body string) OwnerView {
 		t.Helper()
 		rec := httptest.NewRecorder()

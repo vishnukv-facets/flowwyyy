@@ -35,7 +35,7 @@ func TestTaskRunsAPIReturnsLedgerRowsAndDetail(t *testing.T) {
 		t.Fatalf("UpsertBrainRun: %v", err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/runs", nil)
@@ -96,7 +96,7 @@ func TestTaskRunsAPILegacyFallbackUsesAutoRunFields(t *testing.T) {
 		t.Fatalf("seed legacy auto run fields: %v", err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/runs", nil)
 	srv.ServeHTTP(rec, req)

@@ -189,7 +189,7 @@ func TestOverviewChatRecordsChatRow(t *testing.T) {
 // chats by default, and surface them when include_archived is set.
 func TestHandleChats(t *testing.T) {
 	root, db := testRootDB(t)
-	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"}))
 
 	mustInsertChat(t, db, flowdb.Chat{
 		Slug: "overview-old", Title: "Older", Provider: "claude", Origin: "ui",
@@ -249,7 +249,7 @@ func TestHandleChats(t *testing.T) {
 
 	// Empty DB still encodes [] (non-nil), and a non-GET method is rejected.
 	_, emptyDB := testRootDB(t)
-	emptySrv := New(Config{DB: emptyDB, FlowRoot: root, CommandPath: "/bin/false"}).Handler()
+	emptySrv := authedTestHandler(New(Config{DB: emptyDB, FlowRoot: root, CommandPath: "/bin/false"}))
 	rec := httptest.NewRecorder()
 	emptySrv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/chats", nil))
 	if got := rec.Body.String(); got != "[]\n" {

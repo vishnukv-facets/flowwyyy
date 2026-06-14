@@ -29,7 +29,7 @@ func TestTaskAPIUsesFlowDataAndFiles(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
 	srv.ServeHTTP(rec, req)
@@ -85,7 +85,7 @@ func TestTaskAPIExposesAuxFilesAsArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil))
 	if rec.Code != http.StatusOK {
@@ -118,7 +118,7 @@ func TestTaskAPIExposesSessionProviderAndNormalizedHarness(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
 	srv.ServeHTTP(rec, req)
@@ -156,7 +156,7 @@ func TestTaskAPIExposesAutoRunState(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui", nil)
 	srv.ServeHTTP(rec, req)
@@ -441,7 +441,7 @@ func TestSearchReadsUpdateBodies(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/search?q=current-data-marker", nil)
 	srv.ServeHTTP(rec, req)
@@ -464,7 +464,7 @@ func TestSearchReadsBriefBodies(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/search?q=real-task-brief", nil)
 	srv.ServeHTTP(rec, req)
@@ -491,7 +491,7 @@ func TestSearchTranscriptsRequireOptInScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/search?q=server-transcript-marker", nil)
 	srv.ServeHTTP(rec, req)
@@ -533,7 +533,7 @@ func TestSearchReadsMemoryBodies(t *testing.T) {
 	}
 	writeTestFile(t, filepath.Join(home, ".codex", "memories", "raw_memories.md"), "server-codex-memory-marker\n")
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/search?q=server-flow-memory-marker", nil)
 	srv.ServeHTTP(rec, req)
@@ -662,7 +662,7 @@ func TestKBFileSaveRejectsStaleMTime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(
 		http.MethodPut,
@@ -706,7 +706,7 @@ func TestMemoryWriteRejectsStaleMTime(t *testing.T) {
 	}
 
 	payload := fmt.Sprintf(`{"path":%q,"text":"stale browser draft\n","mtime":%q}`, path, loadedMTime)
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/memory", strings.NewReader(payload))
 	srv.ServeHTTP(rec, req)
@@ -726,7 +726,7 @@ func TestUIDataUsesFlowRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/ui-data.js", nil)
 	srv.ServeHTTP(rec, req)
@@ -751,7 +751,7 @@ func TestUIDataJSONEndpointUsesFlowRecords(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/ui-data", nil)
 	srv.ServeHTTP(rec, req)
@@ -1080,7 +1080,7 @@ func TestFSEntriesListsRealDirectories(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/fs/entries?path="+url.QueryEscape(parent), nil)
 	srv.ServeHTTP(rec, req)
@@ -1141,7 +1141,7 @@ func TestUIEventsStreamSendsInitialSnapshot(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
@@ -2250,7 +2250,7 @@ func TestTaskAPISurfacesForkLineage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui-fork", nil)
 	srv.ServeHTTP(rec, req)
@@ -2367,7 +2367,7 @@ func TestCreateFlowMultipartImagesStoresAttachmentsInBrief(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/actions", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -3051,7 +3051,7 @@ func TestPlaybookBriefCanBeUpdatedFromUI(t *testing.T) {
 	if err := flowdb.UpsertPlaybook(db, &flowdb.Playbook{Slug: "tri", Name: "Triage", WorkDir: root}); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{DB: db, FlowRoot: root}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/playbooks/tri/brief", strings.NewReader("# Updated\n\n- Check queues\n"))
 	srv.ServeHTTP(rec, req)
@@ -3084,7 +3084,7 @@ func TestProjectBriefCanBeUpdatedFromUI(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	srv := New(Config{DB: db, FlowRoot: root}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPut, "/api/projects/ops/brief", strings.NewReader("# Updated\n\n- Read updates\n"))
 	srv.ServeHTTP(rec, req)
@@ -3631,7 +3631,7 @@ func TestTaskBridgeEndpointReturnsAgentSnapshot(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/bridge", nil)
 	srv.ServeHTTP(rec, req)
@@ -3701,7 +3701,7 @@ func TestTaskBridgeAgentUsesWorktreeForGitDiff(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/bridge", nil)
 	srv.ServeHTTP(rec, req)
@@ -3744,7 +3744,7 @@ func TestTaskAttachmentUploadStoresFileAndReturnsInsertText(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/tasks/build-ui/attachments", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -3805,7 +3805,7 @@ func TestTaskAttachmentUploadCodexUsesBarePaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/tasks/build-ui/attachments", &body)
 	req.Header.Set("Content-Type", writer.FormDataContentType())
@@ -3863,7 +3863,7 @@ func TestTaskBridgeEndpointUsesCodexProviderForTranscript(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/bridge", nil)
 	srv.ServeHTTP(rec, req)
@@ -4105,7 +4105,7 @@ func askFlowTest(t *testing.T, db *sql.DB, root, query string) struct {
 	} `json:"citations"`
 } {
 	t.Helper()
-	srv := New(Config{DB: db, FlowRoot: root, Version: "test"}).Handler()
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, Version: "test"}))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/ask-flow", strings.NewReader(fmt.Sprintf(`{"query":%q}`, query)))
 	srv.ServeHTTP(rec, req)

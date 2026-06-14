@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flow/internal/flowdb"
 	"fmt"
+	"net/http"
 	"net/url"
 	"os"
 	"strings"
@@ -90,7 +91,16 @@ func cmdWait(args []string) int {
 		base = "http://127.0.0.1:8787"
 	}
 	wsURL := toWSURL(base) + "/ws/events?task_slug=" + url.QueryEscape(slug)
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	// The /ws/events handshake is gated by a session token and a strict
+	// same-origin check (audit P0-1). Carry the token (query param — WS can't
+	// take custom headers in browsers, and the server accepts it either way) and
+	// set Origin to the server base so the exact-host check passes; a Go dialer
+	// sends no Origin by default, which the strict check now rejects.
+	if tok := uiSessionToken(); tok != "" {
+		wsURL += "&token=" + url.QueryEscape(tok)
+	}
+	dialHeader := http.Header{"Origin": {strings.TrimRight(base, "/")}}
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, dialHeader)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: dial %s: %v\n", wsURL, err)
 		return 1
