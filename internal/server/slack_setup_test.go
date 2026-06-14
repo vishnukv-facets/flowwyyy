@@ -31,6 +31,11 @@ func clearSlackSetupEnv(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+	// Secrets now live in the (mocked) keyring, which is process-global across
+	// the test binary — clear the Slack accounts so they don't leak between tests.
+	for account := range slackSecretAccounts {
+		_ = keyringDelete(slackKeyringService, account)
+	}
 }
 
 func TestSlackAppManifest(t *testing.T) {
@@ -177,8 +182,15 @@ func TestSlackSetupCreateApp(t *testing.T) {
 		t.Fatalf("credentials not applied to env: %q %q", os.Getenv("FLOW_SLACK_APP_ID"), os.Getenv("FLOW_SLACK_CLIENT_ID"))
 	}
 	cfg := loadConfigFile(srv.configPath())
-	if cfg["FLOW_SLACK_APP_ID"] != "A123" || cfg["FLOW_SLACK_CLIENT_SECRET"] != "shhh" {
-		t.Fatalf("credentials not persisted: %#v", cfg)
+	if cfg["FLOW_SLACK_APP_ID"] != "A123" || cfg["FLOW_SLACK_CLIENT_ID"] != "42.99" {
+		t.Fatalf("non-secret credentials not persisted to config: %#v", cfg)
+	}
+	// The OAuth client secret is a secret — it goes to the keyring, never config.
+	if got := cfg["FLOW_SLACK_CLIENT_SECRET"]; got != "" {
+		t.Fatalf("client_secret leaked into config.json: %q", got)
+	}
+	if got, _ := keyringGet(slackKeyringService, keyringAcctSlackClientSecret); got != "shhh" {
+		t.Fatalf("client_secret not stored in keyring: %q", got)
 	}
 
 	// Second call without force resumes the existing app instead of minting
@@ -380,9 +392,16 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 		t.Fatalf("self bot user IDs = %q, want UBOTNEW", got)
 	}
 
+	// Bot and operator user tokens are secrets — keyring, never config.json.
 	cfg := loadConfigFile(srv.configPath())
-	if cfg["FLOW_SLACK_TOKEN"] != "xoxb-new" || cfg["FLOW_SLACK_USER_TOKEN"] != "xoxp-new" {
-		t.Fatalf("tokens not persisted: %#v", cfg)
+	if cfg["FLOW_SLACK_TOKEN"] != "" || cfg["FLOW_SLACK_USER_TOKEN"] != "" {
+		t.Fatalf("tokens leaked into config.json: %#v", cfg)
+	}
+	if got, _ := keyringGet(slackKeyringService, keyringAcctSlackBotToken); got != "xoxb-new" {
+		t.Fatalf("bot token not stored in keyring: %q", got)
+	}
+	if got, _ := keyringGet(slackKeyringService, keyringAcctSlackUserToken); got != "xoxp-new" {
+		t.Fatalf("user token not stored in keyring: %q", got)
 	}
 
 	status, _, _, team := dance2.snapshot()

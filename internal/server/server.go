@@ -45,6 +45,8 @@ func New(cfg Config) *Server {
 	// the authoritative at-rest store — wins over a stale config/shell value,
 	// while an absent entry preserves the env fallback.
 	loadGitHubSecretsFromKeyring()
+	// Same for the Slack bot token, operator user token, and OAuth client secret.
+	loadSlackSecretsFromKeyring()
 	s.terminals = newTerminalHub(s)
 	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
 	// process, so the Ask Flow tray survives a flow-server restart.

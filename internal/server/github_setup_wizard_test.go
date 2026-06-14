@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -244,9 +245,25 @@ func TestGitHubAppManifest_IncludesSetupURLForInstallRedirect(t *testing.T) {
 	}
 }
 
+// stubGitHubInstallationVerifier replaces the App-API installation verifier with
+// an allowlist so the unauthenticated install callback can be tested without a
+// real connected App. Restored on cleanup.
+func stubGitHubInstallationVerifier(t *testing.T, allowed ...string) {
+	t.Helper()
+	prev := verifyGitHubInstallation
+	allow := map[string]bool{}
+	for _, id := range allowed {
+		allow[id] = true
+	}
+	verifyGitHubInstallation = func(_ context.Context, id string) bool { return allow[id] }
+	t.Cleanup(func() { verifyGitHubInstallation = prev })
+}
+
 func TestHandleGitHubSetupCallback_CapturesInstallationID(t *testing.T) {
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "") // isolate from captureInstallationID's process-global os.Setenv
 	srv, _ := githubSetupTestServer(t)
 	t.Setenv("FLOW_GH_APP_SLUG", "flow-dev") // App already exists from a prior step
+	stubGitHubInstallationVerifier(t, "555", "556")
 
 	// Post-install redirect: installation_id + setup_action, no code, no state.
 	rec := httptest.NewRecorder()
@@ -263,6 +280,26 @@ func TestHandleGitHubSetupCallback_CapturesInstallationID(t *testing.T) {
 	srv.handleGitHubSetupCallback(httptest.NewRecorder(), httptest.NewRequest("GET", "/api/github/setup/callback?installation_id=555&setup_action=install", nil))
 	if cfg := loadConfigFile(srv.configPath()); cfg["FLOW_GH_INSTALLATION_IDS"] != "555,556" {
 		t.Errorf("installation ids = %q, want 555,556", cfg["FLOW_GH_INSTALLATION_IDS"])
+	}
+}
+
+// TestHandleGitHubSetupCallback_RejectsUnverifiedInstallationID is the P2-3
+// security property: an installation_id that does not belong to this App (the
+// verifier returns false — the fail-closed default for an attacker-supplied id
+// on the public callback) must NOT be persisted.
+func TestHandleGitHubSetupCallback_RejectsUnverifiedInstallationID(t *testing.T) {
+	t.Setenv("FLOW_GH_INSTALLATION_IDS", "") // isolate from captureInstallationID's process-global os.Setenv
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_APP_SLUG", "flow-dev")
+	stubGitHubInstallationVerifier(t /* allow nothing */)
+
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupCallback(rec, httptest.NewRequest("GET", "/api/github/setup/callback?installation_id=99999&setup_action=install", nil))
+	if cfg := loadConfigFile(srv.configPath()); cfg["FLOW_GH_INSTALLATION_IDS"] != "" {
+		t.Errorf("unverified installation id was persisted: %q", cfg["FLOW_GH_INSTALLATION_IDS"])
+	}
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "verify") {
+		t.Errorf("expected a verification-error page, got: %s", rec.Body.String())
 	}
 }
 

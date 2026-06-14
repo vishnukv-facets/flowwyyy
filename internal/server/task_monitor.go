@@ -183,6 +183,54 @@ func (r *monitorReconciler) tick() {
 	}
 }
 
+// inboxWakePrompt picks the wake prompt for a task's live session. When the
+// batch carries untrusted connector content, the bodies are withheld
+// (formatGuardedInboxWakePrompt) UNLESS we can positively confirm the session is
+// attended (a human can approve tool calls). This is the P1-1 "don't auto-inject
+// attacker text into a no-human-approval session" gate, and it fails CLOSED: if
+// the task can't be loaded or its mode is uncertain, we withhold rather than
+// risk injecting untrusted text into a bypass/autonomous session. A batch with
+// no untrusted content always uses the normal prompt.
+func (s *Server) inboxWakePrompt(slug string, entries []monitor.InboxEntry) string {
+	if entriesIncludeUntrusted(entries) && !s.sessionConfirmedAttended(slug) {
+		return formatGuardedInboxWakePrompt(slug, entries)
+	}
+	return formatInboxWakePrompt(slug, entries)
+}
+
+// sessionConfirmedAttended reports whether we can POSITIVELY confirm a human can
+// approve this task's tool calls (default/auto permission mode, no autonomous
+// run in flight). Returns false on any uncertainty — DB unavailable, task gone,
+// or an unattended mode — so callers withhold untrusted content by default.
+func (s *Server) sessionConfirmedAttended(slug string) bool {
+	if s == nil || s.cfg.DB == nil {
+		return false
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil || task == nil {
+		return false
+	}
+	return !taskSessionUnattended(task)
+}
+
+// taskSessionUnattended reports whether a task's agent session runs without a
+// human able to approve tool calls: either an explicit bypass permission mode
+// (every tool auto-runs, no prompt) or an autonomous --auto run currently in
+// flight. These are exactly the sessions where injecting untrusted connector
+// text could drive tool execution with no approval (security audit P1-1).
+func taskSessionUnattended(t *flowdb.Task) bool {
+	if t == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(t.PermissionMode), "bypass") {
+		return true
+	}
+	if t.AutoRunStatus.Valid && strings.EqualFold(strings.TrimSpace(t.AutoRunStatus.String), "running") {
+		return true
+	}
+	return false
+}
+
 // deliverInboxEvents routes new actionable inbox events to a task's agent:
 //   - flow-managed PTY live  → inject the wake prompt (existing behavior)
 //   - native session live    → leave events in the inbox (no PTY, no duplicate)
@@ -193,7 +241,7 @@ func (r *monitorReconciler) tick() {
 // paths return nil to avoid hot loops (events remain in inbox.jsonl regardless).
 func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) error {
 	if s.terminals != nil && s.terminals.running(slug) {
-		return s.terminals.wakeTask(slug, formatInboxWakePrompt(slug, entries))
+		return s.terminals.wakeTask(slug, s.inboxWakePrompt(slug, entries))
 	}
 	// No browser PTY is attached in this server process, but the agent may still
 	// be alive in its detached tmux session — the common case right after a
@@ -202,7 +250,7 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	// Without this, a still-live flow session is indistinguishable from a native
 	// (user-owned) one below and the wake is silently dropped while the cursor
 	// advances past the event.
-	if s.terminals != nil && s.terminals.wakeSharedTask(slug, formatInboxWakePrompt(slug, entries)) {
+	if s.terminals != nil && s.terminals.wakeSharedTask(slug, s.inboxWakePrompt(slug, entries)) {
 		return nil
 	}
 	task, err := flowdb.GetTask(s.cfg.DB, slug)

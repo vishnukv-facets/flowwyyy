@@ -182,10 +182,20 @@ func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Reques
 	state := strings.TrimSpace(r.URL.Query().Get("state"))
 
 	// Post-install redirect (App setup_url): carries installation_id, not a
-	// manifest code or our state nonce. Capture the installation so the SDK can
-	// mint tokens for it, then we're done.
+	// manifest code or our state nonce. This branch is served on the PUBLIC
+	// ingress mux with no state nonce (the install URL we hand the operator
+	// carries none for GitHub to echo), so an attacker could otherwise POST an
+	// arbitrary installation_id here. Verify the id actually belongs to this App
+	// (App-JWT authed, reflects GitHub's truth) before persisting; fail closed.
 	if code == "" {
 		if instID := strings.TrimSpace(r.URL.Query().Get("installation_id")); instID != "" {
+			vctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			defer cancel()
+			if !verifyGitHubInstallation(vctx, instID) {
+				writeSetupResultHTML(w, callbackError, "Couldn't verify the installation",
+					"The installation_id did not match this App's installations. If you just installed it, retry from Connect GitHub.")
+				return
+			}
 			s.captureInstallationID(instID)
 			s.publishUIChange("github-setup")
 			writeSetupResultHTML(w, callbackOK, "GitHub App installed", "Flow is now connected and receiving webhooks.")
@@ -345,6 +355,29 @@ func (s *Server) handleGitHubSetupDisconnect(w http.ResponseWriter, r *http.Requ
 	}
 	s.publishUIChange("github-setup")
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// verifyGitHubInstallation reports whether an installation id genuinely belongs
+// to the connected App. It lists the App's installations (App-JWT authed, so it
+// reflects GitHub's truth, not Flow's captured list) and checks membership.
+// Fails CLOSED: any API error, no connected App, or a non-matching id returns
+// false — so the unauthenticated public setup callback can't persist an
+// attacker-supplied installation_id. Overridable in tests.
+var verifyGitHubInstallation = func(ctx context.Context, id string) bool {
+	want := strings.TrimSpace(id)
+	if want == "" {
+		return false
+	}
+	installs, ok, err := monitor.ListGitHubAppInstallations(ctx)
+	if err != nil || !ok {
+		return false
+	}
+	for _, in := range installs {
+		if strconv.FormatInt(in.ID, 10) == want {
+			return true
+		}
+	}
+	return false
 }
 
 // captureInstallationID appends an installation id to FLOW_GH_INSTALLATION_IDS
