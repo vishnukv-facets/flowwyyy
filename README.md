@@ -142,15 +142,28 @@ flow skill into `~/.claude/skills/flow/SKILL.md` and registers a SessionStart
 hook so every future session loads the skill automatically. Then say
 **"let's get to work"** and follow along.
 
-<details>
-<summary>Manual install (curl + chmod + flow init)</summary>
+### Homebrew
 
 ```bash
-# 1. Download the binary for your Mac. (The binary is named `flow`.)
+brew install vishnukv-facets/flowwyyy/flowwyyy
+flow init
+```
+
+Taps [`vishnukv-facets/homebrew-flowwyyy`](https://github.com/vishnukv-facets/homebrew-flowwyyy)
+and installs the `flow` binary. Upgrade later with `brew upgrade flowwyyy`. (The
+formula is named `flowwyyy` to avoid colliding with homebrew-core's `flow`; the
+command it installs is still `flow`.)
+
+<details>
+<summary>Manual install (curl + tar + flow init)</summary>
+
+```bash
+# 1. Download + extract the binary for your Mac. (The binary is named `flow`.)
 ARCH=arm64        # Apple Silicon (M1/M2/M3/M4) — use amd64 for Intel.
 
-curl -fsSL -o /usr/local/bin/flow \
-  "https://github.com/vishnukv-facets/flowwyyy/releases/latest/download/flow-darwin-${ARCH}"
+curl -fsSL \
+  "https://github.com/vishnukv-facets/flowwyyy/releases/latest/download/flow-darwin-${ARCH}.tar.gz" \
+  | tar -xz -C /usr/local/bin flow
 chmod +x /usr/local/bin/flow
 xattr -d com.apple.quarantine /usr/local/bin/flow 2>/dev/null || true
 

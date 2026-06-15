@@ -31,11 +31,12 @@ jobs:
         run: |
           go build -trimpath \
             -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o "${{ matrix.asset }}" .
+            -o flow .
+          tar -czf "${{ matrix.asset }}.tar.gz" flow
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.asset }}
-          path: ${{ matrix.asset }}
+          name: ${{ matrix.asset }}.tar.gz
+          path: ${{ matrix.asset }}.tar.gz
           if-no-files-found: error
 
   release:
@@ -49,14 +50,14 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: |
-          shasum -a 256 flow-darwin-* > SHA256SUMS
+          shasum -a 256 flow-darwin-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/flow-darwin-arm64
-            dist/flow-darwin-amd64
+            dist/flow-darwin-arm64.tar.gz
+            dist/flow-darwin-amd64.tar.gz
             dist/SHA256SUMS
           generate_release_notes: true
           fail_on_unmatched_files: true
