@@ -69,6 +69,47 @@ func TestDeepTriagePromptUsesContextPackAsPrimaryInput(t *testing.T) {
 	}
 }
 
+func TestDeepTriagePromptIncrementalHasPriorAndRetrieved(t *testing.T) {
+	in := ClassifyInput{ThreadKey: "C1:1.1", Source: "slack", Text: "any update?"}
+	inc := IncrementalContext{
+		Prior: &PriorUnderstanding{
+			Action: "forward", Confidence: 0.82, Summary: "asks about the oauth rollout",
+			Reason: "continuation of the rollout thread", EventCount: 3,
+			OperatorActions: []string{"forwarded->oauth-rollout"},
+			OperatorReplies: []string{"I'll ship it Friday"},
+		},
+		Retrieved: []RetrievedDoc{
+			{Type: "memory", Slug: "kb", Name: "user.md", Snippet: "oauth rollout slipped to next sprint"},
+		},
+	}
+	prompt := deepTriagePromptIncremental(in, "Tasks:\n(none)", contextFromClassifyInput(in), nil, inc)
+
+	for _, want := range []string{
+		"INCREMENTAL UPDATE",                          // says so explicitly
+		"Prior running understanding (JSON)",          // layer 2 present
+		`"summary":"asks about the oauth rollout"`,     // prior decision content
+		"forwarded-\\u003eoauth-rollout",              // prior operator action survives JSON
+		"Retrieved related context (JSON)",            // layer 3 present
+		"oauth rollout slipped to next sprint",         // retrieved snippet content
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("incremental prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// A zero IncrementalContext reproduces the cold prompt — no incremental
+	// framing, no prior/retrieved blocks.
+	cold := deepTriagePromptIncremental(in, "Tasks:\n(none)", contextFromClassifyInput(in), nil, IncrementalContext{})
+	for _, absent := range []string{"INCREMENTAL UPDATE", "Prior running understanding", "Retrieved related context"} {
+		if strings.Contains(cold, absent) {
+			t.Fatalf("cold prompt unexpectedly contains %q:\n%s", absent, cold)
+		}
+	}
+	if !strings.Contains(cold, "MODE: stage3-deep") || !strings.Contains(cold, "Context pack (JSON):") {
+		t.Fatalf("cold prompt lost its base structure:\n%s", cold)
+	}
+}
+
 func TestDeepTriagePromptHidesInternalFetchErrorsAndRawSlackIDs(t *testing.T) {
 	pack := ThreadContext{
 		Source:      "slack",

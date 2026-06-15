@@ -310,13 +310,15 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 		return fmt.Errorf("steering: task index: %w", err)
 	}
 
-	// Read back the thread's running understanding before triaging, so triage is
-	// no longer stateless across events. We only log continuity here — feeding
-	// prior state into the deep triager is [[steerer-context-assembly]].
+	// Read back the thread's running understanding before triaging so triage is
+	// no longer stateless across events — the prior decision plus any operator
+	// actions/replies feed the incremental deep-triage prompt below
+	// ([[steerer-context-assembly]] layer 2).
 	// ponytail: read-back resolves the stable-key case (threaded conversations);
 	// the clubbed-key case (a standalone DM whose state lives under the
 	// conversation anchor) is that task's job, not this keystone's.
-	if prior, hadPrior, perr := flowdb.GetThreadState(c.DB, in.ThreadKey); perr != nil {
+	prior, hadPrior, perr := flowdb.GetThreadState(c.DB, in.ThreadKey)
+	if perr != nil {
 		c.log("thread-state: load %s: %v", in.ThreadKey, perr)
 	} else if hadPrior {
 		c.log("thread-state: %s has prior decision %q (conf %.2f, %d events) — continuing",
@@ -381,7 +383,14 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	}
 
 	c.stage(tr, start, "stage3", "running", "deep triage")
-	v3, err := DeepTriageWithContextAndHints(c.deepStreamCtx(ctx, tr, start), in, taskIndex, pack, hints)
+	// Assemble the full context for incremental deep-triage: layer 2 (the thread's
+	// prior running understanding) + layer 3 (retrieved KB / past-task history).
+	// Both degrade to empty, in which case DeepTriageIncremental cold-classifies.
+	inc := IncrementalContext{
+		Prior:     priorUnderstanding(prior, hadPrior),
+		Retrieved: c.retrieveHistory(in, pack),
+	}
+	v3, err := DeepTriageIncremental(c.deepStreamCtx(ctx, tr, start), in, taskIndex, pack, hints, inc)
 	if err != nil {
 		c.log("deep triage failed for %s: %v; falling back to stage2 verdict", in.ThreadKey, err)
 		tr.Error = appendCascadeError(tr.Error, "deep triage failed: "+err.Error()+"; fell back to stage2")
@@ -1104,6 +1113,49 @@ func (c *Cascade) recordThreadDecision(threadKey, summary string, v Verdict, ts 
 	}); err != nil {
 		c.log("thread-state: record decision for %s: %v", threadKey, err)
 	}
+}
+
+// priorUnderstanding projects a persisted thread-state row into the model-facing
+// PriorUnderstanding fed to incremental Stage 3. Returns nil when there is no
+// prior signal at all (the thread's first triage), which makes the prompt fall
+// back to cold framing. A row that carries only operator actions/replies (the
+// cascade never carded it, but the operator acted/replied) still counts as prior
+// understanding worth feeding.
+func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
+	if !had {
+		return nil
+	}
+	hasDecision := s.EventCount > 0 || strings.TrimSpace(s.CurrentAction) != ""
+	if !hasDecision && len(s.OperatorActions) == 0 && len(s.OperatorReplies) == 0 {
+		return nil
+	}
+	p := &PriorUnderstanding{
+		Action:     s.CurrentAction,
+		Confidence: s.CurrentConfidence,
+		Reason:     s.CurrentReason,
+		Summary:    s.Summary,
+		EventCount: s.EventCount,
+	}
+	for _, a := range s.OperatorActions {
+		p.OperatorActions = append(p.OperatorActions, formatOperatorAction(a))
+	}
+	for _, r := range s.OperatorReplies {
+		if t := strings.TrimSpace(r.Text); t != "" {
+			p.OperatorReplies = append(p.OperatorReplies, t)
+		}
+	}
+	return p
+}
+
+func formatOperatorAction(a flowdb.ThreadOperatorAction) string {
+	s := a.Action
+	if a.Outcome != "" && a.Outcome != a.Action {
+		s += " (" + a.Outcome + ")"
+	}
+	if a.LinkedTask != "" {
+		s += " -> " + a.LinkedTask
+	}
+	return s
 }
 
 func (c *Cascade) contextPack(ctx context.Context, ev monitor.InboundEvent) ThreadContext {

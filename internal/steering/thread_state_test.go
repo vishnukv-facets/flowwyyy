@@ -2,6 +2,8 @@ package steering
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"strings"
 	"testing"
 
@@ -102,6 +104,93 @@ func TestCascadeObserveAccumulatesThreadState(t *testing.T) {
 	if s.CurrentAction != "reply" {
 		t.Errorf("CurrentAction = %q, want reply", s.CurrentAction)
 	}
+}
+
+// Replaying multiple events on one thread feeds each subsequent deep-triage the
+// PRIOR decision (incremental context), and an incremental model that honors it
+// produces a STABLE decision instead of flip-flopping. Also asserts the cascade
+// degrades gracefully when layer-3 retrieval errors.
+func TestIncrementalReplayStableDecision(t *testing.T) {
+	c, db := cascadeFixture(t)
+	t.Cleanup(func() { retrievalSearch = flowdb.SearchDocsMatch })
+	// Layer 3 errors on every call — triage must still complete (degrades to nil).
+	retrievalSearch = func(*sql.DB, string, []flowdb.SearchScope, int) ([]flowdb.SearchResult, error) {
+		return nil, errors.New("index cold")
+	}
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return stage1JSONForPrompt(prompt, true, "relevant"), nil
+		}
+		return `{"suggested_action":"forward","confidence":0.6,"summary":"q"}`, nil
+	})
+
+	var deepPrompts []string
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		deepPrompts = append(deepPrompts, prompt)
+		// An incremental model: if told a prior decision, hold it; else seed "forward".
+		action := "forward"
+		if strings.Contains(prompt, "Prior running understanding (JSON)") {
+			action = priorActionFromPrompt(prompt)
+		}
+		return `{"suggested_action":"` + action + `","confidence":0.9,"summary":"customer q"}`, nil
+	})
+
+	// Three events on one thread (C1:1.1), distinct event ts so the verdict cache
+	// doesn't suppress them.
+	events := []monitor.InboundEvent{
+		{Kind: "message", ChannelType: "channel", Channel: "C1", TS: "1.1", ThreadTS: "1.1", UserID: "U_OTHER", Text: "can you look at the oauth rollout?"},
+		{Kind: "message", ChannelType: "channel", Channel: "C1", TS: "2.2", ThreadTS: "1.1", UserID: "U_OTHER", Text: "any update?"},
+		{Kind: "message", ChannelType: "channel", Channel: "C1", TS: "3.3", ThreadTS: "1.1", UserID: "U_OTHER", Text: "bump"},
+	}
+	for i, ev := range events {
+		if err := c.Observe(context.Background(), ev); err != nil {
+			t.Fatalf("observe %d: %v", i, err)
+		}
+	}
+
+	if len(deepPrompts) != 3 {
+		t.Fatalf("deep triage ran %d times, want 3", len(deepPrompts))
+	}
+	// Events 2 and 3 must have carried the prior decision into the prompt.
+	for i := 1; i < 3; i++ {
+		if !strings.Contains(deepPrompts[i], "Prior running understanding (JSON)") ||
+			!strings.Contains(deepPrompts[i], "INCREMENTAL UPDATE") {
+			t.Fatalf("deep prompt %d missing incremental prior context:\n%s", i, deepPrompts[i])
+		}
+	}
+	// The decision stayed stable across the replay (no flip-flop).
+	s, ok, err := flowdb.GetThreadState(db, "C1:1.1")
+	if err != nil || !ok {
+		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
+	}
+	if s.EventCount != 3 {
+		t.Errorf("EventCount = %d, want 3", s.EventCount)
+	}
+	if s.CurrentAction != "forward" {
+		t.Errorf("CurrentAction = %q, want stable forward across replay", s.CurrentAction)
+	}
+}
+
+// priorActionFromPrompt extracts the prior suggested_action the incremental
+// prompt carried, so the test's stub model can "hold" it.
+func priorActionFromPrompt(prompt string) string {
+	marker := "Prior running understanding (JSON)"
+	idx := strings.Index(prompt, marker)
+	if idx < 0 {
+		return "forward"
+	}
+	tail := prompt[idx:]
+	key := `"action":"`
+	a := strings.Index(tail, key)
+	if a < 0 {
+		return "forward"
+	}
+	a += len(key)
+	end := strings.IndexByte(tail[a:], '"')
+	if end < 0 {
+		return "forward"
+	}
+	return tail[a : a+end]
 }
 
 // An intentional operator resolution (dismiss) records onto the thread's
