@@ -97,6 +97,52 @@ func TestCaptureKBViaAgentLeavesCardOnFailure(t *testing.T) {
 	}
 }
 
+func TestCaptureOperatorReplyKB(t *testing.T) {
+	t.Run("nothing-durable is a clean no-op", func(t *testing.T) {
+		prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "NOTHING-DURABLE", nil })
+		if err := captureOperatorReplyKB(context.Background(), "C1:1", "slack", "ok thanks will do", "/tmp/flow/kb"); err != nil {
+			t.Errorf("NOTHING-DURABLE should not error, got %v", err)
+		}
+		// The prompt offers the durable-iff-present contract and the operator's words.
+		if !strings.Contains(*prompt, "NOTHING-DURABLE") || !strings.Contains(*prompt, "ok thanks will do") {
+			t.Errorf("prompt missing contract/reply text: %s", *prompt)
+		}
+	})
+	t.Run("captured succeeds", func(t *testing.T) {
+		stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/processes.md", nil })
+		if err := captureOperatorReplyKB(context.Background(), "C1:1", "slack", "we always deploy on fridays", "/tmp/flow/kb"); err != nil {
+			t.Errorf("CAPTURED should succeed, got %v", err)
+		}
+	})
+	t.Run("failure surfaces an error", func(t *testing.T) {
+		stubCaptureKBRunner(t, func(string) (string, error) { return "FAILED: no kb dir", nil })
+		if err := captureOperatorReplyKB(context.Background(), "C1:1", "slack", "durable enough fact here", "/tmp/flow/kb"); err == nil {
+			t.Error("FAILED output should surface an error")
+		}
+	})
+	t.Run("empty kb dir errors", func(t *testing.T) {
+		if err := captureOperatorReplyKB(context.Background(), "C1:1", "slack", "x", ""); err == nil {
+			t.Error("empty kb dir should error")
+		}
+	})
+}
+
+func TestSubstantive(t *testing.T) {
+	cases := map[string]bool{
+		"We standardized prod on us-east-1": true,
+		"ok":                                false,
+		"thanks":                            false,
+		"👍":                                 false,
+		"on it":                             false, // 2 words
+		"will take a look now":              true,
+	}
+	for in, want := range cases {
+		if got := substantive(in); got != want {
+			t.Errorf("substantive(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestCaptureConfirmed(t *testing.T) {
 	cases := map[string]bool{
 		"CAPTURED kb/org.md":            true,

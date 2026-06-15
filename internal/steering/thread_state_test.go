@@ -216,12 +216,20 @@ func TestOperatorActionRecordedOnDismiss(t *testing.T) {
 	}
 }
 
-// An operator's own reply on a watched thread fills the operator-reply slot
-// (Stage 0 still drops the event; this only persists the slot).
+// An operator's own reply on a thread flow ALREADY triaged fills the
+// operator-reply slot (Stage 0 still drops the event; the learning path persists
+// the slot). The gate requires prior decision state — see the operator-reply
+// learning tests for the unwatched/new-thread drop case.
 func TestOperatorReplyRecorded(t *testing.T) {
 	c := newClubTestCascade(t)
+	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
+		ThreadKey: "C1:1.1", Source: "slack", Action: "reply", Confidence: 0.7,
+		Reason: "prior card", At: "2026-06-12T06:40:00Z",
+	}); err != nil {
+		t.Fatalf("seed prior decision: %v", err)
+	}
 	ev := monitor.InboundEvent{Channel: "C1", ChannelType: "channel", ThreadTS: "1.1", TS: "1.1", UserID: "U_ME", Text: "I'll take it from here"}
-	c.resolveOnOperatorReply(context.Background(), ev)
+	c.learnFromOperatorReply(context.Background(), ev, "backfill")
 	s, ok, err := flowdb.GetThreadState(c.DB, "C1:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
