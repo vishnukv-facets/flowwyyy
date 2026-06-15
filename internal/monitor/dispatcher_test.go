@@ -53,6 +53,16 @@ func stubDispatcherIO(t *testing.T) (*[]spawnCall, *[]tagCall, *[]string, func()
 	origSpawn := spawnFlowTask
 	origTag := tagFlowTask
 	origOpen := openSlackReplyTask
+	origLookPath := lookPath
+
+	lookPath = func(bin string) (string, error) {
+		switch bin {
+		case "claude", "codex":
+			return "/test/bin/" + bin, nil
+		default:
+			return "", os.ErrNotExist
+		}
+	}
 
 	spawnFlowTask = func(_ context.Context, name, slug, brief, provider, project string) error {
 		mu.Lock()
@@ -76,6 +86,7 @@ func stubDispatcherIO(t *testing.T) (*[]spawnCall, *[]tagCall, *[]string, func()
 		spawnFlowTask = origSpawn
 		tagFlowTask = origTag
 		openSlackReplyTask = origOpen
+		lookPath = origLookPath
 	}
 }
 

@@ -25,6 +25,24 @@ import (
 	"time"
 )
 
+func fakeLaunchCapabilities(t *testing.T) {
+	t.Helper()
+	oldDetect := detectCapabilities
+	detectCapabilities = func() uiCapabilities {
+		return uiCapabilities{
+			Providers: []uiToolCapability{
+				{ID: "claude", Label: "Claude Code", Available: true, Path: "/test/bin/claude"},
+				{ID: "codex", Label: "Codex", Available: true, Path: "/test/bin/codex"},
+			},
+			Terminals: []uiToolCapability{
+				{ID: "iterm", Label: "iTerm", Available: true, Path: "/Applications/iTerm.app"},
+				{ID: "tmux", Label: "tmux", Available: true, Path: "/usr/bin/tmux"},
+			},
+		}
+	}
+	t.Cleanup(func() { detectCapabilities = oldDetect })
+}
+
 func TestTaskAPIUsesFlowDataAndFiles(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -1487,6 +1505,7 @@ func TestActivityHeatmapCountsWorkNotCreation(t *testing.T) {
 }
 
 func TestAttachActionOpensBrowserTerminalBridge(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	sessionID := "11111111-1111-4111-8111-111111111111"
@@ -2218,6 +2237,7 @@ func TestTerminalEnvForcesBrowserFriendlyClaudeRenderer(t *testing.T) {
 }
 
 func TestCreateFlowPersistsPermissionMode(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2243,6 +2263,7 @@ func TestCreateFlowPersistsPermissionMode(t *testing.T) {
 }
 
 func TestCreateFlowDefaultsPermissionModeAuto(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2267,6 +2288,7 @@ func TestCreateFlowDefaultsPermissionModeAuto(t *testing.T) {
 }
 
 func TestCreateFlowNoOpenCreatesBacklogWithoutSession(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2302,6 +2324,7 @@ func TestCreateFlowNoOpenCreatesBacklogWithoutSession(t *testing.T) {
 }
 
 func TestCreateFlowDefaultOpensSession(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2448,6 +2471,7 @@ func TestTaskAPISurfacesForkLineage(t *testing.T) {
 }
 
 func TestCreateFlowPreservesExplicitDefaultPermissionMode(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2473,6 +2497,7 @@ func TestCreateFlowPreservesExplicitDefaultPermissionMode(t *testing.T) {
 }
 
 func TestCreateFlowPersistsCodexProvider(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2498,6 +2523,7 @@ func TestCreateFlowPersistsCodexProvider(t *testing.T) {
 }
 
 func TestCreateFlowMultipartImagesStoresAttachmentsInBrief(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 
@@ -2572,6 +2598,7 @@ func TestCreateFlowMultipartImagesStoresAttachmentsInBrief(t *testing.T) {
 }
 
 func TestCreateFlowReactivatesDeletedArchivedTask(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	t.Setenv("FLOW_ROOT", root)
 	insertProjectTask(t, db, root)
@@ -2629,6 +2656,7 @@ func TestCreateFlowReactivatesDeletedArchivedTask(t *testing.T) {
 }
 
 func TestCreateFlowExistingActiveTaskOpensExisting(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: testFlowBinary(t)})
@@ -2814,6 +2842,7 @@ func TestUpdatePermissionModeStoresMode(t *testing.T) {
 }
 
 func TestUpdatePermissionModeRestartsLiveBrowserTerminal(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	sessionID := "11111111-2222-4333-8444-555555555555"
@@ -3122,6 +3151,7 @@ func TestCreateProjectRequiresWorkDir(t *testing.T) {
 }
 
 func TestSpawnBacklogActionAppliesProviderChoiceBeforeSessionCreation(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -3150,6 +3180,7 @@ func TestSpawnBacklogActionAppliesProviderChoiceBeforeSessionCreation(t *testing
 }
 
 func TestSpawnRunActionCreatesBrowserBridgeRun(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	playbookDir := filepath.Join(root, "playbooks", "tri")
 	if err := os.MkdirAll(filepath.Join(playbookDir, "updates"), 0o755); err != nil {
@@ -3391,6 +3422,7 @@ func TestPrepareTerminalLaunchResumesExistingSession(t *testing.T) {
 }
 
 func TestRestartBrowserTerminalPreservesExistingSession(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	sessionID := "33333333-3333-4333-8333-333333333333"
@@ -3422,6 +3454,7 @@ func TestRestartBrowserTerminalPreservesExistingSession(t *testing.T) {
 }
 
 func TestRestartFreshBrowserTerminalClearsExistingSession(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
 	sessionID := "44444444-4444-4444-8444-444444444444"
@@ -3488,6 +3521,7 @@ func TestRestartFreshBrowserTerminalClearsExistingSession(t *testing.T) {
 }
 
 func TestITermActionOpensNativeTerminalNotBrowserBridge(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	commands := enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
@@ -3527,6 +3561,7 @@ func TestITermActionOpensNativeTerminalNotBrowserBridge(t *testing.T) {
 }
 
 func TestITermActionResumesCodexSession(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	commands := enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
@@ -3586,6 +3621,7 @@ func readITermLaunchScriptBody(t *testing.T, script string) string {
 }
 
 func TestNativeTerminalActionStillLaunchesWhenSessionAlreadyLive(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
@@ -3626,6 +3662,7 @@ func TestNativeTerminalActionStillLaunchesWhenSessionAlreadyLive(t *testing.T) {
 }
 
 func TestNativeTerminalActionKeepsSharedBrowserTerminalAfterNativeOpen(t *testing.T) {
+	fakeLaunchCapabilities(t)
 	root, db := testRootDB(t)
 	enableSharedTerminalForTest(t)
 	insertProjectTask(t, db, root)
