@@ -220,6 +220,7 @@ func (c *Cascade) ObserveBackfill(ctx context.Context, ev monitor.InboundEvent) 
 // single-event Stage 1 relevance, then the shared finishItem tail. It emits a
 // trace at every exit.
 func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin string) error {
+	ctx = withSteeringUsage(ctx, c.DB, "classifier")
 	start := c.now()
 	cleaned := c.cleanText(ctx, ev.Text)
 	tr := c.newTrace(ev, origin, cleaned)
@@ -508,6 +509,7 @@ func gateWeakSemanticForward(v *Verdict, deterministic bool) string {
 // relevance call (the rest is per-item). Used by the steerer backfill, where
 // many events arrive at once. Each event still emits exactly one trace.
 func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) error {
+	ctx = withSteeringUsage(ctx, c.DB, "classifier")
 	cfg := c.Config
 	if c.ConfigFn != nil {
 		cfg = c.ConfigFn()

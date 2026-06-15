@@ -14,7 +14,7 @@ func TestParseClaudeStreamForwardsDeltasAndUsesResult(t *testing.T) {
 	}, "\n")
 
 	var deltas []string
-	final, err := parseClaudeStream(strings.NewReader(ndjson), func(d string) { deltas = append(deltas, d) })
+	final, _, err := parseClaudeStreamWithUsage(strings.NewReader(ndjson), func(d string) { deltas = append(deltas, d) }, "", "")
 	if err != nil {
 		t.Fatalf("parseClaudeStream: %v", err)
 	}
@@ -30,6 +30,28 @@ func TestParseClaudeStreamForwardsDeltasAndUsesResult(t *testing.T) {
 	}
 }
 
+func TestParseClaudeStreamWithUsageReadsResultEnvelope(t *testing.T) {
+	ndjson := strings.Join([]string{
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"{\"ok\":"}}}`,
+		`{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"true}"}}}`,
+		`{"type":"result","result":"{\"ok\":true}","usage":{"input_tokens":10,"cache_creation_input_tokens":2,"cache_read_input_tokens":99,"output_tokens":3},"total_cost_usd":0.07}`,
+	}, "\n")
+
+	final, delta, err := parseClaudeStreamWithUsage(strings.NewReader(ndjson), nil, "classifier", "2026-06-15")
+	if err != nil {
+		t.Fatalf("parseClaudeStreamWithUsage: %v", err)
+	}
+	if final != `{"ok":true}` {
+		t.Fatalf("final = %q, want result-event text", final)
+	}
+	if delta.Kind != "classifier" || delta.Day != "2026-06-15" {
+		t.Fatalf("delta identity = %+v", delta)
+	}
+	if delta.Tokens != 15 || delta.CacheReadInputTokens != 99 || delta.CostUSD != 0.07 {
+		t.Fatalf("delta = %+v, want usage/cost from result event", delta)
+	}
+}
+
 func TestParseClaudeStreamFallsBackToAccumulatedWhenNoResult(t *testing.T) {
 	// No "result" event (e.g. truncated stream) → reassembled deltas are returned.
 	ndjson := strings.Join([]string{
@@ -38,7 +60,7 @@ func TestParseClaudeStreamFallsBackToAccumulatedWhenNoResult(t *testing.T) {
 	}, "\n")
 
 	var streamed strings.Builder
-	final, err := parseClaudeStream(strings.NewReader(ndjson), func(d string) { streamed.WriteString(d) })
+	final, _, err := parseClaudeStreamWithUsage(strings.NewReader(ndjson), func(d string) { streamed.WriteString(d) }, "", "")
 	if err != nil {
 		t.Fatalf("parseClaudeStream: %v", err)
 	}
@@ -54,7 +76,7 @@ func TestParseClaudeStreamToleratesNoise(t *testing.T) {
 	// Blank lines and non-JSON noise must not fail the whole parse.
 	ndjson := "garbage not json\n\n" +
 		`{"type":"result","result":"{\"ok\":true}"}` + "\n"
-	final, err := parseClaudeStream(strings.NewReader(ndjson), nil)
+	final, _, err := parseClaudeStreamWithUsage(strings.NewReader(ndjson), nil, "", "")
 	if err != nil {
 		t.Fatalf("parseClaudeStream: %v", err)
 	}

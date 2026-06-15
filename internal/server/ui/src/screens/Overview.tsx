@@ -304,6 +304,12 @@ function StatsPanel({ stats }: { stats: UiStats }) {
           <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_codex ?? 0)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_codex} sess</span>
         </div>
+        <div className="stats-tok-row">
+          <span className="stats-tok-name">Automation / steering</span>
+          <span className="mono stats-tok-val">{compactTokens(stats.tokens_automation)}</span>
+          <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_automation ?? 0)}</span>
+          <span className="faint mono stats-tok-sess">{stats.runs_automation} runs</span>
+        </div>
         <div className="stats-tok-row stats-tok-total">
           <span className="stats-tok-name">Combined</span>
           <span className="mono stats-tok-val">{compactTokens(stats.tokens_total)}</span>

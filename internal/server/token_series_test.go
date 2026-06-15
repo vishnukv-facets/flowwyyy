@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"flow/internal/flowdb"
 )
 
 // Claude assistant transcript line with the given timestamp and token usage.
@@ -115,7 +117,7 @@ func TestBuildUIStatsUsesTokenSeriesForStreaks(t *testing.T) {
 		{Date: "2026-06-15", Tokens: 0},
 	}
 
-	stats := buildUIStats(nil, nil, nil, tokenSeries, now)
+	stats := buildUIStats(nil, nil, nil, tokenSeries, flowdb.SteeringUsage{}, now)
 
 	if stats.ActiveDays != 3 {
 		t.Errorf("ActiveDays = %d, want 3 token-active days", stats.ActiveDays)
@@ -125,5 +127,22 @@ func TestBuildUIStatsUsesTokenSeriesForStreaks(t *testing.T) {
 	}
 	if stats.CurrentStreak != 3 {
 		t.Errorf("CurrentStreak = %d, want 3 with untouched-today grace", stats.CurrentStreak)
+	}
+}
+
+func TestBuildUIStatsKeepsAutomationUsageSeparate(t *testing.T) {
+	stats := buildUIStats(nil, nil, nil, nil, flowdb.SteeringUsage{Tokens: 123, CostUSD: 0.45, Runs: 2}, time.Now())
+
+	if stats.TokensAutomation != 123 {
+		t.Errorf("TokensAutomation = %d, want 123", stats.TokensAutomation)
+	}
+	if stats.CostAutomation != 0.45 {
+		t.Errorf("CostAutomation = %g, want 0.45", stats.CostAutomation)
+	}
+	if stats.RunsAutomation != 2 {
+		t.Errorf("RunsAutomation = %d, want 2", stats.RunsAutomation)
+	}
+	if stats.TokensTotal != 0 || stats.SessionsTotal != 0 {
+		t.Errorf("automation usage should not inflate interactive totals: stats = %+v", stats)
 	}
 }

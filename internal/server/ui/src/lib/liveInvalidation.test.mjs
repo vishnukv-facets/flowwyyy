@@ -18,6 +18,14 @@ test('state mutation events still request a broad live-data refresh', () => {
   assert.equal(focusedLiveInvalidationKeys({ type: 'ui_change' }), null)
 })
 
+test('steering stage completion refreshes usage stats', () => {
+  assert.deepEqual(focusedLiveInvalidationKeys({ type: 'steering_stage', data: { done: false } }), ['steering-runs'])
+  assert.deepEqual(focusedLiveInvalidationKeys({ type: 'steering_stage', data: { done: true } }), [
+    'steering-runs',
+    'ui-data',
+  ])
+})
+
 test('ui-data refresh is event-driven rather than interval-polled', () => {
   const querySource = readFileSync(resolve(here, 'query.ts'), 'utf8')
   const useUiData = querySource.match(/export function useUiData\(\) \{[\s\S]*?\n\}/)?.[0] ?? ''

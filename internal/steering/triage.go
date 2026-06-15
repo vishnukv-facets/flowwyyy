@@ -23,12 +23,12 @@ var deepTriageRunner = func(ctx context.Context, prompt string) (string, error) 
 			return out, nil
 		}
 	}
-	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--dangerously-skip-permissions")
+	cmd := exec.CommandContext(ctx, "claude", "-p", prompt, "--dangerously-skip-permissions", "--output-format", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", commandError("steering: deep triage claude -p", err, out)
 	}
-	return string(out), nil
+	return decodeClaudeJSONOutput(ctx, "classifier", out)
 }
 
 // DeepTriage runs Stage 3 on a single survivor. Callers that already fetched a

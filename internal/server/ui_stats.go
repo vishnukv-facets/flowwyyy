@@ -303,7 +303,7 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 // session totals across every tracked session (live + done + chats, deduped by
 // slug). Chats are flow-launched sessions too, so their token/cost burn folds
 // into the same per-provider panel rather than being silently excluded.
-func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now time.Time) uiStats {
+func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, automation flowdb.SteeringUsage, now time.Time) uiStats {
 	var st uiStats
 	today := now.In(time.Local).Format("2006-01-02")
 	// Restrict to days up to and including today. The token grid runs to the end
@@ -377,7 +377,18 @@ func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now tim
 	tally(live)
 	tally(done)
 	tally(chats)
+	st.TokensAutomation = automation.Tokens
+	st.CostAutomation = automation.CostUSD
+	st.RunsAutomation = automation.Runs
 	return st
+}
+
+func (s *Server) automationUsageStats() flowdb.SteeringUsage {
+	usage, err := flowdb.SumSteeringUsage(s.cfg.DB)
+	if err != nil {
+		return flowdb.SteeringUsage{}
+	}
+	return usage
 }
 
 func activityTimeForFile(file FileRef) (time.Time, bool) {

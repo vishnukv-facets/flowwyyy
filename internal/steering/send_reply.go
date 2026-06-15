@@ -18,12 +18,12 @@ import (
 // the attention feed, so there's nothing left to gate. Mockable in tests.
 var sendReplyRunner = func(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt,
-		"--model", classifierModel(), "--dangerously-skip-permissions")
-	out, err := cmd.CombinedOutput() // capture stderr too — surfaces MCP/tool failures
+		"--model", classifierModel(), "--dangerously-skip-permissions", "--output-format", "json")
+	out, err := cmd.Output()
 	if err != nil {
-		return strings.TrimSpace(string(out)), fmt.Errorf("steering: send-reply claude -p: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		return strings.TrimSpace(string(out)), commandError("steering: send-reply claude -p", err, out)
 	}
-	return string(out), nil
+	return decodeClaudeJSONOutput(ctx, "send_reply", out)
 }
 
 // SendReplyViaAgent posts an operator-approved reply WITHOUT spawning a visible
@@ -37,7 +37,7 @@ func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("steering: send-reply requires non-empty text")
 	}
-	out, err := sendReplyRunner(ctx, sendReplyPrompt(item, text, instructions))
+	out, err := sendReplyRunner(withSteeringUsage(ctx, db, "send_reply"), sendReplyPrompt(item, text, instructions))
 	trimmed := strings.TrimSpace(out)
 	// Always log what the agent actually said — the only way to see whether it
 	// posted, refused, or lacked the connector MCP in a headless run.

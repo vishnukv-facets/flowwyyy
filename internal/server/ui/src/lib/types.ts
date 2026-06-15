@@ -796,12 +796,15 @@ export interface UiStats {
   tokens_total: number
   tokens_claude: number
   tokens_codex: number
+  tokens_automation: number
   cost_total?: number
   cost_claude?: number
   cost_codex?: number
+  cost_automation?: number
   sessions_total: number
   sessions_claude: number
   sessions_codex: number
+  runs_automation: number
 }
 
 export interface FlowDBObject {
@@ -906,7 +909,9 @@ export interface TranscriptEntry {
   text?: string
   tool_name?: string
   tool_input_summary?: string
+  tool_input?: string
   tool_result_text?: string
+  tool_use_id?: string
   is_error?: boolean
   byte_offset: number
   timestamp?: string
@@ -934,6 +939,24 @@ export interface SearchResponse {
   updates?: SearchResult[]
   transcripts?: SearchResult[]
   memories?: SearchResult[]
+}
+
+export interface KBDreamRecord {
+  at: string
+  status: 'ok' | 'error'
+  pruned: number
+  duration_ms: number
+  detail?: string
+}
+
+export interface KBDreamStatus {
+  enabled: boolean
+  running: boolean
+  interval_ms: number
+  max_age_days: number
+  last_run_at?: string
+  next_run_at?: string
+  history: KBDreamRecord[]
 }
 
 export interface AskFlowCitation {

@@ -33,7 +33,7 @@ func TestDreamKBViaAgentRunsAndReturnsReply(t *testing.T) {
 	}
 	t.Cleanup(func() { captureKBRunner = prev })
 
-	out, err := DreamKBViaAgent(context.Background(), "/kb")
+	out, err := DreamKBViaAgent(context.Background(), nil, "/kb")
 	if err != nil {
 		t.Fatalf("DreamKBViaAgent: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestDreamKBViaAgentRunsAndReturnsReply(t *testing.T) {
 }
 
 func TestDreamKBViaAgentRequiresDir(t *testing.T) {
-	if _, err := DreamKBViaAgent(context.Background(), "  "); err == nil {
+	if _, err := DreamKBViaAgent(context.Background(), nil, "  "); err == nil {
 		t.Errorf("expected error for empty kb dir")
 	}
 }

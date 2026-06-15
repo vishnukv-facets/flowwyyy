@@ -19,12 +19,12 @@ import (
 // tests.
 var captureKBRunner = func(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt,
-		"--model", CaptureKBModel(), "--dangerously-skip-permissions")
-	out, err := cmd.CombinedOutput() // capture stderr too — surfaces tool/file failures
+		"--model", CaptureKBModel(), "--dangerously-skip-permissions", "--output-format", "json")
+	out, err := cmd.Output()
 	if err != nil {
-		return strings.TrimSpace(string(out)), fmt.Errorf("steering: capture-kb claude -p: %w (output: %s)", err, strings.TrimSpace(string(out)))
+		return strings.TrimSpace(string(out)), commandError("steering: capture-kb claude -p", err, out)
 	}
-	return string(out), nil
+	return decodeClaudeJSONOutput(ctx, "capture_kb", out)
 }
 
 // CaptureKBModel is the model the ephemeral KB-capture session runs under.
@@ -50,7 +50,7 @@ func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kb
 	if strings.TrimSpace(kbDir) == "" {
 		return fmt.Errorf("steering: capture-kb requires a kb directory")
 	}
-	out, err := captureKBRunner(ctx, captureKBPrompt(item, kbDir))
+	out, err := captureKBRunner(withSteeringUsage(ctx, db, "capture_kb"), captureKBPrompt(item, kbDir))
 	trimmed := strings.TrimSpace(out)
 	// Always log what the agent actually did — the only window into a headless run.
 	fmt.Fprintf(os.Stderr, "steering: capture-kb agent for %s replied: %s\n", item.ID, truncate(trimmed, 600))

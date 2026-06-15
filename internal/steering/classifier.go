@@ -18,12 +18,12 @@ const classifierTextRuneLimit = 1200
 // return canned JSON without invoking claude.
 var classifierRunner = func(ctx context.Context, prompt string) (string, error) {
 	cmd := exec.CommandContext(ctx, "claude", "-p", prompt,
-		"--model", classifierModel(), "--dangerously-skip-permissions")
+		"--model", classifierModel(), "--dangerously-skip-permissions", "--output-format", "json")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", commandError("steering: classifier claude -p", err, out)
 	}
-	return string(out), nil
+	return decodeClaudeJSONOutput(ctx, "classifier", out)
 }
 
 // classifierModel returns the cheap model id used for Stage 1/2. Override via

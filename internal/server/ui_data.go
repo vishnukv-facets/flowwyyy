@@ -238,18 +238,21 @@ type uiModelCount struct {
 // 12-week heatmap shown on the dashboard) and how many context tokens each
 // provider has in play across all tracked sessions.
 type uiStats struct {
-	CurrentStreak  int     `json:"current_streak"` // consecutive active days ending today
-	LongestStreak  int     `json:"longest_streak"` // longest active-day run in the window
-	ActiveDays     int     `json:"active_days"`    // active days within the 12-week window
-	TokensTotal    int     `json:"tokens_total"`
-	TokensClaude   int     `json:"tokens_claude"`
-	TokensCodex    int     `json:"tokens_codex"`
-	CostTotal      float64 `json:"cost_total,omitempty"`
-	CostClaude     float64 `json:"cost_claude,omitempty"`
-	CostCodex      float64 `json:"cost_codex,omitempty"`
-	SessionsTotal  int     `json:"sessions_total"`
-	SessionsClaude int     `json:"sessions_claude"`
-	SessionsCodex  int     `json:"sessions_codex"`
+	CurrentStreak    int     `json:"current_streak"` // consecutive active days ending today
+	LongestStreak    int     `json:"longest_streak"` // longest active-day run in the window
+	ActiveDays       int     `json:"active_days"`    // active days within the 12-week window
+	TokensTotal      int     `json:"tokens_total"`
+	TokensClaude     int     `json:"tokens_claude"`
+	TokensCodex      int     `json:"tokens_codex"`
+	TokensAutomation int     `json:"tokens_automation"`
+	CostTotal        float64 `json:"cost_total,omitempty"`
+	CostClaude       float64 `json:"cost_claude,omitempty"`
+	CostCodex        float64 `json:"cost_codex,omitempty"`
+	CostAutomation   float64 `json:"cost_automation,omitempty"`
+	SessionsTotal    int     `json:"sessions_total"`
+	SessionsClaude   int     `json:"sessions_claude"`
+	SessionsCodex    int     `json:"sessions_codex"`
+	RunsAutomation   int     `json:"runs_automation"`
 }
 
 type uiTrash struct {
@@ -652,7 +655,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		TokenSeries:      tokenSeries,
 		TopTasks:         topTasks,
 		ModelMix:         modelMix,
-		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), tokenSeries, time.Now()),
+		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), tokenSeries, s.automationUsageStats(), time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,

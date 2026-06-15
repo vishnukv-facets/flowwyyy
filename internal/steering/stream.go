@@ -9,6 +9,9 @@ import (
 	"io"
 	"os/exec"
 	"strings"
+	"time"
+
+	"flow/internal/flowdb"
 )
 
 // streamSink receives incremental model-output text (deltas) for a stage that is
@@ -52,7 +55,11 @@ func runClaudeStreaming(ctx context.Context, args []string, prompt string, sink 
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	final, parseErr := parseClaudeStream(stdout, sink)
+	kind := "classifier"
+	if rec, ok := ctx.Value(steeringUsageKey{}).(steeringUsageContext); ok && rec.kind != "" {
+		kind = rec.kind
+	}
+	final, delta, parseErr := parseClaudeStreamWithUsage(stdout, sink, kind, time.Now().In(time.Local).Format("2006-01-02"))
 	waitErr := cmd.Wait()
 	if parseErr != nil {
 		return "", parseErr
@@ -60,21 +67,18 @@ func runClaudeStreaming(ctx context.Context, args []string, prompt string, sink 
 	if waitErr != nil {
 		return "", commandError("steering: deep triage claude -p (stream)", waitErr, stderr.Bytes())
 	}
+	recordSteeringUsage(ctx, delta)
 	return final, nil
 }
 
-// parseClaudeStream reads claude's stream-json NDJSON, forwarding each text/think
-// delta to sink and reconstructing the final response. The "result" event's
-// result field is authoritative when present (so the verdict text is correct even
-// if delta reassembly is imperfect); otherwise the accumulated deltas are used.
-// Split out from runClaudeStreaming so it can be unit-tested without claude.
-func parseClaudeStream(r io.Reader, sink streamSink) (string, error) {
+func parseClaudeStreamWithUsage(r io.Reader, sink streamSink, kind, day string) (string, flowdb.SteeringUsageDelta, error) {
 	sc := bufio.NewScanner(r)
 	// Stream-json lines (esp. full assistant/result events) can be large.
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	var streamed strings.Builder
 	var result string
 	haveResult := false
+	var delta flowdb.SteeringUsageDelta
 	for sc.Scan() {
 		line := bytes.TrimSpace(sc.Bytes())
 		if len(line) == 0 {
@@ -84,6 +88,9 @@ func parseClaudeStream(r io.Reader, sink streamSink) (string, error) {
 			Type   string          `json:"type"`
 			Event  json.RawMessage `json:"event"`
 			Result *string         `json:"result"`
+			Usage  claudeJSONUsage `json:"usage"`
+
+			TotalCostUSD float64 `json:"total_cost_usd"`
 		}
 		if json.Unmarshal(line, &env) != nil {
 			continue // tolerate non-JSON noise rather than failing the whole run
@@ -101,15 +108,17 @@ func parseClaudeStream(r io.Reader, sink streamSink) (string, error) {
 				result = *env.Result
 				haveResult = true
 			}
+			delta = env.Usage.delta(kind, day)
+			delta.CostUSD = env.TotalCostUSD
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return "", err
+		return "", flowdb.SteeringUsageDelta{}, err
 	}
 	if haveResult && strings.TrimSpace(result) != "" {
-		return result, nil
+		return result, delta, nil
 	}
-	return streamed.String(), nil
+	return streamed.String(), delta, nil
 }
 
 // streamEventText pulls the text (or thinking) delta out of a partial-message

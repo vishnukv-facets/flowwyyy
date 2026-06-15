@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"strings"
@@ -20,11 +21,11 @@ const PendingRemovalHeading = "## ⚠️ Pending removal"
 // entries left flagged for too long. Reviews the KB FILES (not a conversation),
 // so a headless session over the files is the right tool — same runner as
 // capture-kb. Returns the agent's reply (logged by the caller).
-func DreamKBViaAgent(ctx context.Context, kbDir string) (string, error) {
+func DreamKBViaAgent(ctx context.Context, db *sql.DB, kbDir string) (string, error) {
 	if strings.TrimSpace(kbDir) == "" {
 		return "", fmt.Errorf("steering: kb-dream requires a kb directory")
 	}
-	out, err := captureKBRunner(ctx, dreamKBPrompt(kbDir))
+	out, err := captureKBRunner(withSteeringUsage(ctx, db, "dream"), dreamKBPrompt(kbDir))
 	trimmed := strings.TrimSpace(out)
 	fmt.Fprintf(os.Stderr, "steering: kb-dream agent replied: %s\n", truncate(trimmed, 600))
 	if err != nil {

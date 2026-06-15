@@ -149,7 +149,7 @@ func (d *kbDreamer) tick(ctx context.Context) {
 	//    file's Pending removal section. Sequential before the prune so the prune
 	//    sees the agent's output.
 	kbDir := filepath.Join(root, "kb")
-	if _, err := steering.DreamKBViaAgent(ctx, kbDir); err != nil {
+	if _, err := steering.DreamKBViaAgent(ctx, d.srv.cfg.DB, kbDir); err != nil {
 		fmt.Fprintf(os.Stderr, "kb dreamer: dream pass: %v\n", err)
 		rec.Status = "error"
 		rec.Detail = truncate(err.Error(), 300)

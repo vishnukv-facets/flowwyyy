@@ -15,11 +15,12 @@ import (
 type classifierExec func(ctx context.Context, args []string) (string, error)
 
 func defaultClassifierExec(ctx context.Context, args []string) (string, error) {
+	args = append(append([]string{}, args...), "--output-format", "json")
 	out, err := exec.CommandContext(ctx, "claude", args...).Output()
 	if err != nil {
 		return "", commandError("steering: pooled classifier claude", err, out)
 	}
-	return string(out), nil
+	return decodeClaudeJSONOutput(ctx, "classifier", out)
 }
 
 // classifierPool manages reusable, primed claude sessions for the cheap
