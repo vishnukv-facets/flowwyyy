@@ -29,8 +29,8 @@
 > the engineer on your team.
 
 <p align="center">
-  <img src="docs/ui/flowwyyy-demo.gif" alt="flowwyyy in motion" width="900">
-  <br><sub><em>flowwyyy in motion.</em></sub>
+  <video src="https://github.com/vishnukv-facets/flowwyyy/raw/main/docs/ui/flowwyyy-tour.mp4" controls muted width="900"></video>
+  <br><sub><em>A 45-second guided tour of Mission Control — with narration. (▶ click to play)</em></sub>
 </p>
 
 <p align="center">
