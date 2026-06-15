@@ -134,8 +134,10 @@ code, kbd, pre { font-family: var(--font-mono); font-feature-settings: 'zero' 1;
 /* ---------- hero ---------- */
 .hero { text-align: center; padding: 92px 0 60px; }
 .hero .pill-row { display: flex; justify-content: center; margin-bottom: 28px; }
-.hero .mark { width: min(420px, 76vw); margin: 0 auto 26px; }
-.hero .pitch { max-width: 640px; margin: 0 auto 36px; color: var(--text-2); font-size: clamp(16px, 2.3vw, 19.5px); line-height: 1.6; }
+.hero .mark { width: min(400px, 74vw); margin: 0 auto 30px; }
+.hero .headline { font-family: var(--font-sans); font-size: clamp(31px, 5.4vw, 50px); font-weight: 700; letter-spacing: -0.035em; line-height: 1.06; color: var(--text); margin: 0 auto 16px; max-width: 14ch; }
+.hero .headline .dot { color: var(--accent-hi); }
+.hero .pitch { max-width: 588px; margin: 0 auto 34px; color: var(--text-2); font-size: clamp(15.5px, 1.7vw, 18px); line-height: 1.64; }
 .hero .pitch b { color: var(--text); font-weight: 600; }
 .hero .cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
 
