@@ -193,7 +193,9 @@ footer .wrap { display: flex; flex-wrap: wrap; gap: 14px 26px; align-items: cent
 footer a { color: var(--text-2); font-family: var(--font-mono); font-size: 13px; }
 footer a:hover { color: var(--text); text-decoration: none; }
 footer .grow { flex: 1; }
-footer .built { color: var(--text-3); }
+/* tagline: all-mono so it sits on one baseline with the mono footer links */
+footer .built { color: var(--text-3); font-family: var(--font-mono); font-size: 13px; white-space: nowrap; }
+footer .built a { color: var(--text-2); }
 
 /* ---------- docs / api shared layout ---------- */
 .docs { display: grid; grid-template-columns: 232px 1fr; gap: 52px; padding: 40px 0 96px; align-items: start; }
