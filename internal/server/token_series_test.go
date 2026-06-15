@@ -105,3 +105,25 @@ func TestLocalDayRejectsGarbage(t *testing.T) {
 		t.Errorf("localDay(garbage): got %q, want empty", got)
 	}
 }
+
+func TestBuildUIStatsUsesTokenSeriesForStreaks(t *testing.T) {
+	now := time.Date(2026, 6, 15, 12, 0, 0, 0, time.Local)
+	tokenSeries := []uiTokenDay{
+		{Date: "2026-06-12", Tokens: 100},
+		{Date: "2026-06-13", Tokens: 100},
+		{Date: "2026-06-14", Tokens: 100},
+		{Date: "2026-06-15", Tokens: 0},
+	}
+
+	stats := buildUIStats(nil, nil, nil, tokenSeries, now)
+
+	if stats.ActiveDays != 3 {
+		t.Errorf("ActiveDays = %d, want 3 token-active days", stats.ActiveDays)
+	}
+	if stats.LongestStreak != 3 {
+		t.Errorf("LongestStreak = %d, want 3 token-active days", stats.LongestStreak)
+	}
+	if stats.CurrentStreak != 3 {
+		t.Errorf("CurrentStreak = %d, want 3 with untouched-today grace", stats.CurrentStreak)
+	}
+}

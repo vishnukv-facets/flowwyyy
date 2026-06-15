@@ -298,23 +298,23 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 	return days
 }
 
-// buildUIStats derives the Mission Control analytics strip: activity-day streaks
-// from the heatmap, plus per-provider context-token and session totals across
-// every tracked session (live + done + chats, deduped by slug). Chats are
-// flow-launched sessions too, so their token/cost burn folds into the same
-// per-provider panel rather than being silently excluded.
-func buildUIStats(live, done, chats []uiAgent, heatmap []uiActivityDay, now time.Time) uiStats {
+// buildUIStats derives the Mission Control analytics strip: token-day streaks
+// from the same series as the calendar, plus per-provider context-token and
+// session totals across every tracked session (live + done + chats, deduped by
+// slug). Chats are flow-launched sessions too, so their token/cost burn folds
+// into the same per-provider panel rather than being silently excluded.
+func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now time.Time) uiStats {
 	var st uiStats
 	today := now.In(time.Local).Format("2006-01-02")
-	// Restrict to days up to and including today. The heatmap grid runs to the
-	// end of the current week, so the trailing future days (count 0) would
-	// otherwise read as a broken streak.
-	onByDay := make([]bool, 0, len(heatmap))
-	for _, d := range heatmap {
+	// Restrict to days up to and including today. The token grid runs to the end
+	// of the current week, so the trailing future days (tokens 0) would otherwise
+	// read as a broken streak.
+	onByDay := make([]bool, 0, len(tokenSeries))
+	for _, d := range tokenSeries {
 		if d.Date > today {
 			continue
 		}
-		on := d.Count > 0
+		on := d.Tokens > 0
 		onByDay = append(onByDay, on)
 		if on {
 			st.ActiveDays++

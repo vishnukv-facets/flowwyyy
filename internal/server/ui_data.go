@@ -652,7 +652,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		TokenSeries:      tokenSeries,
 		TopTasks:         topTasks,
 		ModelMix:         modelMix,
-		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), heatmap, time.Now()),
+		Stats:            buildUIStats(agents, doneCandidates, s.chatStatAgents(), tokenSeries, time.Now()),
 		Capabilities:     s.uiCapabilities(),
 		Trash:            s.uiTrash(),
 		SampleTranscript: transcript,
