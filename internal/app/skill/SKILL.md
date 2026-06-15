@@ -452,6 +452,14 @@ question: ..." in the brief and move on.
    "Codex", and pass the answer as `--agent claude` / `--agent codex` (or the
    `--codex` / `--claude` shortcut). This is as non-negotiable as Name —
    you cannot save a task without it.
+7. **Assignee** — always ask, easy to skip. Use AskUserQuestion with
+   "Me (self)" as the default one-click choice and "Someone else" for a
+   typed name. The default is self (NULL); pass `--assignee <name>` only when
+   the user chooses someone else.
+8. **Due date** — always ask, easy to skip. Use AskUserQuestion with
+   "No due date" as the default one-click choice, plus common options such as
+   "Today" / "This week" and an "Other" path for `YYYY-MM-DD`, `tomorrow`,
+   weekday names, or `Nd`. Pass `--due <date>` only when the user sets one.
 
 **Optional sections (offered, can be deferred):**
 
@@ -504,6 +512,14 @@ acceptance criteria.
   changed later only while the task is still in backlog (via
   `flow update task <slug> --agent claude|codex`); once a session starts it
   is locked.
+- **Assignee.** Use `AskUserQuestion` with "Me (self)" and "Someone else".
+  Skip the question only if the user already named an assignee. Treat
+  "Me (self)" as the default and omit `--assignee`; pass `--assignee <name>`
+  only when the user chooses someone else and provides a name.
+- **Due date.** Use `AskUserQuestion` with "No due date", "Today",
+  "This week", and "Pick a date". Skip the question only if the user already
+  stated a due date. Treat "No due date" as the default and omit `--due`;
+  pass `--due <date>` only when the user chooses a date.
 - **`--mkdir`** if the `work_dir` doesn't exist yet. Use `AskUserQuestion`
   with "Yes, create it" / "No, I'll fix the path".
 
