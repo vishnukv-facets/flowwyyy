@@ -261,6 +261,9 @@ Attention
                      inspect the steering decision funnel and trace rows
   flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]
                      report Attention feedback approval/dismiss rates by one dimension
+  flow attention calibration
+                     per (action × raw confidence band): the observed operator-agreement
+                     rate (calibrated confidence) vs the raw band the model emitted
   flow attention handoff accept <correlation-id> --reason "<why>"
                      accept an Attention confirmed handoff from this task's inbox
   flow attention handoff decline <correlation-id> --reason "<why>"
@@ -2927,6 +2930,13 @@ create tasks, or change policy.
    learning-loop summary. Common dimensions are `source`, `channel`,
    `author`, `thread-type`, `suggested-action`, and `confidence-band`.
    Report patterns as evidence; do not mutate autonomy policy yourself.
+5. Use `flow attention calibration` when the operator asks whether the
+   confidence numbers can be trusted. It prints, per (action × raw
+   confidence band), the observed operator-agreement rate (the calibrated
+   confidence) — so a band where the model emits 0.9 but the operator only
+   agrees ~50% of the time is visible. Bands with too little feedback are
+   marked as raw fallback. Report it as evidence; calibration only surfaces
+   the score, it does not change the autonomy gate.
 
 **Send-reply safety boundary:**
 

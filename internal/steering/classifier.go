@@ -218,6 +218,8 @@ Allowed suggested_action values: make_task, capture_kb, forward, reply, afk_repl
 - digest_only: noteworthy but not actionable now.
 - drop: not worth surfacing.
 
+` + confidenceRubric() + `
+
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
 
 Respond with ONLY a minified JSON object, no prose, no code fences:

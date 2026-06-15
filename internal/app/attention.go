@@ -34,8 +34,10 @@ func cmdAttention(args []string) int {
 		return cmdAttentionTrace(rest)
 	case "feedback":
 		return cmdAttentionFeedback(rest)
+	case "calibration":
+		return cmdAttentionCalibration(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|handoff|sent|trace|feedback)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|handoff|sent|trace|feedback|calibration)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -50,7 +52,8 @@ func printAttentionUsage() {
   flow attention handoff decline <correlation-id> --reason "<why>"
   flow attention sent <id> [--close-floating <floating-id>]
   flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]
-  flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]`)
+  flow attention feedback [--group source|channel|author|thread-type|suggested-action|confidence-band]
+  flow attention calibration   (raw confidence band vs observed operator-agreement rate, per action)`)
 }
 
 func cmdAttentionList(args []string) int {
@@ -435,6 +438,51 @@ func renderAttentionFeedbackReport(rows []flowdb.AttentionFeedbackAggregate) str
 
 func percent(v float64) string {
 	return fmt.Sprintf("%.0f%%", v*100)
+}
+
+// cmdAttentionCalibration prints the confidence calibration table: for each
+// (action × raw confidence band) the steerer has feedback on, the observed
+// operator-agreement rate. This is the audit surface for "is a 0.9 actually a
+// 0.9?" — the raw band is what the model emitted, CALIBRATED is what it should
+// have meant. GROUNDED=no marks bands with too few samples to trust (the live
+// path keeps the raw number there).
+func cmdAttentionCalibration(args []string) int {
+	if handled, rc := parseFlagSet(flagSet("attention calibration"), args); handled {
+		return rc
+	}
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+
+	cal, err := steering.LoadConfidenceCalibrator(db)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Print(renderAttentionCalibration(cal.Cells()))
+	return 0
+}
+
+// renderAttentionCalibration renders the calibration cells as a compact table.
+// Pure (no I/O) so it's unit-testable.
+func renderAttentionCalibration(cells []steering.CalibrationCell) string {
+	if len(cells) == 0 {
+		return "No attention feedback to calibrate against yet.\n"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%-12s  %-11s  %-7s  %-6s  %-10s  %s\n",
+		"ACTION", "RAW-BAND", "SAMPLES", "AGREED", "CALIBRATED", "GROUNDED")
+	for _, c := range cells {
+		grounded := "yes"
+		if !c.Grounded {
+			grounded = "no (raw fallback)"
+		}
+		fmt.Fprintf(&b, "%-12s  %-11s  %-7d  %-6d  %-10s  %s\n",
+			clipStr(string(c.Action), 12), c.Band, c.Total, c.Agreed, percent(c.Calibrated), grounded)
+	}
+	return b.String()
 }
 
 // sinceToRFC3339 converts a Go duration string (e.g. "24h") into an RFC3339

@@ -112,6 +112,8 @@ Do the following, then emit a single verdict:
 4. Read task-impact hints. Availability/FYI events are not automatically actionable. If hints show the sender or named participant is blocking/reviewing/assigned to/affecting active work, set matched_task to the strongest affected task and explain impact. Use "forward" when the affected task/session should know about the update. Use "digest_only" when there is no affected task and no reply needed.
 5. Consider "capture_kb": if the message's lasting value is a DECISION, a PLAN, or an org/process/product fact the operator should remember long-term — and there is no action for them to take — prefer capture_kb over make_task. capture_kb and make_task are mutually exclusive: choose make_task when there is work to do, capture_kb when the value is the durable knowledge itself.
 
+` + confidenceRubric() + `
+
 Always refer to people and channels by name; never output raw platform IDs (e.g. Slack user IDs like U0123, channel IDs like C0123).
 Do not mention context fetch failures, API/token/channel access errors, fetch_status, fetch_error, or missing source context in summary, draft, or reason. Those fields are internal audit details; base the verdict on the visible fallback event context and lower confidence only when missing context materially changes the decision.
 
