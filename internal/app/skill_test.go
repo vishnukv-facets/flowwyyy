@@ -524,6 +524,23 @@ func TestSkillIntakeMinimal(t *testing.T) {
 	}
 }
 
+func TestSkillIntakeSurfacesDueDateAndAssignee(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"**Assignee**",
+		"Me (self)",
+		"pass `--assignee <name>` only when",
+		"**Due date**",
+		"No due date",
+		"pass `--due <date>` only when",
+		"always ask, easy to skip",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing task-intake due/assignee guidance %q", want)
+		}
+	}
+}
+
 func TestSkillUsesAskUserQuestionConsistently(t *testing.T) {
 	got := string(embeddedSkill)
 	// The skill should have many AskUserQuestion references — at least one
