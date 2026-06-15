@@ -1366,16 +1366,26 @@ func TestBuildTaskViewDoneTaskIsNotLive(t *testing.T) {
 	}
 }
 
-func TestActivityHeatmapUsesTaskAndUpdateDates(t *testing.T) {
+// The heatmap counts tasks we actually WORKED ON each day — sessions
+// started/resumed, progress notes written, or live now. It deliberately does
+// NOT count created_at/updated_at: the attention router auto-creates dozens of
+// triage cards whose created_at all land on one day, and updated_at gets bumped
+// by background machinery, so counting them inflates "N tasks active" with tasks
+// nobody touched (the bug this guards against).
+func TestActivityHeatmapCountsWorkNotCreation(t *testing.T) {
 	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.Local)
+	sessStarted := "2026-05-09T08:00:00+05:30"
+	sessResumed := "2026-05-11T08:00:00+05:30"
 	days := buildActivityHeatmap([]TaskView{{
-		Slug:      "build-ui",
-		Status:    "in-progress",
-		Live:      true, // a live session counts as active "now" (2026-05-15)
-		CreatedAt: "2026-05-12T10:00:00+05:30",
-		UpdatedAt: "2026-05-13T11:00:00+05:30",
+		Slug:               "build-ui",
+		Status:             "in-progress",
+		Live:               true,                            // counts "now" (2026-05-15)
+		CreatedAt:          "2026-05-12T10:00:00+05:30",     // must NOT count
+		UpdatedAt:          "2026-05-13T11:00:00+05:30",     // must NOT count
+		SessionStarted:     &sessStarted,                    // counts (2026-05-09)
+		SessionLastResumed: &sessResumed,                    // counts (2026-05-11)
 		Updates: []FileRef{{
-			Filename: "2026-05-14-progress.md",
+			Filename: "2026-05-14-progress.md", // counts (2026-05-14, from filename)
 			MTime:    "2026-05-15T09:00:00+05:30",
 		}},
 	}}, now)
@@ -1383,9 +1393,16 @@ func TestActivityHeatmapUsesTaskAndUpdateDates(t *testing.T) {
 	for _, day := range days {
 		counts[day.Date] = day.Count
 	}
-	for _, date := range []string{"2026-05-12", "2026-05-13", "2026-05-14", "2026-05-15"} {
+	// Real work signals light up their day.
+	for _, date := range []string{"2026-05-09", "2026-05-11", "2026-05-14", "2026-05-15"} {
 		if counts[date] == 0 {
-			t.Fatalf("expected activity on %s; counts=%#v", date, counts)
+			t.Fatalf("expected work activity on %s; counts=%#v", date, counts)
+		}
+	}
+	// Mere creation / metadata bumps do NOT.
+	for _, date := range []string{"2026-05-12", "2026-05-13"} {
+		if counts[date] != 0 {
+			t.Fatalf("created_at/updated_at should not count as activity on %s; counts=%#v", date, counts)
 		}
 	}
 	if len(days) != 84 {

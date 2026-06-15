@@ -229,11 +229,13 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 	days := make([]uiActivityDay, 84)
 	index := make(map[string]int, len(days))
 	seenTasks := make(map[string]map[string]bool)
-	// Count is the number of DISTINCT tasks touched on a day, not the raw sum of
-	// timestamp events. A single task carries several timestamps (created,
-	// updated, session started/resumed, + each update file) that often share the
-	// same instant — summing them inflates the number and double-counts. Distinct
-	// tasks/day matches the tooltip's task list and reads honestly.
+	// Count is the number of DISTINCT tasks we actually WORKED ON each day — not
+	// tasks that merely exist. We deliberately do NOT count created_at/updated_at:
+	// the attention router auto-creates dozens of triage cards (Slack mentions, PR
+	// events) whose created_at all land on one day, and updated_at gets bumped by
+	// background machinery (linking a PR, tag/waiting changes) — both inflate the
+	// number with tasks nobody touched. Real work signals only: a session
+	// started/resumed, a progress note (update file) written, or live right now.
 	distinct := make(map[string]map[string]bool)
 	for i := range days {
 		date := start.AddDate(0, 0, i).Format("2006-01-02")
@@ -270,8 +272,6 @@ func buildActivityHeatmap(tasks []TaskView, now time.Time) []uiActivityDay {
 		}
 	}
 	for _, task := range tasks {
-		addString(task.CreatedAt, task.Slug, task.Name)
-		addString(task.UpdatedAt, task.Slug, task.Name)
 		if task.SessionStarted != nil {
 			addString(*task.SessionStarted, task.Slug, task.Name)
 		}
