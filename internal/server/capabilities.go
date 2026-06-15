@@ -32,7 +32,9 @@ type uiCapabilities struct {
 	Integrations []uiToolCapability `json:"integrations"`
 }
 
-func detectCapabilities() uiCapabilities {
+var detectCapabilities = realDetectCapabilities
+
+func realDetectCapabilities() uiCapabilities {
 	return uiCapabilities{
 		Providers: []uiToolCapability{
 			binaryCapability("claude", "Claude Code", "claude"),

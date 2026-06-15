@@ -2,7 +2,7 @@ import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } 
 import { ApiError, apiAction, apiGet, apiGetText, apiPost } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
-import { UI_DATA_IDLE_REFETCH_MS, focusedLiveInvalidationKeys } from './liveInvalidation'
+import { focusedLiveInvalidationKeys } from './liveInvalidation'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
@@ -104,12 +104,11 @@ function qs(params: Record<string, string | boolean | number | undefined>): stri
 
 // ----- queries ------------------------------------------------------------
 export function useUiData() {
-  // Runtime events refresh this immediately during active work. The idle poll is
-  // a slow backstop for mid-turn token growth and missed filesystem-side changes.
+  // Runtime events refresh this during active work. Keep this event-driven so
+  // large dashboards do not rebuild on a timer while idle.
   return useQuery({
     queryKey: ['ui-data'],
     queryFn: () => apiGet<UiData>('/api/ui-data'),
-    refetchInterval: UI_DATA_IDLE_REFETCH_MS,
   })
 }
 export function useSettings() {
