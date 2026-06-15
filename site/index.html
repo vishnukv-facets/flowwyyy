@@ -16,7 +16,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
 </head>
 <body>
 
@@ -55,15 +55,42 @@
           Star on GitHub
         </a>
       </div>
+
+      <div class="chips">
+        <span class="chip"><span class="d"></span>Claude · Codex</span>
+        <span class="chip"><span class="d"></span>Worktrees</span>
+        <span class="chip"><span class="d"></span>Mission Control</span>
+        <span class="chip"><span class="d"></span>Slack triggers</span>
+        <span class="chip"><span class="d"></span>GitHub triggers</span>
+        <span class="chip"><span class="d"></span>Attention Router</span>
+        <span class="chip"><span class="d"></span>Owners &amp; auto-runs</span>
+        <span class="chip"><span class="d"></span>FTS search</span>
+      </div>
     </div>
   </header>
 
-  <section class="block">
+  <section class="block" style="padding-top:24px">
     <div class="wrap">
-      <figure class="shot">
-        <img src="img/overview.png" alt="Mission Control dashboard — attention, in-flight work, agenda, and spend" loading="lazy">
-        <figcaption>Mission Control: your day at a glance — attention, in-flight work, agenda, and spend.</figcaption>
-      </figure>
+      <div class="hero-stage fade-up">
+        <div class="window">
+          <div class="window-bar">
+            <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+            <span class="addr">flow ui serve · 127.0.0.1:8787</span>
+            <span class="live"><span class="live-dot"></span> live</span>
+          </div>
+          <div class="window-body">
+            <img src="img/overview.png" alt="Mission Control dashboard — attention, in-flight work, agenda, and spend" loading="lazy">
+          </div>
+        </div>
+        <div class="floaty" aria-hidden="true">
+          <div class="bar"><i></i><i></i><i></i><span class="t">flow · session</span></div>
+          <div class="body">
+            <div><span class="prompt">$</span>flow do oauth-budget</div>
+            <div class="cmt"># resume · claude opus · worktree flow/oauth-budget</div>
+            <div class="stat"><span class="live-dot"></span> running · 3 files changed</div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
