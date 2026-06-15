@@ -86,6 +86,12 @@ type Cascade struct {
 	// defaults it to a cheap Haiku matcher; tests swap it. Nil disables clubbing
 	// (every standalone message gets its own card — the pre-clubbing behavior).
 	MatchConversation ConversationMatcher
+
+	// KBDir is the operator's knowledge-base directory (…/kb). When set, the
+	// operator-reply learning path distills durable facts out of hand-written
+	// replies into it. Empty (NewCascade default; tests) ⇒ KB capture is skipped.
+	// Best-effort and live-only — never load-bearing for triage.
+	KBDir string
 }
 
 // NewCascade builds a Cascade with production defaults (real clock, random IDs,
@@ -185,30 +191,151 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 	return audit
 }
 
-// resolveOnOperatorReply stands down any open feed item for a thread when the
-// operator posts there themselves (a self-authored event). They handled it
-// directly — outside flow — so the surfaced "needs your reply" card is now
-// stale. Fires on the live event AND on backfill replay of the operator's own
-// message, so it covers new and recently-missed replies. Connector-blind:
-// works for Slack threads/DMs and GitHub comments alike.
-func (c *Cascade) resolveOnOperatorReply(ctx context.Context, ev monitor.InboundEvent) {
+// learnFromOperatorReply is the learning path for a self-authored message Stage 0
+// dropped. The operator wrote a reply BY HAND on a watched thread flow already
+// triaged; their words are the strongest signal of how the thread resolved and of
+// the operator's voice. Stage 0 still drops the event (it is never surfaced as a
+// card); this reacts to that drop. Connector-blind: Slack threads/DMs and GitHub
+// comments alike.
+//
+// GATE — only threads flow already deep-triaged learn (reusing priorUnderstanding's
+// "has decision" test): recordThreadDecision runs only past the Stage-0 scope gate
+// (writeFeed + the deep-triage drop paths), so "has decision" structurally implies
+// "was watched". New / unwatched / shallow-dropped threads have no such state and
+// fall straight through — preserving the plain self-drop with NO row created (no
+// firehose of thread-state rows for the operator's everyday chatter).
+//
+// DELIVERY DEPENDENCY: this only fires if the operator's own message actually
+// reaches the cascade — Slack needs user-token event subs (message.im/mpim and
+// watched-channel events on behalf of the user) and/or the backfill poller; GitHub
+// needs the comment delivered by the App webhook. AGENT-ECHO LIMITATION: a reply
+// the agent itself posted via send_reply rides the operator's user token and is
+// indistinguishable from a hand-typed one at the socket (no app_id/footer). The TS
+// de-dup below catches exact replays/backfill double-processing; it cannot tell an
+// agent-sent reply from a hand-typed one of different text — accepted as a known
+// gap, not detectable with current payload data.
+func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.InboundEvent, origin string) {
 	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
 	if key == "" {
 		return
 	}
-	now := c.now().UTC().Format(time.RFC3339)
-	n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, now)
-	if err == nil && n > 0 {
-		c.log("operator handled %s directly; resolved %d open feed item(s)", key, n)
+	prior, hadPrior, err := flowdb.GetThreadState(c.DB, key)
+	if err != nil {
+		c.log("thread-state: get %s for operator reply: %v", key, err)
+		return
 	}
-	// Persist the operator's own reply into the thread's running understanding.
-	// This task only fills the slot; routing it into a learn path is
-	// [[steerer-operator-reply-learning]]. Stage 0 still drops the event itself.
+	// Gate: only learn on threads flow already triaged (same test as priorUnderstanding).
+	if !hadPrior || (prior.EventCount == 0 && strings.TrimSpace(prior.CurrentAction) == "") {
+		return
+	}
+	// De-dup against replay / backfill double-processing of the same message
+	// (self-authored events drop before the verdict cache, so they aren't deduped
+	// upstream).
+	for _, r := range prior.OperatorReplies {
+		if ev.TS != "" && r.TS == ev.TS {
+			return
+		}
+	}
+	now := c.now().UTC().Format(time.RFC3339)
+	text := c.cleanText(ctx, ev.Text)
+
+	// Agent-sent echo: a reply the agent posted on the operator's behalf rides the
+	// operator's user token, so the socket re-delivers it as a self-authored event.
+	// It was already recorded as an approved send_reply action when posted —
+	// re-learning it here would double-count the calibration signal and capture the
+	// agent's own words into the KB as if the operator hand-wrote them. Recognize it,
+	// stand down any still-open card (idempotent; covers the race where the echo
+	// beats `attention sent` bookkeeping), and stop short of operator-learning.
+	if c.isAgentSentEcho(key, text) {
+		if n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
+			c.log("agent-sent reply echoed on %s; resolved %d open feed item(s)", key, n)
+		}
+		c.log("self-authored reply on %s recognized as agent-sent echo; not re-learning", key)
+		return
+	}
+
+	// 1. Persist the operator's own reply into the running understanding.
 	if err := flowdb.AppendThreadOperatorReply(c.DB, key, flowdb.ThreadOperatorReply{
-		At: now, TS: ev.TS, Author: ev.UserID, Text: c.cleanText(ctx, ev.Text),
+		At: now, TS: ev.TS, Author: ev.UserID, Text: text,
 	}); err != nil {
 		c.log("thread-state: record operator reply for %s: %v", key, err)
 	}
+
+	// 2. The operator handled it outside flow — stand down any open card and
+	//    recover the prior card (for the matched task + the calibration signal).
+	if n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
+		c.log("operator handled %s directly; resolved %d open feed item(s)", key, n)
+	}
+	priorCard, hadCard, cerr := flowdb.LatestFeedItemByThread(c.DB, key)
+	if cerr != nil {
+		c.log("thread-state: latest card for %s: %v", key, cerr)
+	}
+
+	// 3. Record the resolution as an operator action in the running understanding —
+	//    the uniform, always-on calibration signal (prior decision lives in the same
+	//    thread-state row) and a marker incremental Stage 3 reads next time.
+	matched := ""
+	if hadCard {
+		matched = strings.TrimSpace(priorCard.MatchedTask)
+	}
+	if err := flowdb.AppendThreadOperatorAction(c.DB, key, flowdb.ThreadOperatorAction{
+		At: now, Action: "operator_reply", Outcome: "handled", LinkedTask: matched,
+	}); err != nil {
+		c.log("thread-state: record operator action for %s: %v", key, err)
+	}
+
+	// 4. Calibration signal: agent's prior suggestion vs the operator's hand action.
+	//    Needs a feed item for the id; when the thread was deep-dropped without a
+	//    card the signal still lives in the operator action recorded above.
+	if hadCard {
+		fb := flowdb.AttentionFeedbackFromFeed(priorCard, "operator_reply", flowdb.OutcomeOperatorHandled, "", now)
+		if err := flowdb.RecordAttentionFeedback(c.DB, fb); err != nil {
+			c.log("attention-feedback: record operator-reply calibration for %s: %v", key, err)
+		}
+	}
+
+	// 5. KB capture — live only (skip on backfill to avoid burst LLM spend) and only
+	//    for substantive text. Best-effort: a failure never affects triage.
+	if origin == "live" && strings.TrimSpace(c.KBDir) != "" && substantive(text) {
+		if err := captureOperatorReplyKB(ctx, key, connectorOf(ev), text, c.KBDir); err != nil {
+			c.log("kb-capture: operator reply on %s: %v", key, err)
+		}
+	}
+}
+
+// isAgentSentEcho reports whether a self-authored reply is the echo of a reply the
+// agent itself posted on the operator's behalf (send_reply rides the operator's
+// user token, so the socket re-delivers it as self-authored). Detected by matching
+// the normalized text against drafts the agent sent on this thread in the last hour
+// — the only signal available, since a user-token post carries no app/bot marker
+// when it echoes back. A user-token post echoes within seconds, so an hour is
+// generous slack while staying short enough not to match an unrelated old draft.
+// ponytail: exact normalized text+time match; mention-render drift could miss an
+// echo (worst case: one agent reply mis-recorded as operator) — tighten only if
+// that shows up.
+func (c *Cascade) isAgentSentEcho(threadKey, text string) bool {
+	want := normalizeReplyText(text)
+	if want == "" {
+		return false
+	}
+	since := c.now().UTC().Add(-time.Hour).Format(time.RFC3339)
+	drafts, err := flowdb.RecentAgentReplyDrafts(c.DB, threadKey, since)
+	if err != nil {
+		c.log("attention-feedback: recent agent drafts for %s: %v", threadKey, err)
+		return false
+	}
+	for _, d := range drafts {
+		if normalizeReplyText(d) == want {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeReplyText lowercases and collapses whitespace so an agent draft and its
+// socket echo compare equal despite formatting noise.
+func normalizeReplyText(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // Observe runs the cascade for one live inbound event. Errors from a stage
@@ -238,7 +365,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	s0 := Stage0(ev, cfg)
 	if !s0.Pass {
 		if s0.DropReason == "self-authored" {
-			c.resolveOnOperatorReply(ctx, ev)
+			c.learnFromOperatorReply(ctx, ev, origin)
 		}
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 		c.emitTrace(tr, start)
@@ -563,7 +690,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		s0 := Stage0(ev, cfg)
 		if !s0.Pass {
 			if s0.DropReason == "self-authored" {
-				c.resolveOnOperatorReply(ctx, ev)
+				c.learnFromOperatorReply(ctx, ev, "backfill")
 			}
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 			c.emitTrace(tr, start)

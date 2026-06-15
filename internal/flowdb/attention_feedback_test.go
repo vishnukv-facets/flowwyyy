@@ -157,3 +157,74 @@ func TestLearnedAttentionPolicySuppressesDismissedSourcesAndAdjustsThresholds(t 
 		t.Errorf("reply threshold adjustment = %v, want a positive adjustment after repeated dismissals", got)
 	}
 }
+
+// operator_handled calibration rows are stored and listable, but invisible to the
+// operator-facing report and the learned-policy derivation, so they never dilute
+// approval/dismiss denominators or trip suppression/threshold logic.
+func TestOperatorHandledExcludedFromAggregations(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	for i, ts := range []string{"01", "02", "03", "04", "05"} {
+		fb := AttentionFeedback{
+			ID: "oh" + ts, FeedItemID: "f" + ts, Source: "slack", Channel: "C_NOISE", Author: "U_NOISE",
+			ThreadType: "channel", ThreadKey: "C_NOISE:1", SuggestedAction: "reply",
+			FinalAction: "operator_reply", Outcome: OutcomeOperatorHandled, Confidence: 0.5,
+			CreatedAt: "2026-06-05T10:00:" + ts + "Z",
+		}
+		if err := RecordAttentionFeedback(db, fb); err != nil {
+			t.Fatalf("record row %d: %v", i, err)
+		}
+	}
+
+	if rows, err := ListAttentionFeedback(db, AttentionFeedbackFilter{}); err != nil || len(rows) != 5 {
+		t.Fatalf("ListAttentionFeedback len=%d err=%v, want 5 stored rows", len(rows), err)
+	}
+	rep, err := AttentionFeedbackReport(db, "suggested_action")
+	if err != nil {
+		t.Fatalf("AttentionFeedbackReport: %v", err)
+	}
+	if len(rep) != 0 {
+		t.Errorf("report = %+v, want empty (all rows are operator_handled)", rep)
+	}
+	policy, err := LearnedAttentionPolicyFromFeedback(db, LearnedAttentionPolicyOptions{})
+	if err != nil {
+		t.Fatalf("LearnedAttentionPolicyFromFeedback: %v", err)
+	}
+	if len(policy.SuppressAuthors) != 0 || len(policy.SuppressThreads) != 0 || len(policy.ThresholdAdjustments) != 0 {
+		t.Errorf("learned policy = %+v, want empty (operator_handled rows excluded)", policy)
+	}
+}
+
+func TestRecentAgentReplyDrafts(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	seed := func(id, thread, final, draft, at string) {
+		if err := RecordAttentionFeedback(db, AttentionFeedback{
+			ID: id, FeedItemID: id, Source: "slack", ThreadKey: thread, SuggestedAction: "reply",
+			FinalAction: final, Outcome: "approved", DraftAfter: draft, CreatedAt: at,
+		}); err != nil {
+			t.Fatalf("seed %s: %v", id, err)
+		}
+	}
+	seed("s1", "C1:1", "send_reply", "draft A", "2026-06-05T10:00:00Z")
+	seed("s2", "C1:1", "sent", "draft B", "2026-06-05T11:00:00Z")
+	seed("d1", "C1:1", "dismiss", "", "2026-06-05T12:00:00Z")                 // not a reply → excluded
+	seed("s3", "C2:9", "send_reply", "other thread", "2026-06-05T11:30:00Z") // other thread → excluded
+
+	got, err := RecentAgentReplyDrafts(db, "C1:1", "")
+	if err != nil {
+		t.Fatalf("RecentAgentReplyDrafts: %v", err)
+	}
+	if len(got) != 2 || got[0] != "draft B" || got[1] != "draft A" {
+		t.Errorf("drafts = %v, want [draft B, draft A] newest-first", got)
+	}
+	since, err := RecentAgentReplyDrafts(db, "C1:1", "2026-06-05T10:30:00Z")
+	if err != nil {
+		t.Fatalf("RecentAgentReplyDrafts(since): %v", err)
+	}
+	if len(since) != 1 || since[0] != "draft B" {
+		t.Errorf("drafts since = %v, want [draft B] only", since)
+	}
+}

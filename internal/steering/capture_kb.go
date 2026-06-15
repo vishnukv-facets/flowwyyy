@@ -123,3 +123,81 @@ If you could not write for ANY reason (no file access, the dir is missing, etc.)
 reply with a single line: FAILED: <short reason>. Do NOT pretend you captured it.
 Output nothing else.`
 }
+
+// captureOperatorReplyKB distills a durable fact out of a reply the operator
+// wrote BY HAND on a watched, already-triaged thread and appends it to the KB —
+// the steerer "learns the operator's voice/decisions" path. Unlike
+// CaptureKBViaAgent (operator clicked "capture" on a card), there's no feed item
+// and no certainty the reply carries a durable fact, so the prompt is allowed to
+// answer NOTHING-DURABLE and we treat that as a clean no-op. Best-effort: returns
+// an error only on a real failure (the caller logs and moves on); NOTHING-DURABLE
+// and CAPTURED both succeed.
+func captureOperatorReplyKB(ctx context.Context, threadKey, source, text, kbDir string) error {
+	if strings.TrimSpace(kbDir) == "" {
+		return fmt.Errorf("steering: capture operator-reply kb requires a kb directory")
+	}
+	out, err := captureKBRunner(ctx, operatorReplyKBPrompt(threadKey, source, text, kbDir))
+	trimmed := strings.TrimSpace(out)
+	fmt.Fprintf(os.Stderr, "steering: operator-reply kb agent for %s replied: %s\n", threadKey, truncate(trimmed, 600))
+	if err != nil {
+		return err
+	}
+	if strings.Contains(strings.ToUpper(trimmed), "NOTHING-DURABLE") {
+		return nil // operator's reply carried nothing worth keeping — expected, not a failure
+	}
+	if !captureConfirmed(trimmed) {
+		return fmt.Errorf("steering: operator-reply kb not confirmed (agent said: %s)", truncate(trimmed, 200))
+	}
+	return nil
+}
+
+func operatorReplyKBPrompt(threadKey, source, text, kbDir string) string {
+	kbDir = strings.TrimRight(strings.TrimSpace(kbDir), "/")
+	return `MODE: capture-kb (operator hand-written reply)
+
+You are the learning step of an operator's attention router. The operator replied
+BY HAND on a watched conversation. Their own words are the strongest signal of how
+they think, decide, and phrase things. Capture ONLY a durable fact if the reply
+carries one — do not invent or stretch.
+
+The KB lives in this directory (one durable-facts markdown file per scope):
+  ` + kbDir + `/user.md       — facts about the operator personally
+  ` + kbDir + `/org.md        — people, teams, orgs, who-owns-what
+  ` + kbDir + `/products.md   — products, services, systems, architecture
+  ` + kbDir + `/processes.md  — how things are done; conventions; workflows
+  ` + kbDir + `/business.md   — business context, customers, priorities
+
+Steps:
+1. Decide whether the reply contains a DURABLE fact — a decision, a standing
+   preference, an org/process/product/business truth. Transient chatter
+   ("ok", "thanks", "looking now", "will check") is NOT durable.
+2. If NOT durable, reply with the single line: NOTHING-DURABLE — and stop.
+3. If durable: READ the best-fit KB file, distill ONE concise fact (1–3 lines),
+   write it as a standing truth (strip "I just said today" phrasing). If it's a
+   PLAN not yet carried out, suffix "(plan, as of ` + nowRFC3339()[:10] + `)".
+4. APPEND it with a dated provenance line, e.g.
+   "(source: ` + source + ` thread ` + threadKey + `, captured ` + nowRFC3339()[:10] + `)".
+5. DEDUP: if already present, refine in place instead of duplicating. Already
+   covered still counts as captured.
+6. Refer to people and channels by name; never paste raw platform IDs.
+
+Source: ` + source + ` thread ` + threadKey + `
+
+The operator's hand-written reply:
+` + strings.TrimSpace(text) + `
+
+Reply with ONE line only:
+  CAPTURED <relative kb file path>   (you wrote/confirmed a durable fact)
+  NOTHING-DURABLE                    (no durable fact in the reply)
+  FAILED: <short reason>             (could not write for any reason)
+Output nothing else.`
+}
+
+// substantive is a cheap pre-filter so the operator-reply KB agent is not spawned
+// for trivial acknowledgements ("ok", "thanks", "👍", "on it"). The agent makes the
+// real durability call; this only avoids an LLM round-trip on obvious noise.
+// ponytail: word-count heuristic (a 1-token emoji/ack is <4 fields); tighten only
+// if noise slips through.
+func substantive(text string) bool {
+	return len(strings.Fields(text)) >= 4
+}

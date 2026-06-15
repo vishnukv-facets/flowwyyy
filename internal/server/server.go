@@ -108,6 +108,11 @@ func New(cfg Config) *Server {
 			cascade.ResolveUserName = s.nameResolver.UserName
 		}
 		cascade.FetchContext = steering.NewDefaultContextFetcher(cascade.TextClean, s.slackPermalinker)
+		// Operator-reply learning distills durable facts out of hand-written replies
+		// into the KB. Empty FlowRoot ⇒ KBDir stays empty ⇒ capture is skipped.
+		if cfg.FlowRoot != "" {
+			cascade.KBDir = filepath.Join(cfg.FlowRoot, "kb")
+		}
 		// Stream live stage progress to Mission Control's inbox (CI-style view).
 		cascade.Progress = s.publishSteeringStage
 		dispatcher.Steerer = cascade

@@ -280,6 +280,34 @@ func ResolveOpenFeedItemsByThread(db *sql.DB, threadKey, actedAt string) (int, e
 	return int(n), nil
 }
 
+// LatestFeedItemByThread returns the most recently created feed card for a
+// thread regardless of status (the card may already be resolved). The bool is
+// false (zero FeedItem, nil error) when the thread never had a card — e.g. it was
+// deep-triaged and dropped without surfacing. Used by the operator-reply learning
+// path to recover the agent's prior suggestion for a calibration signal.
+func LatestFeedItemByThread(db *sql.DB, threadKey string) (FeedItem, bool, error) {
+	if strings.TrimSpace(threadKey) == "" {
+		return FeedItem{}, false, nil
+	}
+	rows, err := db.Query(
+		`SELECT `+feedItemColumns+`
+		 FROM attention_feed WHERE thread_key = ?
+		 ORDER BY created_at DESC, id DESC LIMIT 1`, threadKey,
+	)
+	if err != nil {
+		return FeedItem{}, false, fmt.Errorf("flowdb: latest feed item for thread %q: %w", threadKey, err)
+	}
+	defer rows.Close()
+	items, err := scanFeedItemRows(rows)
+	if err != nil {
+		return FeedItem{}, false, err
+	}
+	if len(items) == 0 {
+		return FeedItem{}, false, nil
+	}
+	return items[0], true, nil
+}
+
 // SetFeedItemAction rewrites a still-'new' feed item's suggested action and
 // matched task in place. Used to reconcile open cards when a tracking task is
 // (re)discovered after the card was written — e.g. flipping make_task → forward

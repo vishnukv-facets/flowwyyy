@@ -304,6 +304,35 @@ func TestSetFeedItemActed(t *testing.T) {
 	}
 }
 
+func TestLatestFeedItemByThread(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	if _, err := UpsertFeedItem(db, FeedItem{
+		ID: "lf1", Source: "slack", ThreadKey: "C1:700.1", SuggestedAction: "reply",
+		MatchedTask: "task-x", Confidence: 0.6, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, ok, err := LatestFeedItemByThread(db, "C1:700.1")
+	if err != nil || !ok {
+		t.Fatalf("LatestFeedItemByThread ok=%v err=%v, want found", ok, err)
+	}
+	if got.ID != "lf1" || got.SuggestedAction != "reply" || got.MatchedTask != "task-x" {
+		t.Errorf("got = %+v, want the seeded card with its suggestion + matched task", got)
+	}
+
+	// A thread with no card → not found, no error.
+	if _, ok, err := LatestFeedItemByThread(db, "C9:nope"); err != nil || ok {
+		t.Errorf("missing thread: ok=%v err=%v, want false,nil", ok, err)
+	}
+	// Empty key is a safe no-op.
+	if _, ok, err := LatestFeedItemByThread(db, ""); err != nil || ok {
+		t.Errorf("empty key: ok=%v err=%v, want false,nil", ok, err)
+	}
+}
+
 func TestFeedItemSourceContextRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 	defer db.Close()

@@ -71,6 +71,18 @@ type LearnedAttentionPolicy struct {
 	ThresholdAdjustments map[string]float64
 }
 
+// OutcomeOperatorHandled marks a calibration-only feedback row emitted when the
+// operator handled a watched thread by replying in it themselves (steerer
+// operator-reply learning). These rows preserve the agent's prior suggestion vs
+// the operator's hand action for the confidence-calibration task, but are
+// excluded from the operator-facing report and the learned-policy derivation so
+// they never dilute approval/dismiss denominators.
+const OutcomeOperatorHandled = "operator_handled"
+
+// notOperatorHandled is the SQL predicate that excludes calibration-only rows
+// from the feedback aggregations.
+const notOperatorHandled = `outcome != '` + OutcomeOperatorHandled + `'`
+
 // AttentionFeedbackFromFeed builds a feedback row from a feed item snapshot.
 func AttentionFeedbackFromFeed(item FeedItem, finalAction, outcome, draftAfter, createdAt string) AttentionFeedback {
 	before := strings.TrimSpace(item.Draft)
@@ -169,6 +181,44 @@ func RecordAttentionFeedback(db *sql.DB, fb AttentionFeedback) error {
 	return nil
 }
 
+// RecentAgentReplyDrafts returns the draft texts of replies the agent posted on
+// a thread (send_reply / sent feedback rows) at/after `since`, newest first. The
+// operator-reply learning path uses these to recognize the echo of a reply the
+// agent itself sent: it rides the operator's user token, so Slack re-delivers it
+// as a self-authored event indistinguishable from a hand-typed reply except by
+// its text. `since` (RFC3339, empty = no lower bound) bounds the match to recently
+// sent drafts.
+func RecentAgentReplyDrafts(db *sql.DB, threadKey, since string) ([]string, error) {
+	if strings.TrimSpace(threadKey) == "" {
+		return nil, nil
+	}
+	q := `SELECT draft_after FROM attention_feedback
+	      WHERE thread_key = ? AND final_action IN ('send_reply','sent')
+	        AND draft_after IS NOT NULL AND draft_after != ''`
+	args := []any{threadKey}
+	if strings.TrimSpace(since) != "" {
+		q += " AND created_at >= ?"
+		args = append(args, since)
+	}
+	q += " ORDER BY created_at DESC, id DESC"
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("flowdb: recent agent reply drafts for %q: %w", threadKey, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var d sql.NullString
+		if err := rows.Scan(&d); err != nil {
+			return nil, fmt.Errorf("flowdb: scan agent reply draft: %w", err)
+		}
+		if d.String != "" {
+			out = append(out, d.String)
+		}
+	}
+	return out, rows.Err()
+}
+
 // ListAttentionFeedback returns feedback rows newest-first.
 func ListAttentionFeedback(db *sql.DB, f AttentionFeedbackFilter) ([]AttentionFeedback, error) {
 	limit := f.Limit
@@ -229,6 +279,7 @@ func AttentionFeedbackReport(db *sql.DB, groupBy string) ([]AttentionFeedbackAgg
 		       SUM(CASE WHEN outcome = 'dismissed' THEN 1 ELSE 0 END) AS dismissed,
 		       SUM(CASE WHEN outcome = 'muted' THEN 1 ELSE 0 END) AS muted
 		FROM attention_feedback
+		WHERE ` + notOperatorHandled + `
 		GROUP BY group_value
 		ORDER BY total DESC, group_value ASC`)
 	if err != nil {
@@ -344,6 +395,7 @@ func learnSuppressions(db *sql.DB, col string, opts LearnedAttentionPolicyOption
 		FROM attention_feedback
 		WHERE ` + col + ` IS NOT NULL AND ` + col + ` != ''
 		  AND COALESCE(thread_type, '') NOT IN ('im', 'mpim')
+		  AND ` + notOperatorHandled + `
 		GROUP BY value`)
 	if err != nil {
 		return fmt.Errorf("flowdb: learn attention suppressions by %s: %w", col, err)
@@ -370,6 +422,7 @@ func learnThresholdAdjustments(db *sql.DB, opts LearnedAttentionPolicyOptions, t
 		       SUM(CASE WHEN outcome IN ('dismissed','muted') THEN 1 ELSE 0 END) AS negative
 		FROM attention_feedback
 		WHERE suggested_action != ''
+		  AND ` + notOperatorHandled + `
 		GROUP BY suggested_action`)
 	if err != nil {
 		return fmt.Errorf("flowdb: learn attention threshold adjustments: %w", err)
