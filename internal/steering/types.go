@@ -144,6 +144,41 @@ type ThreadContext struct {
 	FetchError   string           `json:"fetch_error,omitempty"`
 }
 
+// PriorUnderstanding is the model-facing snapshot of a thread's persistent
+// running understanding (flowdb.ThreadState), fed into incremental deep-triage so
+// Stage 3 updates its prior decision with the new delta instead of cold
+// re-deriving. The cascade builds it from the thread-state row read back before
+// triaging; a nil *PriorUnderstanding means this is the thread's first triage.
+type PriorUnderstanding struct {
+	Action          string   `json:"action,omitempty"`
+	Confidence      float64  `json:"confidence"`
+	Reason          string   `json:"reason,omitempty"`
+	Summary         string   `json:"summary,omitempty"`
+	EventCount      int      `json:"event_count"`
+	OperatorActions []string `json:"operator_actions,omitempty"`
+	OperatorReplies []string `json:"operator_replies,omitempty"`
+}
+
+// RetrievedDoc is one related-context hit pulled from the FTS index (KB facts,
+// task briefs/updates) for the deep triager — the "elsewhere" layer that lets it
+// resolve references to things decided in other conversations or recorded long
+// ago. Snippet is already bounded by the FTS snippet() window.
+type RetrievedDoc struct {
+	Type    string `json:"type,omitempty"`
+	Slug    string `json:"slug,omitempty"`
+	Name    string `json:"name,omitempty"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+// IncrementalContext carries the two context layers Stage 3 gains beyond the
+// current-thread pack: the thread's prior running understanding (layer 2) and
+// retrieved cross-conversation/KB history (layer 3). A zero value degrades to the
+// prior cold-classification behavior, so older call sites stay correct.
+type IncrementalContext struct {
+	Prior     *PriorUnderstanding
+	Retrieved []RetrievedDoc
+}
+
 // Connector abstracts a monitored source (slack, github, gmail). The cascade,
 // feed, and actions never know which connector an item came from. SendReply
 // is invoked ONLY by the autonomy gate — never by triage code (spec §5).

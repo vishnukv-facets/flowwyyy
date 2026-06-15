@@ -161,6 +161,49 @@ func TestSearchDocsRefreshesChangedMarkdown(t *testing.T) {
 	}
 }
 
+// SearchDocsMatch with an OR expression recalls docs that share only ONE term
+// with the query — the recall the steerer needs from a whole message. The
+// AND-of-prefixes SearchDocs builds would miss both, so this is the difference
+// between working retrieval and retrieval that always returns nothing.
+func TestSearchDocsMatchOR(t *testing.T) {
+	isolateMemoryEnv(t)
+	db := openTempDB(t)
+	root := t.TempDir()
+	for _, tc := range []struct{ slug, marker string }{
+		{"alpha", "oauthmarker"},
+		{"beta", "migrationmarker"},
+	} {
+		dir := filepath.Join(root, "tasks", tc.slug)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		insertTask(t, db, tc.slug, tc.slug, "backlog", "medium", root, nil)
+		if err := os.WriteFile(filepath.Join(dir, "brief.md"), []byte("# "+tc.slug+"\n\n"+tc.marker+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := SyncSearchDocs(db, root, false); err != nil {
+		t.Fatalf("SyncSearchDocs: %v", err)
+	}
+
+	// AND semantics: no single brief contains BOTH markers → zero recall.
+	if got, err := SearchDocs(db, "oauthmarker migrationmarker", DefaultSearchScopes(), 10); err != nil || len(got) != 0 {
+		t.Fatalf("AND query got=%+v err=%v, want 0 (proves the recall trap)", got, err)
+	}
+	// OR semantics: both briefs surface.
+	got, err := SearchDocsMatch(db, "oauthmarker* OR migrationmarker*", DefaultSearchScopes(), 10)
+	if err != nil {
+		t.Fatalf("SearchDocsMatch: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("OR query got %d results, want 2: %+v", len(got), got)
+	}
+	// Empty expression degrades to no results, not an error.
+	if got, err := SearchDocsMatch(db, "   ", DefaultSearchScopes(), 10); err != nil || got != nil {
+		t.Fatalf("blank expr got=%+v err=%v, want nil/nil", got, err)
+	}
+}
+
 func isolateMemoryEnv(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()

@@ -276,6 +276,29 @@ CREATE TABLE IF NOT EXISTS attention_handoffs (
     responded_at       TEXT
 );
 
+-- Persistent per-thread "running understanding" for the attention router
+-- (task steerer-thread-memory). Unlike attention_feed — whose coalescing upsert
+-- overwrites every verdict field per event — this row ACCUMULATES across events
+-- for one thread_key: the current decision, a rolling summary, the operator
+-- actions taken on the thread, the operator's own replies seen, and the
+-- last-seen source ts. It lives in its own table so it outlives any single card
+-- (survives dismissal/re-surface) and survives clubbed thread_key rewrites; the
+-- feed's coalescing behavior is unchanged. PK on thread_key covers every lookup.
+CREATE TABLE IF NOT EXISTS attention_thread_state (
+    thread_key         TEXT PRIMARY KEY,
+    source             TEXT NOT NULL DEFAULT '',
+    current_action     TEXT,
+    current_confidence REAL NOT NULL DEFAULT 0,
+    current_reason     TEXT,
+    summary            TEXT NOT NULL DEFAULT '',
+    operator_actions   TEXT NOT NULL DEFAULT '[]',
+    operator_replies   TEXT NOT NULL DEFAULT '[]',
+    event_count        INTEGER NOT NULL DEFAULT 0,
+    last_seen_ts       TEXT,
+    first_seen_at      TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS steering_trace (
     id                TEXT PRIMARY KEY,
     created_at        TEXT NOT NULL,
