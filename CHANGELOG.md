@@ -7,7 +7,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
-## [0.1.0] — 2026-06-15
+## [0.1.0-alpha.1] — 2026-06-15
 
 Initial offering. **flowwyyy is `flow`, with batteries** — the original
 [`flow`](https://github.com/Facets-cloud/flow) CLI, kept backward-compatible,
@@ -54,5 +54,5 @@ agent session from a brilliant new hire into the engineer on your team.
   `go vet` / `go build` / `go test ./...`.
 - **License.** MIT.
 
-[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0
+[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0-alpha.1...HEAD
+[0.1.0-alpha.1]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.1
