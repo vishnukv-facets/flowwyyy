@@ -367,6 +367,21 @@ func feedReplyTaskBrief(item flowdb.FeedItem, text string) string {
 func nowRFC3339() string { return time.Now().UTC().Format(time.RFC3339) }
 
 func recordActionFeedback(db *sql.DB, item flowdb.FeedItem, finalAction, outcome, draftAfter string) error {
+	// Record the intentional operator/autonomous action into the thread's running
+	// understanding. This is the single chokepoint every deliberate resolution
+	// flows through (make_task/forward/dismiss/confirm_handoff/send_reply);
+	// clubbing/dedup/mute cleanup dismissals hit the low-level setters directly
+	// and are correctly NOT recorded here. item.ThreadKey is the card's post-club
+	// key, matching what RecordThreadDecision wrote. Best-effort: never fail the
+	// action on a thread-state write error.
+	if err := flowdb.AppendThreadOperatorAction(db, item.ThreadKey, flowdb.ThreadOperatorAction{
+		At:         nowRFC3339(),
+		Action:     finalAction,
+		Outcome:    outcome,
+		LinkedTask: strings.TrimSpace(item.MatchedTask),
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "steering: record thread operator action: %v\n", err)
+	}
 	return flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedbackFromFeed(item, finalAction, outcome, draftAfter, nowRFC3339()))
 }
 
