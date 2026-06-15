@@ -1241,6 +1241,82 @@ func TestUIEventsStreamSendsInitialSnapshot(t *testing.T) {
 	}
 }
 
+func TestUIEventsStreamRefreshesTopCostOnAgentHook(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	transcriptPath := filepath.Join(root, "session.jsonl")
+	if err := os.WriteFile(transcriptPath, []byte(`{"type":"session_meta"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	sessionID := "11111111-1111-4111-8111-111111111111"
+	if _, err := db.Exec(
+		`UPDATE tasks
+		 SET status = 'in-progress',
+		     session_provider = 'claude',
+		     session_id = ?,
+		     session_path = ?,
+		     session_started = ?
+		 WHERE slug = 'build-ui'`,
+		sessionID,
+		transcriptPath,
+		flowdb.NowISO(),
+	); err != nil {
+		t.Fatalf("update task session: %v", err)
+	}
+
+	base := New(Config{DB: db, FlowRoot: root, Version: "test"})
+	srv := authedTestHandler(base)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+	rec := &eventStreamRecorder{}
+	done := make(chan struct{})
+	go func() {
+		srv.ServeHTTP(rec, req)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(rec.String(), "event: ui-data") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := rec.String(); !strings.Contains(got, "event: ui-data") {
+		t.Fatalf("missing initial SSE snapshot: %q", got)
+	}
+
+	f, err := os.OpenFile(transcriptPath, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open transcript for append: %v", err)
+	}
+	if _, err := f.WriteString(`{"timestamp":"2026-06-15T10:00:00Z","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":1000,"output_tokens":200}}}` + "\n"); err != nil {
+		t.Fatalf("append transcript: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close transcript: %v", err)
+	}
+
+	base.events.publish(eventEnvelope{Type: "agent_hook", SessionID: sessionID, TaskSlug: "build-ui"})
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body := rec.String()
+		if strings.Count(body, "event: ui-data") >= 2 && strings.Contains(body, `"TOP_TASKS"`) && strings.Contains(body, `"cost_usd"`) {
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("stream handler did not stop after cancellation")
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("agent_hook did not push refreshed top-cost data: %q", rec.String())
+}
+
 func TestToolCallActivitySeriesBucketsByMinute(t *testing.T) {
 	now := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	ts := func(minutesAgo int) string {
@@ -1379,11 +1455,11 @@ func TestActivityHeatmapCountsWorkNotCreation(t *testing.T) {
 	days := buildActivityHeatmap([]TaskView{{
 		Slug:               "build-ui",
 		Status:             "in-progress",
-		Live:               true,                            // counts "now" (2026-05-15)
-		CreatedAt:          "2026-05-12T10:00:00+05:30",     // must NOT count
-		UpdatedAt:          "2026-05-13T11:00:00+05:30",     // must NOT count
-		SessionStarted:     &sessStarted,                    // counts (2026-05-09)
-		SessionLastResumed: &sessResumed,                    // counts (2026-05-11)
+		Live:               true,                        // counts "now" (2026-05-15)
+		CreatedAt:          "2026-05-12T10:00:00+05:30", // must NOT count
+		UpdatedAt:          "2026-05-13T11:00:00+05:30", // must NOT count
+		SessionStarted:     &sessStarted,                // counts (2026-05-09)
+		SessionLastResumed: &sessResumed,                // counts (2026-05-11)
 		Updates: []FileRef{{
 			Filename: "2026-05-14-progress.md", // counts (2026-05-14, from filename)
 			MTime:    "2026-05-15T09:00:00+05:30",
