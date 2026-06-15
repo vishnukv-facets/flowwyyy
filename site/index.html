@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>flowwyyy — task &amp; memory layer for Claude Code and Codex</title>
+  <meta name="description" content="flowwyyy is a task manager for Claude Code and Codex with a browser-based Mission Control, Slack and GitHub triggers, a cross-source Attention Router, autonomous owners, and a working memory that compounds.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://vishnukv-facets.github.io/flowwyyy/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="flowwyyy — flow, with batteries">
+  <meta property="og:description" content="A task manager for Claude Code and Codex: Mission Control in the browser, Slack/GitHub triggers, cross-source triage, autonomous owners, and a knowledge base that grows.">
+  <meta property="og:url" content="https://vishnukv-facets.github.io/flowwyyy/">
+  <meta property="og:image" content="https://vishnukv-facets.github.io/flowwyyy/img/overview.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=5">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="favicon.svg" alt="">flowwyyy<span class="dot">.</span></a>
+      <span class="spacer"></span>
+      <div class="links">
+        <a href="docs.html">Docs</a>
+        <a href="api.html" class="hide-sm">API</a>
+        <a href="docs.html#install" class="hide-sm">Install</a>
+        <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="wrap fade-up">
+      <div class="pill-row"><span class="badge accent"><span class="dot-i"></span> alpha · built on flow</span></div>
+      <img class="mark" src="assets/flowwyyy-wordmark-dark.svg?v=2" alt="flowwyyy">
+      <h1 class="headline">flow, with batteries<span class="dot">.</span></h1>
+      <p class="pitch">A task manager for <b>Claude Code and Codex</b> — Mission Control in the browser, first-class <b>Slack</b> &amp; <b>GitHub</b> triggers, a cross-source <b>Attention Router</b>, autonomous <b>owners</b>, and a working memory that turns every session from a brilliant new hire into the engineer on your team.</p>
+
+      <div class="term" role="group" aria-label="Install command">
+        <div class="bar"><i></i><i></i><i></i><span class="label">install</span></div>
+        <div class="body">
+          <code id="cmd"><span class="prompt">$</span>brew install vishnukv-facets/flowwyyy/flowwyyy<span class="cursor" aria-hidden="true"></span></code>
+          <button class="copy" id="copy" type="button" aria-label="Copy install command">copy</button>
+        </div>
+      </div>
+      <p class="alt-install">then <code>flow init</code> — or <a href="docs.html#install">grab the binary directly</a></p>
+
+      <div class="cta" style="margin-top:30px">
+        <a class="btn primary" href="docs.html">Read the docs</a>
+        <a class="btn" href="https://github.com/vishnukv-facets/flowwyyy">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Star on GitHub
+        </a>
+      </div>
+
+      <div class="chips">
+        <span class="chip"><span class="d"></span>Claude · Codex</span>
+        <span class="chip"><span class="d"></span>Worktrees</span>
+        <span class="chip"><span class="d"></span>Mission Control</span>
+        <span class="chip"><span class="d"></span>Slack triggers</span>
+        <span class="chip"><span class="d"></span>GitHub triggers</span>
+        <span class="chip"><span class="d"></span>Attention Router</span>
+        <span class="chip"><span class="d"></span>Owners &amp; auto-runs</span>
+        <span class="chip"><span class="d"></span>FTS search</span>
+      </div>
+    </div>
+  </header>
+
+  <section class="block" style="padding-top:24px">
+    <div class="wrap">
+      <div class="hero-stage fade-up">
+        <div class="window">
+          <div class="window-bar">
+            <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
+            <span class="addr">flow ui serve · 127.0.0.1:8787</span>
+            <span class="live"><span class="live-dot"></span> live</span>
+          </div>
+          <div class="window-body">
+            <img src="img/overview.png" alt="Mission Control dashboard — attention, in-flight work, agenda, and spend" loading="lazy">
+          </div>
+        </div>
+        <div class="floaty" aria-hidden="true">
+          <div class="bar"><i></i><i></i><i></i><span class="t">flow · session</span></div>
+          <div class="body">
+            <div><span class="prompt">$</span>flow do oauth-budget</div>
+            <div class="cmt"># resume · claude opus · worktree flow/oauth-budget</div>
+            <div class="stat"><span class="live-dot"></span> running · 3 files changed</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="features">
+    <div class="wrap">
+      <p class="eyebrow accent">What you get</p>
+      <h2 class="section-title">The CLI you know, with the layer it was missing.</h2>
+      <p class="section-sub">Everything upstream <code>flow</code> does — plus the connectors, triage, and autonomy that make a browser worth leaving open all day.</p>
+
+      <div class="features">
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 20h10"/></svg></div>
+          <h3>One task, one session, one tab</h3>
+          <p><code>flow do &lt;task&gt;</code> spawns a dedicated tab — iTerm2, Warp, Terminal, kitty, Ghostty, or zellij. Tomorrow's <code>flow do</code> resumes the same conversation.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M2 12h20"/><circle cx="12" cy="12" r="9"/></svg></div>
+          <h3>Claude or Codex, your call</h3>
+          <p>Provider is per-task — pass <code>--agent codex</code> or keep Claude. The knowledge base, briefs, and close-out sweep work identically either way.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 17l6-6-6-6M12 19h8"/></svg></div>
+          <h3>Worktrees by default</h3>
+          <p>Each task gets a git worktree on <code>flow/&lt;slug&gt;</code>, so parallel work never collides. <code>flow done</code> pushes the branch and opens a PR with the brief as its body.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></div>
+          <h3>Mission Control in your browser</h3>
+          <p><code>flow ui serve</code> boots a local web app: task views, inline editing, a Cmd+K palette, and a browser-attached terminal streaming the live agent.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l2.4 7.4H22l-6 4.6 2.3 7L12 16.6 5.7 21 8 14 2 9.4h7.6z"/></svg></div>
+          <h3>Attention Router</h3>
+          <p>A cross-source triage queue that watches your connectors, scores what deserves a look, and surfaces cards you act on — surface-only until you opt into more.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <h3>Owners &amp; autonomous runs</h3>
+          <p>Durable, repo-scoped controllers that wake on a cadence to dispatch work — plus <code>flow do --auto</code> headless runs that work end-to-end and close themselves.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg></div>
+          <h3>Slack &amp; GitHub triggers</h3>
+          <p>React to a thread with <code>:claude:</code>, or get assigned a PR — flow spins up a task bound to that source, with the same KB and UI.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v5H4zM4 13h10v7H4zM18 13h2v7h-2z"/></svg></div>
+          <h3>Per-task model selection</h3>
+          <p>Pin a model with <code>--model</code>, or let flow resolve a tier at launch — upshifted for high-priority work, downshifted for richly-specified briefs.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg></div>
+          <h3>Full-text search &amp; daily briefing</h3>
+          <p><code>flow search</code> over briefs, updates, KB, and transcripts via SQLite FTS5. <code>flow standup</code> assembles a copyable needs-action / FYI digest.</p>
+        </div>
+        <div class="feature">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/></svg></div>
+          <h3>A knowledge base that grows</h3>
+          <p>Five markdown buckets for durable facts about you, your team, products, processes, and customers — live-appended during sessions, swept from transcripts on done.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="block">
+    <div class="wrap">
+      <div class="note">
+        <strong>Two names, one tool.</strong> The CLI binary is <code>flow</code> — every command is <code>flow do</code>, <code>flow ui serve</code>, <code>flow done</code>; scripts and muscle memory from upstream flow keep working unchanged. The browser product — Mission Control — wears the <code>flowwyyy</code> name. New here? It's <code>flow</code> at the terminal and flowwyyy in the browser.
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="tour">
+    <div class="wrap">
+      <p class="eyebrow accent">A tour</p>
+      <h2 class="section-title">One consistent view — terminal, browser, and skill.</h2>
+      <p class="section-sub">Same SQLite, same markdown briefs, same skill. Mission Control is a peer to the CLI, not a replacement.</p>
+      <div class="gallery">
+        <figure class="shot"><img src="img/attention.png" alt="The Attention feed — cross-source cards with confidence and suggested actions" loading="lazy"><figcaption>Attention — cards with a source, a confidence score, and one-click actions.</figcaption></figure>
+        <figure class="shot"><img src="img/cmdk.gif" alt="Cmd+K command palette filtering across briefs and updates" loading="lazy"><figcaption>Cmd+K — full-text search over briefs, updates, memories, and commands.</figcaption></figure>
+        <figure class="shot"><img src="img/owners.png" alt="Owners — durable autonomous controllers on a cadence" loading="lazy"><figcaption>Owners — durable controllers that wake on a cadence.</figcaption></figure>
+        <figure class="shot"><img src="img/connectors.png" alt="Connectors — Slack, GitHub, and public ingress setup" loading="lazy"><figcaption>Connectors — Slack, GitHub, and public ingress, wired in a wizard.</figcaption></figure>
+        <figure class="shot"><img src="img/kb.png" alt="Knowledge base — five markdown buckets rendered as a reader" loading="lazy"><figcaption>Knowledge base — five markdown buckets, lazy-loaded and ever-growing.</figcaption></figure>
+        <figure class="shot"><img src="img/graph.png" alt="Graph — task tree and dependencies" loading="lazy"><figcaption>Graph — the task tree and its dependencies.</figcaption></figure>
+      </div>
+    </div>
+  </section>
+
+  <section class="block" id="get-started">
+    <div class="wrap" style="text-align:center">
+      <p class="eyebrow accent">Get started</p>
+      <h2 class="section-title">Local, portable, yours.</h2>
+      <p class="section-sub" style="margin-left:auto;margin-right:auto">Everything lives under <code>~/.flow/</code> — plain markdown beside a SQLite index. No server, no cloud, no telemetry.</p>
+      <div class="cta" style="justify-content:center">
+        <a class="btn primary" href="docs.html#install">Install flowwyyy</a>
+        <a class="btn" href="docs.html">Read the docs</a>
+        <a class="btn" href="api.html">API reference</a>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer-motion" aria-hidden="true">
+    <div class="wrap"><img src="img/flowwyyy-demo.gif" alt="flowwyyy in motion — one task, one agent session, one tab" loading="lazy"></div>
+  </div>
+  <footer>
+    <div class="wrap">
+      <a class="brand" href="./" style="color:var(--text-2)"><img src="favicon.svg" alt="" style="width:18px;height:18px;vertical-align:middle;margin-right:7px">flowwyyy</a>
+      <span class="grow"></span>
+      <a href="docs.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy/blob/main/CONTRIBUTING.md">Contributing</a>
+      <span class="built">Built on <a href="https://github.com/Facets-cloud/flow" style="display:inline">flow</a> · MIT</span>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var btn = document.getElementById('copy');
+      if (!btn) return;
+      btn.addEventListener('click', function () {
+        navigator.clipboard.writeText('brew install vishnukv-facets/flowwyyy/flowwyyy').then(function () {
+          btn.textContent = 'copied';
+          btn.classList.add('copied');
+          setTimeout(function () { btn.textContent = 'copy'; btn.classList.remove('copied'); }, 1800);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>

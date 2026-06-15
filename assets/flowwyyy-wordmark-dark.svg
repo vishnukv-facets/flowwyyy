@@ -12,7 +12,8 @@
   </defs>
 
   <!-- App mark: rounded square with bridge glyph + anchor dots (mirrors the UI logo) -->
-  <g transform="translate(8,22) scale(0.58)">
+  <!-- y-offset nudged down to optically center against the descender-heavy wordmark -->
+  <g transform="translate(8,30) scale(0.58)">
     <rect width="200" height="200" rx="44" fill="url(#markGrad)"/>
     <path d="M50 138 Q78 138 78 110 Q78 82 110 82 Q142 82 142 110 Q142 138 170 138"
           fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>

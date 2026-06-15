@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Docs — flowwyyy</title>
+  <meta name="description" content="flowwyyy documentation: install, the complete command reference (every flow command and argument), Slack and GitHub connector setup, and the ~/.flow data layout.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://vishnukv-facets.github.io/flowwyyy/docs.html">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=5">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="favicon.svg" alt="">flowwyyy<span class="dot">.</span></a>
+      <span class="spacer"></span>
+      <div class="links">
+        <a href="docs.html" class="active">Docs</a>
+        <a href="api.html">API</a>
+        <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="docs">
+      <aside class="toc">
+        <h4>Getting started</h4>
+        <a href="#install">Install</a>
+        <a href="#first-run">First run</a>
+        <a href="#sessions">The session model</a>
+        <a href="#models">Which model launches</a>
+        <h4>Command reference</h4>
+        <a href="#c-setup">Setup</a>
+        <a href="#c-create">Create</a>
+        <a href="#c-sessions">Sessions</a>
+        <a href="#c-read">Read &amp; list</a>
+        <a href="#c-edit">Edit &amp; mutate</a>
+        <a href="#c-attention">Attention</a>
+        <a href="#c-owners">Owners</a>
+        <a href="#c-playbooks">Playbooks</a>
+        <a href="#c-orchestration">Orchestration</a>
+        <a href="#c-workdirs">Workdirs</a>
+        <a href="#c-slack">Slack</a>
+        <h4>Connectors</h4>
+        <a href="#slack">Slack setup</a>
+        <a href="#github">GitHub setup</a>
+        <a href="#ingress">Public ingress</a>
+        <h4>Reference</h4>
+        <a href="#data">Your data (~/.flow)</a>
+        <a href="api.html">API reference →</a>
+      </aside>
+
+      <main class="doc-content">
+        <h1>Documentation</h1>
+        <p class="lede">flowwyyy is the <code>flow</code> CLI plus a browser-based Mission Control. Install once, say <em>"let's get to work,"</em> and the bundled skill turns plain English into flow commands. This page covers install, every command and its arguments, connector setup, and where your data lives. References (<code>&lt;ref&gt;</code>) resolve by exact slug.</p>
+
+        <h2 id="install">Install</h2>
+        <p>flowwyyy runs on <strong>macOS + Claude Code or Codex</strong>. The CLI binary is named <code>flow</code>.</p>
+        <h3>Homebrew (recommended)</h3>
+        <pre><span class="prompt">$</span> brew install vishnukv-facets/flowwyyy/flowwyyy
+<span class="prompt">$</span> flow init</pre>
+        <p>Taps <code>vishnukv-facets/homebrew-flowwyyy</code> and installs <code>flow</code>. Upgrade later with <code>brew upgrade flowwyyy</code>. The formula is named <code>flowwyyy</code> to avoid colliding with homebrew-core's <code>flow</code>; the command it installs is still <code>flow</code>.</p>
+        <h3>Manual (curl + tar)</h3>
+        <pre><span class="c"># Apple Silicon — use amd64 for Intel</span>
+<span class="prompt">$</span> ARCH=arm64
+<span class="prompt">$</span> curl -fsSL \
+    "https://github.com/vishnukv-facets/flowwyyy/releases/latest/download/flow-darwin-${ARCH}.tar.gz" \
+    | tar -xz -C /usr/local/bin flow
+<span class="prompt">$</span> chmod +x /usr/local/bin/flow
+<span class="prompt">$</span> xattr -d com.apple.quarantine /usr/local/bin/flow 2>/dev/null || true
+<span class="prompt">$</span> flow init</pre>
+        <p>The <code>xattr</code> step removes Gatekeeper's quarantine attribute so macOS doesn't refuse to run the unsigned binary.</p>
+        <h3>What <code>flow init</code> does</h3>
+        <ul>
+          <li>Creates <code>~/.flow/</code> — the SQLite index, knowledge base, and project/task/playbook/owner directories.</li>
+          <li>Writes the flow skill to <code>~/.claude/skills/flow/SKILL.md</code>.</li>
+          <li>Adds a SessionStart hook to <code>~/.claude/settings.json</code> so every new session auto-loads the skill.</li>
+        </ul>
+        <div class="callout">Upgrading? In any Claude Code session say <em>"Upgrade flowwyyy from https://github.com/vishnukv-facets/flowwyyy"</em> — it fetches the latest binary and runs <code>flow skill update</code>. Check your version with <code>flow --version</code>.</div>
+
+        <h2 id="first-run">First run</h2>
+        <p>Open Claude (or Codex) and say <strong>"let's get to work."</strong> The skill handles the rest — capturing work as briefs, resuming sessions, and tracking what you're waiting on. Prefer the browser? Run <code>flow ui serve</code> and open <code>http://127.0.0.1:8787</code>.</p>
+
+        <h2 id="sessions">The session model</h2>
+        <p><code>flow do &lt;task&gt;</code> resolves the task's provider, pre-allocates or captures a session id, writes it to the task row, and spawns a tab — running <code>claude --session-id &lt;uuid&gt;</code> (or <code>codex resume</code>). Future <code>flow do</code> calls resume the same conversation, and a SessionStart hook re-injects the brief, updates, and repo context on every resume.</p>
+        <p>By default the session launches inside a per-task git <strong>worktree</strong> at <code>&lt;repo&gt;/.&lt;agent&gt;/worktrees/&lt;slug&gt;</code> on branch <code>flow/&lt;slug&gt;</code>, so parallel tasks never step on each other. <code>flow do --here</code> binds the current session instead and never relocates.</p>
+
+        <h2 id="models">Which model a session launches with</h2>
+        <p>You don't pick a model during intake — it's resolved at launch. An explicit <code>--model</code> always wins. Otherwise flow picks a tier (<code>FLOW_MODEL_TIER</code>, default <strong>medium</strong>), upshifted for high-priority work and downshifted for richly-specified briefs.</p>
+        <table class="ref">
+          <thead><tr><th>Tier</th><th>Claude</th><th>Codex</th></tr></thead>
+          <tbody>
+            <tr><td>large</td><td><code>opus</code></td><td><code>gpt-5.5</code></td></tr>
+            <tr><td>medium (default)</td><td><code>sonnet</code></td><td><code>gpt-5.4</code></td></tr>
+            <tr><td>small</td><td><code>haiku</code></td><td><code>gpt-5.4-mini</code></td></tr>
+          </tbody>
+        </table>
+        <p>The model is locked once a session starts — change it only while the task is in backlog.</p>
+
+        <!-- ===================== COMMAND REFERENCE ===================== -->
+
+        <h2 id="c-setup">Setup</h2>
+
+        <div class="cmd">
+          <p class="blurb">Create <code>~/.flow/</code>, initialise the database + knowledge base, and install the skill and SessionStart hook. Required once before anything else.</p>
+          <pre><span class="prompt">$</span> flow init</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Manage the bundled skill file on disk.</p>
+          <pre><span class="prompt">$</span> flow skill install [--force]
+<span class="prompt">$</span> flow skill uninstall
+<span class="prompt">$</span> flow skill update          <span class="c"># reinstall after upgrading the binary</span></pre>
+          <dl class="args">
+            <dt>install --force</dt><dd>Overwrite an existing skill file.</dd>
+            <dt>update</dt><dd>Refresh the skill and re-wire the SessionStart / UserPromptSubmit hooks. Use this after upgrading <code>flow</code>.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-create">Create</h2>
+
+        <div class="cmd">
+          <p class="blurb">Create a task. The interview-driven skill normally does this for you, but the flags are:</p>
+          <pre><span class="prompt">$</span> flow add task "&lt;name&gt;" [flags]</pre>
+          <dl class="args">
+            <dt>--slug &lt;s&gt;</dt><dd>Short, memorable, ASCII slug. Auto-derived from the name if omitted.</dd>
+            <dt>--project &lt;slug&gt;</dt><dd>Attach to an existing project. Omit for an adhoc/floating task.</dd>
+            <dt>--work-dir &lt;path&gt;</dt><dd>Where the task lives on disk. Defaults to the project's <code>work_dir</code>, or an auto-created workspace.</dd>
+            <dt>--mkdir</dt><dd>Create <code>--work-dir</code> if it doesn't exist.</dd>
+            <dt>--priority h|m|l</dt><dd>Priority. Default medium.</dd>
+            <dt>--due &lt;date&gt;</dt><dd>Due date — <code>YYYY-MM-DD</code>, <code>today</code>, <code>tomorrow</code>, a weekday, or <code>Nd</code>.</dd>
+            <dt>--agent claude|codex</dt><dd>Session agent (also <code>--claude</code> / <code>--codex</code>). Locked once a session starts.</dd>
+            <dt>--tag &lt;t&gt;</dt><dd>Attach a tag. Repeatable.</dd>
+            <dt>--permission-mode default|auto|bypass</dt><dd>Tool-approval mode for the session.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Create a project — an ongoing container that groups related tasks.</p>
+          <pre><span class="prompt">$</span> flow add project "&lt;name&gt;" --work-dir &lt;path&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--work-dir &lt;path&gt;</dt><dd>Required. The repo/path the project's work happens in.</dd>
+            <dt>--slug &lt;s&gt;</dt><dd>Custom slug.</dd>
+            <dt>--priority h|m|l</dt><dd>Project priority.</dd>
+            <dt>--mkdir</dt><dd>Create the work-dir if missing.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Create a playbook — a reusable run definition (see <a href="#c-playbooks">Playbooks</a>).</p>
+          <pre><span class="prompt">$</span> flow add playbook "&lt;name&gt;" --work-dir &lt;path&gt; [--slug &lt;s&gt;] [--project &lt;slug&gt;] [--mkdir]</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Create an owner — a durable, repo-scoped controller that wakes on a cadence (see <a href="#c-owners">Owners</a>).</p>
+          <pre><span class="prompt">$</span> flow add owner "&lt;name&gt;" --work-dir &lt;path&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--work-dir &lt;path&gt;</dt><dd>Required. The repo the owner operates in.</dd>
+            <dt>--project &lt;slug&gt;</dt><dd>Attach to a project.</dd>
+            <dt>--every &lt;dur&gt;</dt><dd>Tick cadence, e.g. <code>24h</code>, <code>6h</code>.</dd>
+            <dt>--agent claude|codex</dt><dd>Agent used for dispatched work.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-sessions">Sessions</h2>
+
+        <div class="cmd">
+          <p class="blurb">Start or resume work on a task. Spawns a terminal tab inside the task's worktree and flips it to <code>in-progress</code>.</p>
+          <pre><span class="prompt">$</span> flow do &lt;ref&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--agent claude|codex</dt><dd>Override the stored provider for this launch.</dd>
+            <dt>--fresh</dt><dd>Start a brand-new session instead of resuming the stored one.</dd>
+            <dt>--dangerously-skip-permissions</dt><dd>Pass the agent's low-friction permissions flag (Codex: bypass approvals + sandbox).</dd>
+            <dt>--force</dt><dd>Override the live-session guard (the task already has a running session elsewhere).</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Bind <em>this</em> Claude/Codex session to the task — no new tab. Status flips to in-progress; future <code>flow do</code> resumes here.</p>
+          <pre><span class="prompt">$</span> flow do --here &lt;ref&gt; [--force]</pre>
+          <dl class="args">
+            <dt>--force</dt><dd>Overwrite the target task's prior binding. Cannot rebind a session already bound to another task.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Run a task end-to-end headlessly — no tab, no human. Returns immediately with the supervisor PID + log path; the run closes itself with <code>flow done</code>.</p>
+          <pre><span class="prompt">$</span> flow do --auto &lt;ref&gt; [--with "&lt;instruction&gt;" | --with-file &lt;path&gt;]</pre>
+          <dl class="args">
+            <dt>--with "&lt;text&gt;"</dt><dd>Inject a one-off instruction as the first message.</dd>
+            <dt>--with-file &lt;path&gt;</dt><dd>Point the run at an instruction file instead.</dd>
+          </dl>
+          <p style="color:var(--text-3);font-size:13.5px">No human watches an <code>--auto</code> run — match the model to the task with <code>--model</code> (set at creation), or set <code>--priority high</code> so the resolver upshifts. Block on completion with <a href="#c-orchestration"><code>flow wait</code></a>.</p>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Close out a task: run the KB close-out sweep, push the worktree branch, and open a PR with the brief as its body.</p>
+          <pre><span class="prompt">$</span> flow done &lt;ref&gt;</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Hook handlers — wired into <code>~/.claude/settings.json</code> by <code>flow init</code>. You rarely call these by hand.</p>
+          <pre><span class="prompt">$</span> flow hook session-start
+<span class="prompt">$</span> flow hook agent-event --provider claude|codex</pre>
+        </div>
+
+        <h2 id="c-read">Read &amp; list</h2>
+
+        <div class="cmd">
+          <p class="blurb">Boot Mission Control — the local web app (see <a href="#ingress">below</a> for connectors).</p>
+          <pre><span class="prompt">$</span> flow ui serve [flags]</pre>
+          <dl class="args">
+            <dt>--host &lt;h&gt;</dt><dd>Bind host. Default <code>127.0.0.1</code>; a non-loopback host is refused unless set explicitly.</dd>
+            <dt>--port &lt;p&gt;</dt><dd>Port. Default <code>8787</code>.</dd>
+            <dt>--bg</dt><dd>Run detached, logging to <code>~/.flow/logs/ui-serve.log</code>.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">A copyable daily briefing — separates <strong>needs action</strong> from <strong>FYI</strong>.</p>
+          <pre><span class="prompt">$</span> flow standup [--for today|monday|24h] [--clipboard]</pre>
+          <dl class="args">
+            <dt>--for today|monday|24h</dt><dd>Window. Default today.</dd>
+            <dt>--clipboard</dt><dd>Also copy the briefing to the clipboard.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Full-text search over briefs, updates, and memories (SQLite FTS5).</p>
+          <pre><span class="prompt">$</span> flow search "&lt;query&gt;" [flags]</pre>
+          <dl class="args">
+            <dt>--in briefs,updates,memories,transcripts</dt><dd>Scopes to search. Default briefs+updates+memories; add <code>transcripts</code> (or <code>all</code>) to widen.</dd>
+            <dt>--limit N</dt><dd>Max results.</dd>
+            <dt>--format table|json|tsv</dt><dd>Output format.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Show one entity's metadata, brief path, and update files. No arg → the current/bound entity.</p>
+          <pre><span class="prompt">$</span> flow show task     [&lt;ref&gt;]
+<span class="prompt">$</span> flow show project  [&lt;ref&gt;]
+<span class="prompt">$</span> flow show playbook &lt;ref&gt;
+<span class="prompt">$</span> flow show owner    &lt;slug&gt;</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Render a readable transcript from a session's JSONL.</p>
+          <pre><span class="prompt">$</span> flow transcript [&lt;ref&gt;] [--compact]</pre>
+          <dl class="args">
+            <dt>--compact</dt><dd>Omit tool results and thinking blocks.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">List entities. Lists default to active (non-archived, non-deleted) rows.</p>
+          <pre><span class="prompt">$</span> flow list tasks     [flags]
+<span class="prompt">$</span> flow list projects  [flags]
+<span class="prompt">$</span> flow list playbooks [flags]
+<span class="prompt">$</span> flow list owners    [flags]
+<span class="prompt">$</span> flow list tags                <span class="c"># every tag in use + counts</span></pre>
+          <dl class="args">
+            <dt>--status &lt;s&gt;</dt><dd>tasks: <code>backlog|in-progress|done</code> · projects: <code>active|done</code> · owners: <code>active|paused|retired</code>.</dd>
+            <dt>--project &lt;slug&gt;</dt><dd>Filter to one project (tasks, playbooks).</dd>
+            <dt>--priority h|m|l</dt><dd>Filter tasks by priority.</dd>
+            <dt>--tag &lt;t&gt;</dt><dd>Filter tasks by tag.</dd>
+            <dt>--since today|monday|7d|YYYY-MM-DD</dt><dd>Only rows touched since the window.</dd>
+            <dt>--include-archived</dt><dd>Include archived rows.</dd>
+            <dt>--include-deleted | --deleted</dt><dd>Include / only show soft-deleted rows.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-edit">Edit &amp; mutate</h2>
+
+        <div class="cmd">
+          <p class="blurb">Open an entity's <code>brief.md</code> in <code>$EDITOR</code>.</p>
+          <pre><span class="prompt">$</span> flow edit &lt;ref&gt;</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">The canonical lane for in-place task field edits. At least one flag is required.</p>
+          <pre><span class="prompt">$</span> flow update task &lt;ref&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--slug &lt;new&gt; · --name &lt;new&gt;</dt><dd>Rename the slug or display name.</dd>
+            <dt>--work-dir &lt;path&gt; [--mkdir]</dt><dd>Relocate the task on disk.</dd>
+            <dt>--status backlog|in-progress|done</dt><dd>Change status (e.g. reopen a done task).</dd>
+            <dt>--priority h|m|l</dt><dd>Change priority.</dd>
+            <dt>--assignee &lt;name&gt; · --clear-assignee</dt><dd>Set / clear the assignee (null = self).</dd>
+            <dt>--due-date &lt;date&gt; · --clear-due</dt><dd>Set / clear the due date.</dd>
+            <dt>--parent &lt;task&gt; · --clear-parent</dt><dd>Set / clear a parent-child dependency.</dd>
+            <dt>--waiting "&lt;x&gt;" · --clear-waiting</dt><dd>Set / clear the <code>waiting_on</code> note (status stays in-progress).</dd>
+            <dt>--tag &lt;t&gt; · --remove-tag &lt;t&gt; · --clear-tags</dt><dd>Add, remove, or clear tags (the first two repeatable).</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Edit project / playbook fields.</p>
+          <pre><span class="prompt">$</span> flow update project  &lt;ref&gt; [--slug &lt;new&gt;] [--name &lt;new&gt;] [--work-dir &lt;path&gt;] [--mkdir] [--priority h|m|l]
+<span class="prompt">$</span> flow update playbook &lt;ref&gt; [--slug &lt;new&gt;] [--name &lt;new&gt;] [--work-dir &lt;path&gt;] [--mkdir]</pre>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Lifecycle: archive (set-aside history), soft-delete (recoverable), and their inverses. All accept task / project / playbook refs.</p>
+          <pre><span class="prompt">$</span> flow archive   &lt;ref&gt;
+<span class="prompt">$</span> flow unarchive &lt;ref&gt;
+<span class="prompt">$</span> flow delete    &lt;ref&gt;          <span class="c"># soft-delete; hides from lists/UI</span>
+<span class="prompt">$</span> flow restore   &lt;ref&gt;          <span class="c"># undo a soft-delete</span></pre>
+        </div>
+
+        <h2 id="c-attention">Attention</h2>
+        <p>The Attention Router is the cross-source triage queue. Review it as an operator — it surfaces, it doesn't autonomously act. (Full feed UI lives in Mission Control; see the <a href="api.html#ep-attention">API</a>.)</p>
+        <div class="cmd">
+          <pre><span class="prompt">$</span> flow attention list [--status new|acted|dismissed|all]
+<span class="prompt">$</span> flow attention act &lt;id&gt; &lt;make-task|forward|dismiss&gt;
+<span class="prompt">$</span> flow attention feedback [--group &lt;dimension&gt;]</pre>
+          <dl class="args">
+            <dt>list --status</dt><dd>Filter cards by state. Default <code>new</code>.</dd>
+            <dt>act &lt;id&gt; &lt;action&gt;</dt><dd><code>make-task</code> (tracked work), <code>forward</code> (route to a matched task), or <code>dismiss</code> (hide; doesn't mute the source).</dd>
+            <dt>feedback --group</dt><dd>Approval/dismiss rates by <code>source|channel|author|thread-type|suggested-action|confidence-band</code>.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-owners">Owners</h2>
+        <p>Owners orchestrate ongoing outcomes via short <em>ticks</em> — they dispatch tasks/runs, never do substantive work inline.</p>
+        <div class="cmd">
+          <pre><span class="prompt">$</span> flow owner start|pause|retire &lt;slug&gt;
+<span class="prompt">$</span> flow owner tick &lt;slug&gt; [--auto]
+<span class="prompt">$</span> flow owner next &lt;slug&gt; (--in &lt;duration&gt; | --at &lt;RFC3339&gt;)
+<span class="prompt">$</span> flow owner tick-due              <span class="c"># scheduler entry point (host cron)</span></pre>
+          <dl class="args">
+            <dt>start|pause|retire</dt><dd>Lifecycle controls.</dd>
+            <dt>tick [--auto]</dt><dd>Run a tick now — guided by default, headless with <code>--auto</code>.</dd>
+            <dt>next --in &lt;dur&gt; | --at &lt;ts&gt;</dt><dd>Set the next wake (relative duration or absolute RFC3339).</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-playbooks">Playbooks</h2>
+        <p>A playbook is a reusable run definition. Each run snapshots the brief into a fresh task with its own session — reproducible, frozen at run time.</p>
+        <div class="cmd">
+          <pre><span class="prompt">$</span> flow run playbook &lt;slug&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--agent claude|codex</dt><dd>Provider for this run.</dd>
+            <dt>--dangerously-skip-permissions</dt><dd>Low-friction permissions for the spawned session.</dd>
+            <dt>--auto</dt><dd>Run headless (no tab), self-closing — the mode scheduled runs use.</dd>
+            <dt>--with "&lt;text&gt;" | --with-file &lt;path&gt;</dt><dd>Inject a one-off instruction (only with <code>--auto</code>).</dd>
+          </dl>
+        </div>
+        <div class="callout"><strong>Scheduling.</strong> A playbook can fire unattended on a cadence — set it with <code>flow update playbook &lt;slug&gt; --schedule "every day at 9am"</code> (or <code>"every 6 hours"</code>, a weekday + time, or raw cron). <code>--pause-schedule</code>, <code>--resume-schedule</code>, and <code>--clear-schedule</code> control it. Scheduled runs always fire in <code>--auto</code> mode.</div>
+
+        <h2 id="c-orchestration">Orchestration</h2>
+        <p>A small vocabulary for delegating to child agents in other tabs and coordinating between them.</p>
+        <div class="cmd">
+          <p class="blurb">Create a task (optionally parented) and immediately open it in a new tab. The prompt becomes the child's brief "What".</p>
+          <pre><span class="prompt">$</span> flow spawn "&lt;name&gt;" [flags]</pre>
+          <dl class="args">
+            <dt>--parent &lt;slug&gt;</dt><dd>Parent task; this spawn becomes its (non-blocking) subtask.</dd>
+            <dt>--depends-on &lt;slug&gt;</dt><dd>A task this spawn is blocked by. Repeatable.</dd>
+            <dt>--prompt "&lt;text&gt;"</dt><dd>Seeds the child's brief What section.</dd>
+            <dt>--project &lt;slug&gt; · --work-dir &lt;path&gt; · --slug &lt;s&gt; · --mkdir</dt><dd>Placement, as for <code>add task</code>.</dd>
+            <dt>--priority h|m|l · --agent claude|codex · --model &lt;m&gt;</dt><dd>Priority, provider, model override.</dd>
+            <dt>--no-open</dt><dd>Create the task but don't spawn a session yet.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Append a message to a task's inbox; a live flow terminal is woken through the inbox monitor.</p>
+          <pre><span class="prompt">$</span> flow tell &lt;slug&gt; "&lt;message&gt;" [flags]</pre>
+          <dl class="args">
+            <dt>--from &lt;label&gt;</dt><dd>Sender label. Defaults to the caller's bound task slug, else <code>user</code>.</dd>
+            <dt>--no-notify</dt><dd>Skip the UI inbox-changed event.</dd>
+          </dl>
+        </div>
+        <div class="cmd">
+          <p class="blurb">Block until a task reaches a state. Event-driven (subscribes to <code>/ws/events</code>), not polling.</p>
+          <pre><span class="prompt">$</span> flow wait &lt;slug&gt; [flags]</pre>
+          <dl class="args">
+            <dt>--until &lt;state&gt;</dt><dd><code>backlog|in-progress|done</code> (lifecycle) or <code>running|waiting|idle|dead|released</code> (runtime). Default <code>done</code>.</dd>
+            <dt>--timeout &lt;dur&gt;</dt><dd>Max wait; <code>0</code> = forever. Default <code>5m</code>.</dd>
+            <dt>--server &lt;url&gt;</dt><dd>flow UI base URL. Default <code>$FLOW_UI_URL</code> or <code>http://127.0.0.1:8787</code>.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-workdirs">Workdirs</h2>
+        <p>A registry of known local repo paths so the skill can match repo intent to a path on disk.</p>
+        <div class="cmd">
+          <pre><span class="prompt">$</span> flow workdir list
+<span class="prompt">$</span> flow workdir add &lt;path&gt; [--name &lt;nickname&gt;]
+<span class="prompt">$</span> flow workdir remove &lt;path&gt;
+<span class="prompt">$</span> flow workdir scan [&lt;root&gt;] [--add]</pre>
+          <dl class="args">
+            <dt>add --name</dt><dd>Register a path with a nickname (captures the git origin remote if present).</dd>
+            <dt>scan [--add]</dt><dd>Detect repos under a root; <code>--add</code> backfills origin remotes / registers them.</dd>
+          </dl>
+        </div>
+
+        <h2 id="c-slack">Slack</h2>
+        <div class="cmd">
+          <p class="blurb">Post a message as the bot. Requires <code>FLOW_SLACK_WRITES_ENABLED=1</code>.</p>
+          <pre><span class="prompt">$</span> flow slack send --channel &lt;id&gt; --text "&lt;message&gt;"</pre>
+        </div>
+
+        <!-- ===================== CONNECTORS ===================== -->
+
+        <h2 id="slack">Slack — react to triage</h2>
+        <p>flowwyyy listens to a Slack workspace over Socket Mode and turns <em>your</em> reactions into tasks. React to a thread with <code>:claude:</code> for a Claude session, <code>:codex:</code> for Codex.</p>
+        <p><strong>Quick setup — the Connect Slack wizard.</strong> Open <strong>Mission Control → Connectors → Slack</strong>. Three resumable steps:</p>
+        <ul>
+          <li><strong>Create the app</strong> from an app-configuration token — flow calls Slack's manifest API and wires every scope, event subscription, and Socket Mode for you.</li>
+          <li><strong>App-level token</strong> — a deep-linked paste (Slack has no API for this one).</li>
+          <li><strong>Install</strong> — one click round-trips OAuth and hands flow the bot token, your user token (DM following), and your member ID.</li>
+        </ul>
+        <p>Reactions are explicit consent from <em>your</em> account, so a coworker's <code>:claude:</code> is harmless noise — only the IDs in <code>FLOW_SLACK_SELF_USER_IDS</code> count. flow tags each task <code>slack-thread:&lt;channel&gt;:&lt;ts&gt;</code>: one thread, one task, forever.</p>
+
+        <h2 id="github">GitHub — assigned work &amp; review threads</h2>
+        <p>flowwyyy ingests GitHub activity — assigned issues, assigned/review-requested PRs, review comments, head updates, merges, and closes — via <strong>signed webhook deliveries from a GitHub App</strong>. GitHub POSTs to <code>/api/github/webhook</code>; flow verifies the HMAC, dedupes, normalizes, and dispatches — no GitHub API call on the hot path.</p>
+        <p><strong>Setup — the Connect GitHub wizard.</strong> Mission Control → <strong>Connectors → GitHub</strong> builds a GitHub App manifest (webhook URL, generated signing secret, the right events + permissions), POSTs it to github.com, and receives the app id, private key, and webhook secret in one shot — <strong>secrets go to the OS keyring, nothing pasted by hand.</strong> It then guides installation. The wizard requires a running <a href="#ingress">public ingress</a> first.</p>
+        <p>PR tasks are tagged <code>gh-pr:&lt;owner&gt;/&lt;repo&gt;#&lt;n&gt;</code>, issue tasks <code>gh-issue:…</code>. A <code>CHANGES_REQUESTED</code> review or new head SHA reopens a done task; a merge marks it done. If flow was down, the wizard's <strong>Replay missed deliveries</strong> button replays the gap, deduped by delivery GUID.</p>
+
+        <h2 id="ingress">Public ingress</h2>
+        <p>Some connectors need an external HTTPS URL to reach flow inbound — Slack's OAuth redirect and GitHub's webhook POSTs. flow keeps running locally, exposes <em>only</em> the connector callback paths (never the UI or data API), and validates everything itself.</p>
+        <table class="ref">
+          <thead><tr><th>Provider</th><th>Public URL from</th><th>Use when</th></tr></thead>
+          <tbody>
+            <tr><td><code>none</code></td><td>—</td><td>Slack-only, accepting the localhost cert warning</td></tr>
+            <tr><td><code>zrok</code></td><td>generated at runtime</td><td>you want a public URL without running a server</td></tr>
+            <tr><td><code>manual</code></td><td><code>FLOW_PUBLIC_BASE_URL</code></td><td>you already front flow with your own proxy/tunnel</td></tr>
+          </tbody>
+        </table>
+        <p>zrok is recommended — flow embeds the zrok Go SDK (no binary, no subprocess). Enable once with <code>zrok enable &lt;token&gt;</code>, set <code>FLOW_INGRESS_PROVIDER=zrok</code> and a stable <code>FLOW_ZROK_SHARE_NAME</code>, and check live state at <code>GET /api/ingress/status</code>.</p>
+
+        <h2 id="data">Your data — local, portable, yours</h2>
+        <p>Everything lives under <code>~/.flow/</code> (override with <code>$FLOW_ROOT</code>). No server, no cloud, no telemetry — plain markdown beside a SQLite index, readable in any editor and versionable in git.</p>
+        <pre>~/.flow/
+  flow.db                          <span class="c"># SQLite index — projects, tasks, playbooks, owners</span>
+  kb/  user.md org.md products.md processes.md business.md
+  projects/&lt;slug&gt;/  brief.md  updates/YYYY-MM-DD-*.md
+  tasks/&lt;slug&gt;/     brief.md  updates/*.md  inbox.jsonl
+  playbooks/&lt;slug&gt;/ brief.md  updates/*.md
+  owners/&lt;slug&gt;/    charter.md updates/*.md</pre>
+        <p>The database is an <em>index</em>, not the source of truth — every entity's real content is the markdown beside it; you could delete <code>flow.db</code> and rebuild from the markdown. Back up with git, Time Machine, or a synced folder (add <code>kb/</code> to <code>.gitignore</code> if you push to a shared remote). To move machines: copy <code>~/.flow/</code> over, install the binary, run <code>flow init</code> once.</p>
+        <div class="callout">⚠️ Don't run flow on two machines simultaneously through a synced folder — SQLite doesn't tolerate concurrent writes from separate hosts.</div>
+
+        <p style="margin-top:48px">Next: the <a href="api.html">Mission Control API reference →</a></p>
+      </main>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <a class="brand" href="./" style="color:var(--text-2)"><img src="favicon.svg" alt="" style="width:18px;height:18px;vertical-align:middle;margin-right:7px">flowwyyy</a>
+      <span class="grow"></span>
+      <a href="docs.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy/blob/main/CHANGELOG.md">Changelog</a>
+      <span class="built">Built on <a href="https://github.com/Facets-cloud/flow" style="display:inline">flow</a> · MIT</span>
+    </div>
+  </footer>
+</body>
+</html>

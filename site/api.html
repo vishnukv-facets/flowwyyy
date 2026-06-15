@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API reference — flowwyyy</title>
+  <meta name="description" content="The Mission Control local API: the loopback + session-token auth model, the WebSocket-RPC / SSE / terminal protocols, and every endpoint with its request and response JSON schema.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://vishnukv-facets.github.io/flowwyyy/api.html">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css?v=5">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="favicon.svg" alt="">flowwyyy<span class="dot">.</span></a>
+      <span class="spacer"></span>
+      <div class="links">
+        <a href="docs.html">Docs</a>
+        <a href="api.html" class="active">API</a>
+        <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="docs">
+      <aside class="toc">
+        <h4>Overview</h4>
+        <a href="#about">About the API</a>
+        <a href="#base">Base URL</a>
+        <a href="#auth">Authentication</a>
+        <a href="#conventions">Conventions</a>
+        <h4>Transport</h4>
+        <a href="#rest">REST</a>
+        <a href="#ws-rpc">WebSocket RPC</a>
+        <a href="#ws-events">Event stream</a>
+        <a href="#ws-terminal">Terminal bridge</a>
+        <h4>Endpoints</h4>
+        <a href="#ep-health">Health &amp; settings</a>
+        <a href="#ep-actions">Actions</a>
+        <a href="#ep-tasks">Tasks</a>
+        <a href="#ep-projects">Projects</a>
+        <a href="#ep-playbooks">Playbooks</a>
+        <a href="#ep-owners">Owners</a>
+        <a href="#ep-search">Search</a>
+        <a href="#ep-attention">Attention</a>
+        <a href="#ep-overview">Overview</a>
+        <a href="#ep-connectors">Connectors &amp; system</a>
+        <h4>Schemas</h4>
+        <a href="#s-fileref">FileRef</a>
+        <a href="#s-error">Error</a>
+      </aside>
+
+      <main class="doc-content">
+        <h1>API reference</h1>
+        <p class="lede">Mission Control (<code>flow ui serve</code>) exposes a local HTTP + WebSocket API — the same surface the browser SPA drives. It's <strong>local-first and loopback-only</strong>: ~86 HTTP endpoints and four WebSocket channels, gated by a same-origin check and a per-boot session token. Every shape below is taken from the Go structs in <code>internal/server/</code>.</p>
+
+        <div class="callout"><strong>No OpenAPI spec — yet.</strong> The API is hand-implemented in Go (routes in <code>internal/server/server.go</code>). This page is the authoritative reference. Shapes may change between alpha releases; pin a version if you script against it.</div>
+
+        <h2 id="about">About the API</h2>
+        <p>The server is a single Go binary — no Node runtime — that embeds the static UI at compile time and serves it from <code>/</code>. Every read and mutation the browser performs is available here; the SPA itself runs them over a single <a href="#ws-rpc">WebSocket-RPC</a> connection rather than plain <code>fetch</code>.</p>
+
+        <h2 id="base">Base URL</h2>
+        <pre>http://127.0.0.1:8787</pre>
+        <p>Default host/port. Override with <code>flow ui serve --host &lt;h&gt; --port &lt;p&gt;</code>. The server refuses a non-loopback host unless you pass <code>--host</code> explicitly — there's no built-in auth or TLS, so front it with your own proxy if you expose it.</p>
+
+        <h2 id="auth">Authentication</h2>
+        <p>Two layers, both in <code>internal/server/session_token.go</code>.</p>
+        <h3>1 · Same-origin gate</h3>
+        <p>WebSocket upgrades require an <code>Origin</code> header that exactly matches the server host. Empty origins (non-browser clients) are rejected on <code>/ws/*</code>.</p>
+        <h3>2 · Session token</h3>
+        <p>At boot the server mints a random token (<code>crypto/rand</code>) at <code>~/.flow/.ui-session-token</code> (mode <code>0600</code>). It guards every state-changing <code>/api/*</code> request and every WS handshake.</p>
+        <ul>
+          <li><strong>HTTP</strong> — send it as the <code>X-Flow-Session-Token</code> header.</li>
+          <li><strong>WebSocket</strong> — pass it as the <code>token</code> query parameter (browsers can't set custom WS headers).</li>
+          <li>The SPA reads it from <code>window.__FLOW_TOKEN__</code>; trusted CLIs read the token file.</li>
+        </ul>
+        <pre><span class="prompt">$</span> TOKEN=$(cat ~/.flow/.ui-session-token)
+<span class="prompt">$</span> curl -s http://127.0.0.1:8787/api/tasks \
+    -H "X-Flow-Session-Token: $TOKEN"</pre>
+        <p><strong>Token-exempt</strong> (authenticated by other means, still origin-checked): <code>/api/github/webhook</code> (HMAC), <code>/api/hooks/agent</code> &amp; <code>/api/inbox/notify</code> (loopback-only), and the OAuth callbacks <code>/api/slack/oauth/callback</code> &amp; <code>/api/github/setup/callback</code> (state-nonce validated).</p>
+
+        <h2 id="conventions">Conventions</h2>
+        <ul>
+          <li><strong>Content type</strong> — JSON in and out, except briefs/updates which are <code>text/markdown</code> on <code>GET</code>/<code>PUT</code>.</li>
+          <li><strong>Optional fields</strong> — fields tagged <code>omitempty</code> are dropped from the response when empty; treat any field below as possibly absent unless it's a core identifier.</li>
+          <li><strong>Errors</strong> — a non-2xx status with body <code>{ "error": "message" }</code>. See <a href="#s-error">Error</a>.</li>
+          <li><strong>Enums</strong> — status <code>backlog | in-progress | done</code>; priority <code>high | medium | low</code>; provider <code>claude-code | codex</code>.</li>
+        </ul>
+
+        <h2 id="rest">REST</h2>
+        <p>Standard JSON over HTTP. <code>GET</code> reads; <code>POST</code>/<code>PUT</code>/<code>PATCH</code>/<code>DELETE</code> mutate and require the token. Path params are written <code>{slug}</code>.</p>
+
+        <h2 id="ws-rpc">WebSocket RPC — <span class="m ws">WS</span> <code>/ws/rpc</code></h2>
+        <p>The primary transport: run any <code>/api/*</code> request over one bidirectional socket. Auth: origin match + <code>?token=</code>. On connect the server sends a <code>ready</code> frame; it pings every 25s.</p>
+        <div class="io-label">Greeting (server → client)</div>
+        <pre>{ <span class="key">"type"</span>: <span class="s">"ready"</span>, <span class="key">"server_version"</span>: <span class="s">"string"</span>, <span class="key">"flow_root"</span>: <span class="s">"string"</span> }</pre>
+        <div class="io-label">Request frame (client → server)</div>
+        <pre>{
+  <span class="key">"id"</span>: <span class="s">"req-123"</span>,
+  <span class="key">"method"</span>: <span class="s">"GET | POST | PUT | DELETE"</span>,
+  <span class="key">"path"</span>: <span class="s">"/api/actions"</span>,
+  <span class="key">"body"</span>: { },                  <span class="c">// JSON body (optional)</span>
+  <span class="key">"text"</span>: <span class="s">"raw markdown"</span>,       <span class="c">// for text/markdown PUT (optional)</span>
+  <span class="key">"content_type"</span>: <span class="s">"text/markdown"</span>,
+  <span class="key">"form"</span>: { <span class="s">"key"</span>: <span class="s">"value"</span> },   <span class="c">// form fields (optional)</span>
+  <span class="key">"files"</span>: [ { <span class="key">"field"</span>: <span class="s">"files"</span>, <span class="key">"name"</span>: <span class="s">"x.png"</span>,
+              <span class="key">"content_type"</span>: <span class="s">"image/png"</span>, <span class="key">"data"</span>: <span class="s">"&lt;base64&gt;"</span> } ]
+}</pre>
+        <div class="io-label">Response frame (server → client)</div>
+        <pre>{
+  <span class="key">"type"</span>: <span class="s">"rpc"</span>,
+  <span class="key">"id"</span>: <span class="s">"req-123"</span>,
+  <span class="key">"status"</span>: <span class="n">200</span>,
+  <span class="key">"content_type"</span>: <span class="s">"application/json"</span>,
+  <span class="key">"json"</span>: { },     <span class="c">// parsed JSON response</span>
+  <span class="key">"text"</span>: <span class="s">"…"</span>,    <span class="c">// non-JSON body</span>
+  <span class="key">"error"</span>: <span class="s">"…"</span>    <span class="c">// on failure</span>
+}</pre>
+        <p>File uploads are base64-encoded in the frame; the bridge rebuilds real <code>multipart/form-data</code> so handlers work unchanged (max 96 MiB per frame).</p>
+
+        <h2 id="ws-events">Event stream — <span class="m ws">WS</span> <code>/ws/events</code></h2>
+        <p>Real-time fan-out of agent hooks, UI-change signals, liveness snapshots, and steering progress. Filters: <code>?session_id=</code>, <code>?task_slug=</code>, <code>?types=agent_hook,ui_change,…</code>. SSE-over-HTTP variants live at <code>GET /api/events</code> and <code>GET /api/work-events</code>.</p>
+        <pre>{ <span class="key">"type"</span>: <span class="s">"subscribed"</span>, <span class="key">"subscriber_id"</span>: <span class="s">"sub-1"</span>, <span class="key">"hook_version"</span>: <span class="n">42</span> }
+{ <span class="key">"type"</span>: <span class="s">"agent_hook"</span>, <span class="key">"task_slug"</span>: <span class="s">"…"</span>,
+  <span class="key">"hook"</span>: { <span class="key">"provider"</span>: <span class="s">"claude-code"</span>, <span class="key">"kind"</span>: <span class="s">"PostToolUse"</span> } }
+{ <span class="key">"type"</span>: <span class="s">"ui_change"</span>, <span class="key">"data"</span>: { <span class="key">"kind"</span>: <span class="s">"tasks"</span> } }
+{ <span class="key">"type"</span>: <span class="s">"liveness"</span>, <span class="key">"task_slug"</span>: <span class="s">"…"</span>,
+  <span class="key">"liveness"</span>: { <span class="key">"status"</span>: <span class="s">"alive"</span>, <span class="key">"reason"</span>: <span class="s">"…"</span> } }
+{ <span class="key">"type"</span>: <span class="s">"ping"</span>, <span class="key">"ts"</span>: <span class="s">"2026-06-15T10:30:30Z"</span> }</pre>
+        <p>Backpressure: a 64-event buffer per subscriber; slow clients are dropped rather than blocking the publisher.</p>
+
+        <h2 id="ws-terminal">Terminal bridge — <span class="m ws">WS</span> <code>/ws/terminal</code></h2>
+        <p>PTY I/O between the browser terminal and the task's tmux session. Query <code>?slug=&lt;task&gt;&amp;cols=120&amp;rows=32</code>. The floating (Ask Flow) variant is <code>/ws/floating-terminal?id=&lt;id&gt;</code>; same frames.</p>
+        <pre><span class="c">// client → server</span>
+{ <span class="key">"type"</span>: <span class="s">"input"</span>, <span class="key">"data"</span>: <span class="s">"ls -la\n"</span> }
+{ <span class="key">"type"</span>: <span class="s">"resize"</span>, <span class="key">"cols"</span>: <span class="n">120</span>, <span class="key">"rows"</span>: <span class="n">32</span> }
+
+<span class="c">// server → client</span>
+{ <span class="key">"type"</span>: <span class="s">"output"</span>, <span class="key">"data"</span>: <span class="s">"…"</span> }
+{ <span class="key">"type"</span>: <span class="s">"state"</span>, <span class="key">"data"</span>: <span class="s">"live | exited"</span>, <span class="key">"message"</span>: <span class="s">"…"</span> }</pre>
+
+        <!-- ===================== ENDPOINTS ===================== -->
+
+        <h2 id="ep-health">Health &amp; settings</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/health</span><span class="desc">Server health check.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200</div>
+            <pre>{ <span class="key">"ok"</span>: <span class="n">true</span>, <span class="key">"version"</span>: <span class="s">"string"</span>, <span class="key">"flow_root"</span>: <span class="s">"string"</span> }</pre>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/settings</span><span class="desc">Settings schema + current values (~47 fields across Slack, GitHub, Steering, Ingress, General).</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200</div>
+            <pre>{
+  <span class="key">"fields"</span>: [
+    {
+      <span class="key">"key"</span>: <span class="s">"FLOW_SLACK_TOKEN"</span>,
+      <span class="key">"label"</span>: <span class="s">"Bot / read token"</span>,
+      <span class="key">"group"</span>: <span class="s">"Slack"</span>,
+      <span class="key">"type"</span>: <span class="s">"string | secret | bool | int | enum"</span>,
+      <span class="key">"default"</span>: <span class="s">"string"</span>,
+      <span class="key">"options"</span>: [<span class="s">"…"</span>],          <span class="c">// for enum</span>
+      <span class="key">"help"</span>: <span class="s">"string"</span>,
+      <span class="key">"value"</span>: <span class="s">"string"</span>,            <span class="c">// empty for secrets</span>
+      <span class="key">"set"</span>: <span class="n">true</span>,
+      <span class="key">"source"</span>: <span class="s">"default | config | env"</span>
+    }
+  ]
+}</pre>
+            <p>Update settings through <a href="#ep-actions"><code>POST /api/actions</code></a> with <code>kind: "update-settings"</code>.</p>
+          </div>
+        </div>
+
+        <h2 id="ep-actions">Actions</h2>
+        <p>Most mutations funnel through one verb-dispatched endpoint. The <code>kind</code> field selects the operation; only the fields relevant to that kind are read.</p>
+        <div class="ep">
+          <div class="ep-head"><span class="m post">POST</span><span class="path">/api/actions</span><span class="desc">Execute an action by kind.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Request</div>
+            <pre>{
+  <span class="key">"kind"</span>: <span class="s">"spawn"</span>,           <span class="c">// see kinds below</span>
+  <span class="key">"target"</span>: <span class="s">"&lt;slug&gt;"</span>,        <span class="c">// task/project to act on</span>
+  <span class="key">"slug"</span>: <span class="s">"&lt;new-slug&gt;"</span>,      <span class="c">// for create-* kinds</span>
+  <span class="key">"name"</span>: <span class="s">"Add OAuth login"</span>,
+  <span class="key">"description"</span>: <span class="s">"…"</span>,
+  <span class="key">"project"</span>: <span class="s">"&lt;slug&gt;"</span>,
+  <span class="key">"work_dir"</span>: <span class="s">"/path/to/repo"</span>,
+  <span class="key">"path"</span>: <span class="s">"…"</span>,
+  <span class="key">"priority"</span>: <span class="s">"high | medium | low"</span>,
+  <span class="key">"prompt"</span>: <span class="s">"first message for the session"</span>,
+  <span class="key">"provider"</span>: <span class="s">"claude-code | codex"</span>,
+  <span class="key">"model"</span>: <span class="s">"opus | sonnet | haiku | …"</span>,
+  <span class="key">"permission_mode"</span>: <span class="s">"default | auto | bypass"</span>,
+  <span class="key">"session_id"</span>: <span class="s">"&lt;uuid&gt;"</span>,
+  <span class="key">"branch"</span>: <span class="s">"…"</span>,
+  <span class="key">"mkdir"</span>: <span class="n">false</span>,
+  <span class="key">"no_open"</span>: <span class="n">false</span>,
+  <span class="key">"schedule"</span>: <span class="s">"every day at 9am"</span>,
+  <span class="key">"schedule_op"</span>: <span class="s">"set | clear | pause | resume"</span>,
+  <span class="key">"attention_action"</span>: <span class="s">"make_task | forward | dismiss | …"</span>,
+  <span class="key">"reply_text"</span>: <span class="s">"…"</span>,
+  <span class="key">"reply_instructions"</span>: <span class="s">"…"</span>,
+  <span class="key">"settings"</span>: { <span class="s">"FLOW_…"</span>: <span class="s">"value"</span> }   <span class="c">// for update-settings</span>
+}</pre>
+            <div class="io-label">Response · 200</div>
+            <pre>{
+  <span class="key">"ok"</span>: <span class="n">true</span>,
+  <span class="key">"message"</span>: <span class="s">"string"</span>,
+  <span class="key">"output"</span>: <span class="s">"string"</span>,                 <span class="c">// optional</span>
+  <span class="key">"agent"</span>: { <span class="key">"slug"</span>: <span class="s">"…"</span>, <span class="key">"status"</span>: <span class="s">"…"</span> },  <span class="c">// on spawn/resume</span>
+  <span class="key">"floating_terminal"</span>: { <span class="key">"id"</span>: <span class="s">"…"</span>, <span class="key">"provider"</span>: <span class="s">"…"</span>, <span class="key">"title"</span>: <span class="s">"…"</span> },
+  <span class="key">"bridge"</span>: <span class="n">true</span>,
+  <span class="key">"already_live"</span>: <span class="n">false</span>
+}</pre>
+            <div class="io-label">Accepted <code>kind</code> values</div>
+            <p>Sessions: <code>spawn</code>, <code>resume</code>, <code>attach</code>, <code>restart</code>, <code>restart-fresh</code>, <code>kill</code>, <code>nudge</code>, <code>fork</code>, <code>switch-branch</code>, <code>iterm</code>/<code>terminal</code>/<code>warp</code>/<code>kitty</code>/<code>ghostty</code>/<code>wezterm</code>/<code>tmux</code>/<code>vscode</code>/<code>alacritty</code> · Lifecycle: <code>archive</code>, <code>unarchive</code>, <code>done</code>, <code>delete</code>, <code>restore</code>, <code>destroy</code>, <code>empty-trash</code>, <code>pause</code>, <code>clear-waiting</code>, <code>mark-read</code>, <code>approve</code>, <code>deny</code> · Create: <code>create-flow</code>, <code>create-project</code>, <code>create-playbook</code>, <code>create-kb</code>, <code>spawn-run</code> · Update: <code>update-priority</code>, <code>update-provider</code>, <code>update-model</code>, <code>update-permission-mode</code>, <code>update-task-name</code>, <code>update-project</code>, <code>update-playbook</code>, <code>edit-playbook</code>, <code>set-playbook-schedule</code> · Workdirs: <code>workdir-add</code>, <code>workdir-rename</code>, <code>workdir-remove</code> · Attention: <code>attention-act</code> · System: <code>update-settings</code>, <code>rotate-webhook-secret</code>, <code>rotate-ingress-url</code>, <code>reveal-webhook-secret</code>, <code>compact-db</code> · Chats: <code>chat-archive</code>, <code>chat-unarchive</code>, <code>chat-delete</code>, <code>chat-reopen</code>, <code>overview-chat</code>, <code>close-floating-terminal</code>.</p>
+          </div>
+        </div>
+
+        <h2 id="ep-tasks">Tasks</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/tasks</span><span class="desc">List tasks.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Query params</div>
+            <pre>status · project · priority · tag · kind · playbook · since
+include_archived · include_deleted · deleted · include_done</pre>
+            <div class="io-label">Response · 200 · array of TaskView (selected fields)</div>
+            <pre>[
+  {
+    <span class="key">"slug"</span>: <span class="s">"oauth-budget"</span>,
+    <span class="key">"name"</span>: <span class="s">"Add OAuth login"</span>,
+    <span class="key">"project_slug"</span>: <span class="s">"budgeting-app"</span>,
+    <span class="key">"status"</span>: <span class="s">"in-progress"</span>,
+    <span class="key">"kind"</span>: <span class="s">"regular | playbook_run"</span>,
+    <span class="key">"priority"</span>: <span class="s">"high"</span>,
+    <span class="key">"work_dir"</span>: <span class="s">"/path/to/repo"</span>,
+    <span class="key">"worktree_path"</span>: <span class="s">"…/.claude/worktrees/oauth-budget"</span>,
+    <span class="key">"waiting_on"</span>: <span class="n">null</span>,
+    <span class="key">"due_date"</span>: <span class="s">"2026-06-20"</span>,
+    <span class="key">"assignee"</span>: <span class="n">null</span>,
+    <span class="key">"permission_mode"</span>: <span class="s">"auto"</span>,
+    <span class="key">"model"</span>: <span class="s">"opus"</span>,
+    <span class="key">"tags"</span>: [<span class="s">"design"</span>, <span class="s">"gh-pr:owner/repo#6"</span>],
+    <span class="key">"session_id"</span>: <span class="s">"&lt;uuid&gt;"</span>,
+    <span class="key">"session_provider"</span>: <span class="s">"claude-code"</span>,
+    <span class="key">"live"</span>: <span class="n">true</span>,
+    <span class="key">"auto_run_status"</span>: <span class="s">"running | completed | dead"</span>,
+    <span class="key">"days_in_status"</span>: <span class="n">2</span>,
+    <span class="key">"stale_days"</span>: <span class="n">null</span>,
+    <span class="key">"created_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"updated_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"brief_path"</span>: <span class="s">"/…/tasks/oauth-budget/brief.md"</span>,
+    <span class="key">"updates"</span>: [ <span class="c">/* FileRef */</span> ],
+    <span class="key">"aux_files"</span>: [ <span class="c">/* FileRef */</span> ],
+    <span class="key">"transcript_available"</span>: <span class="n">true</span>
+  }
+]</pre>
+            <p class="c">Additional <code>omitempty</code> fields exist (parent/children, forks, harness, session timestamps, inbox counts, auto-run pid/log, temporal_summary…). They appear only when set.</p>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/tasks/{slug}</span><span class="desc">Single task — same TaskView shape.</span></div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span> <span class="m put">PUT</span><span class="path">/api/tasks/{slug}/brief</span><span class="desc">Read / replace the task brief.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Content type</div>
+            <pre>text/markdown   <span class="c">// body is the raw markdown brief</span></pre>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/tasks/{slug}/updates</span><span class="desc">List update files; …/updates/{file} returns one (markdown).</span></div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/tasks/{slug}/transcript</span><span class="desc">Cached agent session transcript. …/auto-runs and …/workspace return run + git info.</span></div>
+        </div>
+
+        <h2 id="ep-projects">Projects</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/projects</span><span class="desc">List projects. {slug} for detail; /brief, /updates, /tasks, /playbooks for children.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Query params</div>
+            <pre>status · include_archived · include_deleted · deleted</pre>
+            <div class="io-label">Response · 200 · array of ProjectView</div>
+            <pre>[
+  {
+    <span class="key">"slug"</span>: <span class="s">"budgeting-app"</span>,
+    <span class="key">"name"</span>: <span class="s">"Budgeting app"</span>,
+    <span class="key">"status"</span>: <span class="s">"active | done"</span>,
+    <span class="key">"priority"</span>: <span class="s">"medium"</span>,
+    <span class="key">"work_dir"</span>: <span class="s">"/path/to/repo"</span>,
+    <span class="key">"task_counts"</span>: { <span class="key">"total"</span>: <span class="n">12</span>, <span class="key">"in_progress"</span>: <span class="n">2</span>, <span class="key">"backlog"</span>: <span class="n">5</span>, <span class="key">"done"</span>: <span class="n">5</span> },
+    <span class="key">"recent_tasks"</span>: [ { <span class="key">"slug"</span>: <span class="s">"…"</span>, <span class="key">"name"</span>: <span class="s">"…"</span>, <span class="key">"status"</span>: <span class="s">"…"</span>, <span class="key">"updated_at"</span>: <span class="s">"…"</span> } ],
+    <span class="key">"created_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"updated_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"brief_path"</span>: <span class="s">"/…/projects/budgeting-app/brief.md"</span>,
+    <span class="key">"updates"</span>: [ <span class="c">/* FileRef */</span> ],
+    <span class="key">"aux_files"</span>: [ <span class="c">/* FileRef */</span> ]
+  }
+]</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-playbooks">Playbooks</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/playbooks</span><span class="desc">List playbooks. {slug} for detail; /runs, /status for run history + schedule.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200 · array of PlaybookView</div>
+            <pre>[
+  {
+    <span class="key">"slug"</span>: <span class="s">"weekly-review"</span>,
+    <span class="key">"name"</span>: <span class="s">"Weekly review"</span>,
+    <span class="key">"project_slug"</span>: <span class="s">"…"</span>,
+    <span class="key">"work_dir"</span>: <span class="s">"/path/to/repo"</span>,
+    <span class="key">"brief_path"</span>: <span class="s">"/…/playbooks/weekly-review/brief.md"</span>,
+    <span class="key">"updates"</span>: [ <span class="c">/* FileRef */</span> ],
+    <span class="key">"recent_runs"</span>: [ { <span class="key">"slug"</span>: <span class="s">"…"</span>, <span class="key">"status"</span>: <span class="s">"…"</span>, <span class="key">"provider"</span>: <span class="s">"…"</span>, <span class="key">"started_at"</span>: <span class="s">"…"</span> } ],
+    <span class="key">"run_count_7d"</span>: <span class="n">1</span>,
+    <span class="key">"run_days_30"</span>: [<span class="n">0</span>, <span class="n">1</span>, <span class="n">0</span>],
+    <span class="key">"schedule"</span>: <span class="s">"every monday at 9am"</span>,
+    <span class="key">"schedule_paused"</span>: <span class="n">false</span>,
+    <span class="key">"next_fire_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"last_fired_at"</span>: <span class="s">"RFC3339"</span>
+  }
+]</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-owners">Owners</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/owners</span><span class="desc">List owners (OwnerView).</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200 · array of OwnerView</div>
+            <pre>[
+  {
+    <span class="key">"slug"</span>: <span class="s">"release-captain"</span>,
+    <span class="key">"name"</span>: <span class="s">"Release captain"</span>,
+    <span class="key">"work_dir"</span>: <span class="s">"/path/to/repo"</span>,
+    <span class="key">"project_slug"</span>: <span class="s">"…"</span>,
+    <span class="key">"status"</span>: <span class="s">"active | paused | retired"</span>,
+    <span class="key">"every"</span>: <span class="s">"24h"</span>,
+    <span class="key">"next_wake_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"next_due"</span>: <span class="n">false</span>,
+    <span class="key">"last_tick_at"</span>: <span class="s">"RFC3339"</span>,
+    <span class="key">"last_tick_status"</span>: <span class="s">"ok | error"</span>,
+    <span class="key">"harness"</span>: <span class="s">"claude-code"</span>,
+    <span class="key">"charter_path"</span>: <span class="s">"/…/owners/release-captain/charter.md"</span>
+  }
+]</pre>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/owners/{slug}</span><span class="desc">Owner detail — OwnerView plus journal, owned tasks, tick history, and a live log tail.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200 · OwnerDetailView (adds)</div>
+            <pre>{
+  <span class="c">/* …all OwnerView fields… */</span>
+  <span class="key">"journal"</span>: [ { <span class="key">"filename"</span>: <span class="s">"…"</span>, <span class="key">"path"</span>: <span class="s">"…"</span>, <span class="key">"mtime"</span>: <span class="s">"…"</span>, <span class="key">"content"</span>: <span class="s">"…"</span> } ],
+  <span class="key">"tasks"</span>: [ { <span class="key">"slug"</span>: <span class="s">"…"</span>, <span class="key">"status"</span>: <span class="s">"…"</span>, <span class="key">"has_session"</span>: <span class="n">true</span>, <span class="key">"is_question"</span>: <span class="n">false</span> } ],
+  <span class="key">"ticks"</span>: [ { <span class="key">"started_at"</span>: <span class="s">"…"</span>, <span class="key">"status"</span>: <span class="s">"…"</span>, <span class="key">"content"</span>: <span class="s">"…"</span> } ],
+  <span class="key">"tick_log_tail"</span>: <span class="s">"string"</span>
+}</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-search">Search</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/search</span><span class="desc">Full-text search across briefs, updates, memories (and transcripts on request).</span></div>
+          <div class="ep-body">
+            <div class="io-label">Query params</div>
+            <pre>q       <span class="c">// the query string (required)</span>
+in      <span class="c">// scopes: briefs,updates,memories,transcripts — or "all"</span>
+limit   <span class="c">// default 20</span></pre>
+            <div class="io-label">Response · 200</div>
+            <pre>{
+  <span class="key">"query"</span>: <span class="s">"socket mode"</span>,
+  <span class="key">"tasks"</span>:       [ { <span class="key">"type"</span>: <span class="s">"task"</span>, <span class="key">"slug"</span>: <span class="s">"…"</span>, <span class="key">"name"</span>: <span class="s">"…"</span>, <span class="key">"url"</span>: <span class="s">"…"</span>, <span class="key">"snippet"</span>: <span class="s">"…"</span> } ],
+  <span class="key">"projects"</span>:    [ <span class="c">/* SearchResult */</span> ],
+  <span class="key">"playbooks"</span>:   [ <span class="c">/* SearchResult */</span> ],
+  <span class="key">"updates"</span>:     [ <span class="c">/* SearchResult */</span> ],
+  <span class="key">"transcripts"</span>: [ <span class="c">/* SearchResult */</span> ],
+  <span class="key">"memories"</span>:    [ { <span class="key">"type"</span>: <span class="s">"memory"</span>, <span class="key">"scope"</span>: <span class="s">"kb"</span>, <span class="key">"source_path"</span>: <span class="s">"…"</span>, <span class="key">"snippet"</span>: <span class="s">"…"</span> } ]
+}</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-attention">Attention</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/attention</span><span class="desc">List feed cards.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Query params</div>
+            <pre>status   <span class="c">// new | acted | dismissed | all (default new)</span></pre>
+            <div class="io-label">Response · 200 · array of AttentionItemView (selected fields)</div>
+            <pre>[
+  {
+    <span class="key">"id"</span>: <span class="s">"feed-item-id"</span>,
+    <span class="key">"source"</span>: <span class="s">"slack | github"</span>,
+    <span class="key">"thread_key"</span>: <span class="s">"slack:C123:169..."</span>,
+    <span class="key">"summary"</span>: <span class="s">"…"</span>,
+    <span class="key">"suggested_action"</span>: <span class="s">"make_task | forward | …"</span>,
+    <span class="key">"matched_task"</span>: <span class="s">"&lt;slug&gt;"</span>,
+    <span class="key">"confidence"</span>: <span class="n">0.82</span>,
+    <span class="key">"status"</span>: <span class="s">"new | acted | dismissed"</span>,
+    <span class="key">"channel_name"</span>: <span class="s">"#eng"</span>,
+    <span class="key">"author_name"</span>: <span class="s">"…"</span>,
+    <span class="key">"permalink"</span>: <span class="s">"https://…"</span>,
+    <span class="key">"why"</span>: { <span class="key">"reason"</span>: <span class="s">"…"</span>, <span class="key">"stage_reached"</span>: <span class="s">"stage2"</span>, <span class="key">"confidence"</span>: <span class="n">0.82</span> },
+    <span class="key">"action_previews"</span>: [ { <span class="key">"action"</span>: <span class="s">"make_task"</span>, <span class="key">"label"</span>: <span class="s">"…"</span>, <span class="key">"primary"</span>: <span class="n">true</span> } ]
+  }
+]</pre>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/attention/trace</span><span class="desc">Audit the steering funnel.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Query params</div>
+            <pre>since · disposition · source · limit (default 200)</pre>
+            <div class="io-label">Response · 200</div>
+            <pre>{
+  <span class="key">"funnel"</span>: { <span class="key">"observed"</span>: <span class="n">0</span>, <span class="key">"dropped_stage0"</span>: <span class="n">0</span>, <span class="key">"dropped_stage1"</span>: <span class="n">0</span>,
+              <span class="key">"dropped_stage2"</span>: <span class="n">0</span>, <span class="key">"surfaced"</span>: <span class="n">0</span>, <span class="key">"errors"</span>: <span class="n">0</span> },
+  <span class="key">"items"</span>: [ <span class="c">/* SteeringTraceView: stage1/2/3 action + confidence, disposition, latency_ms, … */</span> ]
+}</pre>
+          </div>
+        </div>
+        <div class="ep">
+          <div class="ep-head"><span class="m post">POST</span><span class="path">/api/actions</span><span class="desc">Act on a card (kind = attention-act).</span></div>
+          <div class="ep-body">
+            <div class="io-label">Request</div>
+            <pre>{
+  <span class="key">"kind"</span>: <span class="s">"attention-act"</span>,
+  <span class="key">"target"</span>: <span class="s">"&lt;feed-item-id&gt;"</span>,
+  <span class="key">"attention_action"</span>: <span class="s">"make_task | make_task_start | capture_kb | forward |
+                       confirm_handoff | send_reply | dismiss | retriage |
+                       mute_channel | mute_sender | mute_thread"</span>,
+  <span class="key">"reply_text"</span>: <span class="s">"…"</span>,            <span class="c">// for send_reply (operator-approved)</span>
+  <span class="key">"reply_instructions"</span>: <span class="s">"…"</span>
+}</pre>
+            <div class="io-label">Response · 200 · actionResponse</div>
+            <pre>{ <span class="key">"ok"</span>: <span class="n">true</span>, <span class="key">"message"</span>: <span class="s">"string"</span> }</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-overview">Overview</h2>
+        <div class="ep">
+          <div class="ep-head"><span class="m get">GET</span><span class="path">/api/overview</span><span class="desc">Dashboard snapshot — lists of TaskView + active playbooks + a briefing.</span></div>
+          <div class="ep-body">
+            <div class="io-label">Response · 200</div>
+            <pre>{
+  <span class="key">"live_sessions"</span>:         [ <span class="c">/* TaskView */</span> ],
+  <span class="key">"in_flight"</span>:             [ <span class="c">/* TaskView */</span> ],
+  <span class="key">"high_priority_backlog"</span>: [ <span class="c">/* TaskView */</span> ],
+  <span class="key">"waiting"</span>:               [ <span class="c">/* TaskView */</span> ],
+  <span class="key">"stale"</span>:                 [ <span class="c">/* TaskView */</span> ],
+  <span class="key">"active_playbooks"</span>:      [ <span class="c">/* PlaybookView */</span> ],
+  <span class="key">"briefing"</span>: { <span class="key">"needs_you"</span>: [], <span class="key">"finishing_up"</span>: [], <span class="key">"incoming"</span>: [], <span class="key">"recent_activity"</span>: [] }
+}</pre>
+          </div>
+        </div>
+
+        <h2 id="ep-connectors">Connectors &amp; system</h2>
+        <p>Setup/status endpoints return small status objects; mutations (create-app, OAuth, disconnect) run through the wizards. The full set:</p>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/slack/setup/status</code></td><td>Slack connection + wizard state</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/slack/setup/create-app</code></td><td>Create the Slack app from a manifest; <code>/oauth/start</code>, <code>/app-token</code>, <code>/oauth/cancel</code>, <code>/reset</code> round it out</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/slack/channels</code></td><td>Channels the bot is in</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/slack/send</code></td><td>Send to a channel/thread (gated by write perms)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/setup/status</code></td><td>App install status + wizard state</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/github/setup/create-app</code></td><td>Build + POST the GitHub App manifest; <code>/installations</code>, <code>/orgs</code>, <code>/backfill</code>, <code>/disconnect</code> manage it</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/github/webhook</code></td><td>Webhook ingestion — HMAC-signed (<code>X-Hub-Signature-256</code>), token-exempt</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/webhook/status</code></td><td>Delivery + signature status</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/ingress/status</code></td><td>Public ingress URL + provider</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/kb</code></td><td>List KB files; <code>/{file}</code> reads/<span class="m put">PUT</span>s one; <code>/kb/dream</code> runs a hygiene pass</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/brain/graph</code></td><td>Knowledge graph (nodes, edges); <code>/node/{id}</code> for detail</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/workdirs</code> · <code>/api/tags</code></td><td>Known repos; tags + usage counts</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/fs/entries</code> · <code>/api/fs/mkdir</code></td><td>List a directory; create one</td></tr>
+          </tbody>
+        </table>
+
+        <!-- ===================== SHARED SCHEMAS ===================== -->
+
+        <h2 id="s-fileref">Schema · FileRef</h2>
+        <p>Used wherever updates / aux files are listed.</p>
+        <pre>{ <span class="key">"filename"</span>: <span class="s">"2026-06-15-note.md"</span>, <span class="key">"path"</span>: <span class="s">"/…/updates/…"</span>, <span class="key">"mtime"</span>: <span class="s">"RFC3339"</span>, <span class="key">"size"</span>: <span class="n">812</span> }</pre>
+
+        <h2 id="s-error">Schema · Error</h2>
+        <p>Any non-2xx response carries:</p>
+        <pre>{ <span class="key">"error"</span>: <span class="s">"human-readable message"</span> }</pre>
+
+        <p style="margin-top:48px">Back to the <a href="docs.html">documentation →</a></p>
+      </main>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <a class="brand" href="./" style="color:var(--text-2)"><img src="favicon.svg" alt="" style="width:18px;height:18px;vertical-align:middle;margin-right:7px">flowwyyy</a>
+      <span class="grow"></span>
+      <a href="docs.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      <span class="built">Built on <a href="https://github.com/Facets-cloud/flow" style="display:inline">flow</a> · MIT</span>
+    </div>
+  </footer>
+</body>
+</html>
