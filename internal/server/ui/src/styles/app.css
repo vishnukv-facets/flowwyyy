@@ -5074,11 +5074,16 @@ a.orch-pr:hover {
 .trend-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px 8px;
+  gap: 4px 0;
 }
 .trend-stats .stat {
   background: transparent;
   padding: 2px 0;
+}
+/* Subtle hairline between each of the 4 tiles (not the outer edges). */
+.trend-stats .stat:not(:first-child) {
+  border-left: 1px solid var(--border-faint);
+  padding-left: 14px;
 }
 .trend-stats .stat-value {
   font-size: 18px;
