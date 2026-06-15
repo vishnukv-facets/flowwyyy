@@ -62,17 +62,18 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
 
-  # Bump the Homebrew tap formula to this release. Requires a HOMEBREW_TAP_TOKEN
-  # secret (a PAT with contents:write on vishnukv-facets/homebrew-flowwyyy) —
-  # the default GITHUB_TOKEN can't push to another repo. Skips cleanly if unset.
+  # Bump the Homebrew tap formula to this release. Pushes to the separate
+  # vishnukv-facets/homebrew-flowwyyy repo via a write deploy key (the default
+  # GITHUB_TOKEN can't push cross-repo). The HOMEBREW_TAP_DEPLOY_KEY secret holds
+  # the deploy key's private half; the job skips cleanly when it's unset.
   homebrew:
     needs: release
     runs-on: ubuntu-latest
     env:
-      TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
     steps:
       - name: Bump tap formula
-        if: ${{ env.TAP_TOKEN != '' }}
+        if: ${{ env.DEPLOY_KEY != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -87,7 +88,12 @@ jobs:
             echo "could not parse checksums from SHA256SUMS" >&2
             exit 1
           fi
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/vishnukv-facets/homebrew-flowwyyy.git" tap
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          ssh-keyscan -t ed25519 github.com >> "$HOME/.ssh/known_hosts" 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i $HOME/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+          git clone git@github.com:vishnukv-facets/homebrew-flowwyyy.git tap
           mkdir -p tap/Formula
           cat > tap/Formula/flowwyyy.rb <<EOF
           class Flowwyyy < Formula
@@ -120,6 +126,6 @@ jobs:
           git add Formula/flowwyyy.rb
           git diff --cached --quiet || git commit -m "flowwyyy ${VERSION}"
           git push
-      - name: Skipped (no tap token)
-        if: ${{ env.TAP_TOKEN == '' }}
-        run: echo "HOMEBREW_TAP_TOKEN not set — skipping formula bump. Add a PAT with contents:write on vishnukv-facets/homebrew-flowwyyy to enable."
+      - name: Skipped (no deploy key)
+        if: ${{ env.DEPLOY_KEY == '' }}
+        run: echo "HOMEBREW_TAP_DEPLOY_KEY not set — skipping Homebrew formula bump."
