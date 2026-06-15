@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="assets/flow-logo-v2.svg" alt="flowwyyy" width="480">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/flowwyyy-wordmark-dark.svg">
+    <img src="assets/flowwyyy-wordmark-light.svg" alt="flowwyyy" width="460">
+  </picture>
 </p>
 
 <p align="center">
@@ -18,6 +21,11 @@
 > triggers, a cross-source **Attention Router**, autonomous **owners**, and a
 > working-memory layer that turns every session from a brilliant new hire into
 > the engineer on your team.
+
+<p align="center">
+  <img src="docs/ui/flowwyyy-demo.gif" alt="flowwyyy in motion" width="900">
+  <br><sub><em>flowwyyy in motion.</em></sub>
+</p>
 
 <p align="center">
   <img src="docs/ui/overview.png" alt="Mission Control — the flowwyyy dashboard" width="900">
