@@ -651,11 +651,3 @@ func appCommandLog(commands [][]string) string {
 	}
 	return out
 }
-
-// capturedSlackNotice records a single PostMessage call so tests can assert
-// shape and content without spinning up an httptest server.
-type capturedSlackNotice struct {
-	channel  string
-	threadTS string
-	text     string
-}

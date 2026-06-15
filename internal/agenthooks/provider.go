@@ -51,22 +51,11 @@ type HookSpec struct {
 	Matcher string
 }
 
-// providers is the global registry. Append at package init time.
-// Order matters only for log determinism — installation runs them
-// independently.
+// providers is the static set of supported agent hosts. Order matters
+// only for log determinism — installation runs them independently.
 var providers = []Provider{
 	claudeProvider{},
 	codexProvider{},
-}
-
-// RegisterProvider appends a new Provider to the registry. Third-party
-// integrations (e.g. an opencode plugin) can call this from their own
-// package's init to plug in.
-func RegisterProvider(p Provider) {
-	if p == nil {
-		return
-	}
-	providers = append(providers, p)
 }
 
 // Providers returns a snapshot of the registered providers. Useful

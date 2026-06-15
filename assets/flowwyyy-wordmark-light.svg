@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 160" role="img" aria-label="flowwyyy">
+  <title>flowwyyy — task and memory layer for Claude Code and Codex</title>
+  <defs>
+    <linearGradient id="markGrad" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#645df6"/>
+      <stop offset="1" stop-color="#8b87f8"/>
+    </linearGradient>
+    <style>
+      .word { fill: #16181f; font: 700 80px/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, "DejaVu Sans Mono", monospace; letter-spacing: -2px; }
+      .dot  { fill: #645df6; }
+    </style>
+  </defs>
+
+  <!-- App mark: rounded square with bridge glyph + anchor dots (mirrors the UI logo) -->
+  <g transform="translate(8,22) scale(0.58)">
+    <rect width="200" height="200" rx="44" fill="url(#markGrad)"/>
+    <path d="M50 138 Q78 138 78 110 Q78 82 110 82 Q142 82 142 110 Q142 138 170 138"
+          fill="none" stroke="#ffffff" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="50"  cy="138" r="11" fill="#ffffff"/>
+    <circle cx="170" cy="138" r="11" fill="#ffffff"/>
+  </g>
+
+  <!-- Wordmark — period glued to the text via tspan so it stays put across fonts -->
+  <text class="word" x="150" y="110">flowwyyy<tspan class="dot">.</tspan></text>
+</svg>

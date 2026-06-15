@@ -1,9 +1,12 @@
 BINARY      := flow
 INSTALL_DIR := $(HOME)/.local/bin
 
-# VERSION is injected into the binary via -ldflags. Defaults to "dev";
-# the release workflow overrides this with VERSION=<tag>.
-VERSION  ?= dev
+# VERSION is injected into the binary via -ldflags and shown in `flow
+# --version` and Mission Control. It tracks the latest git tag (flow's
+# 0.x.y-alpha.N pre-release convention until 1.0); a tagless checkout falls
+# back to "dev", which deliberately opts out of skill auto-upgrade. The
+# release workflow overrides it with the pushed tag (VERSION=<tag>).
+VERSION  ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
 LDFLAGS  := -X main.version=$(VERSION)
 
 .PHONY: build ui ui-check rebuild install uninstall test clean

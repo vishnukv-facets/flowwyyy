@@ -16,13 +16,12 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *fl
 	if !getOnly(w, r) {
 		return
 	}
-	familySlug := task.Slug
-	if root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug); err == nil {
-		familySlug = root
-	} else {
+	root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	familySlug := root
 	limit := 20
 	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -55,13 +54,12 @@ func (s *Server) handleTaskRunDetail(w http.ResponseWriter, r *http.Request, tas
 	if !getOnly(w, r) {
 		return
 	}
-	familySlug := task.Slug
-	if root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug); err == nil {
-		familySlug = root
-	} else {
+	root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
+	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	familySlug := root
 	run, err := flowdb.GetBrainRun(s.cfg.DB, runID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

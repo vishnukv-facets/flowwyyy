@@ -213,7 +213,7 @@ export function Shell({ children }: { children: ReactNode }) {
     },
   ]
   const allNav = groups.flatMap((g) => g.items)
-  const title = allNav.find((n) => n.match(loc))?.label ?? 'flow'
+  const title = allNav.find((n) => n.match(loc))?.label ?? 'flowwyyy'
   const connLabel = conn === 'open' ? 'live' : conn === 'connecting' ? 'connecting' : 'offline'
 
   return (
@@ -222,7 +222,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <Link href="/" className="rail-brand">
           <FlowMark size={23} />
           <span className="rail-wordmark">
-            flow<span className="accent">.</span>
+            flowwyyy<span className="accent">.</span>
           </span>
         </Link>
         <nav className="rail-nav">

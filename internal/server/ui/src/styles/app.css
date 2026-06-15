@@ -5074,11 +5074,16 @@ a.orch-pr:hover {
 .trend-stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  gap: 4px 8px;
+  gap: 4px 0;
 }
 .trend-stats .stat {
   background: transparent;
   padding: 2px 0;
+}
+/* Subtle hairline between each of the 4 tiles (not the outer edges). */
+.trend-stats .stat:not(:first-child) {
+  border-left: 1px solid var(--border-faint);
+  padding-left: 14px;
 }
 .trend-stats .stat-value {
   font-size: 18px;
@@ -7562,4 +7567,168 @@ a.owner-task-item:hover {
   margin: 0;
   border: 0;
   border-radius: 0;
+}
+
+/* ============================== KB dreaming ==============================
+   Hygiene worker banner on the Knowledge page: status + live next-pass
+   countdown + manual trigger, with a collapsible run history. */
+.chip.ok {
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 42%, transparent);
+  color: var(--ok);
+}
+
+.kb-dream {
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.kb-dream-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 15px;
+}
+.kb-dream-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent-hi);
+}
+.kb-dream-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.kb-dream-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.kb-dream-title .chip {
+  height: 20px;
+  padding: 0 9px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.kb-dream-cadence {
+  font-size: 12px;
+  font-weight: 400;
+}
+.kb-dream-sub {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.kb-dream-sub strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.kb-dream-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/* run history (collapsible) */
+.kb-dream-history {
+  border-top: 1px solid var(--border-faint);
+  background: var(--bg-1);
+  padding: 6px;
+}
+.kb-dream-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.kb-dream-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: var(--r-sm);
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.kb-dream-item:hover {
+  background: var(--surface-hover);
+}
+.kb-dream-status {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-pill);
+}
+.kb-dream-status.ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.kb-dream-status.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.kb-dream-when {
+  flex: none;
+  color: var(--text-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.kb-dream-detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-dream-dur {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* empty state */
+.kb-dream-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 7px;
+  padding: 26px 20px;
+  color: var(--text-3);
+}
+.kb-dream-empty > svg {
+  color: var(--accent-hi);
+  opacity: 0.75;
+}
+.kb-dream-empty-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+.kb-dream-empty-hint {
+  max-width: 460px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-3);
 }

@@ -5,7 +5,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"io/fs"
 	"mime"
 	"net/http"
 	"os"
@@ -177,6 +176,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/workdirs", s.handleWorkdirs)
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/kb", s.handleKB)
+	mux.HandleFunc("/api/kb/dream", s.handleKBDream) // must precede the /api/kb/ subtree
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
 	mux.HandleFunc("/api/memory/sources", s.handleMemorySources)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
@@ -566,9 +566,4 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = w.Write(data)
-}
-
-func embeddedStaticExists(name string) bool {
-	_, err := fs.Stat(staticFS, "static/"+name)
-	return err == nil
 }

@@ -350,7 +350,7 @@ func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmod
 		if !ok {
 			l.logFn("events_api: unexpected payload type %T", evt.Data)
 			if evt.Request != nil {
-				client.Ack(*evt.Request)
+				_ = client.Ack(*evt.Request) // ack failure → Slack redelivers, which is fine
 			}
 			return
 		}
@@ -361,7 +361,7 @@ func (l *SlackListener) handleSocketEvent(ctx context.Context, client *socketmod
 		// Ack AFTER dispatch — if we crash before this line, Slack will
 		// redeliver the event within its retry window.
 		if evt.Request != nil {
-			client.Ack(*evt.Request)
+			_ = client.Ack(*evt.Request) // ack failure → Slack redelivers, which is fine
 		}
 	default:
 		// Surface unhandled types so we can diagnose unexpected behavior;
