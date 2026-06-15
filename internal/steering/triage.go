@@ -48,7 +48,18 @@ func DeepTriageWithContext(ctx context.Context, in ClassifyInput, taskIndex stri
 // DeepTriageWithContextAndHints runs Stage 3 with deterministic source context
 // plus task-impact hints assembled by Go.
 func DeepTriageWithContextAndHints(ctx context.Context, in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint) (Verdict, error) {
-	raw, err := deepTriageRunner(ctx, deepTriagePromptWithContextAndHints(in, taskIndex, pack, hints))
+	return DeepTriageIncremental(ctx, in, taskIndex, pack, hints, IncrementalContext{})
+}
+
+// DeepTriageIncremental runs Stage 3 with the full assembled context: the
+// current-thread pack (layer 1), the thread's prior running understanding
+// (layer 2), and retrieved cross-conversation/KB history (layer 3). When
+// inc.Prior is set, the prompt frames the call as an INCREMENTAL update of the
+// prior decision rather than a cold re-classification — so repeated events on a
+// thread produce stable decisions. A zero IncrementalContext reproduces the
+// prior cold behavior for older call sites.
+func DeepTriageIncremental(ctx context.Context, in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint, inc IncrementalContext) (Verdict, error) {
+	raw, err := deepTriageRunner(ctx, deepTriagePromptIncremental(in, taskIndex, pack, hints, inc))
 	if err != nil {
 		return Verdict{}, err
 	}
@@ -64,14 +75,33 @@ func deepTriagePromptWithContext(in ClassifyInput, taskIndex string, pack Thread
 }
 
 func deepTriagePromptWithContextAndHints(in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint) string {
+	return deepTriagePromptIncremental(in, taskIndex, pack, hints, IncrementalContext{})
+}
+
+func deepTriagePromptIncremental(in ClassifyInput, taskIndex string, pack ThreadContext, hints []TaskImpactHint, inc IncrementalContext) string {
 	if hints == nil {
 		hints = []TaskImpactHint{}
 	}
+	inc = modelFacingIncremental(in.Source, inc)
 	payload, _ := json.Marshal(modelFacingClassifyInput(in))
 	contextPayload, _ := json.Marshal(modelFacingThreadContext(pack))
 	hintPayload, _ := json.Marshal(modelFacingTaskImpactHints(in.Source, hints))
-	return `MODE: stage3-deep
 
+	incrementalDirective := ""
+	priorBlock := ""
+	if inc.Prior != nil {
+		priorPayload, _ := json.Marshal(inc.Prior)
+		incrementalDirective = "\nINCREMENTAL UPDATE — this thread already has a running understanding from earlier events (see \"Prior running understanding\" below). Do NOT cold-classify the latest message. START from your prior decision and treat the new message as a DELTA: keep the prior suggested_action, matched_task, and confidence unless the new message materially changes them; never flip-flop on noise or a re-delivery. Factor in any operator actions or operator replies already recorded on the thread. In \"reason\", state what changed since the prior decision, or that nothing material changed and you are holding it.\n"
+		priorBlock = "\n\nPrior running understanding (JSON) — your last decision on this thread; update it incrementally:\n" + string(priorPayload)
+	}
+	retrievedBlock := ""
+	if len(inc.Retrieved) > 0 {
+		retrievedPayload, _ := json.Marshal(inc.Retrieved)
+		retrievedBlock = "\n\nRetrieved related context (JSON) — KB facts and past task notes the system pulled to help resolve references to things decided earlier or in other conversations. Treat as supporting evidence, not the thread itself:\n" + string(retrievedPayload)
+	}
+
+	return `MODE: stage3-deep
+` + incrementalDirective + `
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Go has already fetched the surrounding source context into the context pack below. Treat that context pack as the primary source of truth; do not rely on fetching Slack/GitHub context yourself. If fetch_status is "error" or "unavailable", proceed from the fallback event context and lower confidence when the missing context matters.
 
 Do the following, then emit a single verdict:
@@ -92,7 +122,7 @@ Operator task/project index:
 ` + taskIndex + `
 
 Task-impact hints (JSON):
-` + string(hintPayload) + `
+` + string(hintPayload) + priorBlock + retrievedBlock + `
 
 Context pack (JSON):
 ` + string(contextPayload) + `
@@ -141,6 +171,60 @@ func modelFacingContextMessage(source string, msg ContextMessage) ContextMessage
 	msg.Text = modelFacingSlackText(msg.Text, "Slack participant")
 	msg.Permalink = ""
 	return msg
+}
+
+// modelFacingIncremental sanitizes the prior-understanding (layer 2) and
+// retrieved-context (layer 3) layers before they reach the model: Slack IDs are
+// stripped (consistent with modelFacingThreadContext), operator replies are
+// capped to the most recent few and truncated, and retrieved snippets are
+// length-bounded so retrieval can't blow the prompt budget. Returns a copy; the
+// stored ThreadState is never mutated.
+func modelFacingIncremental(source string, inc IncrementalContext) IncrementalContext {
+	slack := source == "slack"
+	if inc.Prior != nil {
+		p := *inc.Prior
+		if slack {
+			p.Reason = modelFacingSlackText(p.Reason, "Slack participant")
+			p.Summary = modelFacingSlackText(p.Summary, "Slack participant")
+		}
+		p.OperatorActions = copyShortList(slack, p.OperatorActions, 0)
+		p.OperatorReplies = copyShortList(slack, p.OperatorReplies, 3)
+		inc.Prior = &p
+	}
+	if len(inc.Retrieved) > 0 {
+		out := make([]RetrievedDoc, 0, len(inc.Retrieved))
+		for _, d := range inc.Retrieved {
+			d.Snippet = truncate(d.Snippet, 240)
+			if slack {
+				d.Snippet = modelFacingSlackText(d.Snippet, "Slack participant")
+				d.Name = modelFacingSlackText(d.Name, "Slack participant")
+			}
+			out = append(out, d)
+		}
+		inc.Retrieved = out
+	}
+	return inc
+}
+
+// copyShortList returns a fresh, optionally Slack-sanitized copy of a short
+// string list, keeping only the last keepLast entries (0 = keep all) and
+// truncating each. Used for operator action/reply labels fed to the model.
+func copyShortList(slack bool, in []string, keepLast int) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	if keepLast > 0 && len(in) > keepLast {
+		in = in[len(in)-keepLast:]
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		s = truncate(strings.TrimSpace(s), 160)
+		if slack {
+			s = modelFacingSlackText(s, "Slack participant")
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 func modelFacingTaskImpactHints(source string, hints []TaskImpactHint) []TaskImpactHint {

@@ -118,14 +118,22 @@ func SyncSearchDocsForScopes(db *sql.DB, root string, scopes []SearchScope) erro
 }
 
 func SearchDocs(db *sql.DB, query string, scopes []SearchScope, limit int) ([]SearchResult, error) {
+	return SearchDocsMatch(db, ftsQuery(query), scopes, limit)
+}
+
+// SearchDocsMatch runs a pre-built FTS5 MATCH expression against the search
+// indexes. SearchDocs feeds it ftsQuery's AND-of-prefix-terms; callers that need
+// OR recall (e.g. the steerer retrieving related context from a whole message)
+// build their own `t1* OR t2* …` expression and pass it directly. The expression
+// is always bound as a `MATCH ?` parameter, never interpolated.
+func SearchDocsMatch(db *sql.DB, fts string, scopes []SearchScope, limit int) ([]SearchResult, error) {
 	if limit <= 0 {
 		limit = 20
 	}
 	if len(scopes) == 0 {
 		scopes = DefaultSearchScopes()
 	}
-	fts := ftsQuery(query)
-	if fts == "" {
+	if strings.TrimSpace(fts) == "" {
 		return nil, nil
 	}
 	// Transcripts live in their own FTS index (see schema): partition the
