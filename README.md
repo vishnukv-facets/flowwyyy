@@ -16,6 +16,12 @@
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%2B%20Codex-1b1b1f" alt="Claude Code and Codex">
 </p>
 
+<p align="center">
+  <a href="https://vishnukv-facets.github.io/flowwyyy/"><strong>Website</strong></a>
+  · <a href="https://vishnukv-facets.github.io/flowwyyy/docs.html">Docs</a>
+  · <a href="https://vishnukv-facets.github.io/flowwyyy/api.html">API reference</a>
+</p>
+
 > **flowwyyy** is a task manager for **Claude Code and Codex** with a
 > browser-based **Mission Control**, first-class **Slack** and **GitHub**
 > triggers, a cross-source **Attention Router**, autonomous **owners**, and a
@@ -857,6 +863,9 @@ those stacks daily. If that's you, [a PR is very welcome](CONTRIBUTING.md).
 
 ## Docs & contributing
 
+- [Website](https://vishnukv-facets.github.io/flowwyyy/) — the landing page
+- [Documentation](https://vishnukv-facets.github.io/flowwyyy/docs.html) — install, commands, connectors, data layout
+- [API reference](https://vishnukv-facets.github.io/flowwyyy/api.html) — the Mission Control local API
 - [Contributing](CONTRIBUTING.md) — bug reports, PRs, dev setup
 - [Changelog](CHANGELOG.md)
 - [Security](SECURITY.md) — how to report issues

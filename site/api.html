@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>API reference — flowwyyy</title>
+  <meta name="description" content="The Mission Control local API: the auth model (loopback + session token), the WebSocket-RPC / SSE / terminal protocols, and a grouped reference of every HTTP endpoint.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://vishnukv-facets.github.io/flowwyyy/api.html">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="favicon.svg" alt="">flowwyyy<span class="dot">.</span></a>
+      <span class="spacer"></span>
+      <div class="links">
+        <a href="docs.html">Docs</a>
+        <a href="api.html" class="active">API</a>
+        <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="docs">
+      <aside class="toc">
+        <h4>Overview</h4>
+        <a href="#about">About the API</a>
+        <a href="#base">Base URL</a>
+        <a href="#auth">Authentication</a>
+        <h4>Transport</h4>
+        <a href="#rest">REST</a>
+        <a href="#ws-rpc">WebSocket RPC</a>
+        <a href="#ws-events">Event stream</a>
+        <a href="#ws-terminal">Terminal bridge</a>
+        <h4>Endpoints</h4>
+        <a href="#ep-tasks">Tasks</a>
+        <a href="#ep-projects">Projects &amp; playbooks</a>
+        <a href="#ep-owners">Owners &amp; chats</a>
+        <a href="#ep-attention">Attention &amp; inbox</a>
+        <a href="#ep-slack">Slack</a>
+        <a href="#ep-github">GitHub</a>
+        <a href="#ep-kb">KB, search &amp; system</a>
+        <a href="#ep-actions">Actions</a>
+      </aside>
+
+      <main class="doc-content">
+        <h1>API reference</h1>
+        <p class="lede">Mission Control (<code>flow ui serve</code>) exposes a local HTTP + WebSocket API — the same surface the browser SPA uses. It's a <strong>local-first, loopback-only</strong> API: ~86 HTTP endpoints and a handful of WebSocket channels, all gated by a same-origin check and a per-boot session token.</p>
+
+        <div class="callout"><strong>No OpenAPI spec — yet.</strong> The API is hand-implemented in Go (routes registered in <code>internal/server/server.go</code>). This page is the authoritative reference, maintained by hand. Shapes can change between alpha releases; pin a version if you script against it.</div>
+
+        <h2 id="about">About the API</h2>
+        <p>The server is a single Go binary with no Node runtime — the static UI is embedded at compile time and served from <code>/</code>. Every read and mutation the browser performs is available here; in fact the SPA runs all of them over a single <a href="#ws-rpc">WebSocket-RPC</a> connection rather than plain <code>fetch</code>.</p>
+
+        <h2 id="base">Base URL</h2>
+        <pre>http://127.0.0.1:8787</pre>
+        <p>Default host/port. Override with <code>flow ui serve --host &lt;h&gt; --port &lt;p&gt;</code>. The server refuses to bind a non-loopback host unless you pass <code>--host</code> explicitly — there is no built-in auth or TLS, so put your own proxy in front if you expose it.</p>
+
+        <h2 id="auth">Authentication</h2>
+        <p>Two layers guard the API. Both are enforced in <code>internal/server/session_token.go</code>.</p>
+        <h3>1 · Same-origin gate</h3>
+        <p>WebSocket upgrades require an <code>Origin</code> header that exactly matches the server host. Empty origins (non-browser clients) are rejected on <code>/ws/*</code>.</p>
+        <h3>2 · Session token</h3>
+        <p>At boot the server mints a random token (<code>crypto/rand</code>) and writes it to <code>~/.flow/.ui-session-token</code> (mode <code>0600</code>). It guards every state-changing <code>/api/*</code> request and every WebSocket handshake.</p>
+        <ul>
+          <li><strong>HTTP</strong> — send it as the <code>X-Flow-Session-Token</code> header.</li>
+          <li><strong>WebSocket</strong> — pass it as the <code>token</code> query parameter (browsers can't set custom headers on a WS handshake).</li>
+          <li>The browser SPA reads it from <code>window.__FLOW_TOKEN__</code>, injected into <code>index.html</code>. Trusted CLIs read the token file directly.</li>
+        </ul>
+        <pre><span class="prompt">$</span> TOKEN=$(cat ~/.flow/.ui-session-token)
+<span class="prompt">$</span> curl -s http://127.0.0.1:8787/api/tasks \
+    -H "X-Flow-Session-Token: $TOKEN"</pre>
+        <p><strong>Token-exempt routes</strong> (authenticated by other means, still origin-checked): <code>/api/github/webhook</code> (HMAC), <code>/api/hooks/agent</code> &amp; <code>/api/inbox/notify</code> (loopback-only), and the OAuth callbacks <code>/api/slack/oauth/callback</code> &amp; <code>/api/github/setup/callback</code> (state-nonce validated). Read-only <code>GET</code>s are reachable same-origin; mutations always require the token.</p>
+
+        <h2 id="rest">REST</h2>
+        <p>Standard JSON over HTTP. <code>GET</code> reads; <code>POST</code>/<code>PUT</code>/<code>PATCH</code>/<code>DELETE</code> mutate and require the token. Markdown briefs and updates are sent/returned as <code>text/markdown</code>. Path params are written <code>{slug}</code> below.</p>
+
+        <h2 id="ws-rpc">WebSocket RPC — <span class="m ws">WS</span> <code>/ws/rpc</code></h2>
+        <p>The primary transport. Run any <code>/api/*</code> request over one bidirectional socket. Auth: origin match + <code>?token=</code>. On connect the server sends <code>{"type":"ready", "server_version":"…"}</code>; it pings every 25s.</p>
+        <h3>Client → server</h3>
+        <pre>{
+  "id": "req-123",
+  "method": "POST",
+  "path": "/api/actions",
+  "body": { "kind": "spawn", "target": "my-task" },
+  "text": "raw markdown",          <span class="c">// for markdown PUT (optional)</span>
+  "content_type": "text/markdown",
+  "files": [{ "field": "files", "name": "x.png",
+              "content_type": "image/png", "data": "&lt;base64&gt;" }]
+}</pre>
+        <h3>Server → client</h3>
+        <pre>{
+  "type": "rpc",
+  "id": "req-123",
+  "status": 200,
+  "content_type": "application/json",
+  "json": { },                     <span class="c">// parsed JSON response</span>
+  "text": "…",                     <span class="c">// non-JSON body</span>
+  "error": "…"                     <span class="c">// on failure</span>
+}</pre>
+        <p>File uploads are base64-encoded in the frame; the bridge rebuilds real <code>multipart/form-data</code> so handlers work unchanged (max 96 MiB per frame).</p>
+
+        <h2 id="ws-events">Event stream — <span class="m ws">WS</span> <code>/ws/events</code></h2>
+        <p>Real-time fan-out of agent hooks, UI-change signals, liveness snapshots, and steering stage progress. Optional query filters: <code>session_id</code>, <code>task_slug</code>, <code>types=agent_hook,ui_change,…</code>. There is also an SSE-over-HTTP variant at <code>GET /api/events</code> and <code>GET /api/work-events</code>.</p>
+        <pre>{ "type": "subscribed", "subscriber_id": "sub-1", "hook_version": 42 }
+{ "type": "agent_hook", "session_id": "…", "task_slug": "…",
+  "hook": { "provider": "claude-code", "kind": "PostToolUse" } }
+{ "type": "ui_change", "data": { "kind": "tasks" } }
+{ "type": "liveness", "task_slug": "…",
+  "liveness": { "status": "alive", "reason": "…" } }
+{ "type": "ping", "ts": "2026-06-15T10:30:30Z" }</pre>
+        <p>Backpressure: a 64-event buffer per subscriber; slow clients are dropped rather than blocking the publisher.</p>
+
+        <h2 id="ws-terminal">Terminal bridge — <span class="m ws">WS</span> <code>/ws/terminal</code></h2>
+        <p>PTY I/O between the browser terminal widget and the task's tmux session. Query: <code>?slug=&lt;task&gt;&amp;cols=120&amp;rows=32</code>. The floating (Ask Flow) variant is <code>/ws/floating-terminal?id=&lt;id&gt;</code>; both share the frame format.</p>
+        <pre><span class="c">// client → server</span>
+{ "type": "input", "data": "ls -la\n" }
+{ "type": "resize", "cols": 120, "rows": 32 }
+
+<span class="c">// server → client</span>
+{ "type": "output", "data": "…" }
+{ "type": "state", "data": "live|exited", "message": "…" }</pre>
+
+        <h2 id="ep-tasks">Endpoints · Tasks</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks</code></td><td>List tasks — filters: <code>status</code>, <code>project</code>, <code>priority</code>, <code>tag</code>, <code>kind</code>, <code>since</code></td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}</code></td><td>Task detail</td></tr>
+            <tr><td><span class="m get">GET</span> <span class="m put">PUT</span></td><td><code>/api/tasks/{slug}/brief</code></td><td>Read / update the task brief (markdown)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}/updates</code></td><td>List update files; <code>…/updates/{file}</code> reads one</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/tasks/{slug}/attachments</code></td><td>Upload terminal files; returns insert text for agent input</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}/auto-runs</code></td><td>List autonomous runs; <code>…/log</code> tails the live log</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}/transcript</code></td><td>Cached agent session transcript</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}/bridge</code></td><td>Agent bridge info (provider, session, model)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tasks/{slug}/workspace</code></td><td>Workspace tree (git dirs under work_dir)</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-projects">Endpoints · Projects &amp; playbooks</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/projects</code></td><td>List projects — filters: <code>status</code>, <code>include_archived</code>, <code>deleted</code></td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/projects/{slug}</code></td><td>Project detail</td></tr>
+            <tr><td><span class="m get">GET</span> <span class="m put">PUT</span></td><td><code>/api/projects/{slug}/brief</code></td><td>Read / update the project brief</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/projects/{slug}/tasks</code></td><td>Tasks owned by the project</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/playbooks</code></td><td>List playbooks; <code>/{slug}</code> for detail</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/playbooks/{slug}/runs</code></td><td>Run history; <code>…/status</code> for schedule state</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-owners">Endpoints · Owners &amp; chats</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/owners</code></td><td>List owners</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/owners/{slug}</code></td><td>Owner detail — view, journal, owned tasks, tick history + live log tail</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/chats</code></td><td>List non-task agent sessions; <code>/{slug}</code> for detail</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/chats/{slug}/attachments</code></td><td>Upload chat-window images</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-attention">Endpoints · Attention &amp; inbox</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/attention</code></td><td>List active feed cards (Slack/GitHub triage)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/attention/trace</code></td><td>Stage-by-stage triage trace + reasoning for one card</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/attention/decision</code></td><td>Act on a card — <code>make-task</code>, <code>forward</code>, <code>dismiss</code>, <code>send-reply</code></td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/steering/runs</code></td><td>Recent + in-flight cascade triage runs</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/inbox</code></td><td>List inbox conversations; <code>/conversation</code> for one thread</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/inbox/notify</code></td><td>Loopback wake-poke from <code>flow tell</code></td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-slack">Endpoints · Slack</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/slack/channels</code></td><td>Channels the bot is in (for feed filtering)</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/slack/send</code></td><td>Send a message to a channel/thread (gated by write perms)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/slack/setup/status</code></td><td>Connection + wizard state</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/slack/setup/create-app</code></td><td>Create the Slack app from a manifest</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/slack/setup/oauth/start</code></td><td>Start OAuth; <code>/app-token</code>, <code>/oauth/cancel</code>, <code>/reset</code> round it out</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/slack/oauth/callback</code></td><td>OAuth callback (token-exempt, state-validated)</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-github">Endpoints · GitHub</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/setup/status</code></td><td>App install status + wizard state</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/github/setup/create-app</code></td><td>Build + POST the GitHub App manifest</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/setup/installations</code></td><td>Install targets; <code>/orgs</code> lists installable orgs</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/github/setup/backfill</code></td><td>Replay missed webhook deliveries</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/github/webhook</code></td><td>Webhook ingestion — HMAC-signed (<code>X-Hub-Signature-256</code>)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/webhook/status</code></td><td>Delivery + signature status</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/github/auth/status</code></td><td>Current auth method; <code>/auth/switch</code> toggles PAT ↔ App</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-kb">Endpoints · KB, search &amp; system</h2>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/kb</code></td><td>List KB files; <code>/{file}</code> reads or <span class="m put">PUT</span>s one</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/kb/dream</code></td><td>Trigger a KB hygiene pass (flag stale entries)</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/memory/sources</code></td><td>List memory sources; <span class="m post">POST</span> <code>/api/memory</code> writes a note</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/search</code></td><td>Full-text search across tasks, updates, and KB</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/brain/graph</code></td><td>Knowledge graph (nodes, edges, clusters); <code>/node/{id}</code> for detail</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/overview</code></td><td>Dashboard snapshot — active tasks, recent activity, stats</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/workdirs</code></td><td>Known git repos + flow root</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/tags</code></td><td>All task tags + usage counts</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/settings</code></td><td>Settings schema + current values</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/ingress/status</code></td><td>Public ingress URL + provider status</td></tr>
+            <tr><td><span class="m get">GET</span></td><td><code>/api/health</code></td><td>Server health — version + flow root</td></tr>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/fs/entries</code></td><td>List a directory (git/hidden detection); <code>/fs/mkdir</code> creates one</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="ep-actions">Endpoints · Actions</h2>
+        <p>Most mutations funnel through one verb-dispatched endpoint:</p>
+        <table class="ref">
+          <thead><tr><th>Method</th><th>Path</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><span class="m post">POST</span></td><td><code>/api/actions</code></td><td>Execute an action by <code>kind</code></td></tr>
+          </tbody>
+        </table>
+        <p>The request body's <code>kind</code> selects the operation — <code>create-flow</code>, <code>spawn</code>, <code>resume</code>, <code>fork</code>, <code>update-settings</code>, and more. Common fields:</p>
+        <pre>{
+  "kind": "spawn",            <span class="c">// create-flow | spawn | resume | fork | update-settings …</span>
+  "target": "&lt;slug&gt;",         <span class="c">// task/project to act on</span>
+  "name": "Add OAuth login",
+  "project": "&lt;slug&gt;",
+  "work_dir": "/path/to/repo",
+  "priority": "high",
+  "prompt": "first message for the session",
+  "provider": "claude-code", <span class="c">// or codex</span>
+  "model": "opus",
+  "attention_action": "make-task",
+  "settings": { }            <span class="c">// for update-settings</span>
+}</pre>
+        <p>Response: <code>{ "ok": true, "message": "…", "agent": {…}, "bridge": true }</code>. The full field set lives in <code>internal/server/actions.go</code> and <code>types.go</code>.</p>
+
+        <p style="margin-top:48px">Back to the <a href="docs.html">documentation →</a></p>
+      </main>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <a class="brand" href="./" style="color:var(--text-2)"><img src="favicon.svg" alt="" style="width:18px;height:18px;vertical-align:middle;margin-right:7px">flowwyyy</a>
+      <span class="grow"></span>
+      <a href="docs.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      <span class="built">Built on <a href="https://github.com/Facets-cloud/flow" style="display:inline">flow</a> · MIT</span>
+    </div>
+  </footer>
+</body>
+</html>

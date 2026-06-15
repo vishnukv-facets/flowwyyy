@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Docs — flowwyyy</title>
+  <meta name="description" content="flowwyyy documentation: install, the load-bearing commands (flow do, list, standup, owner, ui serve), Slack and GitHub connector setup, and the ~/.flow data layout.">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="canonical" href="https://vishnukv-facets.github.io/flowwyyy/docs.html">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <nav class="nav">
+    <div class="wrap">
+      <a class="brand" href="./"><img src="favicon.svg" alt="">flowwyyy<span class="dot">.</span></a>
+      <span class="spacer"></span>
+      <div class="links">
+        <a href="docs.html" class="active">Docs</a>
+        <a href="api.html">API</a>
+        <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <div class="wrap">
+    <div class="docs">
+      <aside class="toc">
+        <h4>Getting started</h4>
+        <a href="#install">Install</a>
+        <a href="#first-run">First run</a>
+        <a href="#sessions">The session model</a>
+        <h4>Load-bearing commands</h4>
+        <a href="#flow-do">flow do</a>
+        <a href="#flow-list">flow list</a>
+        <a href="#flow-standup">flow standup</a>
+        <a href="#flow-owner">flow owner</a>
+        <a href="#flow-ui-serve">flow ui serve</a>
+        <h4>Connectors</h4>
+        <a href="#slack">Slack</a>
+        <a href="#github">GitHub</a>
+        <a href="#ingress">Public ingress</a>
+        <h4>Reference</h4>
+        <a href="#data">Your data (~/.flow)</a>
+        <a href="api.html">API reference →</a>
+      </aside>
+
+      <main class="doc-content">
+        <h1>Documentation</h1>
+        <p class="lede">flowwyyy is the <code>flow</code> CLI plus a browser-based Mission Control. Install once, say <em>"let's get to work,"</em> and the bundled skill turns plain English into flow commands. This page covers install, the commands you'll reach for daily, connector setup, and where your data lives.</p>
+
+        <h2 id="install">Install</h2>
+        <p>flowwyyy runs on <strong>macOS + Claude Code or Codex</strong>. The CLI binary is named <code>flow</code>.</p>
+
+        <h3>Homebrew (recommended)</h3>
+        <pre><span class="prompt">$</span> brew install vishnukv-facets/flowwyyy/flowwyyy
+<span class="prompt">$</span> flow init</pre>
+        <p>Taps <code>vishnukv-facets/homebrew-flowwyyy</code> and installs <code>flow</code>. Upgrade later with <code>brew upgrade flowwyyy</code>. The formula is named <code>flowwyyy</code> to avoid colliding with homebrew-core's <code>flow</code>; the command it installs is still <code>flow</code>.</p>
+
+        <h3>Manual (curl + tar)</h3>
+        <pre><span class="c"># Apple Silicon — use amd64 for Intel</span>
+<span class="prompt">$</span> ARCH=arm64
+<span class="prompt">$</span> curl -fsSL \
+    "https://github.com/vishnukv-facets/flowwyyy/releases/latest/download/flow-darwin-${ARCH}.tar.gz" \
+    | tar -xz -C /usr/local/bin flow
+<span class="prompt">$</span> chmod +x /usr/local/bin/flow
+<span class="prompt">$</span> xattr -d com.apple.quarantine /usr/local/bin/flow 2>/dev/null || true
+<span class="prompt">$</span> flow init</pre>
+        <p>The <code>xattr</code> step removes Gatekeeper's quarantine attribute so macOS doesn't refuse to run the unsigned binary.</p>
+
+        <h3>What <code>flow init</code> does</h3>
+        <p>It's the step that wires flowwyyy into your agent. It:</p>
+        <ul>
+          <li>Creates <code>~/.flow/</code> — the SQLite index, knowledge base, and project/task/playbook/owner directories.</li>
+          <li>Writes the flow skill to <code>~/.claude/skills/flow/SKILL.md</code>.</li>
+          <li>Adds a SessionStart hook to <code>~/.claude/settings.json</code> so every new session auto-loads the skill.</li>
+        </ul>
+        <div class="callout">Upgrading? In any Claude Code session say <em>"Upgrade flowwyyy from https://github.com/vishnukv-facets/flowwyyy"</em> — it fetches the latest binary and runs <code>flow skill update</code>. Check your version with <code>flow --version</code>.</div>
+
+        <h2 id="first-run">First run</h2>
+        <p>Open Claude (or Codex) and say <strong>"let's get to work."</strong> The skill handles the rest — capturing work as briefs, resuming sessions, and tracking what you're waiting on. Prefer the browser? Run <code>flow ui serve</code> and open <code>http://127.0.0.1:8787</code>.</p>
+
+        <h2 id="sessions">The session model</h2>
+        <p><code>flow do &lt;task&gt;</code> resolves the task's provider, pre-allocates or captures a session id, writes it to the task row, and spawns a tab — running <code>claude --session-id &lt;uuid&gt;</code> (or <code>codex resume</code>). Future <code>flow do</code> calls resume the same conversation, and a SessionStart hook re-injects the brief, updates, and repo context on every resume.</p>
+        <p>By default the session launches inside a per-task git <strong>worktree</strong> at <code>&lt;repo&gt;/.&lt;agent&gt;/worktrees/&lt;slug&gt;</code> on branch <code>flow/&lt;slug&gt;</code>, so parallel tasks never step on each other. <code>flow do --here</code> binds the current session instead and never relocates.</p>
+
+        <h2 id="flow-do">flow do</h2>
+        <p>Start or resume work on a task. The session opens in a new terminal tab and the task flips to <code>in-progress</code>.</p>
+        <pre><span class="prompt">$</span> flow do &lt;task&gt;                          <span class="c"># start / resume in a new tab</span>
+<span class="prompt">$</span> flow do &lt;task&gt; --here                   <span class="c"># bind THIS session, no new tab</span>
+<span class="prompt">$</span> flow do &lt;task&gt; --auto                   <span class="c"># headless run — no tab, no human</span>
+<span class="prompt">$</span> flow do &lt;task&gt; --with "&lt;instruction&gt;"   <span class="c"># inject a first message</span>
+<span class="prompt">$</span> flow done &lt;task&gt;                        <span class="c"># close out: KB sweep, push branch, open PR</span></pre>
+        <p><code>--auto</code> returns immediately (printing the supervisor PID + log path); Claude runs via <code>claude -p</code>, Codex via <code>codex exec</code>. Because no human is watching, match the model to the task — pin <code>--model</code> or set <code>--priority high</code>. <code>flow wait &lt;task&gt; --until done</code> blocks on completion.</p>
+
+        <h2 id="flow-list">flow list</h2>
+        <p>See what's on your plate. Lists default to active (non-archived, non-deleted) rows.</p>
+        <pre><span class="prompt">$</span> flow list tasks                          <span class="c"># all active tasks</span>
+<span class="prompt">$</span> flow list tasks --status in-progress     <span class="c"># filter by status</span>
+<span class="prompt">$</span> flow list tasks --priority high --project &lt;slug&gt;
+<span class="prompt">$</span> flow list tasks --tag &lt;tag&gt; --since monday
+<span class="prompt">$</span> flow list projects                       <span class="c"># projects</span>
+<span class="prompt">$</span> flow list runs --since 7d                 <span class="c"># playbook runs</span></pre>
+        <p>Status is one of <code>backlog</code>, <code>in-progress</code>, <code>done</code>. Add <code>--include-archived</code> or <code>--deleted</code> to widen. Tasks waiting on someone show a <code>[waiting: …]</code> note; stale ones carry a <code>⚠</code> marker.</p>
+
+        <h2 id="flow-standup">flow standup</h2>
+        <p>A copyable daily briefing — it separates <strong>needs action</strong> from <strong>FYI</strong> and groups by project, source, and urgency.</p>
+        <pre><span class="prompt">$</span> flow standup --for today
+<span class="prompt">$</span> flow standup --for monday --clipboard    <span class="c"># also copy to clipboard</span></pre>
+        <p>It assembles Attention cards, waiting work, stale sessions, ready high-priority backlog, and recent activity into one digest you can paste anywhere.</p>
+
+        <h2 id="flow-owner">flow owner</h2>
+        <p><strong>Owners</strong> are durable, repo-scoped controllers for ongoing outcomes. An owner isn't one long session — it's a charter, a journal, and short <em>ticks</em> that wake, review state, dispatch work, self-pace, and exit.</p>
+        <pre><span class="prompt">$</span> flow add owner "&lt;name&gt;" --work-dir &lt;path&gt; [--every 24h] [--agent claude|codex]
+<span class="prompt">$</span> flow owner list
+<span class="prompt">$</span> flow owner show &lt;slug&gt;
+<span class="prompt">$</span> flow owner start|pause|retire &lt;slug&gt;
+<span class="prompt">$</span> flow owner tick &lt;slug&gt;                    <span class="c"># guided tick; --auto for headless</span>
+<span class="prompt">$</span> flow owner next &lt;slug&gt; --in 24h           <span class="c"># set the next wake</span></pre>
+        <p>Owners orchestrate; they don't do substantive work inline. A tick dispatches tasks or playbook runs that self-close, writes a journal note, sets its next wake, and exits. The scheduler is an in-process heartbeat inside <code>flow ui serve</code>.</p>
+
+        <h2 id="flow-ui-serve">flow ui serve</h2>
+        <p>Boots Mission Control — a local web app at <code>127.0.0.1:8787</code>. Same SQLite, same markdown briefs, same skill; just the richer surface.</p>
+        <pre><span class="prompt">$</span> flow ui serve                            <span class="c"># foreground on :8787</span>
+<span class="prompt">$</span> flow ui serve --bg                        <span class="c"># detached, logs to ~/.flow/logs/</span>
+<span class="prompt">$</span> flow ui serve --port 9000 --host 0.0.0.0  <span class="c"># bind elsewhere (see below)</span></pre>
+        <p>You get side-by-side task lists, an Attention-aware briefing, inline brief editing, live agent status, a Cmd+K palette, and a browser-attached terminal that streams the Claude or Codex session over WebSocket.</p>
+        <div class="callout"><strong>Local by design.</strong> No auth, no TLS, loopback only — the binary refuses to bind a non-loopback host without an explicit <code>--host</code> flag. If you want it on a network, put your own auth in front. See the <a href="api.html#auth">API auth model</a>.</div>
+
+        <h2 id="slack">Slack — react to triage</h2>
+        <p>flowwyyy listens to a Slack workspace over Socket Mode and turns <em>your</em> reactions into tasks. React to a thread with <code>:claude:</code> and a Claude session spins up bound to that thread; react with <code>:codex:</code> and you get a Codex session.</p>
+        <p><strong>Quick setup — the Connect Slack wizard.</strong> Open <strong>Mission Control → Connectors → Slack</strong>. The wizard does the whole dance in three resumable steps:</p>
+        <ul>
+          <li><strong>Create the app</strong> from an app-configuration token — flow calls Slack's manifest API and wires every scope, event subscription, and Socket Mode for you.</li>
+          <li><strong>App-level token</strong> — a deep-linked paste (Slack has no API for this one).</li>
+          <li><strong>Install</strong> — one click round-trips OAuth and hands flow the bot token, your user token (DM following), and your member ID.</li>
+        </ul>
+        <p>Reactions are explicit consent from <em>your</em> account, so a coworker's <code>:claude:</code> is harmless noise — only the IDs in <code>FLOW_SLACK_SELF_USER_IDS</code> count. flow tags each task <code>slack-thread:&lt;channel&gt;:&lt;ts&gt;</code>: one thread, one task, forever.</p>
+
+        <h2 id="github">GitHub — assigned work &amp; review threads</h2>
+        <p>flowwyyy ingests GitHub activity — assigned issues, assigned/review-requested PRs, review comments, head updates, merges, and closes — via <strong>signed webhook deliveries from a GitHub App</strong>. GitHub POSTs to <code>/api/github/webhook</code>; flow verifies the HMAC, dedupes, normalizes, and dispatches — no GitHub API call on the hot path.</p>
+        <p><strong>Setup — the Connect GitHub wizard.</strong> Mission Control → <strong>Connectors → GitHub</strong> builds a GitHub App manifest (webhook URL, generated signing secret, the right events + permissions), POSTs it to github.com, and receives the app id, private key, and webhook secret in one shot — <strong>secrets go to the OS keyring, nothing pasted by hand.</strong> It then guides installation. The wizard requires a running <a href="#ingress">public ingress</a> first.</p>
+        <p>PR tasks are tagged <code>gh-pr:&lt;owner&gt;/&lt;repo&gt;#&lt;n&gt;</code>, issue tasks <code>gh-issue:…</code>. A <code>CHANGES_REQUESTED</code> review or new head SHA reopens a done task; a merge marks it done. If flow was down, the wizard's <strong>Replay missed deliveries</strong> button replays the gap, deduped by delivery GUID.</p>
+
+        <h2 id="ingress">Public ingress</h2>
+        <p>Some connectors need an external HTTPS URL to reach flow inbound — Slack's OAuth redirect and GitHub's webhook POSTs. Public ingress is one reusable abstraction; flow keeps running locally, exposes <em>only</em> the connector callback paths (never the UI or data API), and still validates everything itself.</p>
+        <table class="ref">
+          <thead><tr><th>Provider</th><th>Public URL from</th><th>Use when</th></tr></thead>
+          <tbody>
+            <tr><td><code>none</code></td><td>—</td><td>Slack-only, accepting the localhost cert warning</td></tr>
+            <tr><td><code>zrok</code></td><td>generated at runtime</td><td>you want a public URL without running a server</td></tr>
+            <tr><td><code>manual</code></td><td><code>FLOW_PUBLIC_BASE_URL</code></td><td>you already front flow with your own proxy/tunnel</td></tr>
+          </tbody>
+        </table>
+        <p>zrok is recommended — flow embeds the zrok Go SDK (no binary, no subprocess). Enable once with <code>zrok enable &lt;token&gt;</code>, set <code>FLOW_INGRESS_PROVIDER=zrok</code> and a stable <code>FLOW_ZROK_SHARE_NAME</code>, and check live state at <code>GET /api/ingress/status</code>.</p>
+
+        <h2 id="data">Your data — local, portable, yours</h2>
+        <p>Everything lives under <code>~/.flow/</code> (override with <code>$FLOW_ROOT</code>). No server, no cloud, no telemetry — plain markdown beside a SQLite index, readable in any editor and versionable in git.</p>
+        <pre>~/.flow/
+  flow.db                          <span class="c"># SQLite index — projects, tasks, playbooks, owners</span>
+  kb/  user.md org.md products.md processes.md business.md
+  projects/&lt;slug&gt;/  brief.md  updates/YYYY-MM-DD-*.md
+  tasks/&lt;slug&gt;/     brief.md  updates/*.md  inbox.jsonl
+  playbooks/&lt;slug&gt;/ brief.md  updates/*.md
+  owners/&lt;slug&gt;/    charter.md updates/*.md</pre>
+        <p>The database is an <em>index</em>, not the source of truth — every entity's real content is the markdown beside it; you could delete <code>flow.db</code> and rebuild from the markdown. Back up with git, Time Machine, or a synced folder (add <code>kb/</code> to <code>.gitignore</code> if you push to a shared remote). To move machines: copy <code>~/.flow/</code> over, install the binary, run <code>flow init</code> once.</p>
+        <div class="callout">⚠️ Don't run flow on two machines simultaneously through a synced folder — SQLite doesn't tolerate concurrent writes from separate hosts.</div>
+
+        <p style="margin-top:48px">Next: the <a href="api.html">Mission Control API reference →</a></p>
+      </main>
+    </div>
+  </div>
+
+  <footer>
+    <div class="wrap">
+      <a class="brand" href="./" style="color:var(--text-2)"><img src="favicon.svg" alt="" style="width:18px;height:18px;vertical-align:middle;margin-right:7px">flowwyyy</a>
+      <span class="grow"></span>
+      <a href="docs.html">Docs</a>
+      <a href="api.html">API</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy">GitHub</a>
+      <a href="https://github.com/vishnukv-facets/flowwyyy/blob/main/CHANGELOG.md">Changelog</a>
+      <span class="built">Built on <a href="https://github.com/Facets-cloud/flow" style="display:inline">flow</a> · MIT</span>
+    </div>
+  </footer>
+</body>
+</html>
