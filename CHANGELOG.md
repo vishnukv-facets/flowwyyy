@@ -1,210 +1,58 @@
 # Changelog
 
-All notable changes to flow will be documented here. The format is based
-on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
-project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+All notable changes to flowwyyy are documented here. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
+adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 (`0.x.y` until the API stabilises).
 
 ## [Unreleased]
 
-## [0.1.0-alpha.14] — 2026-05-18
+## [0.1.0] — 2026-06-15
+
+Initial offering. **flowwyyy is `flow`, with batteries** — the original
+[`flow`](https://github.com/Facets-cloud/flow) CLI, kept backward-compatible,
+plus the browser UI, connectors, triage, and autonomy layer that turn each
+agent session from a brilliant new hire into the engineer on your team.
 
 ### Added
 
-- **`flow do --with` / `--with-file`.** Inject a one-shot instruction
-  as the resumed/started session's first user message (prefixed with
-  `[via flow do --with]` so the model can distinguish injected from
-  typed input). `--with-file <path>` points the session at a file
-  (`read instructions at <abs-path>`) instead of embedding contents —
-  no size limits. `--with` on a `done` task auto-rolls it back to
-  in-progress. Rejected in combination with `--here` (no spawned
-  session to inject into). `flow run playbook <slug>` accepts the same
-  flags. The lane for nudging parked tasks and feeding ad-hoc
-  instructions to scheduled playbook runs without opening the tab.
-  ([#50](https://github.com/Facets-cloud/flow/pull/50) by
-  [@anshulsao](https://github.com/anshulsao))
-- **kitty as a first-class spawn backend.** `flow do` opens new tabs
-  in kitty via `kitty @ launch --type tab` when invoked from a kitty
-  shell. Requires `allow_remote_control yes` in kitty config.
-  ([#37](https://github.com/Facets-cloud/flow/pull/37) by
-  [@unni-facets](https://github.com/unni-facets))
-- **Warp as a first-class spawn backend.** `flow do` opens new tabs
-  in Warp when invoked from a Warp shell (`TERM_PROGRAM=WarpTerminal`).
-  Uses `warp://action/new_tab` to open the tab and osascript to
-  keystroke a self-deleting bootstrap script, since Warp has no
-  AppleScript dictionary or command-running CLI. Requires macOS
-  Accessibility for Warp.
-  ([#46](https://github.com/Facets-cloud/flow/pull/46) by
-  [@swapnildahiphale](https://github.com/swapnildahiphale))
-- **Ghostty as a first-class spawn backend.** `flow do` opens new
-  tabs in Ghostty when invoked from a Ghostty shell.
-  ([#53](https://github.com/Facets-cloud/flow/pull/53) by
-  [@cyphernext](https://github.com/cyphernext))
-- **`FLOW_TERM` env override.** Set
-  `FLOW_TERM=warp|iterm|terminal|zellij|kitty|ghostty` to force a
-  specific spawn backend regardless of `$TERM_PROGRAM`. `$ZELLIJ`
-  still wins; unrecognized values fall through to `$TERM_PROGRAM`
-  detection.
-  ([#46](https://github.com/Facets-cloud/flow/pull/46))
-- **`flow run playbook --here`.** Bind THIS Claude session to a
-  playbook-run task without spawning a new tab — mirrors `flow do
-  --here` for run-tasks. Includes a close-out sweep refactor.
-  ([#48](https://github.com/Facets-cloud/flow/pull/48) by
-  [@vishnukv-facets](https://github.com/vishnukv-facets))
-
-### Changed
-
-- **`flow list` rendering.** Tabwriter-aligned columns,
-  `--format json|tsv` for machine-readable output, ANSI color when
-  stdout is a TTY.
-  ([#44](https://github.com/Facets-cloud/flow/pull/44) by
-  [@unni-facets](https://github.com/unni-facets))
-- **README wordmark logo.** Theme-aware SVG logo at the top of
-  the README.
-  ([#35](https://github.com/Facets-cloud/flow/pull/35) by
-  [@pa](https://github.com/pa))
-
-### Fixed
-
-- **flowdb concurrent-open race.** `busy_timeout` is now applied at
-  `OpenDB` time so concurrent opens don't race the pragma.
-  ([#36](https://github.com/Facets-cloud/flow/pull/36) by
-  [@pa](https://github.com/pa))
-- **e2e spawner override leak.** Pin `spawner.Override` in the e2e
-  test so a real kitty tab isn't spawned during CI.
-  ([#42](https://github.com/Facets-cloud/flow/pull/42) by
-  [@unni-facets](https://github.com/unni-facets))
-
-## [0.1.0-alpha.8] — 2026-05-09
-
-### Added
-
-- **zellij as a first-class spawn backend.** `flow do` now opens new
-  tabs inside the current zellij session when `$ZELLIJ` is set, via
-  `zellij action new-tab` + `zellij action write-chars`. Behavior is
-  unchanged for non-zellij users — selection priority is `$ZELLIJ` →
-  `Apple_Terminal` → `iTerm.app` → iTerm-default. Requires zellij ≥
-  0.40. Embedded skill (`SKILL.md`) wording neutralized from
-  "iTerm tab" to "terminal tab" so it reads correctly across all
-  backends; the Terminal.app Accessibility section stays backend-specific.
-  ([#21](https://github.com/Facets-cloud/flow/pull/21) by
-  [@pa](https://github.com/pa))
-
-## [0.1.0-alpha.7] — 2026-05-09
-
-### Removed
-
-- **UserPromptSubmit hook.** Per-prompt skill nudge in ad-hoc Claude
-  sessions retired — the ~200 words of `additionalContext` injected
-  on every user prompt cost more in tokens than it returned in
-  marginal §4.14 reliability over the SessionStart hook alone. The
-  command itself (`flow hook user-prompt-submit`) is now a permanent
-  no-op so any stale entry left behind in older `~/.claude/settings.json`
-  files doesn't error; both `flow skill install` and the auto-upgrade
-  path actively remove the entry, leaving any unrelated user-defined
-  hooks in the same event untouched.
-
-## [0.1.0-alpha.6] — 2026-05-08
-
-### Added
-
-- **Free-form tags on tasks.** New `task_tags(task_slug, tag,
-  created_at)` table; values normalized lowercase + trimmed. Add via
-  `flow update task <ref> --tag <t>` (repeatable, idempotent), remove
-  via `--remove-tag`, wipe via `--clear-tags`. Filter task listings via
-  `flow list tasks --tag <t>`. Aggregate listing via `flow list tags`
-  (distinct tags + per-tag task counts) so tag vocabulary stays
-  consistent over time.
-- **Assignee on tasks.** `tasks.assignee TEXT`. Set at create time via
-  `flow add task --assignee <name>`; post-creation via `flow update
-  task --assignee` / `--clear-assignee`. NULL = self (default);
-  non-null renders as `[@name]` in list/show output.
-- **Live-session detection.** `flow list tasks` and `flow show task`
-  mark `[live]` next to tasks whose `session_id` matches a running
-  Claude process (parsed from `ps`). `flow do <ref>` refuses to spawn
-  a duplicate when the task's session is already running elsewhere;
-  `--force` overrides.
-- **`flow find-session <marker>`.** Scans
-  `~/.claude/projects/*/*.jsonl` for a marker and prints the matching
-  session UUID — the reliable in-flight session-ID capture path.
-  Errors deterministically on zero or multiple matches.
-- **`flow update project <ref> --priority`.** Project priority is now
-  editable after creation.
-- **Reverse status transitions.** `flow update task <ref> --status
-  in-progress` works on `done` tasks, letting `flow do` reopen them.
-
-### Changed
-
-- **`flow update task` is now the canonical lane for all in-place
-  field edits.** New flags: `--status`, `--priority`, `--assignee` /
-  `--clear-assignee`, `--due-date` / `--clear-due`, `--waiting` /
-  `--clear-waiting`, repeatable `--tag` / `--remove-tag`,
-  `--clear-tags`. The existing `--session-id` and `--work-dir`
-  escape hatches stay.
-- **Close-out sweep prompt rewritten with two-tier discipline.** KB
-  step is strict — default = write nothing; three bars (durable /
-  surprising / future-relevant); distill the essence rather than
-  quote-dump (deliberate departure from §4.10 real-time scoop). The
-  project-log step is more permissive — narrative is fine when the
-  session moved the project forward. Floating-task prompts omit
-  project-update concepts entirely.
-- **Skill (`SKILL.md`).** New §4.16 (binding an in-flight session to
-  a task via marker-grep). New §4.16a (tagging — vocabulary
-  discipline rule that says read `flow list tags` before inventing).
-  §4.2 intake gets an optional tag step at the end (offers existing
-  tags via multi-select AskUserQuestion) and a subtle
-  retrospective-capture hint pointing at §4.16. §4.6 waiting
-  workflow rewired through `flow update task --waiting`. Cheat sheet
-  rewritten.
-
-### Removed
-
-- **Legacy field-setter mini-commands consolidated into
-  `flow update task`:** `flow priority`, `flow due`, `flow waiting`,
-  `flow assignee`, `flow tag`, `flow tags`. The aggregate listing
-  for tags moved to `flow list tags`. One canonical verb for
-  in-place edits — fewer commands to learn, no parallel paths for
-  the same field.
-
-## [0.1.0-alpha.1] — 2026-05-04
-
-Initial public release.
-
-### Added
-
-- **Tasks and projects.** `flow add task` / `flow add project` with
-  interview-driven intake; SQLite metadata at `~/.flow/flow.db`.
-- **Knowledge base.** Five markdown files
-  (`user`, `org`, `products`, `processes`, `business`) under
-  `~/.flow/kb/`, surfaced in every task/project context.
-- **Sessions.** `flow do <task>` pre-allocates a session UUID and spawns
-  a Claude Code session in a dedicated iTerm tab. Resume with the same
-  command.
-- **Progress notes.** Append-only markdown logs under each task and
-  project (`updates/YYYY-MM-DD-*.md`).
-- **Playbooks.** `flow add playbook` + `flow run playbook <slug>` for
-  reusable, snapshotted run definitions.
-- **Transcripts.** `flow transcript <task>` produces a readable
-  conversation transcript from a task's Claude session jsonl.
-- **Manual repair.** `flow update task --session-id … --work-dir …` for
-  cases when the DB drifts from reality.
-- **Embedded skill.** `~/.claude/skills/flow/SKILL.md` — natural-language
-  interface to flow commands, installed by `flow init`.
-- **SessionStart hook.** Re-injects task brief, updates, and CLAUDE.md
-  context on every session resume.
-- **`flow --version`.** Build-time `-ldflags '-X main.version=…'`
-  populated from `git describe`.
-- **Auto skill upgrade.** Released binaries detect a version bump and
-  refresh the skill + hook on next invocation; `dev` builds opt out.
-- **Prebuilt binaries.** Darwin arm64 + amd64 published on the GitHub
-  Releases page.
-- **CI.** `.github/workflows/ci.yml` runs `go vet` + `go test ./...`
-  against `macos-latest` and `ubuntu-latest`.
+- **The `flow` CLI.** Personal tasks, projects, playbooks, and owners in a
+  single pure-Go SQLite store (`modernc.org/sqlite`, no CGO). Free-form briefs
+  and dated progress updates live as markdown on disk; metadata lives in
+  `~/.flow/flow.db`. Exit codes, RFC3339 timestamps, and `flag.FlagSet`
+  parsing throughout.
+- **Per-task agent sessions.** `flow do <task>` bootstraps or resumes a
+  long-lived **Claude Code** or **Codex** session in its own terminal tab,
+  pre-loaded with the brief, updates, and repo conventions. Priority-aware
+  model selection picks the tier when `--model` isn't pinned.
+- **Mission Control.** A browser UI (Vite + React + TS, embedded in the
+  binary) over a websocket-RPC bridge: dashboard, tasks/projects/playbooks,
+  knowledge base, owners, and a live in-browser terminal that attaches to the
+  same sessions the CLI spawns.
+- **Connectors.** First-class **Slack** (Socket Mode + user-token channel
+  monitoring) and **GitHub App** (org-wide webhooks) ingestion, with setup
+  wizards in the UI. Connector secrets live in the OS keyring, never in config.
+- **Attention Router.** A cross-source triage pipeline ("steerer") that
+  classifies inbound Slack/GitHub activity into an operator feed — surface,
+  forward, make-task, capture-to-KB — gated by an autonomy policy that
+  defaults to surface-only.
+- **Autonomous owners + headless runs.** `flow owner` schedules recurring
+  agent work; `flow do --auto` runs a task headlessly. The `brain_runs` ledger
+  records every autonomous run.
+- **Working-memory knowledge base.** `~/.flow/kb/*.md` (user, org, products,
+  processes, business) plus per-entity briefs, carried into every session so
+  context isn't re-typed.
+- **Six terminal backends.** iTerm2, kitty, Ghostty, Warp, zellij, and
+  Terminal.app, selected by runtime environment detection. `FLOW_TERM`
+  overrides detection.
+- **`flow standup`.** Aggregates attention, waiting-on, stale, ready, and
+  recent activity into a copyable briefing.
+- **Embedded skill + hooks.** `~/.claude/skills/flow/SKILL.md` is the
+  natural-language interface; SessionStart/PostToolUse hooks re-inject context
+  and wake live sessions on inbound events. Installed by `flow init`.
+- **Quality gate.** `golangci-lint` CI check (new-issue gated) alongside
+  `go vet` / `go build` / `go test ./...`.
 - **License.** MIT.
 
-[Unreleased]: https://github.com/Facets-cloud/flow/compare/v0.1.0-alpha.14...HEAD
-[0.1.0-alpha.14]: https://github.com/Facets-cloud/flow/releases/tag/v0.1.0-alpha.14
-[0.1.0-alpha.8]: https://github.com/Facets-cloud/flow/releases/tag/v0.1.0-alpha.8
-[0.1.0-alpha.7]: https://github.com/Facets-cloud/flow/releases/tag/v0.1.0-alpha.7
-[0.1.0-alpha.6]: https://github.com/Facets-cloud/flow/releases/tag/v0.1.0-alpha.6
-[0.1.0-alpha.1]: https://github.com/Facets-cloud/flow/releases/tag/v0.1.0-alpha.1
+[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0
