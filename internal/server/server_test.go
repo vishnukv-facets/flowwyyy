@@ -1993,6 +1993,35 @@ func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
 	}
 }
 
+func TestDestroyTaskRemovesGitWorktree(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	repo := initGitRepoForServerTest(t)
+	worktreePath := filepath.Join(repo, ".claude", "worktrees", "build-ui")
+	runGitTest(t, repo, "worktree", "add", "-b", "flow/build-ui", worktreePath)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`UPDATE tasks
+		   SET work_dir = ?, worktree_path = ?, session_provider = 'claude', deleted_at = ?
+		 WHERE slug = 'build-ui'`,
+		repo, worktreePath, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "destroy", EntityKind: "task", Slug: "build-ui"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("destroy status = %d, resp = %+v", status, resp)
+	}
+	if _, err := os.Stat(worktreePath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("worktree path after destroy: stat err = %v, want not-exist", err)
+	}
+	if list := runGitTest(t, repo, "worktree", "list", "--porcelain"); strings.Contains(list, worktreePath) {
+		t.Fatalf("git worktree list still contains %q:\n%s", worktreePath, list)
+	}
+}
+
 func TestDestroyProjectWithRefsIsBlocked(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
@@ -4085,13 +4114,14 @@ func TestTaskBridgeEndpointUsesCodexProviderForTranscript(t *testing.T) {
 	}
 }
 
-func runGitTest(t *testing.T, dir string, args ...string) {
+func runGitTest(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(out))
 	}
+	return strings.TrimSpace(string(out))
 }
 
 func initGitRepoForServerTest(t *testing.T) string {
