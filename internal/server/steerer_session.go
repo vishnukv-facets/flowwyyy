@@ -87,11 +87,17 @@ func steererChatSlug(key string) string {
 	return "chat-steer-" + sanitizeSlugSegment(key)
 }
 
-// steererSessionProvider is the provider a NEW steerer chat launches with. Phase 2
-// is always Claude (Opus, via no --model). The configured/per-key default provider
-// is GAP-11 → Phase 5.
-// ponytail: hardcoded claude; FLOW_STEERER_DEFAULT_PROVIDER + per-key override land in P5.
-func steererSessionProvider() string { return "claude" }
+// steererSessionProvider is the provider a NEW steerer chat launches with: the
+// configured default FLOW_STEERER_DEFAULT_PROVIDER (GAP-11), claude when unset or
+// invalid. It applies only at chat CREATION; once a chat exists, chats.provider on
+// the row is authoritative for resume (the manual switch / auto-fork flips it).
+// ponytail: chats.provider is the per-key override; no separate per-key store.
+func steererSessionProvider() string {
+	if p, err := flowdb.NormalizeSessionProvider(os.Getenv("FLOW_STEERER_DEFAULT_PROVIDER")); err == nil {
+		return p
+	}
+	return "claude"
+}
 
 // steererIdleTTL bounds how long a steerer PTY stays warm with no transcript
 // activity before the idle sweep tears it down (the chat row + session_id survive;
@@ -282,6 +288,107 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 // human-readable naming convention (#channel / DM · Name / external-org tag) is
 // GAP-13 → Phase 5.
 func steererChatTitle(key string) string { return "Steering: " + key }
+
+// switchSteererProvider switches a live steerer chat to a new provider
+// (claude↔codex), shared by the manual settings/Chats switch (GAP-11) and the auto
+// provider-fork on token exhaustion (GAP-9) — one mechanism, two triggers, either
+// direction. It hands the new session a rendered transcript of the old one so it
+// continues with context. Serialized on the slot, so an in-flight delivery (which
+// also takes slot.mu) can't race the swap — it waits, then feeds the new session.
+// MUST be called WITHOUT holding slot.mu (it acquires it); callers are the manual
+// action handler and the occupancy worker, never DeliverToChannelSession.
+func (s *Server) switchSteererProvider(slug, target string) error {
+	if s == nil || s.cfg.DB == nil || s.terminals == nil {
+		return errors.New("steerer switch: server not ready")
+	}
+	target, err := flowdb.NormalizeSessionProvider(target)
+	if err != nil {
+		return fmt.Errorf("steerer switch: %w", err)
+	}
+	slot := s.steererSlot(slug)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+
+	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	if err != nil {
+		return fmt.Errorf("steerer switch: lookup chat %q: %w", slug, err)
+	}
+	if chat.Origin != "steerer" {
+		return fmt.Errorf("steerer switch: chat %q is not a steerer chat", slug)
+	}
+	if current, _ := flowdb.NormalizeSessionProvider(chat.Provider); current == target {
+		return nil // already on target — idempotent
+	}
+
+	slot.state = steererSlotForking
+	// Render the dying session BEFORE teardown so the new provider gets context.
+	// Deterministic (no model call) — the old session may be the one out of budget.
+	handoff := s.steererForkHandoffPrime(chat)
+	s.terminals.stopFloating(slug)
+
+	absRoot, err := s.absFlowRoot()
+	if err != nil {
+		slot.state = steererSlotNone
+		return fmt.Errorf("steerer switch: %w", err)
+	}
+	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
+	// Codex assigns its own id on launch (NeedsCapture fills it); Claude pre-generates.
+	sessionID := ""
+	if target == "claude" {
+		sessionID = uuid.NewString()
+	}
+	prompt := steererSessionBrief() + handoff
+	args := agentTerminalArgs(target, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "")
+	launch := terminalLaunch{
+		Slug: slug, SessionID: sessionID, Provider: target, PermissionMode: permissionMode,
+		WorkDir: absRoot, Args: args, FreeAgent: true, Created: true,
+		NeedsCapture: target == "codex", StartedAt: time.Now().Add(-2 * time.Second),
+	}
+	ft := s.terminals.registerFloatingLaunch(launch, chat.Title)
+	if err := s.terminals.startFloatingDetached(ft.ID); err != nil {
+		s.terminals.stopFloating(ft.ID)
+		slot.state = steererSlotNone
+		return fmt.Errorf("steerer switch: relaunch %q: %w", slug, err)
+	}
+	now := flowdb.NowISO()
+	if err := flowdb.SetChatProvider(s.cfg.DB, slug, target, now); err != nil {
+		slot.state = steererSlotNone
+		return fmt.Errorf("steerer switch: %w", err)
+	}
+	// Point the row at the new session id (claude: the new uuid; codex: cleared,
+	// capture fills it post-launch).
+	if err := flowdb.SetChatSession(s.cfg.DB, slug, sessionID, now); err != nil {
+		slot.state = steererSlotNone
+		return fmt.Errorf("steerer switch: %w", err)
+	}
+	slot.state = steererSlotLive
+	s.publishUIChange("chats")
+	return nil
+}
+
+// steererForkHandoffPrime renders the chat's current session transcript as priming
+// for the new provider (GAP-9 hand-off). Reuses the existing fork renderer; empty
+// when there's nothing to hand off.
+func (s *Server) steererForkHandoffPrime(chat *flowdb.Chat) string {
+	absRoot, err := s.absFlowRoot()
+	if err != nil {
+		return ""
+	}
+	provider, perr := flowdb.NormalizeSessionProvider(chat.Provider)
+	if perr != nil {
+		return ""
+	}
+	synth := &flowdb.Task{
+		Slug: chat.Slug, WorkDir: absRoot, SessionProvider: provider,
+		SessionID: chat.SessionID,
+	}
+	render, ok, rerr := s.renderForkTranscript(synth)
+	if rerr != nil || !ok || strings.TrimSpace(render) == "" {
+		return ""
+	}
+	return "\n\n---\n\n## Provider hand-off — prior session transcript\n" +
+		"You are continuing a steerer session that switched providers. Reconstruct the channel's state from this log and keep going:\n\n" + render
+}
 
 // sweepIdleSteererSessionsOnce tears down the PTY of any live steerer session whose
 // transcript has been quiet past the idle TTL, keeping the chat row + session_id so

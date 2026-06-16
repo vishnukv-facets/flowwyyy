@@ -261,6 +261,14 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: true, Message: "deleted chat"}, http.StatusOK
 	case "chat-reopen":
 		return s.reopenChat(slug)
+	case "chat-set-provider":
+		// Manual provider switch on a steerer chat (GAP-11) — same switch path as
+		// the auto-fork (GAP-9), either direction (claude↔codex). Re-primes the new
+		// session from a rendered transcript of the old one.
+		if err := s.switchSteererProvider(slug, req.Provider); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		return actionResponse{OK: true, Message: "switched chat provider to " + req.Provider}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown chat action " + req.Kind}, http.StatusBadRequest
 	}

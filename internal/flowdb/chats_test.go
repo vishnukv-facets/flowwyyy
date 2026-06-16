@@ -6,6 +6,48 @@ import (
 	"testing"
 )
 
+func TestSetChatProviderAndTitle(t *testing.T) {
+	db := openTempDB(t)
+	c := Chat{
+		Slug: "chat-steer-c123", Title: "Steering: C123", Provider: "claude", Origin: "steerer",
+		SessionID: sql.NullString{String: "sess-1", Valid: true},
+		CreatedAt: "2026-06-17T09:00:00Z", LastActivityAt: "2026-06-17T09:00:00Z",
+	}
+	if err := InsertChat(db, c); err != nil {
+		t.Fatalf("InsertChat: %v", err)
+	}
+	if err := SetChatProvider(db, c.Slug, "codex", "2026-06-17T10:00:00Z"); err != nil {
+		t.Fatalf("SetChatProvider: %v", err)
+	}
+	if err := SetChatTitle(db, c.Slug, "#facets-coinswitch", "2026-06-17T10:01:00Z"); err != nil {
+		t.Fatalf("SetChatTitle: %v", err)
+	}
+	got, err := GetChat(db, c.Slug)
+	if err != nil {
+		t.Fatalf("GetChat: %v", err)
+	}
+	if got.Provider != "codex" {
+		t.Errorf("Provider = %q, want codex", got.Provider)
+	}
+	if got.Title != "#facets-coinswitch" {
+		t.Errorf("Title = %q, want #facets-coinswitch", got.Title)
+	}
+	if got.LastActivityAt != "2026-06-17T10:01:00Z" {
+		t.Errorf("LastActivityAt = %q, want bumped", got.LastActivityAt)
+	}
+
+	// A deleted chat is never mutated by the setters.
+	if err := DeleteChat(db, c.Slug, "2026-06-17T11:00:00Z"); err != nil {
+		t.Fatalf("DeleteChat: %v", err)
+	}
+	if err := SetChatProvider(db, c.Slug, "claude", "2026-06-17T12:00:00Z"); err != nil {
+		t.Fatalf("SetChatProvider (deleted): %v", err)
+	}
+	if _, err := GetChat(db, c.Slug); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("deleted chat should stay absent, got err=%v", err)
+	}
+}
+
 func TestChatInsertAndGet(t *testing.T) {
 	db := openTempDB(t)
 

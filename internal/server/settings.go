@@ -123,6 +123,7 @@ var settingsRegistry = []settingSpec{
 	// immediately on the next Slack event; idle-sweep and compact workers require a
 	// server restart to start (they are gated at Serve() time).
 	{Key: "FLOW_STEERING_SESSIONS", Label: "Per-channel session model", Group: "Steering", Type: settingBool, Default: "false", Help: "Route Stage-0 Slack survivors to a persistent per-channel Claude session (conversation memory, coinswitch grouping) instead of a stateless claude -p call per event. Routing takes effect immediately; idle-sweep and compact workers start on the next server restart."},
+	{Key: "FLOW_STEERER_DEFAULT_PROVIDER", Label: "Steerer default provider", Group: "Steering", Type: settingEnum, Options: []string{"claude", "codex"}, Default: "claude", Help: "Which agent a NEW per-channel steerer session launches with. Applies at chat creation; once a chat exists (or auto-forks/is switched manually) its own provider is authoritative until changed again."},
 	// Ingress — public URL for GitHub webhook callbacks only. Slack OAuth uses
 	// a short-lived localhost callback listener during install/reinstall.
 	{Key: "FLOW_INGRESS_PROVIDER", Label: "GitHub ingress provider", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public URL provider for signed GitHub webhook callbacks only. Slack OAuth stays local and does not use standing ingress."},

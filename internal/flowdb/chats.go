@@ -125,6 +125,37 @@ func SetChatSession(db *sql.DB, slug, sessionID, now string) error {
 	return nil
 }
 
+// SetChatProvider flips the provider on an existing chat row (and bumps
+// last_activity_at). Used by the steerer provider fork / manual switch
+// (claude↔codex): once switched, chats.provider is authoritative for resume
+// until changed again. Deleted chats are never touched.
+func SetChatProvider(db *sql.DB, slug, provider, now string) error {
+	_, err := db.Exec(
+		`UPDATE chats SET provider = ?, last_activity_at = ?
+		 WHERE slug = ? AND deleted_at IS NULL`,
+		provider, now, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: set chat provider %q: %w", slug, err)
+	}
+	return nil
+}
+
+// SetChatTitle renames an existing chat row (and bumps last_activity_at). Used by
+// the steerer chat rename + auto-naming convention. Deleted chats are never
+// touched.
+func SetChatTitle(db *sql.DB, slug, title, now string) error {
+	_, err := db.Exec(
+		`UPDATE chats SET title = ?, last_activity_at = ?
+		 WHERE slug = ? AND deleted_at IS NULL`,
+		title, now, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: set chat title %q: %w", slug, err)
+	}
+	return nil
+}
+
 // ListChats returns non-deleted chats ordered by last_activity_at DESC.
 // Archived chats are hidden unless ChatFilter.IncludeArchived is true.
 // Deleted chats (deleted_at IS NOT NULL) are always excluded.

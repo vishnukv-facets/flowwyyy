@@ -18,6 +18,24 @@ func TestSteererChatSlug(t *testing.T) {
 	}
 }
 
+func TestSteererSessionProvider(t *testing.T) {
+	cases := []struct {
+		env  string
+		want string
+	}{
+		{"", "claude"},
+		{"claude", "claude"},
+		{"codex", "codex"},
+		{"garbage", "claude"}, // invalid → safe default
+	}
+	for _, tc := range cases {
+		t.Setenv("FLOW_STEERER_DEFAULT_PROVIDER", tc.env)
+		if got := steererSessionProvider(); got != tc.want {
+			t.Errorf("FLOW_STEERER_DEFAULT_PROVIDER=%q ⇒ %q, want %q", tc.env, got, tc.want)
+		}
+	}
+}
+
 func TestSteererDeliveryPlan(t *testing.T) {
 	cases := []struct {
 		name    string
