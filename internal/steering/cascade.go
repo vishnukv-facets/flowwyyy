@@ -184,6 +184,14 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 	if feedID == "" {
 		return audit
 	}
+	// A correction-triggered re-triage NEVER auto-acts: the operator just supplied
+	// context and the corrected verdict always comes back for their review (operator
+	// decision). The card is already (re)written; we only skip the outward action.
+	if autoActSuppressed(ctx) {
+		audit.decision = "suppressed"
+		audit.reason = "auto-act suppressed: operator-correction re-triage always re-surfaces for review"
+		return audit
+	}
 	pol := c.autonomy()
 	// Gate on the CALIBRATED confidence: the operator's per-action threshold means
 	// "minimum probability I'd agree with this action", learned from their past
@@ -282,8 +290,20 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 		return
 	}
 	// Gate: only learn on threads flow already triaged (same test as priorUnderstanding).
-	if !hadPrior || (prior.EventCount == 0 && strings.TrimSpace(prior.CurrentAction) == "") {
-		return
+	if !hadPrior || threadStateEmpty(prior) {
+		// DM/MPDM replies aren't threaded, so the operator's message keys to ITSELF,
+		// never the clubbed card's key (clubbing keeps the framing message's key). The
+		// raw-key lookup above misses every time on a direct conversation — recover the
+		// owning clubbed card by channel and retry, so a hand-typed reply actually
+		// resolves the card instead of leaving it surfaced.
+		if recovered, ok := c.clubbedThreadKeyForReply(ev); ok && recovered != key {
+			if p2, had2, e2 := flowdb.GetThreadState(c.DB, recovered); e2 == nil && had2 && !threadStateEmpty(p2) {
+				key, prior, hadPrior = recovered, p2, had2
+			}
+		}
+		if !hadPrior || threadStateEmpty(prior) {
+			return
+		}
 	}
 	// De-dup against replay / backfill double-processing of the same message
 	// (self-authored events drop before the verdict cache, so they aren't deduped
@@ -1310,7 +1330,7 @@ func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
 		return nil
 	}
 	hasDecision := s.EventCount > 0 || strings.TrimSpace(s.CurrentAction) != ""
-	if !hasDecision && len(s.OperatorActions) == 0 && len(s.OperatorReplies) == 0 {
+	if !hasDecision && len(s.OperatorActions) == 0 && len(s.OperatorReplies) == 0 && len(s.OperatorCorrections) == 0 {
 		return nil
 	}
 	p := &PriorUnderstanding{
@@ -1328,7 +1348,20 @@ func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
 			p.OperatorReplies = append(p.OperatorReplies, t)
 		}
 	}
+	for _, corr := range s.OperatorCorrections {
+		if t := strings.TrimSpace(corr.Text); t != "" {
+			p.Corrections = append(p.Corrections, t)
+		}
+	}
 	return p
+}
+
+// threadStateEmpty reports that a thread-state row carries no triage decision yet
+// (the inverse of priorUnderstanding's "has decision" test). The operator-reply
+// learn path uses it to decide a thread was never deep-triaged here — and to know
+// when a clubbed-key recovery is needed.
+func threadStateEmpty(s flowdb.ThreadState) bool {
+	return s.EventCount == 0 && strings.TrimSpace(s.CurrentAction) == ""
 }
 
 func formatOperatorAction(a flowdb.ThreadOperatorAction) string {

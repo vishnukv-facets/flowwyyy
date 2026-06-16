@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
-import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Play, RefreshCw, Send, Share2 } from 'lucide-react'
+import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Pencil, Play, RefreshCw, Send, Share2 } from 'lucide-react'
 import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -289,6 +289,25 @@ function FeedView({
     action.mutate({ kind: 'attention-act', target: item.id, attention_action: verb })
   }
 
+  // correct stores the operator's authoritative context on the thread and
+  // re-triages with it folded in (never auto-acts — it re-surfaces). Reuses the
+  // re-triage spinner since the card re-runs and updates in place.
+  const correct = (item: AttentionItem, text: string, remember: boolean) => {
+    if (action.isPending) return
+    setRetriaging((r) => ({ ...r, [item.id]: cardSig(item) }))
+    action.mutate({
+      kind: 'attention-act',
+      target: item.id,
+      attention_action: 'correct',
+      correction_text: text,
+      remember: remember || undefined,
+    })
+    window.setTimeout(
+      () => setRetriaging((r) => { const n = { ...r }; delete n[item.id]; return n }),
+      120000,
+    )
+  }
+
   return (
     <>
       <div className="row gap" style={{ marginBottom: 16 }}>
@@ -323,6 +342,7 @@ function FeedView({
               disabled={action.isPending}
               retriaging={!!retriaging[it.id]}
               onAct={act}
+              onCorrect={correct}
               onOpen={() => setDetail(it)}
             />
           ))}
@@ -360,6 +380,7 @@ function AttentionCard({
   disabled,
   retriaging,
   onAct,
+  onCorrect,
   onOpen,
 }: {
   item: AttentionItem
@@ -367,12 +388,27 @@ function AttentionCard({
   disabled: boolean
   retriaging?: boolean
   onAct: (item: AttentionItem, verb: string) => void
+  onCorrect: (item: AttentionItem, text: string, remember: boolean) => void
   onOpen: () => void
 }) {
   const urgent = item.urgency === 'urgent'
   // Re-triage is in flight if the client just fired it OR the server says so
   // (the server flag survives a page refresh and blocks double-firing).
   const busy = !!retriaging || !!item.retriaging
+  // Inline "correct the steerer" editor: give it the real context, optionally
+  // remember it generally (→ KB). Submitting re-triages with the correction folded
+  // in (never auto-acts).
+  const [correcting, setCorrecting] = useState(false)
+  const [correctionText, setCorrectionText] = useState('')
+  const [rememberCorrection, setRememberCorrection] = useState(false)
+  const submitCorrection = () => {
+    const text = correctionText.trim()
+    if (!text) return
+    onCorrect(item, text, rememberCorrection)
+    setCorrecting(false)
+    setCorrectionText('')
+    setRememberCorrection(false)
+  }
   const [, navigate] = useLocation()
   const channelLabel = item.channel_name || item.channel || ''
   // The steerer suggested capturing this as durable knowledge rather than a task.
@@ -389,6 +425,11 @@ function AttentionCard({
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Only the card itself toggles open on Enter/Space — never when the key
+        // was typed into an interactive child (the correction textarea, the
+        // action buttons, the mute menu). Otherwise typing a space in the
+        // "Correct" editor would bubble up and open the detail modal.
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onOpen()
@@ -439,6 +480,7 @@ function AttentionCard({
       ) : null}
 
       {item.status === 'new' ? (
+        <>
         <div className="att-actions row gap" onClick={stop}>
           {item.matched_task ? (
             <>
@@ -487,6 +529,15 @@ function AttentionCard({
           </button>
           <button
             type="button"
+            className="btn ghost sm"
+            title="Got it wrong? Give it the real context and it re-reads the thread"
+            disabled={disabled || busy}
+            onClick={() => setCorrecting((v) => !v)}
+          >
+            <Pencil size={13} /> Correct
+          </button>
+          <button
+            type="button"
             className="btn icon ghost sm"
             title={busy ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
             aria-label="Re-run triage"
@@ -498,6 +549,44 @@ function AttentionCard({
           {busy ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
           <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>
+        {correcting ? (
+          <div className="att-correct" onClick={stop}>
+            <div className="eyebrow">correct the steerer</div>
+            <textarea
+              className="att-correct-input"
+              rows={2}
+              autoFocus
+              placeholder="What did it get wrong? Give it the real context…"
+              value={correctionText}
+              onChange={(e) => setCorrectionText(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submitCorrection() }
+                if (e.key === 'Escape') setCorrecting(false)
+              }}
+            />
+            <div className="row gap" style={{ marginTop: 6, alignItems: 'center' }}>
+              <label className="row gap faint" style={{ alignItems: 'center', fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={rememberCorrection}
+                  onChange={(e) => setRememberCorrection(e.target.checked)}
+                />
+                Remember this generally (save to KB)
+              </label>
+              <span className="spacer" />
+              <button type="button" className="btn ghost sm" onClick={() => setCorrecting(false)}>Cancel</button>
+              <button
+                type="button"
+                className="btn primary sm"
+                disabled={disabled || !correctionText.trim()}
+                onClick={submitCorrection}
+              >
+                Save &amp; re-triage
+              </button>
+            </div>
+          </div>
+        ) : null}
+        </>
       ) : (
         <div className="att-resolved row gap faint mono" onClick={stop}>
           <span>
@@ -1198,6 +1287,11 @@ function TraceRow({ item, onOpen }: { item: SteeringTrace; onOpen: () => void })
       tabIndex={0}
       onClick={onOpen}
       onKeyDown={(e) => {
+        // Only the card itself toggles open on Enter/Space — never when the key
+        // was typed into an interactive child (the correction textarea, the
+        // action buttons, the mute menu). Otherwise typing a space in the
+        // "Correct" editor would bubble up and open the detail modal.
+        if (e.target !== e.currentTarget) return
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
           onOpen()

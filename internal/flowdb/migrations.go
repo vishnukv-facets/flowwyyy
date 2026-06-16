@@ -472,6 +472,19 @@ func runMigrations(db *sql.DB) error {
 			}
 		}
 	}
+
+	// Operator corrections on a thread's running understanding (the "correct the
+	// steerer" button): authoritative operator-supplied context, fed into deep
+	// triage as ground truth. JSON array, same shape as operator_actions/replies.
+	has, err = columnExists(db, "attention_thread_state", "operator_corrections")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_thread_state ADD COLUMN operator_corrections TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return fmt.Errorf("add attention_thread_state.operator_corrections: %w", err)
+		}
+	}
 	return nil
 }
 

@@ -414,6 +414,11 @@ func TestForwardFeed(t *testing.T) {
 	if !strings.Contains(stubbedForwards[0].msg, "C1:200.1") {
 		t.Errorf("forward message should reference the source thread: %q", stubbedForwards[0].msg)
 	}
+	// The forwarded briefing nudges the receiving session to lift any durable fact
+	// from the external event into the KB (the "make forwards smarter" change).
+	if !strings.Contains(stubbedForwards[0].msg, "capture it to the KB") {
+		t.Errorf("forward message should prompt durable-fact KB capture: %q", stubbedForwards[0].msg)
+	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
 	}

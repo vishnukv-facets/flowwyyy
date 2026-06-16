@@ -54,6 +54,17 @@ test('attention card offers a Save to KB action wired to capture-kb', () => {
   assert.match(attentionSource, /item\.suggested_action === 'capture_kb'/)
 })
 
+// Correct-the-steerer: a card offers a Correct action that captures the
+// operator's authoritative context (optionally promoted to KB) and re-triages
+// with it via the 'correct' attention action.
+test('attention card offers a Correct action wired to the correct action', () => {
+  assert.match(attentionSource, /> Correct/)
+  assert.match(attentionSource, /attention_action: 'correct'/)
+  assert.match(attentionSource, /correction_text: text/)
+  // The "remember generally" path promotes the correction to the KB.
+  assert.match(attentionSource, /Remember this generally/)
+})
+
 // SteeringConfig groups every relocated steering key (Triage scope / Autonomy /
 // Performance) and reuses the shared picker + autonomy components.
 test('steering config consolidates every steering key', () => {

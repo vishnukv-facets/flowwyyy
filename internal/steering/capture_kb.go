@@ -135,6 +135,15 @@ reply with a single line: FAILED: <short reason>. Do NOT pretend you captured it
 Output nothing else.`
 }
 
+// PromoteCorrectionToKB distills an operator correction into a durable KB fact
+// (kb/*.md) — the "remember this generally" option on the correction button. It
+// reuses the operator-reply KB path (operator's own words → KB): NOTHING-DURABLE
+// is a clean no-op, so a thread-specific correction that isn't a general fact
+// simply isn't written. Best-effort — the caller logs and proceeds on error.
+func PromoteCorrectionToKB(ctx context.Context, threadKey, source, text, kbDir string) error {
+	return captureOperatorReplyKB(ctx, threadKey, source, text, kbDir)
+}
+
 // captureOperatorReplyKB distills a durable fact out of a reply the operator
 // wrote BY HAND on a watched, already-triaged thread and appends it to the KB —
 // the steerer "learns the operator's voice/decisions" path. Unlike

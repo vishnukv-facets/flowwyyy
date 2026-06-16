@@ -1155,6 +1155,30 @@ func TestCascadeAutoDismissesDigestOnly(t *testing.T) {
 	}
 }
 
+func TestMaybeAutoActSuppressedByCorrectionContext(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.1}}
+	stubTaskSpawner(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "c1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s",
+		SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-12T06:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	v := Verdict{SuggestedAction: ActionMakeTask, Confidence: 0.99}
+
+	// A correction-triggered re-triage must NOT auto-act, even though the policy
+	// would otherwise allow it.
+	if got := c.maybeAutoAct(withAutoActSuppressed(context.Background()), "c1", v); got.decision != "suppressed" {
+		t.Fatalf("correction-context decision = %q, want suppressed", got.decision)
+	}
+	// Same policy + same verdict on a plain context DOES act — proving suppression
+	// (not the gate) is what held it back.
+	if got := c.maybeAutoAct(context.Background(), "c1", v); got.decision != "acted" {
+		t.Fatalf("plain-context decision = %q, want acted", got.decision)
+	}
+}
+
 func TestCascadeTraceRecordsAutonomyActed(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}

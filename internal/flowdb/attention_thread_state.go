@@ -23,6 +23,7 @@ type ThreadState struct {
 	Summary           string
 	OperatorActions   []ThreadOperatorAction
 	OperatorReplies   []ThreadOperatorReply
+	OperatorCorrections []ThreadOperatorCorrection
 	EventCount        int
 	LastSeenTS        string
 	FirstSeenAt       string
@@ -49,6 +50,15 @@ type ThreadOperatorReply struct {
 	Text   string `json:"text"`
 }
 
+// ThreadOperatorCorrection is one authoritative context correction the operator
+// supplied for a thread via the "correct the steerer" button. Unlike a reply
+// (something said in the conversation), this is the operator telling the steerer
+// what the thread actually means; deep triage treats it as ground truth.
+type ThreadOperatorCorrection struct {
+	At   string `json:"at"`
+	Text string `json:"text"`
+}
+
 // ThreadDecision is the input to RecordThreadDecision: the latest verdict the
 // cascade reached for a thread, plus the source ts anchor and the write time.
 type ThreadDecision struct {
@@ -67,15 +77,15 @@ type ThreadDecision struct {
 func GetThreadState(db *sql.DB, threadKey string) (ThreadState, bool, error) {
 	var s ThreadState
 	var action, reason, lastSeen sql.NullString
-	var actionsJSON, repliesJSON string
+	var actionsJSON, repliesJSON, correctionsJSON string
 	err := db.QueryRow(
 		`SELECT thread_key, source, current_action, current_confidence, current_reason,
-		        summary, operator_actions, operator_replies, event_count, last_seen_ts,
-		        first_seen_at, updated_at
+		        summary, operator_actions, operator_replies, operator_corrections,
+		        event_count, last_seen_ts, first_seen_at, updated_at
 		 FROM attention_thread_state WHERE thread_key = ?`, threadKey,
 	).Scan(
 		&s.ThreadKey, &s.Source, &action, &s.CurrentConfidence, &reason,
-		&s.Summary, &actionsJSON, &repliesJSON, &s.EventCount, &lastSeen,
+		&s.Summary, &actionsJSON, &repliesJSON, &correctionsJSON, &s.EventCount, &lastSeen,
 		&s.FirstSeenAt, &s.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
@@ -92,6 +102,9 @@ func GetThreadState(db *sql.DB, threadKey string) (ThreadState, bool, error) {
 	}
 	if err := json.Unmarshal([]byte(repliesJSON), &s.OperatorReplies); err != nil {
 		return ThreadState{}, false, fmt.Errorf("flowdb: thread state %q operator_replies: %w", threadKey, err)
+	}
+	if err := json.Unmarshal([]byte(correctionsJSON), &s.OperatorCorrections); err != nil {
+		return ThreadState{}, false, fmt.Errorf("flowdb: thread state %q operator_corrections: %w", threadKey, err)
 	}
 	return s, true, nil
 }
@@ -145,6 +158,13 @@ func AppendThreadOperatorReply(db *sql.DB, threadKey string, r ThreadOperatorRep
 	return appendThreadJSON(db, threadKey, "operator_replies", r, r.At)
 }
 
+// AppendThreadOperatorCorrection appends an operator correction (authoritative
+// context for "the steerer got this wrong") to a thread's running understanding,
+// same create-if-missing semantics as the action/reply appends.
+func AppendThreadOperatorCorrection(db *sql.DB, threadKey string, corr ThreadOperatorCorrection) error {
+	return appendThreadJSON(db, threadKey, "operator_corrections", corr, corr.At)
+}
+
 // appendThreadJSON read-modify-writes one JSON-array column on a thread-state
 // row. column is an internal constant (never user input), validated against a
 // whitelist so the dynamic column name can't smuggle SQL. at stamps both the
@@ -153,7 +173,7 @@ func appendThreadJSON(db *sql.DB, threadKey, column string, entry any, at string
 	if threadKey == "" {
 		return fmt.Errorf("flowdb: append thread %s requires a thread_key", column)
 	}
-	if column != "operator_actions" && column != "operator_replies" {
+	if column != "operator_actions" && column != "operator_replies" && column != "operator_corrections" {
 		return fmt.Errorf("flowdb: append thread: unknown column %q", column)
 	}
 	if _, err := db.Exec(

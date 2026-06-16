@@ -5959,6 +5959,30 @@ a.orch-pr:hover {
 .att-actions {
   margin-top: 4px;
 }
+.att-correct {
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+}
+.att-correct-input {
+  width: 100%;
+  margin-top: 5px;
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-1);
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  resize: vertical;
+}
+.att-correct-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .att-forward-target {
   display: inline-block;
   max-width: 220px;

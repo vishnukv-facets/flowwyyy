@@ -87,6 +87,36 @@ func TestRecordThreadDecisionBlankSummaryCarriesForward(t *testing.T) {
 	}
 }
 
+func TestAppendThreadOperatorCorrection(t *testing.T) {
+	db := openTempDB(t)
+	key := "C2:4000.0"
+	// A correction can land before any decision (operator corrects a thin card);
+	// the append must create the row defensively, same as actions/replies.
+	if err := AppendThreadOperatorCorrection(db, key, ThreadOperatorCorrection{
+		At: "2026-06-16T10:00:00Z", Text: "This thread is about the CSX papertrade migration, not the demo.",
+	}); err != nil {
+		t.Fatalf("append correction: %v", err)
+	}
+	if err := AppendThreadOperatorCorrection(db, key, ThreadOperatorCorrection{
+		At: "2026-06-16T10:05:00Z", Text: "Anshul is the CTO, not a customer.",
+	}); err != nil {
+		t.Fatalf("append correction 2: %v", err)
+	}
+	s, ok, err := GetThreadState(db, key)
+	if err != nil || !ok {
+		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
+	}
+	if len(s.OperatorCorrections) != 2 {
+		t.Fatalf("OperatorCorrections = %d, want 2: %+v", len(s.OperatorCorrections), s.OperatorCorrections)
+	}
+	if s.OperatorCorrections[0].Text != "This thread is about the CSX papertrade migration, not the demo." {
+		t.Errorf("correction[0] = %+v", s.OperatorCorrections[0])
+	}
+	if s.OperatorCorrections[1].Text != "Anshul is the CTO, not a customer." {
+		t.Errorf("correction[1] = %+v", s.OperatorCorrections[1])
+	}
+}
+
 func TestAppendThreadOperatorActionAndReply(t *testing.T) {
 	db := openTempDB(t)
 	key := "C2:3000.0"

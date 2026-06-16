@@ -63,6 +63,15 @@ type actionRequest struct {
 	// empty means post the draft as-is.
 	ReplyInstructions string `json:"reply_instructions,omitempty"`
 
+	// CorrectionText is the operator's authoritative context for the "correct"
+	// attention action ("this thread is actually about X"). It is stored on the
+	// thread's running understanding and re-triaged as ground truth.
+	CorrectionText string `json:"correction_text,omitempty"`
+
+	// Remember, on the "correct" action, also promotes the correction into the KB
+	// as a durable cross-thread fact (default false ⇒ thread-local only).
+	Remember bool `json:"remember,omitempty"`
+
 	// Settings carries key→value pairs for the update-settings action.
 	Settings map[string]string `json:"settings,omitempty"`
 
