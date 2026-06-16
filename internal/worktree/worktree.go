@@ -181,6 +181,26 @@ func WorktreePathFor(repoRoot, agent, slug string) string {
 	return filepath.Join(repoRoot, WorktreeRelDir(agent), slug)
 }
 
+// Remove deletes the flow-managed worktree and branch for a task. Missing
+// worktrees/branches are treated as already-clean so permanent delete can be
+// retried safely.
+func Remove(workDir, agent, slug string) error {
+	root := RepoRoot(workDir)
+	if root == "" {
+		return nil
+	}
+	return removeAt(root, WorktreePathFor(root, agent, slug), agent, slug)
+}
+
+// RemovePath is Remove for callers that already have the stored worktree path.
+func RemovePath(worktreePath, agent, slug string) error {
+	root := repoRootFromWorktreePath(worktreePath, agent, slug)
+	if root == "" {
+		return nil
+	}
+	return removeAt(root, worktreePath, agent, slug)
+}
+
 // Ensure prepares a worktree for the task. If workDir is not inside a
 // git repo, it returns IsRepo=false and the caller should use workDir
 // directly. Otherwise it computes the worktree path, creates the
@@ -272,6 +292,48 @@ func Ensure(workDir, agent, slug string) (*Result, error) {
 		_ = err
 	}
 	return res, nil
+}
+
+func removeAt(repoRoot, wtPath, agent, slug string) error {
+	if strings.TrimSpace(slug) == "" {
+		return fmt.Errorf("worktree: empty task slug")
+	}
+	switch agent {
+	case AgentClaude, AgentCodex:
+	default:
+		return fmt.Errorf("worktree: unknown agent %q", agent)
+	}
+
+	registered, err := worktreeRegistered(repoRoot, wtPath)
+	if err != nil {
+		return err
+	}
+	if registered {
+		if _, err := gitOutput(repoRoot, "worktree", "remove", "--force", wtPath); err != nil {
+			return fmt.Errorf("remove worktree %s: %w", wtPath, err)
+		}
+	}
+
+	branch := BranchName(slug)
+	if _, err := gitOutput(repoRoot, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err == nil {
+		if _, err := gitOutput(repoRoot, "branch", "-D", branch); err != nil {
+			return fmt.Errorf("delete branch %s: %w", branch, err)
+		}
+	}
+	if _, err := gitOutput(repoRoot, "worktree", "prune"); err != nil {
+		return fmt.Errorf("prune worktrees: %w", err)
+	}
+	return nil
+}
+
+func repoRootFromWorktreePath(worktreePath, agent, slug string) string {
+	clean := filepath.Clean(strings.TrimSpace(worktreePath))
+	suffix := filepath.Join(WorktreeRelDir(agent), slug)
+	if clean == "." || suffix == "." || !strings.HasSuffix(clean, suffix) {
+		return ""
+	}
+	root := strings.TrimSuffix(clean, suffix)
+	return strings.TrimSuffix(root, string(os.PathSeparator))
 }
 
 // worktreeRegistered reports whether wtPath appears in `git worktree

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"flow/internal/workdirreg"
+	"flow/internal/worktree"
 	"fmt"
 	"net/http"
 	"os"
@@ -37,6 +38,18 @@ func (s *Server) destroyDeletedEntity(kind, slug string) (actionResponse, int) {
 	} else if msg != "" {
 		return actionResponse{OK: false, Message: msg}, http.StatusConflict
 	}
+	var taskWorkDir, taskAgent, taskWorktreePath string
+	if kind == "task" {
+		var provider, wt sql.NullString
+		if err := tx.QueryRow(
+			`SELECT work_dir, session_provider, worktree_path FROM tasks WHERE slug = ?`,
+			slug,
+		).Scan(&taskWorkDir, &provider, &wt); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		taskAgent = taskWorktreeAgent(provider.String, wt.String)
+		taskWorktreePath = strings.TrimSpace(wt.String)
+	}
 	if _, err := tx.Exec(`DELETE FROM search_docs WHERE entity_type = ? AND entity_slug = ?`, kind, slug); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -54,7 +67,37 @@ func (s *Server) destroyDeletedEntity(kind, slug string) (actionResponse, int) {
 	if dir := s.entityDir(kind, slug); dir != "" {
 		_ = os.RemoveAll(dir)
 	}
-	return actionResponse{OK: true, Message: "deleted " + kind + " " + slug}, http.StatusOK
+	msg := "deleted " + kind + " " + slug
+	if kind == "task" {
+		var err error
+		if taskWorktreePath != "" {
+			err = worktree.RemovePath(taskWorktreePath, taskAgent, slug)
+		} else {
+			err = worktree.Remove(taskWorkDir, taskAgent, slug)
+		}
+		if err != nil {
+			msg += "; worktree cleanup failed: " + err.Error()
+		}
+	}
+	return actionResponse{OK: true, Message: msg}, http.StatusOK
+}
+
+func taskWorktreeAgent(provider, worktreePath string) string {
+	clean := filepath.Clean(worktreePath)
+	sep := string(os.PathSeparator)
+	if strings.Contains(clean, sep+".codex"+sep+"worktrees"+sep) {
+		return worktree.AgentCodex
+	}
+	if strings.Contains(clean, sep+".claude"+sep+"worktrees"+sep) {
+		return worktree.AgentClaude
+	}
+	switch strings.TrimSpace(provider) {
+	case worktree.AgentCodex:
+		return worktree.AgentCodex
+	case worktree.AgentClaude:
+		return worktree.AgentClaude
+	}
+	return worktree.AgentClaude
 }
 
 // emptyTrash permanently deletes every soft-deleted task, project, and
