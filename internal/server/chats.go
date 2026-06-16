@@ -63,6 +63,9 @@ type chatView struct {
 	// has no resolvable session yet.
 	Tokens  int     `json:"tokens,omitempty"`
 	CostUSD float64 `json:"cost_usd,omitempty"`
+	// OccupancyPct is the chat's current context-window usage as 0–100 % (the same
+	// used/max the /compact worker reads) — the context-usage indicator (GAP-5).
+	OccupancyPct int `json:"occupancy_pct,omitempty"`
 }
 
 // listChats returns the chats for the Chats sidebar, newest activity first.
@@ -79,7 +82,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 		return nil, err
 	}
 	for _, c := range chats {
-		tokens, cost := s.chatUsage(c)
+		tokens, cost, occupancyPct := s.chatUsage(c)
 		out = append(out, chatView{
 			Slug:           c.Slug,
 			Title:          c.Title,
@@ -92,32 +95,50 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 			LastReply:      s.chatLastReply(c),
 			Tokens:         tokens,
 			CostUSD:        cost,
+			OccupancyPct:   occupancyPct,
 		})
 	}
 	return out, nil
 }
 
-// chatUsage returns a chat's cumulative session tokens (cache-excluded Σ) + full
-// billed cost, or (0,0) when it has no resolvable session yet. Memoized via
-// transcriptCache, so it stays cheap on the buildUIData hot path.
-func (s *Server) chatUsage(c *flowdb.Chat) (int, float64) {
+// chatUsage resolves a chat's session transcript ONCE and returns its cumulative
+// session tokens (cache-excluded Σ), full billed cost (cache included), and current
+// context-window occupancy as a 0–100 % (the same used/max the /compact worker
+// reads — GAP-5). All zero when the chat has no resolvable session yet. Memoized
+// via transcriptCache, so it stays cheap on the buildUIData hot path.
+func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyPct int) {
 	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
-		return 0, 0
+		return 0, 0, 0
 	}
 	absRoot, err := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
 	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
 	if err != nil {
-		return 0, 0
+		return 0, 0, 0
 	}
-	return s.chatSessionUsage(&flowdb.Task{
+	path, err := resolveSessionJSONLPath(&flowdb.Task{
 		Slug:            c.Slug,
 		WorkDir:         absRoot,
 		SessionProvider: provider,
 		SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
 	})
+	if err != nil || path == "" {
+		return 0, 0, 0
+	}
+	entry, err := s.transcripts.get(path)
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, v := range entry.usage.CostByDay {
+		cost += v
+	}
+	tokens = entry.usage.TokensSession
+	if used, max := steererCompactUsage(provider, entry.usage); max > 0 {
+		occupancyPct = min(used*100/max, 100)
+	}
+	return tokens, cost, occupancyPct
 }
 
 // chatLastReply returns a one-line preview of the agent's most recent response
@@ -187,11 +208,6 @@ func (s *Server) chatStatAgents() []uiAgent {
 	if err != nil {
 		return nil
 	}
-	absRoot, aerr := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
-	if aerr != nil {
-		return nil
-	}
-	_ = absRoot
 	var out []uiAgent
 	for _, c := range chats {
 		if c == nil {
@@ -201,7 +217,7 @@ func (s *Server) chatStatAgents() []uiAgent {
 		if perr != nil {
 			continue
 		}
-		tokens, cost := s.chatUsage(c)
+		tokens, cost, _ := s.chatUsage(c)
 		if tokens == 0 && cost == 0 {
 			continue // nothing burned yet / transcript unresolved — don't inflate the count
 		}
@@ -210,27 +226,6 @@ func (s *Server) chatStatAgents() []uiAgent {
 		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, Origin: c.Origin, TokensSession: tokens, CostSession: cost})
 	}
 	return out
-}
-
-// chatSessionUsage resolves a chat's session transcript and returns its
-// cumulative session tokens (cache-excluded, the CLI's Σ) and full billed cost
-// (cache included) — the same two figures sessionInsightsForTask derives for
-// tasks. The transcript parse is memoized by transcriptCache, so this stays cheap
-// on the buildUIData hot path. Any resolution/read error yields (0, 0).
-func (s *Server) chatSessionUsage(task *flowdb.Task) (int, float64) {
-	path, err := resolveSessionJSONLPath(task)
-	if err != nil || path == "" {
-		return 0, 0
-	}
-	entry, err := s.transcripts.get(path)
-	if err != nil {
-		return 0, 0
-	}
-	cost := 0.0
-	for _, c := range entry.usage.CostByDay {
-		cost += c
-	}
-	return entry.usage.TokensSession, cost
 }
 
 // handleChats serves GET /api/chats — the Chats sidebar list. The

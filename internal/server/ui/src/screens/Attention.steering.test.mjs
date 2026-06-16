@@ -65,6 +65,18 @@ test('attention card offers a Correct action wired to the correct action', () =>
   assert.match(attentionSource, /Remember this generally/)
 })
 
+// GAP-5: a card links to its channel's steering session. The slug is derived the
+// same way the server does (chat-steer-<sanitized channel>), the affordance only
+// shows when that steerer chat exists, and it reopens the floating terminal.
+test('attention card links to the channel steering session', () => {
+  assert.match(attentionSource, /function steererChatSlugFor/)
+  assert.match(attentionSource, /'chat-steer-' \+ sanitizeSlugSegment\(item\.channel\)/)
+  assert.match(attentionSource, /View session/)
+  assert.match(attentionSource, /kind: 'chat-reopen'/)
+  // Gated on the chat actually existing (origin==='steerer' in the live list).
+  assert.match(attentionSource, /c\.origin === 'steerer'/)
+})
+
 // SteeringConfig groups every relocated steering key (Triage scope / Autonomy /
 // Performance) and reuses the shared picker + autonomy components.
 test('steering config consolidates every steering key', () => {

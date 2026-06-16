@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
 import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Pencil, Play, RefreshCw, Send, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useSteeringRuns, useWorkEvents } from '../lib/query'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useChats, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
+import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
@@ -14,6 +15,20 @@ import type { AttentionItem, SteeringFunnel, SteeringRun, SteeringStageEvent, St
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
 const VIEWS = ['feed', 'live', 'trace', 'config'] as const
 type View = (typeof VIEWS)[number]
+
+// steererChatSlugFor mirrors the server's steererChatSlug(sessionKeyForEvent(...))
+// for the deterministic Slack case: a card's channel keys "chat-steer-<sanitized
+// channel>" (GAP-5 card→chat link). GitHub canonical PR↔issue keying can't be
+// reliably reconstructed from a card, so only Slack cards link for now.
+function sanitizeSlugSegment(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+function steererChatSlugFor(item: AttentionItem): string | null {
+  if (item.source === 'slack' && item.channel) {
+    return 'chat-steer-' + sanitizeSlugSegment(item.channel)
+  }
+  return null
+}
 
 export function Attention() {
   useDocumentTitle('Attention')
@@ -243,6 +258,22 @@ function FeedView({
   const switching = isLoading || (isFetching && isPlaceholderData)
   const { data: workEvents } = useWorkEvents({ limit: 200 })
   const action = useAction()
+  // Card → steering chat link (GAP-5): the set of live steerer chat slugs so a
+  // card only offers "View session" when its channel actually has one.
+  const { data: chats } = useChats(false)
+  const { open: openFloatingTerminal } = useFloatingTerminals()
+  const steererSlugs = useMemo(
+    () => new Set((chats ?? []).filter((c) => c.origin === 'steerer').map((c) => c.slug)),
+    [chats],
+  )
+  const viewSession = (item: AttentionItem) => {
+    const slug = steererChatSlugFor(item)
+    if (!slug || action.isPending) return
+    action.mutate(
+      { kind: 'chat-reopen', slug },
+      { onSuccess: (resp) => { if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal) } },
+    )
+  }
   const eventByAttentionId = useMemo(() => {
     const map = new Map<string, WorkEvent>()
     for (const event of workEvents?.items ?? []) {
@@ -334,18 +365,22 @@ function FeedView({
         />
       ) : (
         <div className="att-list">
-          {(data ?? []).map((it) => (
-            <AttentionCard
-              key={it.id}
-              item={it}
-              workEvent={eventByAttentionId.get(it.id)}
-              disabled={action.isPending}
-              retriaging={!!retriaging[it.id]}
-              onAct={act}
-              onCorrect={correct}
-              onOpen={() => setDetail(it)}
-            />
-          ))}
+          {(data ?? []).map((it) => {
+            const sess = steererChatSlugFor(it)
+            return (
+              <AttentionCard
+                key={it.id}
+                item={it}
+                workEvent={eventByAttentionId.get(it.id)}
+                disabled={action.isPending}
+                retriaging={!!retriaging[it.id]}
+                onAct={act}
+                onCorrect={correct}
+                onOpen={() => setDetail(it)}
+                onViewSession={sess && steererSlugs.has(sess) ? () => viewSession(it) : undefined}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -382,6 +417,7 @@ function AttentionCard({
   onAct,
   onCorrect,
   onOpen,
+  onViewSession,
 }: {
   item: AttentionItem
   workEvent?: WorkEvent
@@ -390,6 +426,9 @@ function AttentionCard({
   onAct: (item: AttentionItem, verb: string) => void
   onCorrect: (item: AttentionItem, text: string, remember: boolean) => void
   onOpen: () => void
+  // onViewSession, when set, opens this card's channel steerer chat (GAP-5). Set
+  // only when a steerer chat exists for the card's channel.
+  onViewSession?: () => void
 }) {
   const urgent = item.urgency === 'urgent'
   // Re-triage is in flight if the client just fired it OR the server says so
@@ -463,6 +502,17 @@ function AttentionCard({
             >
               <ExternalLink size={13} /> {linkLabel}
             </a>
+          ) : null}
+          {onViewSession ? (
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={disabled}
+              title="Open this channel's steering session"
+              onClick={onViewSession}
+            >
+              <MessageSquare size={13} /> View session
+            </button>
           ) : null}
         </div>
       ) : null}

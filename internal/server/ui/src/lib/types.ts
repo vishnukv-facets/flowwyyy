@@ -907,6 +907,8 @@ export interface Chat {
   /** Cumulative session tokens (cache-excluded Σ) and full billed cost (GAP-12). */
   tokens?: number
   cost_usd?: number
+  /** Current context-window occupancy 0–100 % (the /compact 60% basis) — GAP-5. */
+  occupancy_pct?: number
 }
 
 export interface TranscriptEntry {

@@ -190,6 +190,15 @@ function ChatRow({ chat }: { chat: Chat }) {
               {compactTokens(chat.tokens)} tok · ~{fmtUSD(chat.cost_usd ?? 0)}
             </span>
           ) : null}
+          {chat.occupancy_pct ? (
+            <span
+              className="mono"
+              title="Current context-window usage (the session /compacts at 60%)"
+              style={chat.occupancy_pct >= 60 ? { color: 'var(--warn, #c80)' } : undefined}
+            >
+              {chat.occupancy_pct}% ctx
+            </span>
+          ) : null}
           <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
         </div>
       </div>
