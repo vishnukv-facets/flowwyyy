@@ -51,17 +51,43 @@ func TestAutonomyFromEnv(t *testing.T) {
 
 func TestDefaultAutonomyIsSurfaceOnly(t *testing.T) {
 	p := DefaultAutonomy()
-	for _, a := range []Action{ActionMakeTask, ActionForward, ActionReply, ActionAFKReply} {
+	for _, a := range []Action{ActionMakeTask, ActionForward, ActionCaptureKB, ActionDigestOnly, ActionReply, ActionAFKReply} {
 		if p.Allow(a, 1.0) {
 			t.Errorf("DefaultAutonomy allowed %q at confidence 1.0; want surface-only (deny)", a)
 		}
 	}
 }
 
+func TestAutonomyFromEnvEnablesAndFailSafesNewSafeActions(t *testing.T) {
+	t.Run("capture_kb + dismiss opt in above their thresholds", func(t *testing.T) {
+		t.Setenv("FLOW_STEERING_AUTONOMY", `{"capture_kb":{"enabled":true,"threshold":0.75},"digest_only":{"enabled":true,"threshold":0.85}}`)
+		p := AutonomyFromEnv()
+		if !p.Allow(ActionCaptureKB, 0.75) {
+			t.Error("capture_kb should be allowed at 0.75 (>= 0.75)")
+		}
+		if p.Allow(ActionCaptureKB, 0.74) {
+			t.Error("capture_kb should be denied at 0.74 (< 0.75)")
+		}
+		if !p.Allow(ActionDigestOnly, 0.90) {
+			t.Error("dismiss (digest_only) should be allowed at 0.90")
+		}
+		if p.Allow(ActionDigestOnly, 0.80) {
+			t.Error("dismiss (digest_only) should be denied at 0.80 (< 0.85)")
+		}
+	})
+	t.Run("malformed policy never enables capture_kb or dismiss", func(t *testing.T) {
+		t.Setenv("FLOW_STEERING_AUTONOMY", "{garbage")
+		p := AutonomyFromEnv()
+		if p.Allow(ActionCaptureKB, 1.0) || p.Allow(ActionDigestOnly, 1.0) {
+			t.Error("malformed JSON must leave the new safe actions off")
+		}
+	})
+}
+
 func TestAutonomyLadderDocumentsPolicyMatrix(t *testing.T) {
 	ladder := AutonomyLadder()
-	if len(ladder) != 7 {
-		t.Fatalf("ladder length = %d, want the seven trust-ladder steps", len(ladder))
+	if len(ladder) != 9 {
+		t.Fatalf("ladder length = %d, want the nine trust-ladder steps", len(ladder))
 	}
 
 	byKey := map[string]AutonomyCapability{}
@@ -80,6 +106,12 @@ func TestAutonomyLadderDocumentsPolicyMatrix(t *testing.T) {
 	}
 	if step := byKey["make_task"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.80 {
 		t.Errorf("make_task step = %+v, want configurable auto-actable off-by-default at 0.80", step)
+	}
+	if step := byKey["capture_kb"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.75 || step.Action != ActionCaptureKB {
+		t.Errorf("capture_kb step = %+v, want configurable auto-actable off-by-default at 0.75", step)
+	}
+	if step := byKey["dismiss"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.85 || step.Action != ActionDigestOnly {
+		t.Errorf("dismiss step = %+v, want configurable auto-actable off-by-default at 0.85 gating digest_only", step)
 	}
 	if step := byKey["reply"]; step.AutoActable || step.Configurable {
 		t.Errorf("reply step = %+v, want never auto-actable/configurable today", step)

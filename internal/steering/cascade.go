@@ -52,6 +52,15 @@ type Cascade struct {
 	Autonomy   AutonomyPolicy
 	AutonomyFn func() AutonomyPolicy
 
+	// CalibratorFn, when set, supplies the live confidence calibrator (raw model
+	// score → empirical P(operator agrees) per action×band, learned from
+	// attention_feedback). maybeAutoAct gates on the CALIBRATED score so the
+	// operator's thresholds mean "minimum probability I'd agree", not "minimum
+	// raw model number". NewCascade leaves it nil; serve wiring sets it to a
+	// loader. nil (or a nil calibrator, or a band with too-thin history) ⇒ the
+	// raw score is used unchanged, so behavior degrades safely to pre-calibration.
+	CalibratorFn func() *ConfidenceCalibrator
+
 	now    func() time.Time
 	newID  func() string
 	cache  *verdictCache
@@ -124,6 +133,15 @@ func (c *Cascade) autonomy() AutonomyPolicy {
 	return DefaultAutonomy()
 }
 
+// calibrator returns the live confidence calibrator (CalibratorFn when set, else
+// nil). A nil calibrator is a valid no-op: Calibrate returns the raw score.
+func (c *Cascade) calibrator() *ConfidenceCalibrator {
+	if c.CalibratorFn != nil {
+		return c.CalibratorFn()
+	}
+	return nil
+}
+
 func (c *Cascade) watchConfig() WatchConfig {
 	cfg := c.Config
 	if c.ConfigFn != nil {
@@ -167,9 +185,15 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 		return audit
 	}
 	pol := c.autonomy()
-	decision := pol.Evaluate(v.SuggestedAction, v.Confidence)
+	// Gate on the CALIBRATED confidence: the operator's per-action threshold means
+	// "minimum probability I'd agree with this action", learned from their past
+	// feedback (steerer-confidence-calibration). A nil calibrator or a band with
+	// too-thin history returns the raw model score unchanged, so the gate degrades
+	// safely to the pre-calibration behavior.
+	gateConf, grounded := c.calibrator().Calibrate(v.SuggestedAction, v.Confidence)
+	decision := pol.Evaluate(v.SuggestedAction, gateConf)
 	audit.decision = decision.Decision
-	audit.reason = decision.Reason
+	audit.reason = decision.Reason + confidenceProvenance(grounded, gateConf, v.Confidence)
 	if !decision.Allowed {
 		return audit
 	}
@@ -179,16 +203,49 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 		audit.reason = fmt.Sprintf("auto-act %s could not load feed item %s: %v", v.SuggestedAction, feedID, err)
 		return audit
 	}
-	if err := ApplyAction(ctx, c.DB, item, v.SuggestedAction, pol, false); err != nil {
+	// capture_kb spawns a `claude -p` subprocess (seconds to minutes) — never block
+	// the cascade goroutine on it. Dispatch detached with its own timeout, mirroring
+	// the operator capture path (server/attention.go). The card flips to acted only
+	// when the agent confirms the write; on failure it stays surfaced for review.
+	if v.SuggestedAction == ActionCaptureKB {
+		if strings.TrimSpace(c.KBDir) == "" {
+			audit.decision = "skipped"
+			audit.reason = "capture_kb auto-act enabled but no KB directory configured" + confidenceProvenance(grounded, gateConf, v.Confidence)
+			return audit
+		}
+		go func(it flowdb.FeedItem) {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := ApplyActionAuto(bctx, c.DB, it, ActionCaptureKB, c.KBDir, pol, gateConf); err != nil {
+				c.log("auto-capture-kb for %s failed: %v", it.ID, err)
+				return
+			}
+			c.log("auto-captured KB from %s (calibrated %.2f)", it.ID, gateConf)
+		}(item)
+		audit.decision = "dispatched"
+		audit.reason = "auto-capture_kb dispatched (async); " + decision.Reason + confidenceProvenance(grounded, gateConf, v.Confidence)
+		return audit
+	}
+	if err := ApplyActionAuto(ctx, c.DB, item, v.SuggestedAction, c.KBDir, pol, gateConf); err != nil {
 		audit.decision = "failed"
 		audit.reason = fmt.Sprintf("auto-act %s for %s failed: %v", v.SuggestedAction, feedID, err)
 		c.log("%s", audit.reason)
 		return audit
 	}
 	audit.decision = "acted"
-	audit.reason = decision.Reason
-	c.log("auto-acted %s on %s (confidence %.2f >= threshold)", v.SuggestedAction, feedID, v.Confidence)
+	audit.reason = decision.Reason + confidenceProvenance(grounded, gateConf, v.Confidence)
+	c.log("auto-acted %s on %s (calibrated %.2f >= threshold)", v.SuggestedAction, feedID, gateConf)
 	return audit
+}
+
+// confidenceProvenance annotates an autonomy trace reason with how the gating
+// confidence was derived, so `flow attention trace` shows whether a decision rode
+// the calibrated agreement rate or fell back to the raw model number.
+func confidenceProvenance(grounded bool, calibrated, raw float64) string {
+	if grounded {
+		return fmt.Sprintf(" [calibrated %.2f from raw %.2f]", calibrated, raw)
+	}
+	return fmt.Sprintf(" [raw %.2f; calibration ungrounded]", raw)
 }
 
 // learnFromOperatorReply is the learning path for a self-authored message Stage 0
@@ -1365,31 +1422,46 @@ func (b *budgetGuard) allow(now time.Time) bool {
 	return true
 }
 
+// deepBudgetPerHour caps Stage-3 deep-triage turns (the expensive rung — the
+// capable model with a fetched context pack). 60/hr ≈ one per minute sustained,
+// which clears normal connector volume; bursts spill to the Stage-2 verdict
+// (surfaced, nothing lost) rather than being dropped. Override via
+// FLOW_STEERING_DEEP_BUDGET_PER_HOUR (0 disables deep triage entirely).
 func deepBudgetPerHour() int {
 	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_DEEP_BUDGET_PER_HOUR")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
 	}
-	return 40
+	return 60
 }
 
+// classifierBudgetPerHour caps Stage 1/2 turns. These are cheap batched Haiku
+// calls, so the old 30/hr throttled ordinary inbox volume and silently dropped
+// events under any real connector activity. 120/hr (one every 30s sustained)
+// keeps the cheap front of the cascade open; deep triage remains the rate-limited
+// rung. Override via FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR (0 disables).
 func classifierBudgetPerHour() int {
 	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			return n
 		}
 	}
-	return 30
+	return 120
 }
 
+// classifierFailureCooldown is how long the cascade stops launching classifier
+// subprocesses after a quota/auth failure, to avoid hammering a CLI that's
+// returning errors. 10m recovers quickly from a transient rate-limit blip while
+// still backing off; the old 30m left the steerer deaf for half an hour after a
+// momentary limit. Override via FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN.
 func classifierFailureCooldown() time.Duration {
 	if v := strings.TrimSpace(os.Getenv("FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil && d > 0 {
 			return d
 		}
 	}
-	return 30 * time.Minute
+	return 10 * time.Minute
 }
 
 func randomID() string {
