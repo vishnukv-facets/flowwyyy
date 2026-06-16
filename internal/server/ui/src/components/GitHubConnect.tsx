@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { AlertTriangle, Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
-import { apiPost } from '../lib/api'
+import { ApiError, apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
 import { useGitHubInstallations, useGitHubOrgs, useGitHubSetupStatus } from '../lib/query'
 import { pushToast } from '../lib/toast'
@@ -134,7 +134,7 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
   const orgs = orgsData?.orgs ?? []
   const orgsLoading = target === 'org' && orgsFetching
 
-  const create = async () => {
+  const create = async (replaceExisting = false) => {
     if (target === 'org' && !org.trim()) return
     setBusy(true)
     try {
@@ -142,11 +142,24 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
         name: name.trim(),
         target,
         org: org.trim(),
+        replace_existing: replaceExisting,
       })
       postManifestForm(res.create_url, res.manifest)
       pushToast('ok', 'Opening GitHub to create the App…')
       onDone()
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409 && !replaceExisting) {
+        const ok = await confirmAction({
+          title: 'Replace connected GitHub App?',
+          body: `${err.message}. The current App will stop verifying webhooks once its stored credentials are replaced.`,
+          confirmLabel: 'Replace App',
+          danger: true,
+        })
+        if (ok) {
+          await create(true)
+          return
+        }
+      }
       pushToast('error', err instanceof Error ? err.message : 'could not start App creation')
     } finally {
       setBusy(false)
@@ -211,7 +224,7 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
           type="button"
           className="btn primary"
           disabled={busy || !st.ingress_ready || (target === 'org' && !org.trim())}
-          onClick={create}
+          onClick={() => void create()}
           title={!st.ingress_ready ? 'Start public ingress first' : undefined}
         >
           {busy ? <Loader2 size={14} className="spin" /> : <Github size={14} />}

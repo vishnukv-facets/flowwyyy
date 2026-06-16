@@ -168,6 +168,33 @@ func TestHandleGitHubSetupCreateApp_ReturnsManifestAndState(t *testing.T) {
 	}
 }
 
+func TestHandleGitHubSetupCreateApp_RequiresReplaceConfirmation(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_APP_ID", "77")
+	t.Setenv("FLOW_GH_APP_SLUG", "flow-old")
+	t.Setenv("FLOW_GH_APP_PEM", "PEM")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/github/setup/create-app", strings.NewReader(`{"target":"user","name":"flow-new"}`))
+	srv.handleGitHubSetupCreateApp(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409: %s", rec.Code, rec.Body.String())
+	}
+	if srv.pendingGitHubSetupState() != "" {
+		t.Fatalf("pending setup was started despite missing replace confirmation")
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/api/github/setup/create-app", strings.NewReader(`{"target":"user","name":"flow-new","replace_existing":true}`))
+	srv.handleGitHubSetupCreateApp(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("confirmed replace status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if srv.pendingGitHubSetupState() == "" {
+		t.Fatalf("confirmed replace did not start setup")
+	}
+}
+
 func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 	srv, _ := githubSetupTestServer(t)
 	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
@@ -215,6 +242,45 @@ func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 	// Transport flipped to webhook so the scheduled poller stays off.
 	if cfg["FLOW_GH_TRANSPORT"] != "webhook" {
 		t.Errorf("transport = %q, want webhook", cfg["FLOW_GH_TRANSPORT"])
+	}
+}
+
+func TestHandleGitHubSetupCallback_RejectsUnconfirmedReplace(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{
+			"id": 100, "slug": "flow-new", "client_id": "Iv1.new",
+			"client_secret": "newcs", "webhook_secret": "newwh", "pem": "NEWPEM",
+			"html_url": "https://github.com/apps/flow-new"
+		}`))
+	})
+	t.Setenv("FLOW_GH_API_BASE_URL", "https://github.test")
+
+	createRec := httptest.NewRecorder()
+	srv.handleGitHubSetupCreateApp(createRec, httptest.NewRequest("POST", "/api/github/setup/create-app", strings.NewReader(`{"target":"user"}`)))
+	var cr struct {
+		State string `json:"state"`
+	}
+	_ = json.Unmarshal(createRec.Body.Bytes(), &cr)
+
+	t.Setenv("FLOW_GH_APP_ID", "77")
+	t.Setenv("FLOW_GH_APP_SLUG", "flow-old")
+	t.Setenv("FLOW_GH_APP_PEM", "OLDPEM")
+	if err := storeGitHubSecret(keyringAcctWebhookSecret, "oldwh"); err != nil {
+		t.Fatalf("seed old webhook secret: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupCallback(rec, httptest.NewRequest("GET", "/api/github/setup/callback?code=the-code&state="+cr.State, nil))
+	if !strings.Contains(strings.ToLower(rec.Body.String()), "already connected") {
+		t.Fatalf("expected already-connected error page, got: %s", rec.Body.String())
+	}
+	if v, _ := getGitHubSecret(keyringAcctWebhookSecret); v != "oldwh" {
+		t.Fatalf("webhook secret was overwritten: %q", v)
+	}
+	if os.Getenv("FLOW_GH_APP_ID") != "77" || os.Getenv("FLOW_GH_APP_SLUG") != "flow-old" {
+		t.Fatalf("existing App metadata was overwritten: id=%q slug=%q", os.Getenv("FLOW_GH_APP_ID"), os.Getenv("FLOW_GH_APP_SLUG"))
 	}
 }
 
