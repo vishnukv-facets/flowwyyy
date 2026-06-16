@@ -36,6 +36,69 @@ func TestSteererSessionProvider(t *testing.T) {
 	}
 }
 
+func TestForkTriggerMatches(t *testing.T) {
+	cases := []struct {
+		text string
+		want bool
+	}{
+		{"Claude usage limit reached. Resets at 5pm.", true},
+		{"Error: rate_limit_error", true},
+		{"You have insufficient_quota for this request", true},
+		{"Your credit balance is too low", true},
+		{"", false},
+		{"normal assistant reply about the PR", false},
+		{"Error: overloaded_error, please retry", false}, // transient, not exhaustion
+		{"request timeout (500)", false},
+	}
+	for _, tc := range cases {
+		if got := forkTriggerMatches(tc.text); got != tc.want {
+			t.Errorf("forkTriggerMatches(%q) = %v, want %v", tc.text, got, tc.want)
+		}
+	}
+}
+
+func TestRecentSteererExhaustion(t *testing.T) {
+	// marker only in an OLD entry (beyond the tail) is ignored; recent one matches.
+	var old []TranscriptEntry
+	for range 12 {
+		old = append(old, TranscriptEntry{Type: "assistant", Text: "fine"})
+	}
+	old[0].Text = "usage limit reached" // beyond the 8-entry tail
+	if recentSteererExhaustion(old) {
+		t.Error("old marker beyond the tail must not trigger")
+	}
+	recent := []TranscriptEntry{
+		{Type: "assistant", Text: "ok"},
+		{Type: "tool_result", ToolResultText: "rate limit exceeded"},
+	}
+	if !recentSteererExhaustion(recent) {
+		t.Error("recent exhaustion marker must trigger")
+	}
+}
+
+func TestShouldRecoverToClaude(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	after := 2 * time.Hour
+	cases := []struct {
+		name     string
+		forkedAt time.Time
+		flagOn   bool
+		want     bool
+	}{
+		{"flag off", now.Add(-3 * time.Hour), false, false},
+		{"never forked", time.Time{}, true, false},
+		{"within cooldown", now.Add(-1 * time.Hour), true, false},
+		{"cooldown elapsed", now.Add(-3 * time.Hour), true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldRecoverToClaude(now, tc.forkedAt, after, tc.flagOn); got != tc.want {
+				t.Errorf("shouldRecoverToClaude = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSteererDeliveryPlan(t *testing.T) {
 	cases := []struct {
 		name    string

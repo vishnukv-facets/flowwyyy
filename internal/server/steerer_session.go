@@ -366,6 +366,61 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 	return nil
 }
 
+// steererForkEnabled gates the Claude→Codex provider fork (GAP-9). Off by default;
+// the manual switch (chat-set-provider) works regardless of this flag.
+func steererForkEnabled() bool { return envBoolDefaultServer("FLOW_STEERER_FORK_PROVIDER", false) }
+
+// steererForkRecoveryEnabled gates the optional time-based Codex→Claude come-back.
+// Off by default — coming back to Claude is otherwise an operator (manual) action.
+func steererForkRecoveryEnabled() bool { return envBoolDefaultServer("FLOW_STEERER_FORK_RECOVERY", false) }
+
+// steererForkRecoveryAfter is how long a chat stays on Codex after an auto-fork
+// before recovery retries Claude. A re-exhaustion re-forks and resets the timer,
+// so repeated failures naturally push the next attempt out (anti-thrash, no
+// explicit backoff needed).
+func steererForkRecoveryAfter() time.Duration {
+	return envDurationDefault("FLOW_STEERER_FORK_RECOVERY_AFTER", 2*time.Hour)
+}
+
+// forkTriggerMatches reports whether transcript text shows Claude usage/quota
+// exhaustion the fork should escalate on (GAP-9, best-effort marker scan — the
+// dependable trigger is the manual switch). Transient blips (overloaded / 5xx /
+// timeout) are NOT exhaustion: they retry, they don't justify a provider fork.
+func forkTriggerMatches(text string) bool {
+	t := strings.ToLower(text)
+	for _, m := range []string{
+		"usage limit", "rate limit", "rate_limit", "quota",
+		"insufficient_quota", "exhausted", "credit balance", "billing",
+	} {
+		if strings.Contains(t, m) {
+			return true
+		}
+	}
+	return false
+}
+
+// recentSteererExhaustion scans a bounded transcript tail for an exhaustion marker.
+func recentSteererExhaustion(entries []TranscriptEntry) bool {
+	const tail = 8
+	start := max(len(entries)-tail, 0)
+	for _, e := range entries[start:] {
+		if forkTriggerMatches(e.Text) || forkTriggerMatches(e.ToolResultText) {
+			return true
+		}
+	}
+	return false
+}
+
+// shouldRecoverToClaude reports whether an auto-forked Codex steerer chat should
+// retry Claude. forkedAt is when this chat was auto-forked; a re-exhaustion resets
+// it, so failures back off on their own.
+func shouldRecoverToClaude(now, forkedAt time.Time, recoveryAfter time.Duration, flagOn bool) bool {
+	if !flagOn || forkedAt.IsZero() || recoveryAfter <= 0 {
+		return false
+	}
+	return now.Sub(forkedAt) >= recoveryAfter
+}
+
 // steererForkHandoffPrime renders the chat's current session transcript as priming
 // for the new provider (GAP-9 hand-off). Reuses the existing fork renderer; empty
 // when there's nothing to hand off.

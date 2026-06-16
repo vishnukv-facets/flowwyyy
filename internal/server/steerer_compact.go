@@ -29,10 +29,16 @@ type steererCompactWorker struct {
 	cancel      context.CancelFunc
 	done        chan struct{}
 	compactedAt map[string]time.Time
+	// forkedAt records when this worker auto-forked a chat Claude→Codex, so the
+	// optional recovery path knows how long it's been on Codex (GAP-9). In-memory:
+	// after a restart an already-forked chat won't auto-recover until it re-forks —
+	// the operator can always switch back manually. ponytail: no DB column for an
+	// off-by-default convenience timer.
+	forkedAt map[string]time.Time
 }
 
 func newSteererCompactWorker(srv *Server) *steererCompactWorker {
-	return &steererCompactWorker{srv: srv, compactedAt: map[string]time.Time{}}
+	return &steererCompactWorker{srv: srv, compactedAt: map[string]time.Time{}, forkedAt: map[string]time.Time{}}
 }
 
 func steererCompactInterval() time.Duration {
@@ -147,6 +153,12 @@ func (w *steererCompactWorker) sweepOne(ch *flowdb.Chat, absRoot string, now tim
 	if err != nil {
 		return
 	}
+	// Provider fork (GAP-9) runs before compact: an exhausted Claude session can't
+	// be relieved by /compact, so escalate to the switch instead. If it forks (or
+	// recovers), the slot was relaunched — skip compact this tick.
+	if w.maybeForkSteererChat(ch, provider, entry, now) {
+		return
+	}
 	tokensUsed, tokensMax := steererCompactUsage(provider, entry.usage)
 	w.mu.Lock()
 	last := w.compactedAt[ch.Slug]
@@ -161,6 +173,51 @@ func (w *steererCompactWorker) sweepOne(ch *flowdb.Chat, absRoot string, now tim
 	w.mu.Lock()
 	w.compactedAt[ch.Slug] = now
 	w.mu.Unlock()
+}
+
+// maybeForkSteererChat applies the bidirectional provider-fork triggers for one
+// running steerer chat (GAP-9): auto Claude→Codex on detected exhaustion, and —
+// when recovery is enabled — auto Codex→Claude after a cooldown. Best-effort and
+// gated by FLOW_STEERER_FORK_PROVIDER; the manual switch is the dependable path.
+// Returns true if it switched the provider (the slot was relaunched). Never forks
+// mid-turn (same idle gate as compact).
+func (w *steererCompactWorker) maybeForkSteererChat(ch *flowdb.Chat, provider string, entry *transcriptCacheEntry, now time.Time) bool {
+	if entry == nil || !steererForkEnabled() {
+		return false
+	}
+	if now.Sub(entry.mtime) < steererCompactIdle() {
+		return false // mid-turn — never fork while the agent is working
+	}
+	switch provider {
+	case "claude":
+		if !recentSteererExhaustion(entry.entries) {
+			return false
+		}
+		if err := w.srv.switchSteererProvider(ch.Slug, "codex"); err != nil {
+			fmt.Fprintf(os.Stderr, "steerer fork %s claude→codex: %v\n", ch.Slug, err)
+			return false
+		}
+		w.mu.Lock()
+		w.forkedAt[ch.Slug] = now
+		w.mu.Unlock()
+		return true
+	case "codex":
+		w.mu.Lock()
+		forkedAt := w.forkedAt[ch.Slug]
+		w.mu.Unlock()
+		if !shouldRecoverToClaude(now, forkedAt, steererForkRecoveryAfter(), steererForkRecoveryEnabled()) {
+			return false
+		}
+		if err := w.srv.switchSteererProvider(ch.Slug, "claude"); err != nil {
+			fmt.Fprintf(os.Stderr, "steerer recover %s codex→claude: %v\n", ch.Slug, err)
+			return false
+		}
+		w.mu.Lock()
+		delete(w.forkedAt, ch.Slug)
+		w.mu.Unlock()
+		return true
+	}
+	return false
 }
 
 func steererCompactUsage(provider string, stats transcriptUsageStats) (int, int) {
