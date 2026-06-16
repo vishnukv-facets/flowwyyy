@@ -133,6 +133,11 @@ func New(cfg Config) *Server {
 		// OFF by default inside the dispatcher (CommandChannelEnabled).
 		dispatcher.ChatSink = s
 		s.cascade = cascade
+		// Per-channel steerer session model (GAP-1, behind FLOW_STEERING_SESSIONS,
+		// default off). *Server implements steering.SteererSessionSink; the cold
+		// DeepTriageIncremental path stays the live fallback on any session error.
+		cascade.SessionSink = s
+		dispatcher.SteererSessionsEnabled = steering.SteererSessionsEnabled
 		// Reuse a primed Haiku session across the cheap classifier stages (the
 		// heavy framing + task index sent once at session creation, only the
 		// per-message payload on each resume). No-op when
@@ -295,6 +300,15 @@ func (s *Server) ListenAndServe(addr string) int {
 		s.kbDistiller.start()
 		defer s.kbDistiller.stop()
 	}
+	// Per-channel steerer session idle-sweep: tear down PTYs of steerer sessions
+	// whose transcript has been quiet past the TTL (the chat row + session_id
+	// survive; the next event resumes them). Only runs when FLOW_STEERING_SESSIONS
+	// is on, so it is a no-op by default.
+	if steering.SteererSessionsEnabled() {
+		sweepCtx, sweepCancel := context.WithCancel(context.Background())
+		defer sweepCancel()
+		go s.runSteererIdleSweep(sweepCtx)
+	}
 	// Start the KB dreamer: periodic hygiene pass that flags stale KB entries
 	// into each file's "Pending removal" section and auto-prunes ones left
 	// flagged past the max age.
@@ -368,6 +382,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			if s.cascade != nil {
 				backfill.Observer = s.cascade
 				backfill.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+				backfill.SteererSessionsEnabled = steering.SteererSessionsEnabled
 			}
 			// DM channels the agent registered (slack-dm: tags) are reconciled
 			// via conversations.history on the user token — the bot can't read
