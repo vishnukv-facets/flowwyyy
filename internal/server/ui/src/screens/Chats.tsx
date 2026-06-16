@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { Archive, ArchiveRestore, MessagesSquare, Play, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowLeftRight, Check, MessagesSquare, Pencil, Play, Trash2, X } from 'lucide-react'
 import { useAction, useChats } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
-import { ago, PROVIDER_LABEL } from '../lib/format'
+import { ago, compactTokens, fmtUSD, PROVIDER_LABEL } from '../lib/format'
 import { confirmAction } from '../lib/confirm'
 import type { Chat } from '../lib/types'
 
@@ -61,6 +61,32 @@ function ChatRow({ chat }: { chat: Chat }) {
   const { open: openFloatingTerminal } = useFloatingTerminals()
   const providerLabel = PROVIDER_LABEL[chat.provider] ?? chat.provider
   const isSlack = chat.origin === 'slack'
+  const isSteerer = chat.origin === 'steerer'
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(chat.title)
+
+  const saveRename = () => {
+    const name = draft.trim()
+    if (action.isPending || !name || name === chat.title) {
+      setEditing(false)
+      return
+    }
+    action.mutate({ kind: 'chat-rename', slug: chat.slug, name }, { onSuccess: () => setEditing(false) })
+  }
+
+  // Manual provider switch (GAP-11) — tears down + re-primes the session on the
+  // other agent. Only meaningful for steerer chats; either direction.
+  const switchProvider = async () => {
+    if (action.isPending) return
+    const target = chat.provider === 'codex' ? 'claude' : 'codex'
+    const ok = await confirmAction({
+      title: `Switch to ${PROVIDER_LABEL[target] ?? target}?`,
+      body: `This restarts "${chat.title}" on ${PROVIDER_LABEL[target] ?? target}, re-primed from the current transcript.`,
+      confirmLabel: 'Switch',
+    })
+    if (!ok) return
+    action.mutate({ kind: 'chat-set-provider', slug: chat.slug, provider: target })
+  }
 
   const reopen = () => {
     if (action.isPending) return
@@ -99,7 +125,44 @@ function ChatRow({ chat }: { chat: Chat }) {
       />
       <div className="col" style={{ gap: 4, minWidth: 0, flex: 1 }}>
         <div className="row gap" style={{ alignItems: 'center' }}>
-          <strong className="clip">{chat.title || 'New chat'}</strong>
+          {editing ? (
+            <input
+              className="input sm"
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveRename()
+                if (e.key === 'Escape') setEditing(false)
+              }}
+              style={{ flex: 1, minWidth: 0 }}
+            />
+          ) : (
+            <strong className="clip">{chat.title || 'New chat'}</strong>
+          )}
+          {editing ? (
+            <>
+              <button type="button" className="btn icon ghost sm" title="Save name" aria-label="Save name" onClick={saveRename}>
+                <Check size={13} />
+              </button>
+              <button type="button" className="btn icon ghost sm" title="Cancel" aria-label="Cancel rename" onClick={() => setEditing(false)}>
+                <X size={13} />
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="btn icon ghost sm"
+              title="Rename chat"
+              aria-label="Rename chat"
+              onClick={() => {
+                setDraft(chat.title)
+                setEditing(true)
+              }}
+            >
+              <Pencil size={12} />
+            </button>
+          )}
           {chat.live ? <span className="faint">working…</span> : null}
           {chat.archived ? <span className="badge">archived</span> : null}
         </div>
@@ -119,6 +182,14 @@ function ChatRow({ chat }: { chat: Chat }) {
               <SourceIcon source="slack" size={11} /> Slack
             </span>
           ) : null}
+          {isSteerer ? (
+            <span className="badge" title="Always-on attention steerer session">Steering</span>
+          ) : null}
+          {chat.tokens ? (
+            <span className="mono" title="Cumulative session tokens · estimated cost">
+              {compactTokens(chat.tokens)} tok · ~{fmtUSD(chat.cost_usd ?? 0)}
+            </span>
+          ) : null}
           <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
         </div>
       </div>
@@ -126,6 +197,17 @@ function ChatRow({ chat }: { chat: Chat }) {
         <button type="button" className="btn sm" disabled={action.isPending} onClick={reopen}>
           <Play size={13} /> Reopen
         </button>
+        {isSteerer ? (
+          <button
+            type="button"
+            className="btn ghost sm"
+            disabled={action.isPending}
+            title={`Switch to ${chat.provider === 'codex' ? 'Claude' : 'Codex'}`}
+            onClick={switchProvider}
+          >
+            <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
+          </button>
+        ) : null}
         <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>
           {chat.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
           {chat.archived ? 'Unarchive' : 'Archive'}

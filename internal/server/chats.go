@@ -58,6 +58,11 @@ type chatView struct {
 	// this chat (last assistant text from the session transcript), so the list
 	// shows what the agent is saying / working on without opening the session.
 	LastReply string `json:"last_reply,omitempty"`
+	// Tokens / CostUSD are the chat's cumulative session tokens (cache-excluded Σ)
+	// and full billed cost — same calc as Sessions/tasks (GAP-12). 0 when the chat
+	// has no resolvable session yet.
+	Tokens  int     `json:"tokens,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
 }
 
 // listChats returns the chats for the Chats sidebar, newest activity first.
@@ -74,6 +79,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 		return nil, err
 	}
 	for _, c := range chats {
+		tokens, cost := s.chatUsage(c)
 		out = append(out, chatView{
 			Slug:           c.Slug,
 			Title:          c.Title,
@@ -84,9 +90,34 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 			Archived:       c.ArchivedAt.Valid,
 			Live:           s.terminals != nil && s.terminals.running(c.Slug),
 			LastReply:      s.chatLastReply(c),
+			Tokens:         tokens,
+			CostUSD:        cost,
 		})
 	}
 	return out, nil
+}
+
+// chatUsage returns a chat's cumulative session tokens (cache-excluded Σ) + full
+// billed cost, or (0,0) when it has no resolvable session yet. Memoized via
+// transcriptCache, so it stays cheap on the buildUIData hot path.
+func (s *Server) chatUsage(c *flowdb.Chat) (int, float64) {
+	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
+		return 0, 0
+	}
+	absRoot, err := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
+	if err != nil {
+		return 0, 0
+	}
+	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
+	if err != nil {
+		return 0, 0
+	}
+	return s.chatSessionUsage(&flowdb.Task{
+		Slug:            c.Slug,
+		WorkDir:         absRoot,
+		SessionProvider: provider,
+		SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
+	})
 }
 
 // chatLastReply returns a one-line preview of the agent's most recent response
@@ -160,26 +191,23 @@ func (s *Server) chatStatAgents() []uiAgent {
 	if aerr != nil {
 		return nil
 	}
+	_ = absRoot
 	var out []uiAgent
 	for _, c := range chats {
-		if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
+		if c == nil {
 			continue
 		}
 		provider, perr := flowdb.NormalizeSessionProvider(c.Provider)
 		if perr != nil {
 			continue
 		}
-		task := &flowdb.Task{
-			Slug:            c.Slug,
-			WorkDir:         absRoot,
-			SessionProvider: provider,
-			SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
-		}
-		tokens, cost := s.chatSessionUsage(task)
+		tokens, cost := s.chatUsage(c)
 		if tokens == 0 && cost == 0 {
 			continue // nothing burned yet / transcript unresolved — don't inflate the count
 		}
-		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, TokensSession: tokens, CostSession: cost})
+		// Origin lets buildUIStats attribute steerer chats to the "Steering" slice
+		// (GAP-12) distinct from UI/Slack chats, while still counting in the totals.
+		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, Origin: c.Origin, TokensSession: tokens, CostSession: cost})
 	}
 	return out
 }

@@ -250,6 +250,13 @@ type uiStats struct {
 	SessionsTotal  int     `json:"sessions_total"`
 	SessionsClaude int     `json:"sessions_claude"`
 	SessionsCodex  int     `json:"sessions_codex"`
+	// Steering slice (GAP-12): the always-on per-channel steerer sessions
+	// (origin="steerer" chats) cut out of the totals so the operator can watch
+	// ongoing background spend. A SUBSET of the per-provider totals above (a
+	// forked channel shows up in both Claude and Codex), not additive.
+	TokensSteering   int     `json:"tokens_steering,omitempty"`
+	CostSteering     float64 `json:"cost_steering,omitempty"`
+	SessionsSteering int     `json:"sessions_steering,omitempty"`
 }
 
 type uiTrash struct {
@@ -288,6 +295,9 @@ type uiAgent struct {
 	Branches        []string       `json:"branches,omitempty"`
 	WorkDir         string         `json:"work_dir"`
 	Provider        string         `json:"provider"`
+	// Origin tags a chat-backed agent ("steerer" | "slack" | "ui"); empty for
+	// task sessions. Lets buildUIStats attribute the Steering slice (GAP-12).
+	Origin          string         `json:"origin,omitempty"`
 	PermissionMode  string         `json:"permission_mode"`
 	Priority        string         `json:"priority"`
 	Status          string         `json:"status"`

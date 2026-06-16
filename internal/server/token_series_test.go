@@ -127,3 +127,30 @@ func TestBuildUIStatsUsesTokenSeriesForStreaks(t *testing.T) {
 		t.Errorf("CurrentStreak = %d, want 3 with untouched-today grace", stats.CurrentStreak)
 	}
 }
+
+// GAP-12: origin="steerer" chats are attributed to the Steering slice (a subset of
+// the totals + the correct provider bucket), while UI/Slack chats are not.
+func TestBuildUIStatsSteeringSlice(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.Local)
+	chats := []uiAgent{
+		{Slug: "chat-steer-c1", Provider: "claude", Origin: "steerer", TokensSession: 1000, CostSession: 0.50},
+		{Slug: "chat-steer-c2", Provider: "codex", Origin: "steerer", TokensSession: 400, CostSession: 0.10},
+		{Slug: "overview-ui1", Provider: "claude", Origin: "ui", TokensSession: 200, CostSession: 0.05},
+	}
+	stats := buildUIStats(nil, nil, chats, nil, now)
+
+	if stats.TokensSteering != 1400 {
+		t.Errorf("TokensSteering = %d, want 1400 (steerer chats only)", stats.TokensSteering)
+	}
+	if stats.SessionsSteering != 2 {
+		t.Errorf("SessionsSteering = %d, want 2", stats.SessionsSteering)
+	}
+	// Steering is a subset of the totals (the UI chat counts too), not additive.
+	if stats.TokensTotal != 1600 {
+		t.Errorf("TokensTotal = %d, want 1600 (all three chats)", stats.TokensTotal)
+	}
+	// Provider split still holds across the steerer + UI chats.
+	if stats.TokensCodex != 400 || stats.TokensClaude != 1200 {
+		t.Errorf("provider split = claude %d / codex %d, want 1200 / 400", stats.TokensClaude, stats.TokensCodex)
+	}
+}

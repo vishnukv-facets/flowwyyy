@@ -802,6 +802,11 @@ export interface UiStats {
   sessions_total: number
   sessions_claude: number
   sessions_codex: number
+  /** Steering slice (GAP-12): always-on per-channel steerer sessions, a subset of
+   *  the totals above (not additive). */
+  tokens_steering?: number
+  cost_steering?: number
+  sessions_steering?: number
 }
 
 export interface FlowDBObject {
@@ -899,6 +904,9 @@ export interface Chat {
   live: boolean
   /** One-line preview of the agent's most recent response in this chat. */
   last_reply?: string
+  /** Cumulative session tokens (cache-excluded Σ) and full billed cost (GAP-12). */
+  tokens?: number
+  cost_usd?: number
 }
 
 export interface TranscriptEntry {

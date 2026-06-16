@@ -310,6 +310,17 @@ function StatsPanel({ stats }: { stats: UiStats }) {
           <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_total ?? 0)}</span>
           <span className="faint mono stats-tok-sess">{stats.sessions_total} sess</span>
         </div>
+        {stats.sessions_steering ? (
+          <div
+            className="stats-tok-row"
+            title="Always-on attention steerer sessions — a subset of the totals above, broken out so ongoing background spend is visible."
+          >
+            <span className="stats-tok-name faint">↳ Steering</span>
+            <span className="mono stats-tok-val">{compactTokens(stats.tokens_steering ?? 0)}</span>
+            <span className="mono stats-tok-cost">~{fmtUSD(stats.cost_steering ?? 0)}</span>
+            <span className="faint mono stats-tok-sess">{stats.sessions_steering} sess</span>
+          </div>
+        ) : null}
       </div>
     </div>
   )

@@ -360,6 +360,14 @@ func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now tim
 			st.TokensTotal += a.TokensSession
 			st.CostTotal += a.CostSession
 			st.SessionsTotal++
+			// Steering slice (GAP-12): origin="steerer" chats are a distinct cut of
+			// the same totals (not additive) so the always-on steerer's background
+			// spend is visible on its own.
+			if a.Origin == "steerer" {
+				st.TokensSteering += a.TokensSession
+				st.CostSteering += a.CostSession
+				st.SessionsSteering++
+			}
 			// Every session is exactly one of codex / claude: the builder defaults
 			// Provider to "claude" when unset and codex is always explicit, so the
 			// else-branch correctly owns claude and any unexpected value.
