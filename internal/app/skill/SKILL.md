@@ -91,7 +91,13 @@ an intent, follow the matching recipe instead of re-asking via §1a.
   for them. Codex may briefly be `in-progress` with an empty `session_id`
   while flow captures the id from Codex's session store. New task intake must choose an
   existing project when the work belongs to one; leave `project_slug`
-  empty only when the user explicitly says it is adhoc/floating.
+  empty only when the user explicitly says it is adhoc/floating. Tasks
+  also support two distinct inter-task relationships: **blocking
+  dependencies** (a DAG via `--depends-on`/`--remove-dep`/`--clear-deps`
+  — gates execution order) and **organizational hierarchy** (a tree via
+  `--subtask-of`/`--unparent` — non-blocking grouping). `flow show task`
+  renders these under `depends on:` / `blocks:` and `subtask of:` /
+  `subtasks:` respectively.
 - **Playbooks** are reusable, runnable definitions. A playbook has a
   name, slug, work_dir, optional `project_slug`, and a `brief.md` that
   describes what each invocation should do. Each invocation creates a
@@ -225,6 +231,8 @@ Create
                            [--slug <s>] [--project <slug>] [--work-dir <path>] [--mkdir]
                            [--priority high|medium|low] [--due <date>] [--assignee <name>]
                            [--permission-mode default|auto|bypass] [--model <m>]   (--codex / --claude are shortcuts)
+                           [--depends-on <slug> ...]   (repeatable; blocked by these tasks until they are done)
+                           [--subtask-of <slug>]       (organizational hierarchy parent, non-blocking)
   flow add playbook "<name>" --work-dir <path> [--slug <s>] [--project <slug>] [--mkdir]
 
 Sessions
@@ -275,11 +283,13 @@ Edit / mutate
                             [--status backlog|in-progress|done] [--priority high|medium|low]
                             [--assignee <name>] [--clear-assignee]
                             [--due-date <date>] [--clear-due]
-                            [--parent <task>] [--clear-parent]
+                            [--depends-on <slug> ...] [--remove-dep <slug> ...] [--clear-deps]
+                            [--subtask-of <slug>] [--unparent]
                             [--waiting "<who or what>"] [--clear-waiting]
                             [--project <slug>] [--clear-project]
                             [--model <m>] [--clear-model]   (backlog tasks only)
                             [--brief-status "<1–3 lines>"]   (refresh brief Current state; "-" = stdin)
+                            (deprecated: --parent / --remove-parent / --clear-parent are aliases for --depends-on / --remove-dep / --clear-deps)
   flow update project <ref> [--priority high|medium|low]
   flow update playbook <ref> [--slug <s>] [--name <n>] [--work-dir <path>] [--mkdir]
                              [--project <slug>] [--clear-project]
@@ -296,12 +306,13 @@ Workdirs
   flow workdir scan [<root>] [--add]            (backfills origin remotes for detected repos)
 
 Orchestration (parent-child agents — see §4.17)
-  flow spawn <name> [--parent <slug>] [--prompt <text>] [--project <slug>]
-                    [--work-dir <path>] [--slug <s>] [--priority h|m|l]
-                    [--agent claude|codex] [--no-open]
-       Create a task (parent_slug auto-set when --parent is given) and
-       immediately open it in a new tab. The prompt becomes the task's
-       brief "What" section so the spawned agent starts with context.
+  flow spawn <name> [--parent <slug>] [--depends-on <slug> ...] [--prompt <text>]
+                    [--project <slug>] [--work-dir <path>] [--slug <s>]
+                    [--priority h|m|l] [--agent claude|codex] [--no-open]
+       Create a task and immediately open it in a new tab. --parent sets the
+       organizational hierarchy parent (subtask-of, non-blocking); --depends-on
+       (repeatable) adds blocking dependency edges. The prompt becomes the
+       task's brief "What" section so the spawned agent starts with context.
 
   flow tell <task-slug> "<message>" [--from <slug-or-label>]
        Append a stamped message to ~/.flow/tasks/<slug>/inbox.md and an
@@ -504,6 +515,17 @@ acceptance criteria.
   explicit "Adhoc / no project" option. If there are no projects, say
   that the task will be adhoc unless the user wants to create a project
   first. Do not silently create floating tasks.
+- **Dependencies (easy to skip).** Ask whether this task is blocked by
+  existing tasks that must complete first. Run `flow list tasks` (optionally
+  filtered by `--project <slug>` when a project was chosen, and `--status
+  backlog` or `--status in-progress`) to surface candidates. Use
+  `AskUserQuestion` (header: "Blocked by?", `multiSelect: true`) with one
+  option per relevant candidate task (label = slug, description = task
+  name) plus a "Skip — no deps" option. Pass `--depends-on <slug>` once
+  per selected task in the `flow add task` invocation. This is a
+  *blocking dependency* (DAG): flow will gate execution order and the
+  graph view on these edges. Skip if the user already named deps or if
+  no plausible candidates exist.
 - **Priority.** Use `AskUserQuestion` with "High", "Medium (Recommended)",
   "Low". Skip if the user already stated priority.
 - **Agent (REQUIRED).** Use `AskUserQuestion` (header: "Agent", options:
@@ -1925,7 +1947,7 @@ durable filesystem channels, and signals state through the same
 
 | Command | Purpose | Synchronous? |
 |---|---|---|
-| `flow spawn <name> --parent <slug> --prompt "..."` | Create a child task with the parent linkage set and immediately open it in a new tab. The prompt becomes the child's brief What section. | No — fires the child off in its own tab |
+| `flow spawn <name> --parent <slug> --prompt "..."` | Create a subtask under `<slug>` in the organizational hierarchy (non-blocking) and open it immediately. Add `--depends-on <slug>` to also make it a blocking dependency. The prompt becomes the child's brief What section. | No — fires the child off in its own tab |
 | `flow tell <slug> "..."` | Append a message to the receiving task's inbox.md and inbox.jsonl; a live Flow terminal wakes through the inbox monitor. | No — receiver handles it in its own session |
 | `flow wait <slug> --until <state>` | Block the caller's terminal until the named task reaches the requested state. | Yes — blocks via WS subscription |
 
@@ -1997,21 +2019,34 @@ shape, surface the orchestration option via AskUserQuestion. Examples:
 - **Do not bypass the user's confirmation when proposing orchestration.**
   If the work could plausibly be done inline OR delegated, ask via
   AskUserQuestion. The user often prefers inline for quick tasks.
-- **Do not edit `parent_slug` by hand.** It's set by `flow spawn` at
-  creation time, and existing tasks can be re-parented with
-  `flow update task <child> --parent <parent>` or detached with
-  `flow update task <child> --clear-parent`.
+- **Do not edit `parent_slug` or dependency rows by hand.** Hierarchy
+  (organizational, non-blocking) is set by `flow spawn --parent` at
+  creation and can be changed with `flow update task <child> --subtask-of
+  <parent>` or cleared with `--unparent`. Blocking dependencies are set
+  with `--depends-on <slug>` (repeatable), removed with `--remove-dep
+  <slug>`, or cleared with `--clear-deps`. (The deprecated `--parent` /
+  `--remove-parent` / `--clear-parent` flags in `flow update task` are
+  aliases for the blocking-dependency flags, not for hierarchy — don't
+  use them for re-parenting; use `--subtask-of` instead.)
 
-**Reading children:**
+**Reading the dependency graph:**
 
-When the current bound task has children (visible in `flow show task`
-output under a `children:` section, or in the UI as a tree), and the
+`flow show task` renders four relationship fields:
+- `subtask of:` — organizational hierarchy parent (set via `--parent` in
+  spawn or `--subtask-of` in update; non-blocking)
+- `subtasks:` — organizational children (the inverse)
+- `depends on:` — tasks THIS task is BLOCKED by; must complete before
+  this one can be considered startable
+- `blocks:` — tasks that are waiting on THIS task (the reverse of depends-on)
+
+When the current bound task has subtasks (visible in `flow show task`
+output under a `subtasks:` section, or in the UI as a tree), and the
 user asks something like "what's status on the review-coverage task?",
 prefer one of:
 
 - `flow show task review-coverage` for the brief/updates/status
 - `flow transcript review-coverage --compact` for the recent dialog
-- `flow list tasks --parent <this-slug>` to scan all siblings
+- `flow list tasks --project <project-slug>` to see sibling tasks in the same project
 
 **Inbox housekeeping:**
 
@@ -2137,12 +2172,18 @@ underneath. Don't omit headings — the parallel structure makes the
 briefs scannable.
 
 **Cross-referencing other tasks — use `[[task-slug]]`, never prose.**
-When a brief or update points at another task — a parent, a dependency,
-a related effort — write that task's **exact slug** in double brackets:
-`[[auto-runs]]`. flow indexes these into a backlink graph: `flow show
-<task>` lists them under `linked from:`, and Mission Control renders
-them as clickable in-app links. This is the norm — a brief that says
-"the parent task's brief" or "see the auto-runs task" in prose creates
+When a brief or update points at another task — a subtask parent, a
+blocking dependency, a related effort — write that task's **exact slug**
+in double brackets. Note: `[[slug]]` is a *prose backlink* indexed by
+flow for the "linked from" graph; it does NOT create a blocking
+dependency or hierarchy edge. For machine-trackable edges that gate
+execution order or appear in the graph view, use `--depends-on` (blocking)
+or `--subtask-of` / `flow spawn --parent` (hierarchy). Both mechanisms
+complement each other: set the DB edge for correctness, use `[[slug]]`
+in the brief text for human readability. flow indexes `[[slug]]` references
+into a backlink graph: `flow show <task>` lists them under `linked from:`,
+and Mission Control renders them as clickable in-app links. A brief that
+says "the parent task's brief" or "see the auto-runs task" in prose creates
 **no** link and breaks the graph. Rules:
 - **Bare slug only.** `[[task-slug]]` — no `[[slug|label]]` pipe, no
   paths, no spaces inside the brackets. A target containing `/`, `\`, or
@@ -2458,10 +2499,12 @@ flow update task <ref>
     [--model <m>] [--clear-model]   (backlog tasks only — locked once a session starts)
     [--assignee <name>] [--clear-assignee]
     [--due-date <date>]   [--clear-due]
-    [--parent <task>] [--clear-parent]
+    [--depends-on <slug> ...] [--remove-dep <slug> ...] [--clear-deps]
+    [--subtask-of <slug>] [--unparent]
     [--waiting "<who or what>"] [--clear-waiting]
     [--project <slug>] [--clear-project]
     [--tag <t> ...] [--remove-tag <t> ...] [--clear-tags]
+    (deprecated: --parent / --remove-parent / --clear-parent are aliases for --depends-on / --remove-dep / --clear-deps)
 
 flow update project <ref>
     [--priority high|medium|low]
@@ -2505,10 +2548,21 @@ When to use which flag:
   only when it's non-null.
 - **`--due-date <date>` / `--clear-due`** — set or clear the due date.
   Date formats: `YYYY-MM-DD`, `today`, `tomorrow`, weekday names, `Nd`.
-- **`--parent <task>` / `--clear-parent`** — set or clear parent/child
-  task linkage. Use this for real task-to-task dependencies where the
-  child should not start until the parent lands; use `waiting_on` for
-  looser external blockers.
+- **`--depends-on <slug>` / `--remove-dep <slug>` / `--clear-deps`** —
+  add, remove, or clear *blocking dependencies* (a DAG). A task with
+  unfinished `depends-on` edges is treated as blocked: the graph view
+  and execution order reflect these edges. `--depends-on` and
+  `--remove-dep` are both repeatable. Use this when the task literally
+  cannot or should not start until the dep is done; use `waiting_on`
+  for looser external blockers (waiting on a person, a PR, an external
+  review). Visible in `flow show task` under `depends on:` and `blocks:`.
+  Deprecated aliases: `--parent` / `--remove-parent` / `--clear-parent`
+  (the binary prints a warning but still applies the dep change).
+- **`--subtask-of <slug>` / `--unparent`** — set or clear the
+  *organizational hierarchy parent* (non-blocking). Use this to nest a
+  task under a larger piece of work for display and grouping purposes —
+  the subtask can start and finish independently of its parent.
+  Visible in `flow show task` under `subtask of:` and `subtasks:`.
 - **`--waiting "<X>"` / `--clear-waiting`** — set or clear the
   `waiting_on` freeform note (see §4.6). Status stays in-progress;
   the note is just there to remind the user.
