@@ -157,6 +157,7 @@ func New(cfg Config) *Server {
 		if s.cascade != nil {
 			ghDispatcher.Steerer = s.cascade
 			ghDispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+			ghDispatcher.SessionsEnabled = steering.SteererSessionsEnabled
 		}
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}

@@ -108,6 +108,13 @@ type Cascade struct {
 	// wiring sets it to *server.Server; NewCascade leaves it nil. Never
 	// load-bearing: any delivery error falls back to DeepTriageIncremental.
 	SessionSink SteererSessionSink
+
+	// GitHubCanonicalNum collapses a linked GitHub PR↔issue pair to one canonical
+	// number so both reach ONE steerer chat (GAP-4). nil ⇒ identity (each keys on
+	// its own number); the dispatcher's ownership gate already routes owned/linked
+	// pairs to their work-session before the steerer, so identity is the safe
+	// default. A real resolver can be wired later if un-owned linked pairs recur.
+	GitHubCanonicalNum CanonicalGitHubNumFunc
 }
 
 // NewCascade builds a Cascade with production defaults (real clock, random IDs,
@@ -461,7 +468,7 @@ func (c *Cascade) ObserveSelfAuthored(ctx context.Context, ev monitor.InboundEve
 	if !SteererSessionsEnabled() || c.SessionSink == nil {
 		return nil
 	}
-	key, ok := sessionKeyForEvent(ev)
+	key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum)
 	if !ok {
 		return nil
 	}
@@ -492,7 +499,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 			// session reasons correctly about follow-ups. Flag-gated; on any sink
 			// error fall through to the existing drop trace (fail-open).
 			if SteererSessionsEnabled() && c.SessionSink != nil {
-				if key, ok := sessionKeyForEvent(ev); ok {
+				if key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum); ok {
 					if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, true)); err == nil {
 						tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-authored → context_only"
 						c.emitTrace(tr, start)
@@ -521,7 +528,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	// Placed BEFORE the classifier gate so the session path never shells out. Any
 	// sink error falls through to DeepTriageIncremental below (fail-open invariant).
 	if SteererSessionsEnabled() && c.SessionSink != nil {
-		if key, ok := sessionKeyForEvent(ev); ok {
+		if key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum); ok {
 			if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, false)); err == nil {
 				c.cache.mark(cacheKey, c.now())
 				tr.Disposition, tr.StageReached = "delivered", "session"

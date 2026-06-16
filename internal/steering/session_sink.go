@@ -2,6 +2,7 @@ package steering
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"flow/internal/monitor"
@@ -43,18 +44,25 @@ type SteererSessionSink interface {
 	DeliverToChannelSession(key string, payload SteererDelivery) error
 }
 
+// CanonicalGitHubNumFunc resolves a GitHub PR/issue (repo, num) to the canonical
+// number a linked PR↔issue pair should share, so both reach ONE steerer chat (the
+// issue a PR closes). ok=false ⇒ no link known; key on the event's own number. A
+// nil hook means identity — the common case, since the dispatcher's ownership gate
+// already routes owned/linked pairs to their work-session before the steerer runs.
+type CanonicalGitHubNumFunc func(repo string, num int) (int, bool)
+
 // sessionKeyForEvent resolves the deterministic session key for an event (GAP-4):
 //   - Slack channel / DM / MPDM → the channel id.
 //   - SharedRef forward → the ORIGIN channel (so a reply forwarded into a DM reaches
 //     the origin channel's session, mirroring routeViaSharedRef).
-//   - GitHub → deferred to Phase 5 (canonical PR↔issue keying); returns ok=false so
-//     the cascade keeps the cold path for GitHub.
+//   - GitHub → "gh-<repo>-<num>" per PR/issue, collapsing a linked PR↔issue pair to
+//     one canonical number via the injected resolver (nil ⇒ own number).
 //
 // ok=false means "no session for this event" — the caller falls through to the
 // stateless cold path. The server turns the returned key into the chat slug.
-func sessionKeyForEvent(ev monitor.InboundEvent) (string, bool) {
+func sessionKeyForEvent(ev monitor.InboundEvent, canonical CanonicalGitHubNumFunc) (string, bool) {
 	if connectorOf(ev) == "github" {
-		return "", false
+		return githubSessionKey(ev, canonical)
 	}
 	if ref, ok := ev.SharedRef(); ok {
 		if ch := strings.TrimSpace(ref.Channel); ch != "" {
@@ -65,4 +73,22 @@ func sessionKeyForEvent(ev monitor.InboundEvent) (string, bool) {
 		return ch, true
 	}
 	return "", false
+}
+
+// githubSessionKey builds the per-PR/issue session key "gh-<repo>-<num>" from a
+// GitHub event: repo from ev.Channel ("owner/repo"), num from ev.ItemTS. A linked
+// PR↔issue collapses to one canonical number via the resolver so the pair shares
+// one chat. The "/" in the repo is replaced so the key needs no further sanitizing.
+func githubSessionKey(ev monitor.InboundEvent, canonical CanonicalGitHubNumFunc) (string, bool) {
+	repo := strings.TrimSpace(ev.Channel)
+	num, err := strconv.Atoi(strings.TrimSpace(ev.ItemTS))
+	if repo == "" || err != nil || num <= 0 {
+		return "", false
+	}
+	if canonical != nil {
+		if c, ok := canonical(repo, num); ok && c > 0 {
+			num = c
+		}
+	}
+	return "gh-" + strings.ReplaceAll(repo, "/", "-") + "-" + strconv.Itoa(num), true
 }

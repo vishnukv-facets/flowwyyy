@@ -243,6 +243,55 @@ func TestGitHubDispatcher_SteererOwnedRoutingSkipsLegacyTaskPipeline(t *testing.
 	}
 }
 
+// GAP-4: with the per-channel session model on (SessionsEnabled), an event for a
+// PR/issue already OWNED by a gh-pr:/gh-issue: task routes straight to that task's
+// session and the steerer is SKIPPED — no duplicate steerer chat for an
+// actively-worked item. (Inverts the interim no-sessions behavior above.)
+func TestGitHubDispatcher_SessionsOwnedRoutesToTaskNotSteerer(t *testing.T) {
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+	observer := &fakeMessageObserver{}
+
+	d := NewGitHubDispatcher(db, nil)
+	d.Steerer = observer
+	d.SteererOwnsRouting = func() bool { return true }
+	d.SessionsEnabled = func() bool { return true }
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRReviewComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "PRRC_sessions",
+		Author:    "reviewer",
+		Body:      "Please tighten the idempotency test.",
+		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#discussion_r9",
+		EventKey:  "review-comment:PRRC_sessions",
+		RawJSON:   `{"node_id":"PRRC_sessions"}`,
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(observer.events) != 0 {
+		t.Fatalf("owned PR event must NOT reach the steerer when sessions are on; got %+v", observer.events)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event.Kind != string(GitHubEventPRReviewComment) {
+		t.Fatalf("owned PR event must route to the work-session inbox; entries=%+v", entries)
+	}
+	seen, err := flowdb.HasGitHubEvent(db, ev.EventKeyValue())
+	if err != nil {
+		t.Fatalf("HasGitHubEvent: %v", err)
+	}
+	if !seen {
+		t.Fatal("owned GitHub event should still be recorded for dedupe")
+	}
+}
+
 // Regression: a new comment on an ARCHIVED but still-open PR must route to the
 // existing task (append to its inbox), NOT spawn a duplicate. Archiving only
 // declutters the active list; routing still tracks the thread.

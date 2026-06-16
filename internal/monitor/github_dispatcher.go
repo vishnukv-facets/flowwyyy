@@ -58,6 +58,13 @@ type GitHubDispatcher struct {
 	// skipped after event-level dedupe.
 	Steerer            MessageObserver
 	SteererOwnsRouting func() bool
+	// SessionsEnabled reports whether the per-channel steerer session model is on
+	// (FLOW_STEERING_SESSIONS). When true, an owned PR/issue (a gh-pr:/gh-issue:
+	// task already works it) takes ALL its events into that task's session and the
+	// steerer is skipped — no duplicate steerer chat for an actively-worked item
+	// (GAP-4). serve wiring sets it to steering.SteererSessionsEnabled; nil ⇒ off
+	// (monitor can't import steering, so this mirrors SteererOwnsRouting).
+	SessionsEnabled func() bool
 }
 
 func NewGitHubDispatcher(db *sql.DB, opener TaskOpener) *GitHubDispatcher {
@@ -82,6 +89,20 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	}
 
 	if d.steererOwnsRouting() {
+		// GAP-4: with the per-channel session model on, an owned PR/issue is worked
+		// in its own task session — route ALL its events straight there and skip the
+		// steerer, so no duplicate steerer chat opens for an actively-worked item.
+		// Ownership is checked BEFORE the steerer (mirrors Slack: owned thread →
+		// owning session; un-owned → steerer). Gated on sessions because that is the
+		// only mode where the steerer would open a competing chat.
+		if d.sessionsEnabled() {
+			if slug, found, ferr := d.findTaskByGitHubTag(ev.LinkTag()); ferr == nil && found {
+				if err := AppendInboxEvent(slug, gitHubEventToInboxEvent(ev)); err != nil {
+					return fmt.Errorf("github monitor: append inbox (owned): %w", err)
+				}
+				return d.recordEvent(ev, slug)
+			}
+		}
 		if err := d.Steerer.Observe(ctx, gitHubEventToInboxEvent(ev)); err != nil {
 			return fmt.Errorf("github steerer observe: %w", err)
 		}
@@ -136,6 +157,10 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 
 func (d *GitHubDispatcher) steererOwnsRouting() bool {
 	return d != nil && d.Steerer != nil && d.SteererOwnsRouting != nil && d.SteererOwnsRouting()
+}
+
+func (d *GitHubDispatcher) sessionsEnabled() bool {
+	return d != nil && d.SessionsEnabled != nil && d.SessionsEnabled()
 }
 
 func (d *GitHubDispatcher) dispatchGitHubItem(ctx context.Context, ev GitHubEvent) error {
