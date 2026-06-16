@@ -11,7 +11,7 @@ func TestSendAsBotWritesDisabled(t *testing.T) {
 	called := false
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text, identity string) error {
+	sendAsBotFn = func(channel, threadTS, text, identity string) error {
 		called = true
 		return nil
 	}
@@ -30,7 +30,7 @@ func TestSendAsBotEmptyChannelError(t *testing.T) {
 
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text, identity string) error { return nil }
+	sendAsBotFn = func(channel, threadTS, text, identity string) error { return nil }
 
 	if err := SendAsBot("", "hello"); err == nil {
 		t.Fatal("expected error for empty channel")
@@ -45,7 +45,7 @@ func TestSendAsBotEmptyTextError(t *testing.T) {
 
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text, identity string) error { return nil }
+	sendAsBotFn = func(channel, threadTS, text, identity string) error { return nil }
 
 	if err := SendAsBot("D123", ""); err == nil {
 		t.Fatal("expected error for empty text")
@@ -61,7 +61,7 @@ func TestSendAsBotForwardsToFn(t *testing.T) {
 	var gotChannel, gotText string
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text, identity string) error {
+	sendAsBotFn = func(channel, threadTS, text, identity string) error {
 		gotChannel = channel
 		gotText = text
 		return nil
@@ -75,6 +75,25 @@ func TestSendAsBotForwardsToFn(t *testing.T) {
 	}
 	if gotText != "hello world" {
 		t.Errorf("text = %q, want hello world", gotText)
+	}
+}
+
+func TestSendAsThreadForwardsThreadTS(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	var gotThreadTS string
+	orig := sendAsBotFn
+	defer func() { sendAsBotFn = orig }()
+	sendAsBotFn = func(channel, threadTS, text, identity string) error {
+		gotThreadTS = threadTS
+		return nil
+	}
+
+	if err := SendAsThread("C1", "1234.000100", "hello", "bot"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotThreadTS != "1234.000100" {
+		t.Errorf("thread_ts = %q, want 1234.000100", gotThreadTS)
 	}
 }
 
@@ -170,7 +189,7 @@ func TestSendFileAsWritesDisabled(t *testing.T) {
 	called := false
 	orig := uploadFileFn
 	defer func() { uploadFileFn = orig }()
-	uploadFileFn = func(channel, comment, filePath, identity string) error { called = true; return nil }
+	uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error { called = true; return nil }
 
 	if err := SendFileAs("C1", "caption", "/tmp/x.pdf", "bot"); err == nil {
 		t.Fatal("expected error when writes disabled")
@@ -185,7 +204,7 @@ func TestSendFileAsForwardsToFn(t *testing.T) {
 	var gotChannel, gotComment, gotPath, gotIdentity string
 	orig := uploadFileFn
 	defer func() { uploadFileFn = orig }()
-	uploadFileFn = func(channel, comment, filePath, identity string) error {
+	uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error {
 		gotChannel, gotComment, gotPath, gotIdentity = channel, comment, filePath, identity
 		return nil
 	}
@@ -201,12 +220,31 @@ func TestSendFileAsRequiresChannelAndFile(t *testing.T) {
 	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
 	orig := uploadFileFn
 	defer func() { uploadFileFn = orig }()
-	uploadFileFn = func(channel, comment, filePath, identity string) error { return nil }
+	uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error { return nil }
 	if err := SendFileAs("", "c", "/tmp/x", "bot"); err == nil {
 		t.Error("expected error for empty channel")
 	}
 	if err := SendFileAs("C1", "c", "", "bot"); err == nil {
 		t.Error("expected error for empty file")
+	}
+}
+
+func TestSendFileAsThreadForwardsThreadTS(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+
+	var gotThreadTS string
+	orig := uploadFileFn
+	defer func() { uploadFileFn = orig }()
+	uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error {
+		gotThreadTS = threadTS
+		return nil
+	}
+
+	if err := SendFileAsThread("C1", "1234.000100", "caption", "/tmp/x.pdf", "bot"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if gotThreadTS != "1234.000100" {
+		t.Errorf("thread_ts = %q, want 1234.000100", gotThreadTS)
 	}
 }
 
@@ -216,7 +254,7 @@ func TestSendAsBotPropagatesFnError(t *testing.T) {
 	boom := errors.New("network error")
 	orig := sendAsBotFn
 	defer func() { sendAsBotFn = orig }()
-	sendAsBotFn = func(channel, text, identity string) error { return boom }
+	sendAsBotFn = func(channel, threadTS, text, identity string) error { return boom }
 
 	err := SendAsBot("D123", "hello")
 	if !errors.Is(err, boom) {

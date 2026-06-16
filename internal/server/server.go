@@ -61,6 +61,7 @@ func New(cfg Config) *Server {
 	s.steeringRuns = newSteeringRunStore()
 	s.reconcile = newLivenessReconciler(s)
 	s.kbDistiller = newKBDistiller(s)
+	s.steererCompact = newSteererCompactWorker(s)
 	s.kbDreamer = newKBDreamer(s)
 	s.kbWatcher = newKBWatcher(s)
 	s.transcripts = newTranscriptCache()
@@ -100,16 +101,16 @@ func New(cfg Config) *Server {
 		// "perma drop" mutes (channel/sender/thread) from steering_mutes.
 		cascade.ConfigFn = steering.WatchConfigFnWithMutes(cfg.DB)
 		cascade.AutonomyFn = steering.AutonomyFnWithFeedback(cfg.DB, steering.AutonomyFromEnv) // live per-action auto-act policy + learned threshold nudges
-	// Gate auto-acts on the CALIBRATED confidence (raw model score → empirical
-	// P(operator agrees), learned from attention_feedback). Re-loaded per surfaced
-	// verdict so it tracks new feedback; an error → nil → raw fallback.
-	cascade.CalibratorFn = func() *steering.ConfidenceCalibrator {
-		cal, err := steering.LoadConfidenceCalibrator(cfg.DB)
-		if err != nil {
-			return nil
+		// Gate auto-acts on the CALIBRATED confidence (raw model score → empirical
+		// P(operator agrees), learned from attention_feedback). Re-loaded per surfaced
+		// verdict so it tracks new feedback; an error → nil → raw fallback.
+		cascade.CalibratorFn = func() *steering.ConfidenceCalibrator {
+			cal, err := steering.LoadConfidenceCalibrator(cfg.DB)
+			if err != nil {
+				return nil
+			}
+			return cal
 		}
-		return cal
-	}
 		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
 		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).
@@ -308,6 +309,10 @@ func (s *Server) ListenAndServe(addr string) int {
 		sweepCtx, sweepCancel := context.WithCancel(context.Background())
 		defer sweepCancel()
 		go s.runSteererIdleSweep(sweepCtx)
+		if s.steererCompact != nil {
+			s.steererCompact.start()
+			defer s.steererCompact.stop()
+		}
 	}
 	// Start the KB dreamer: periodic hygiene pass that flags stale KB entries
 	// into each file's "Pending removal" section and auto-prunes ones left

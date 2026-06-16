@@ -385,6 +385,10 @@ func (s *Server) updateSettings(req actionRequest) (actionResponse, int) {
 			continue
 		}
 		if cfg[key] == val {
+			if os.Getenv(key) != val {
+				os.Setenv(key, val)
+				changed = append(changed, key)
+			}
 			continue
 		}
 		cfg[key] = val

@@ -68,7 +68,7 @@ func withSendAsBotStub(t *testing.T) *[]struct{ Channel, Text string } {
 	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
 	var sends []struct{ Channel, Text string }
 	orig := sendAsBotFn
-	sendAsBotFn = func(channel, text, identity string) error {
+	sendAsBotFn = func(channel, threadTS, text, identity string) error {
 		sends = append(sends, struct{ Channel, Text string }{channel, text})
 		return nil
 	}

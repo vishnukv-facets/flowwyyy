@@ -9,8 +9,9 @@ import (
 )
 
 type slackSendRequest struct {
-	Channel string `json:"channel"`
-	Text    string `json:"text"`
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"thread_ts"`
+	Text     string `json:"text"`
 	// As forces the send identity ("bot" | "user"); empty honors the server's
 	// FLOW_SLACK_SEND_AS. `flow slack send --as bot` sets this so automation
 	// posts as the bot (which carries chat:write).
@@ -19,6 +20,11 @@ type slackSendRequest struct {
 	// becomes the initial comment. Requires files:write (bot scope).
 	File string `json:"file"`
 }
+
+var (
+	slackTextSendFn = monitor.SendAsThread
+	slackFileSendFn = monitor.SendFileAsThread
+)
 
 // handleSlackSend posts a Slack message as the flow bot using the SERVER's
 // in-process token. The CLI (`flow slack send`) routes here so the message is
@@ -47,9 +53,9 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 	var sendErr error
 	if hasFile {
 		// File upload; Text (if any) rides along as the initial comment.
-		sendErr = monitor.SendFileAs(req.Channel, req.Text, req.File, req.As)
+		sendErr = slackFileSendFn(req.Channel, req.ThreadTS, req.Text, req.File, req.As)
 	} else {
-		sendErr = monitor.SendAs(req.Channel, req.Text, req.As)
+		sendErr = slackTextSendFn(req.Channel, req.ThreadTS, req.Text, req.As)
 	}
 	if sendErr != nil {
 		// 502: we reached the server but Slack (or the writes gate) rejected

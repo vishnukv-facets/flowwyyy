@@ -25,7 +25,7 @@ type Config struct {
 }
 
 type Server struct {
-	cfg            Config
+	cfg Config
 	// sessionToken gates the local data plane (WS handshakes + state-changing
 	// /api/* routes). Minted with crypto/rand in New(); see session_token.go.
 	sessionToken   string
@@ -33,6 +33,7 @@ type Server struct {
 	events         *eventHub
 	reconcile      *livenessReconciler
 	kbDistiller    *kbDistiller
+	steererCompact *steererCompactWorker
 	kbDreamer      *kbDreamer
 	kbWatcher      *kbWatcher
 	transcripts    *transcriptCache
