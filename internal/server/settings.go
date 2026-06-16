@@ -118,6 +118,11 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_SEND_MODEL", Label: "Reply send model", Group: "Steering", Type: settingEnum, Options: []string{"claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-8"}, Default: "claude-sonnet-4-6", Help: "Model for the ephemeral session that posts your approved Slack replies. Sonnet is reliable + cheap; Haiku is cheapest but often fumbles the Slack tool call; Opus is overkill. Applies to the next send (no restart)."},
 	{Key: "FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR", Label: "Classifier budget / hour", Group: "Steering", Type: settingInt, Default: "30", Help: "Maximum Stage 1/2 classifier subprocess turns per rolling hour. Lower this if Mission Control heats the laptop under Slack/GitHub noise."},
 	{Key: "FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN", Label: "Classifier failure cooldown", Group: "Steering", Type: settingString, Default: "30m", Help: "Go duration for pausing classifier subprocesses after quota/auth failures, e.g. 30m or 1h."},
+	// Per-channel session model (Phase 4 — enable for Slack, validate coinswitch cases).
+	// Default off; enable once Stage-0/1/2 are validated. Routing takes effect
+	// immediately on the next Slack event; idle-sweep and compact workers require a
+	// server restart to start (they are gated at Serve() time).
+	{Key: "FLOW_STEERING_SESSIONS", Label: "Per-channel session model", Group: "Steering", Type: settingBool, Default: "false", Help: "Route Stage-0 Slack survivors to a persistent per-channel Claude session (conversation memory, coinswitch grouping) instead of a stateless claude -p call per event. Routing takes effect immediately; idle-sweep and compact workers start on the next server restart."},
 	// Ingress — public URL for GitHub webhook callbacks only. Slack OAuth uses
 	// a short-lived localhost callback listener during install/reinstall.
 	{Key: "FLOW_INGRESS_PROVIDER", Label: "GitHub ingress provider", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingEnum, Options: []string{"none", "zrok", "manual"}, Default: "none", Help: "Public URL provider for signed GitHub webhook callbacks only. Slack OAuth stays local and does not use standing ingress."},

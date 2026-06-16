@@ -6,6 +6,7 @@ import (
 )
 
 func TestSendAsBotWritesDisabled(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "0")
 	// FLOW_SLACK_WRITES_ENABLED unset (default false) — should error without
 	// ever calling sendAsBotFn.
 	called := false
@@ -121,6 +122,8 @@ func TestSlackSendIdentity(t *testing.T) {
 func TestResolveSendIdentity(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-bot")
 	t.Setenv("SLACK_USER_TOKEN", "xoxp-user")
+	t.Setenv("FLOW_SLACK_USER_TOKEN", "")
+	t.Setenv("FLOW_SLACK_WRITE_TOKEN", "")
 	// Bot is a member of the command IM "Dcmd" only.
 	orig := conversationIsBotIMFn
 	conversationIsBotIMFn = func(ch string) bool { return ch == "Dcmd" }
@@ -186,6 +189,7 @@ func TestResolveSendIdentity(t *testing.T) {
 }
 
 func TestSendFileAsWritesDisabled(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "0")
 	called := false
 	orig := uploadFileFn
 	defer func() { uploadFileFn = orig }()
