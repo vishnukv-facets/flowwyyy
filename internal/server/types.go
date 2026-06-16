@@ -124,6 +124,12 @@ type Server struct {
 	// (see rpc_bridge.go) without duplicating route wiring.
 	apiOnce sync.Once
 	apiMux  http.Handler
+
+	// steererSlots serializes concurrent deliveries to the same per-channel
+	// steerer session and carries its lifecycle state (GAP-5). Keyed by chat slug.
+	// Only used when FLOW_STEERING_SESSIONS is enabled.
+	steererSlots   map[string]*steererSlot
+	steererSlotsMu sync.Mutex
 }
 
 type cachedFlowDBQuickCheck struct {
