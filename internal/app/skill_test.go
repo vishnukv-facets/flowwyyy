@@ -811,9 +811,10 @@ func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
 		"mark the card sent only after the post is confirmed",
 		"`flow attention sent <id> --close-floating <floating-id>`",
 		"Default autonomy is surface-only",
+		"The autonomy gate evaluates the **calibrated** confidence",
 		"The autonomy trust ladder is",
-		"Only `make_task` and `forward` are auto-actable in settings today",
-		"Reply/AFK actions remain manual-only",
+		"Four **safe** actions are auto-actable in settings today",
+		"Reply/AFK (outward sends) stay manual-only",
 		"learned feedback never enables an action",
 		"flow attention feedback --group",
 	} {

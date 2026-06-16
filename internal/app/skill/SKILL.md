@@ -2960,23 +2960,37 @@ create tasks, or change policy.
 
 - Default autonomy is surface-only: `DefaultAutonomy()` disables every outward
   action even though it seeds sensible thresholds for future opt-in settings.
-- Stage 1/2 classifier work is also budgeted because it shells out to Claude
-  subprocesses. `FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR` defaults to `30`;
-  lower it if Mission Control is heating the machine under connector noise, or
-  raise it only when the operator explicitly wants more Attention throughput.
+- The autonomy gate evaluates the **calibrated** confidence, not the raw model
+  number: `ConfidenceCalibrator` maps a score to the empirical P(operator agrees)
+  in that action×band (learned from `attention_feedback`), so an operator
+  threshold means "minimum probability I'd agree". A thin/cold band falls back to
+  the raw score. Autonomous auto-acts deliberately record **no** feedback row, so
+  the steerer can't inflate the calibration it gates on (audit lives in the
+  steering trace).
+- Stage 1/2 classifier work is budgeted because it shells out to Claude
+  subprocesses. `FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR` defaults to `120`
+  (cheap batched Haiku turns — the old 30 throttled normal inbox volume); deep
+  triage is the expensive rung at `FLOW_STEERING_DEEP_BUDGET_PER_HOUR` `60`
+  (bursts spill to the surfaced Stage-2 verdict, nothing lost). Lower them if
+  Mission Control heats the machine under connector noise; raise only on explicit
+  request.
 - If the classifier reports quota/auth unavailability, the router pauses
   classifier subprocess launches for
-  `FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN` (default `30m`) and records trace
+  `FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN` (default `10m`) and records trace
   drops instead of repeatedly spawning failing CLI processes.
 - The autonomy trust ladder is: surface feed items; dismiss/mute only after an
   explicit mute scope; forward high-confidence context to matched tasks; create
-  high-confidence backlog tasks; clear `waiting_on` only for tracked external
-  replies; draft AFK holding replies; and send substantive outbound replies only
-  after explicit operator approval.
-- Only `make_task` and `forward` are auto-actable in settings today, and both
-  require explicit enablement, confidence thresholds, and traceable audit
-  records. Reply/AFK actions remain manual-only even if malformed policy JSON
-  tries to enable them.
+  high-confidence backlog tasks; capture durable facts to the KB; clear
+  `waiting_on` only for tracked external replies; draft AFK holding replies; and
+  send substantive outbound replies only after explicit operator approval.
+- Four **safe** actions are auto-actable in settings today — `make_task` (0.80),
+  `forward` (0.85), `capture_kb` (0.75), and `dismiss` (auto-resolve a surfaced
+  `digest_only` FYI card, 0.85) — each off by default, gated on the calibrated
+  confidence, and traceable. `capture_kb` auto-act runs the same headless KB-write
+  agent the operator's "capture" button uses (a `claude -p` subprocess, dispatched
+  async). A `drop` verdict is already suppressed pre-card unconditionally and is
+  not a gated action. Reply/AFK (outward sends) stay manual-only even if malformed
+  policy JSON tries to enable them.
 - `FLOW_STEERING_AUTONOMY` can enable action thresholds only when the operator
   configured it. Do not edit env, settings, DB rows, or code to enable
   autonomy on the operator's behalf.

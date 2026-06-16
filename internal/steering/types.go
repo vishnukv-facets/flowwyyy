@@ -157,6 +157,10 @@ type PriorUnderstanding struct {
 	EventCount      int      `json:"event_count"`
 	OperatorActions []string `json:"operator_actions,omitempty"`
 	OperatorReplies []string `json:"operator_replies,omitempty"`
+	// Corrections are authoritative operator-supplied context ("the steerer got
+	// this wrong, here's what it means"). Deep triage treats them as ground truth,
+	// above its own inference and retrieved history.
+	Corrections []string `json:"corrections,omitempty"`
 }
 
 // RetrievedDoc is one related-context hit pulled from the FTS index (KB facts,

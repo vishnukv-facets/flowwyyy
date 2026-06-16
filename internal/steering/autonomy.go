@@ -74,6 +74,28 @@ var autonomyLadder = []AutonomyCapability{
 		AutoActable:   true, Configurable: true,
 	},
 	{
+		Key: "capture_kb", Action: ActionCaptureKB, Label: "Capture to knowledge base", Risk: "low", DefaultThreshold: 0.75,
+		Prerequisites: "Watched conversation carries a durable fact and confidence meets the operator threshold.",
+		// Lowest auto-act threshold of the safe set: a KB capture appends one line to a
+		// local, git-tracked markdown file and is never outward-facing, so a wrong call
+		// is cheap and reversible. The autonomous path records NO attention_feedback row
+		// (audit is the trace + the agent's dated provenance line), so it can't inflate
+		// the very calibration it gates on.
+		Audit:       "steering_trace autonomy fields plus the dated KB provenance line the capture agent writes; feed card marked acted on confirmed write.",
+		AutoActable: true, Configurable: true,
+	},
+	{
+		Key: "dismiss", Action: ActionDigestOnly, Label: "Auto-dismiss FYI card", Risk: "low", DefaultThreshold: 0.85,
+		Prerequisites: "Surfaced verdict is a digest_only FYI and confidence meets the operator threshold.",
+		// Resolves a surfaced FYI card without nagging the operator. Reversible (the card
+		// is marked dismissed, recoverable), but it suppresses visibility — so it sits at
+		// the high 0.85 default rather than capture_kb's 0.75. Note: a `drop` verdict is
+		// already suppressed pre-card unconditionally; this gate only governs the
+		// digest_only cards that DO surface.
+		Audit:       "steering_trace autonomy fields plus the dismissed feed card.",
+		AutoActable: true, Configurable: true,
+	},
+	{
 		Key: "clear_waiting_on", Label: "Clear waiting_on", Risk: "medium",
 		Prerequisites: "A non-operator reply lands on a thread/tag already linked to a waiting task.",
 		Audit:         "task update timestamp plus inbound event lineage in the task inbox/dispatcher path.",

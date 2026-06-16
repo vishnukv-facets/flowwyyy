@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 )
 
 // clubCandidateWindow bounds how far back the clubbing candidate search looks:
@@ -34,6 +35,40 @@ const conversationGap = 30 * time.Minute
 
 // chanTypeDM is the channel_type for a 1:1 Slack direct message.
 const chanTypeDM = "im"
+
+// chanTypeMPDM is the channel_type for a multi-person Slack direct message.
+const chanTypeMPDM = "mpim"
+
+// isDirectChannelType reports whether a channel is a DM or MPDM — one ongoing
+// conversation per channel, where messages are NOT threaded so every top-level
+// message anchors its own thread_key.
+func isDirectChannelType(t string) bool {
+	return t == chanTypeDM || t == chanTypeMPDM
+}
+
+// clubbedThreadKeyForReply recovers the clubbed card's thread_key for a
+// self-authored DM/MPDM reply whose own (un-threaded) key never matches the card.
+// In a DM/MPDM the whole channel is one conversation, so the most recent open
+// card in the channel within the conversation gap is the owning card. Returns
+// ("", false) for non-DM channels (threaded replies already match by raw key) or
+// when there's no recent open card. Deterministic — no matcher call — so it's
+// cheap to run on every self-authored reply that missed its raw key.
+func (c *Cascade) clubbedThreadKeyForReply(ev monitor.InboundEvent) (string, bool) {
+	if !isDirectChannelType(ev.ChannelType) {
+		return "", false
+	}
+	rawKey := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
+	since := c.now().Add(-clubCandidateWindow).UTC().Format(time.RFC3339)
+	cands, err := flowdb.ListOpenClubCandidates(c.DB, ev.Channel, rawKey, since, clubCandidateLimit)
+	if err != nil || len(cands) == 0 {
+		return "", false
+	}
+	top := cands[0] // newest-first
+	if !feedTSWithinGap(ev.TS, top.TS, conversationGap) {
+		return "", false
+	}
+	return top.ThreadKey, true
+}
 
 // Context-aware card clubbing groups attention cards that belong to the SAME
 // ongoing conversation even when the deterministic thread_key cannot: in DMs

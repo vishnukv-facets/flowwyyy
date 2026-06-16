@@ -8,6 +8,30 @@ import (
 	"flow/internal/monitor"
 )
 
+// autoActSuppressKey marks a context whose re-triage must NOT auto-act, even if
+// autonomy is enabled. Set on a correction-triggered re-triage so the corrected
+// verdict always re-surfaces for the operator (see RetriageFromCorrection).
+type autoActSuppressKey struct{}
+
+func withAutoActSuppressed(ctx context.Context) context.Context {
+	return context.WithValue(ctx, autoActSuppressKey{}, true)
+}
+
+func autoActSuppressed(ctx context.Context) bool {
+	v, _ := ctx.Value(autoActSuppressKey{}).(bool)
+	return v
+}
+
+// RetriageFromCorrection re-runs triage for a card after the operator supplied a
+// correction. Behaves like Retriage but NEVER auto-acts — a correction-triggered
+// re-decision always re-surfaces for review (operator decision), even when
+// autonomy is enabled for the resulting action. The correction must already be
+// persisted to the thread's running understanding so deep triage reads it as
+// authoritative context.
+func (c *Cascade) RetriageFromCorrection(ctx context.Context, item flowdb.FeedItem) error {
+	return c.Retriage(withAutoActSuppressed(ctx), item)
+}
+
 // Retriage re-runs the per-item cascade tail (task index → stage 2 → deep triage
 // → writeFeed) for an already-surfaced feed item, reconstructing the inbound
 // event from the stored row. It deliberately skips Stage 0/1 and the verdict

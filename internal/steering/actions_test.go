@@ -414,6 +414,11 @@ func TestForwardFeed(t *testing.T) {
 	if !strings.Contains(stubbedForwards[0].msg, "C1:200.1") {
 		t.Errorf("forward message should reference the source thread: %q", stubbedForwards[0].msg)
 	}
+	// The forwarded briefing nudges the receiving session to lift any durable fact
+	// from the external event into the KB (the "make forwards smarter" change).
+	if !strings.Contains(stubbedForwards[0].msg, "capture it to the KB") {
+		t.Errorf("forward message should prompt durable-fact KB capture: %q", stubbedForwards[0].msg)
+	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
 	}
@@ -806,6 +811,85 @@ func TestApplyActionAutonomousAllowed(t *testing.T) {
 	}
 	if len(*spawns) != 1 {
 		t.Errorf("allowed autonomous action should execute, spawns=%d", len(*spawns))
+	}
+}
+
+func TestApplyActionAutoCaptureKBSkipsOperatorFeedback(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
+
+	item := flowdb.FeedItem{ID: "kb1", Source: "slack", ThreadKey: "C1:1.1", Summary: "durable org fact", SuggestedAction: "capture_kb", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	pol := AutonomyPolicy{ActionCaptureKB: {Enabled: true, Threshold: 0.75}}
+	if err := ApplyActionAuto(context.Background(), db, item, ActionCaptureKB, t.TempDir(), pol, 0.90); err != nil {
+		t.Fatalf("ApplyActionAuto capture_kb: %v", err)
+	}
+	got, err := flowdb.GetFeedItem(db, "kb1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" {
+		t.Errorf("confirmed auto-capture should mark the card acted, got %q", got.Status)
+	}
+	// The invariant: an autonomous outcome must NEVER write an attention_feedback
+	// row, or the ConfidenceCalibrator would learn from the steerer agreeing with
+	// itself and inflate the very confidence that gated the action.
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 0 {
+		t.Errorf("autonomous capture_kb wrote %d feedback rows, want 0 (calibration must stay operator-only)", len(fb))
+	}
+}
+
+func TestApplyActionAutoDismissDigestOnly(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	item := flowdb.FeedItem{ID: "fy1", Source: "slack", ThreadKey: "C1:2.1", Summary: "fyi", SuggestedAction: "digest_only", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	pol := AutonomyPolicy{ActionDigestOnly: {Enabled: true, Threshold: 0.85}}
+	if err := ApplyActionAuto(context.Background(), db, item, ActionDigestOnly, "", pol, 0.90); err != nil {
+		t.Fatalf("ApplyActionAuto digest_only: %v", err)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+		t.Errorf("auto-dismiss should resolve the FYI card to 'dismissed'")
+	}
+	fb, _ := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{})
+	if len(fb) != 0 {
+		t.Errorf("autonomous dismiss wrote %d feedback rows, want 0", len(fb))
+	}
+}
+
+func TestApplyActionAutoDeniedLeavesCardUntouched(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	item := flowdb.FeedItem{ID: "d1", Source: "slack", ThreadKey: "C1:3.1", SuggestedAction: "capture_kb", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// DefaultAutonomy is all-off — even a 0.99 gate confidence is denied.
+	if err := ApplyActionAuto(context.Background(), db, item, ActionCaptureKB, t.TempDir(), DefaultAutonomy(), 0.99); err != ErrAutonomyDenied {
+		t.Fatalf("auto capture under default policy should be ErrAutonomyDenied, got %v", err)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+		t.Errorf("denied auto-act must leave the card 'new'")
 	}
 }
 

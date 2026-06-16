@@ -1095,6 +1095,90 @@ func TestCascadeAutoActsWhenAutonomyEnabled(t *testing.T) {
 	}
 }
 
+func TestCascadeAutoActsOnCalibratedConfidence(t *testing.T) {
+	c, db := cascadeFixture(t)
+	// Operator threshold 0.80; the model's raw 0.60 would be DENIED on its own.
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.80}}
+	// Calibration says: in make_task's 0.60 band the operator historically agreed
+	// 9/10 → calibrated 0.90, which clears 0.80. This is the wiring this task adds.
+	cal := NewConfidenceCalibrator([]flowdb.AttentionCalibrationBin{
+		{Action: "make_task", ConfidenceBand: flowdb.ConfidenceBand(0.60), Approved: 9, Negative: 1},
+	}, 0)
+	c.CalibratorFn = func() *ConfidenceCalibrator { return cal }
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	spawns := stubTaskSpawner(t)
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:97.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"make_task","confidence":0.6,"summary":"q"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"make_task","confidence":0.6,"summary":"deep"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "97.1", "U_OTHER", "please")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if *spawns != 1 {
+		t.Errorf("taskSpawner calls = %d, want 1 (calibration lifted raw 0.60 → 0.90 >= 0.80)", *spawns)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+		t.Errorf("acted feed items = %d, want 1", len(items))
+	}
+}
+
+func TestCascadeAutoDismissesDigestOnly(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionDigestOnly: {Enabled: true, Threshold: 0.5}}
+	old := matchExistingTask
+	matchExistingTask = func(_ *sql.DB, _ monitor.InboundEvent) (string, bool) { return "", false }
+	t.Cleanup(func() { matchExistingTask = old })
+	stubClassifier(t, func(prompt string) (string, error) {
+		if strings.Contains(prompt, "MODE: stage1-relevance") {
+			return `[{"thread_key":"C1:98.1","relevant":true}]`, nil
+		}
+		return `{"suggested_action":"digest_only","confidence":0.9,"summary":"fyi"}`, nil
+	})
+	stubDeepTriage(t, func(prompt string) (string, error) {
+		return `{"suggested_action":"digest_only","confidence":0.9,"summary":"fyi"}`, nil
+	})
+	if err := c.Observe(context.Background(), msg("C1", "98.1", "U_OTHER", "fyi heads up")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+		t.Errorf("new feed items = %d, want 0 (digest_only auto-dismissed)", len(items))
+	}
+	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+		t.Errorf("dismissed feed items = %d, want 1 (auto-dismiss resolved the FYI card)", len(items))
+	}
+}
+
+func TestMaybeAutoActSuppressedByCorrectionContext(t *testing.T) {
+	c, db := cascadeFixture(t)
+	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.1}}
+	stubTaskSpawner(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "c1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s",
+		SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-12T06:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	v := Verdict{SuggestedAction: ActionMakeTask, Confidence: 0.99}
+
+	// A correction-triggered re-triage must NOT auto-act, even though the policy
+	// would otherwise allow it.
+	if got := c.maybeAutoAct(withAutoActSuppressed(context.Background()), "c1", v); got.decision != "suppressed" {
+		t.Fatalf("correction-context decision = %q, want suppressed", got.decision)
+	}
+	// Same policy + same verdict on a plain context DOES act — proving suppression
+	// (not the gate) is what held it back.
+	if got := c.maybeAutoAct(context.Background(), "c1", v); got.decision != "acted" {
+		t.Fatalf("plain-context decision = %q, want acted", got.decision)
+	}
+}
+
 func TestCascadeTraceRecordsAutonomyActed(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.5}}

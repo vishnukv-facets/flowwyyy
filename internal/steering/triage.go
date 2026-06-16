@@ -89,10 +89,17 @@ func deepTriagePromptIncremental(in ClassifyInput, taskIndex string, pack Thread
 
 	incrementalDirective := ""
 	priorBlock := ""
+	correctionsDirective := ""
+	correctionsBlock := ""
 	if inc.Prior != nil {
 		priorPayload, _ := json.Marshal(inc.Prior)
 		incrementalDirective = "\nINCREMENTAL UPDATE — this thread already has a running understanding from earlier events (see \"Prior running understanding\" below). Do NOT cold-classify the latest message. START from your prior decision and treat the new message as a DELTA: keep the prior suggested_action, matched_task, and confidence unless the new message materially changes them; never flip-flop on noise or a re-delivery. Factor in any operator actions or operator replies already recorded on the thread. In \"reason\", state what changed since the prior decision, or that nothing material changed and you are holding it.\n"
 		priorBlock = "\n\nPrior running understanding (JSON) — your last decision on this thread; update it incrementally:\n" + string(priorPayload)
+		if len(inc.Prior.Corrections) > 0 {
+			correctionsPayload, _ := json.Marshal(inc.Prior.Corrections)
+			correctionsDirective = "\nOPERATOR CORRECTIONS — the operator has explicitly corrected your understanding of THIS thread (see \"Operator corrections\" below). Treat these as AUTHORITATIVE GROUND TRUTH: they override your own inference, the prior decision, and any retrieved context where they conflict. Re-decide in light of them and reflect them in \"reason\".\n"
+			correctionsBlock = "\n\nOperator corrections (JSON) — authoritative operator-supplied context for this thread; obey them over your own reading:\n" + string(correctionsPayload)
+		}
 	}
 	retrievedBlock := ""
 	if len(inc.Retrieved) > 0 {
@@ -101,7 +108,7 @@ func deepTriagePromptIncremental(in ClassifyInput, taskIndex string, pack Thread
 	}
 
 	return `MODE: stage3-deep
-` + incrementalDirective + `
+` + incrementalDirective + correctionsDirective + `
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Go has already fetched the surrounding source context into the context pack below. Treat that context pack as the primary source of truth; do not rely on fetching Slack/GitHub context yourself. If fetch_status is "error" or "unavailable", proceed from the fallback event context and lower confidence when the missing context matters.
 
 Do the following, then emit a single verdict:
@@ -124,7 +131,7 @@ Operator task/project index:
 ` + taskIndex + `
 
 Task-impact hints (JSON):
-` + string(hintPayload) + priorBlock + retrievedBlock + `
+` + string(hintPayload) + correctionsBlock + priorBlock + retrievedBlock + `
 
 Context pack (JSON):
 ` + string(contextPayload) + `
@@ -191,6 +198,7 @@ func modelFacingIncremental(source string, inc IncrementalContext) IncrementalCo
 		}
 		p.OperatorActions = copyShortList(slack, p.OperatorActions, 0)
 		p.OperatorReplies = copyShortList(slack, p.OperatorReplies, 3)
+		p.Corrections = copyShortList(slack, p.Corrections, 0)
 		inc.Prior = &p
 	}
 	if len(inc.Retrieved) > 0 {

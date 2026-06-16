@@ -47,6 +47,20 @@ func CaptureKBModel() string {
 // anything else the card stays 'new' so the operator sees it wasn't captured and
 // can retry — never a silent false "captured". Mirrors SendReplyViaAgent.
 func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kbDir string) error {
+	if err := captureKBEffect(ctx, db, item, kbDir); err != nil {
+		return err
+	}
+	return recordActionFeedback(db, item, string(ActionCaptureKB), "captured", "")
+}
+
+// captureKBEffect runs the hidden capture agent and, on a confirmed write, marks
+// the card acted — WITHOUT recording an operator-feedback row. It is the shared
+// core behind the operator path (CaptureKBViaAgent, which adds the feedback row)
+// and the autonomous path (ApplyActionAuto, which skips it so an auto-capture
+// can't inflate the calibrator it gated on). On anything but a confirmed capture
+// it returns an error and leaves the card 'new', so the operator sees it wasn't
+// captured and can retry — never a silent false "captured".
+func captureKBEffect(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kbDir string) error {
 	if strings.TrimSpace(kbDir) == "" {
 		return fmt.Errorf("steering: capture-kb requires a kb directory")
 	}
@@ -60,10 +74,7 @@ func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kb
 	if !captureConfirmed(trimmed) {
 		return fmt.Errorf("steering: capture-kb not confirmed (agent said: %s)", truncate(trimmed, 200))
 	}
-	if err := flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339()); err != nil {
-		return err
-	}
-	return recordActionFeedback(db, item, string(ActionCaptureKB), "captured", "")
+	return flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
 }
 
 // captureConfirmed reports whether the agent explicitly confirmed a KB write. We
@@ -122,6 +133,15 @@ CAPTURED <relative kb file path>
 If you could not write for ANY reason (no file access, the dir is missing, etc.),
 reply with a single line: FAILED: <short reason>. Do NOT pretend you captured it.
 Output nothing else.`
+}
+
+// PromoteCorrectionToKB distills an operator correction into a durable KB fact
+// (kb/*.md) — the "remember this generally" option on the correction button. It
+// reuses the operator-reply KB path (operator's own words → KB): NOTHING-DURABLE
+// is a clean no-op, so a thread-specific correction that isn't a general fact
+// simply isn't written. Best-effort — the caller logs and proceeds on error.
+func PromoteCorrectionToKB(ctx context.Context, threadKey, source, text, kbDir string) error {
+	return captureOperatorReplyKB(ctx, threadKey, source, text, kbDir)
 }
 
 // captureOperatorReplyKB distills a durable fact out of a reply the operator

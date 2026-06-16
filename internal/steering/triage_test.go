@@ -110,6 +110,34 @@ func TestDeepTriagePromptIncrementalHasPriorAndRetrieved(t *testing.T) {
 	}
 }
 
+// An operator correction renders an authoritative ground-truth block + directive,
+// so the deep triager obeys it over its own reading. Absent when there's none.
+func TestDeepTriagePromptIncrementalSurfacesOperatorCorrections(t *testing.T) {
+	in := ClassifyInput{ThreadKey: "C1:1.1", Source: "slack", Text: "any update?"}
+	inc := IncrementalContext{Prior: &PriorUnderstanding{
+		Action: "digest_only", Confidence: 0.5, EventCount: 1,
+		Corrections: []string{"This MPDM is about the CSX papertrade migration, not the Anshul demo."},
+	}}
+	prompt := deepTriagePromptIncremental(in, "Tasks:\n(none)", contextFromClassifyInput(in), nil, inc)
+	for _, want := range []string{
+		"OPERATOR CORRECTIONS",
+		"AUTHORITATIVE GROUND TRUTH",
+		"Operator corrections (JSON)",
+		"CSX papertrade migration",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("correction prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// No corrections ⇒ no corrections block/directive.
+	plain := deepTriagePromptIncremental(in, "Tasks:\n(none)", contextFromClassifyInput(in),
+		nil, IncrementalContext{Prior: &PriorUnderstanding{Action: "digest_only", EventCount: 1}})
+	if strings.Contains(plain, "OPERATOR CORRECTIONS") || strings.Contains(plain, "Operator corrections (JSON)") {
+		t.Fatalf("prompt without corrections unexpectedly contains the corrections block:\n%s", plain)
+	}
+}
+
 func TestDeepTriagePromptHidesInternalFetchErrorsAndRawSlackIDs(t *testing.T) {
 	pack := ThreadContext{
 		Source:      "slack",

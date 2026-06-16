@@ -424,6 +424,22 @@ var launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
 	}(item)
 }
 
+// launchAttentionCorrectionRetriage re-triages a card after an operator
+// correction. Same async shape as launchAttentionRetriage, but routes through
+// RetriageFromCorrection so the corrected verdict NEVER auto-acts (always
+// re-surfaces). The correction must already be persisted to thread memory.
+var launchAttentionCorrectionRetriage = func(s *Server, item flowdb.FeedItem) {
+	go func(it flowdb.FeedItem) {
+		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := s.cascade.RetriageFromCorrection(bctx, it); err != nil {
+			fmt.Fprintf(os.Stderr, "attention: correction retriage %s: %v\n", it.ID, err)
+		}
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
+		s.publishUIChange("attention")
+	}(item)
+}
+
 // attentionAct handles the attention-act action: make-task | forward | dismiss
 // on a feed item (Target = feed id). Operator-initiated → manual=true bypasses
 // the autonomy gate.
@@ -458,6 +474,43 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		s.publishUIChange("attention")
 		launchAttentionRetriage(s, item)
 		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
+	case "correct":
+		// The steerer misread this thread; the operator supplies the real context.
+		// Store it on the thread's running understanding (authoritative ground truth
+		// for future triage), optionally promote it to the KB, then re-triage with it
+		// folded in. The correction-triggered re-triage NEVER auto-acts — it always
+		// re-surfaces for the operator (operator decision).
+		if s.cascade == nil {
+			return actionResponse{OK: false, Message: "steering cascade is not running"}, http.StatusServiceUnavailable
+		}
+		text := strings.TrimSpace(req.CorrectionText)
+		if text == "" {
+			return actionResponse{OK: false, Message: "correction requires context text"}, http.StatusBadRequest
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		if err := flowdb.AppendThreadOperatorCorrection(s.cfg.DB, item.ThreadKey, flowdb.ThreadOperatorCorrection{At: now, Text: text}); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		if req.Remember {
+			// Distill into a durable cross-thread KB fact (best-effort, background —
+			// runs the same capture agent as the capture-kb action).
+			kbDir := filepath.Join(s.cfg.FlowRoot, "kb")
+			go func(tk, src, txt string) {
+				bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+				defer cancel()
+				if err := steering.PromoteCorrectionToKB(bctx, tk, src, txt, kbDir); err != nil {
+					fmt.Fprintf(os.Stderr, "attention: promote correction to KB: %v\n", err)
+				}
+			}(item.ThreadKey, item.Source, text)
+		}
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, now)
+		s.publishUIChange("attention")
+		launchAttentionCorrectionRetriage(s, item)
+		msg := "got it — re-reading this thread with your context"
+		if req.Remember {
+			msg += "; saving it to your KB"
+		}
+		return actionResponse{OK: true, Message: msg}, http.StatusOK
 	case "make-task", "make_task":
 		if err := steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
@@ -466,15 +519,26 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 	case "capture-kb", "capture_kb":
 		// A hidden bypass agent distills the card into a durable KB fact and writes
 		// it to kb/*.md — pure local filesystem work, so a headless `claude -p`
-		// handles it (no connector MCP, unlike send-reply on Slack). Run it in the
-		// background: capture can outlast the UI's RPC timeout, and the card flips
-		// to 'acted' once the agent confirms it wrote. No visible task is spawned.
+		// handles it (no connector MCP, unlike send-reply on Slack). The agent runs
+		// for seconds-to-minutes, so resolve the card IMMEDIATELY (like make-task)
+		// rather than waiting for the write — otherwise the operator clicks "Save to
+		// KB" and the card just sits there. If the background write fails, re-surface
+		// the card so they see it wasn't captured and can retry.
 		kbDir := filepath.Join(s.cfg.FlowRoot, "kb")
+		if err := flowdb.SetFeedItemActed(s.cfg.DB, id, "", time.Now().UTC().Format(time.RFC3339)); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("attention")
 		go func(it flowdb.FeedItem) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			if err := steering.CaptureKBViaAgent(bctx, s.cfg.DB, it, kbDir); err != nil {
 				fmt.Fprintf(os.Stderr, "attention: capture-kb agent: %v\n", err)
+				// The write failed — undo the optimistic resolve so the card returns.
+				if rerr := flowdb.SetFeedItemStatus(s.cfg.DB, it.ID, "new", ""); rerr != nil {
+					fmt.Fprintf(os.Stderr, "attention: re-surface capture-kb card %s: %v\n", it.ID, rerr)
+				}
+				s.publishUIChange("attention")
 				return
 			}
 			s.publishUIChange("attention")

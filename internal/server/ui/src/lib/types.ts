@@ -1172,6 +1172,8 @@ export interface ActionRequest {
   attention_action?: string
   reply_text?: string
   reply_instructions?: string
+  correction_text?: string
+  remember?: boolean
   schedule?: string
   schedule_op?: string
 }

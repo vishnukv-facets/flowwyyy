@@ -293,6 +293,7 @@ CREATE TABLE IF NOT EXISTS attention_thread_state (
     summary            TEXT NOT NULL DEFAULT '',
     operator_actions   TEXT NOT NULL DEFAULT '[]',
     operator_replies   TEXT NOT NULL DEFAULT '[]',
+    operator_corrections TEXT NOT NULL DEFAULT '[]',
     event_count        INTEGER NOT NULL DEFAULT 0,
     last_seen_ts       TEXT,
     first_seen_at      TEXT NOT NULL,
