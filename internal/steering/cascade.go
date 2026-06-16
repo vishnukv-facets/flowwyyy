@@ -101,6 +101,13 @@ type Cascade struct {
 	// replies into it. Empty (NewCascade default; tests) ⇒ KB capture is skipped.
 	// Best-effort and live-only — never load-bearing for triage.
 	KBDir string
+
+	// SessionSink, when set AND SteererSessionsEnabled(), receives Stage-0
+	// survivors for delivery into the channel's live steerer session instead of
+	// the stateless deep-triage stages (GAP-1). nil ⇒ the cold path is used. serve
+	// wiring sets it to *server.Server; NewCascade leaves it nil. Never
+	// load-bearing: any delivery error falls back to DeepTriageIncremental.
+	SessionSink SteererSessionSink
 }
 
 // NewCascade builds a Cascade with production defaults (real clock, random IDs,
