@@ -69,6 +69,43 @@ func TestDeepTriagePromptUsesContextPackAsPrimaryInput(t *testing.T) {
 	}
 }
 
+func TestDeepTriagePromptChecksReferencedArtifactsArePresent(t *testing.T) {
+	pack := ThreadContext{
+		Source:      "slack",
+		ThreadKey:   "C1:1780000000.000100",
+		FetchStatus: "ok",
+		Parent: &ContextMessage{
+			Kind:   "event",
+			Author: "Omendra",
+			Text:   "Hi Vishnu, is this draft mail correct here?",
+			TS:     "1780000000.000100",
+		},
+		Participants: []string{"Omendra"},
+		Timestamps:   []string{"1780000000.000100"},
+		Summary:      "Omendra asks about a draft mail, but no draft is included.",
+	}
+	prompt := deepTriagePromptWithContext(
+		ClassifyInput{
+			ThreadKey: "C1:1780000000.000100",
+			Source:    "slack",
+			Author:    "Omendra",
+			Text:      "Hi Vishnu, is this draft mail correct here?",
+		},
+		"Tasks:\n(none)",
+		pack,
+	)
+	for _, want := range []string{
+		"referenced artifact",
+		"actually present in the context pack",
+		"ask the sender to share it",
+		"not a context-fetch failure",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("deep prompt missing artifact-presence guidance %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestDeepTriagePromptIncrementalHasPriorAndRetrieved(t *testing.T) {
 	in := ClassifyInput{ThreadKey: "C1:1.1", Source: "slack", Text: "any update?"}
 	inc := IncrementalContext{
@@ -85,12 +122,12 @@ func TestDeepTriagePromptIncrementalHasPriorAndRetrieved(t *testing.T) {
 	prompt := deepTriagePromptIncremental(in, "Tasks:\n(none)", contextFromClassifyInput(in), nil, inc)
 
 	for _, want := range []string{
-		"INCREMENTAL UPDATE",                          // says so explicitly
-		"Prior running understanding (JSON)",          // layer 2 present
-		`"summary":"asks about the oauth rollout"`,     // prior decision content
-		"forwarded-\\u003eoauth-rollout",              // prior operator action survives JSON
-		"Retrieved related context (JSON)",            // layer 3 present
-		"oauth rollout slipped to next sprint",         // retrieved snippet content
+		"INCREMENTAL UPDATE",                       // says so explicitly
+		"Prior running understanding (JSON)",       // layer 2 present
+		`"summary":"asks about the oauth rollout"`, // prior decision content
+		"forwarded-\\u003eoauth-rollout",           // prior operator action survives JSON
+		"Retrieved related context (JSON)",         // layer 3 present
+		"oauth rollout slipped to next sprint",     // retrieved snippet content
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("incremental prompt missing %q:\n%s", want, prompt)
