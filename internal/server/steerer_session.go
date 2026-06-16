@@ -494,8 +494,38 @@ func (s *Server) sweepIdleSteererSessionsOnce(now time.Time) {
 	}
 }
 
-// runSteererIdleSweep runs sweepIdleSteererSessionsOnce on a ticker until ctx is
-// done. Started from serve wiring only when sessions are enabled (Task 6).
+// reconcileDeletedSteererSessions tears down the PTY of any steerer slug whose
+// chat row is gone — soft-deleted (GAP-14). chat-delete already stops the PTY
+// synchronously; this is the safety-net for any other path that sets deleted_at
+// (so a deleted chat never leaves a claude/codex process running). Reset-and-reopen
+// itself is structural: GetChat treats a deleted row as absent, so the next event
+// on that key starts a FRESH session and UpsertChat reclaims the tombstone.
+func (s *Server) reconcileDeletedSteererSessions() {
+	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
+		return
+	}
+	s.steererSlotsMu.Lock()
+	slugs := make([]string, 0, len(s.steererSlots))
+	for slug := range s.steererSlots {
+		slugs = append(slugs, slug)
+	}
+	s.steererSlotsMu.Unlock()
+	for _, slug := range slugs {
+		if !s.terminals.running(slug) {
+			continue
+		}
+		if _, err := flowdb.GetChat(s.cfg.DB, slug); errors.Is(err, sql.ErrNoRows) {
+			s.terminals.stopFloating(slug)
+			sl := s.steererSlot(slug)
+			sl.mu.Lock()
+			sl.state = steererSlotNone
+			sl.mu.Unlock()
+		}
+	}
+}
+
+// runSteererIdleSweep runs the idle sweep + deleted-chat reconciler on a ticker
+// until ctx is done. Started from serve wiring only when sessions are enabled.
 func (s *Server) runSteererIdleSweep(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
@@ -505,6 +535,7 @@ func (s *Server) runSteererIdleSweep(ctx context.Context) {
 			return
 		case <-t.C:
 			s.sweepIdleSteererSessionsOnce(time.Now())
+			s.reconcileDeletedSteererSessions()
 		}
 	}
 }
