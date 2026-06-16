@@ -436,6 +436,43 @@ func (c *Cascade) ObserveBackfill(ctx context.Context, ev monitor.InboundEvent) 
 	return c.observe(ctx, ev, "backfill")
 }
 
+// buildSteererDelivery assembles the lean per-event payload for a steerer session:
+// cleaned text + the deterministic context pack that anchors this specific message.
+func (c *Cascade) buildSteererDelivery(ctx context.Context, ev monitor.InboundEvent, contextOnly bool) SteererDelivery {
+	return SteererDelivery{
+		Source:      connectorOf(ev),
+		Channel:     ev.Channel,
+		ChannelType: ev.ChannelType,
+		TS:          ev.TS,
+		ThreadTS:    ev.ThreadTS,
+		Author:      ev.UserID,
+		Text:        c.cleanText(ctx, ev.Text),
+		Context:     c.contextPack(ctx, ev),
+		ContextOnly: contextOnly,
+	}
+}
+
+// ObserveSelfAuthored feeds a self-authored bot-echo event (dropped at the top of
+// Dispatch today) into the channel's steerer session as a context_only delivery
+// confirmation (GAP-10) so the session knows its reply landed and stops re-nagging.
+// No-op (returns nil) when sessions are off, no sink is wired, or the event has no
+// session key — never load-bearing.
+func (c *Cascade) ObserveSelfAuthored(ctx context.Context, ev monitor.InboundEvent) error {
+	if !SteererSessionsEnabled() || c.SessionSink == nil {
+		return nil
+	}
+	key, ok := sessionKeyForEvent(ev)
+	if !ok {
+		return nil
+	}
+	p := c.buildSteererDelivery(ctx, ev, true)
+	p.SelfEcho = true
+	if err := c.SessionSink.DeliverToChannelSession(key, p); err != nil {
+		c.log("steerer session self-echo delivery failed for %s: %v", key, err)
+	}
+	return nil
+}
+
 // observe is the single-event triage path: Stage 0 → verdict cache →
 // single-event Stage 1 relevance, then the shared finishItem tail. It emits a
 // trace at every exit.
@@ -450,6 +487,21 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	if !s0.Pass {
 		if s0.DropReason == "self-authored" {
 			c.learnFromOperatorReply(ctx, ev, origin)
+			// Per-channel session model (GAP-10): feed the operator's own message to
+			// the channel session as context_only memory (never surfaced) so the
+			// session reasons correctly about follow-ups. Flag-gated; on any sink
+			// error fall through to the existing drop trace (fail-open).
+			if SteererSessionsEnabled() && c.SessionSink != nil {
+				if key, ok := sessionKeyForEvent(ev); ok {
+					if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, true)); err == nil {
+						tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-authored → context_only"
+						c.emitTrace(tr, start)
+						return nil
+					} else {
+						c.log("steerer session context-only delivery failed for %s: %v", key, err)
+					}
+				}
+			}
 		}
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 		c.emitTrace(tr, start)
@@ -462,6 +514,24 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate within verdict TTL"
 		c.emitTrace(tr, start)
 		return nil
+	}
+
+	// Per-channel session model (GAP-8): when enabled, hand the survivor to the
+	// channel's live steerer session instead of the stateless deep-triage stages.
+	// Placed BEFORE the classifier gate so the session path never shells out. Any
+	// sink error falls through to DeepTriageIncremental below (fail-open invariant).
+	if SteererSessionsEnabled() && c.SessionSink != nil {
+		if key, ok := sessionKeyForEvent(ev); ok {
+			if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, false)); err == nil {
+				c.cache.mark(cacheKey, c.now())
+				tr.Disposition, tr.StageReached = "delivered", "session"
+				c.emitTrace(tr, start)
+				return nil
+			} else {
+				c.log("steerer session delivery failed for %s: %v; falling back to cold triage", key, err)
+				tr.Error = appendCascadeError(tr.Error, "session delivery failed: "+err.Error())
+			}
+		}
 	}
 
 	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
