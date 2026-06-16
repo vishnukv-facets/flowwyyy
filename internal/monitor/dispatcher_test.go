@@ -39,6 +39,61 @@ func (f *fakeMessageObserver) Observe(_ context.Context, ev InboundEvent) error 
 	return f.err
 }
 
+// fakeSelfObserver implements MessageObserver + SelfAuthoredObserver so the
+// dispatcher can route self-authored events into the per-channel session.
+type fakeSelfObserver struct {
+	observed     []InboundEvent
+	selfAuthored []InboundEvent
+}
+
+func (f *fakeSelfObserver) Observe(_ context.Context, ev InboundEvent) error {
+	f.observed = append(f.observed, ev)
+	return nil
+}
+
+func (f *fakeSelfObserver) ObserveSelfAuthored(_ context.Context, ev InboundEvent) error {
+	f.selfAuthored = append(f.selfAuthored, ev)
+	return nil
+}
+
+func TestDispatchSelfAuthoredRoutesToSessionWhenActive(t *testing.T) {
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", "BOT1")
+	db := dispatcherTestDB(t)
+	obs := &fakeSelfObserver{}
+	d := NewDispatcher(db, nil)
+	d.Steerer = obs
+	d.SteererOwnsRouting = func() bool { return true }
+	d.SteererSessionsEnabled = func() bool { return true }
+
+	ev := InboundEvent{Kind: "message", Channel: "C1", ChannelType: "channel", TS: "1.0", ThreadTS: "1.0", UserID: "BOT1", Text: "On it"}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(obs.selfAuthored) != 1 {
+		t.Fatalf("self-authored event must route to ObserveSelfAuthored, got %d", len(obs.selfAuthored))
+	}
+	if len(obs.observed) != 0 {
+		t.Fatalf("self-authored must NOT go through normal Observe, got %d", len(obs.observed))
+	}
+}
+
+func TestDispatchSelfAuthoredStillDroppedWhenInactive(t *testing.T) {
+	t.Setenv("FLOW_SLACK_SELF_BOT_USER_IDS", "BOT1")
+	db := dispatcherTestDB(t)
+	obs := &fakeSelfObserver{}
+	d := NewDispatcher(db, nil)
+	d.Steerer = obs
+	d.SteererOwnsRouting = func() bool { return true }
+	// SteererSessionsEnabled nil ⇒ inactive.
+	ev := InboundEvent{Kind: "message", Channel: "C1", ChannelType: "channel", TS: "1.0", ThreadTS: "1.0", UserID: "BOT1", Text: "On it"}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(obs.selfAuthored) != 0 {
+		t.Fatalf("inactive ⇒ self-authored must drop, got %d", len(obs.selfAuthored))
+	}
+}
+
 // stubDispatcherIO swaps the package-level spawn/tag/open hooks for fakes
 // and returns a teardown to restore the originals. Tests use the returned
 // trackers to assert call patterns. Concurrency-safe so dispatch ordering
