@@ -190,11 +190,14 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 		if err := s.terminals.wakeTask(slug, turn); err != nil {
 			return fmt.Errorf("steerer session: deliver to live session %q: %w", slug, err)
 		}
+		s.maybeUpgradeSteererTitle(chat, p, key)
 		return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
 	case steererActResume:
+		s.maybeUpgradeSteererTitle(chat, p, key)
 		return s.resumeSteererChat(slot, chat, turn)
 	default: // steererActStart
-		return s.startNewSteererChat(slot, slug, key, turn)
+		title := s.resolveSteererChatTitle(context.Background(), p, key)
+		return s.startNewSteererChat(slot, slug, turn, title)
 	}
 }
 
@@ -202,7 +205,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 // steerer brief + the first turn (mirrors openNewSlackChat), records its durable
 // chats row with origin="steerer", and launches with NO --model so it runs the
 // operator's default (Opus).
-func (s *Server) startNewSteererChat(slot *steererSlot, slug, key, turn string) error {
+func (s *Server) startNewSteererChat(slot *steererSlot, slug, turn, title string) error {
 	absRoot, err := s.absFlowRoot()
 	if err != nil {
 		return fmt.Errorf("steerer session: %w", err)
@@ -225,7 +228,7 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, key, turn string) 
 		StartedAt:      time.Now().Add(-2 * time.Second),
 	}
 	slot.state = steererSlotStarting
-	ft := s.terminals.registerFloatingLaunch(launch, steererChatTitle(key))
+	ft := s.terminals.registerFloatingLaunch(launch, title)
 	if err := s.terminals.startFloatingDetached(ft.ID); err != nil {
 		s.terminals.stopFloating(ft.ID)
 		slot.state = steererSlotNone
@@ -234,7 +237,7 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, key, turn string) 
 	now := flowdb.NowISO()
 	if err := flowdb.UpsertChat(s.cfg.DB, flowdb.Chat{
 		Slug:           slug,
-		Title:          steererChatTitle(key),
+		Title:          title,
 		Provider:       provider,
 		Origin:         "steerer",
 		SessionID:      sql.NullString{String: sessionID, Valid: true},
@@ -284,10 +287,88 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 	return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
 }
 
-// steererChatTitle is the minimal display title for Phase 2 (the channel id). The
-// human-readable naming convention (#channel / DM · Name / external-org tag) is
-// GAP-13 → Phase 5.
-func steererChatTitle(key string) string { return "Steering: " + key }
+// steererChatTitleFallback is the placeholder title when names can't be resolved
+// (Slack API unavailable at creation). The sticky-upgrade path replaces it with a
+// human title once resolution succeeds; a custom/operator-renamed title is never
+// equal to this, so it is never clobbered.
+func steererChatTitleFallback(key string) string { return "Steering: " + key }
+
+// steererTitleFor formats the human display title from already-resolved names
+// (GAP-13, pure/testable). channelName is the resolver's "#channel" output (empty
+// for DMs/MPDMs); authorName is the message author's display name. Returns "" when
+// it can't form a good title, so the caller falls back to the placeholder.
+// ponytail: external-org "(Org)" suffix for Slack-Connect partners is deferred —
+// it needs Slack team_id extraction + an operator-team source not wired yet.
+func steererTitleFor(p steering.SteererDelivery, channelName, authorName string) string {
+	switch {
+	case p.Source == "github" || p.ChannelType == "github":
+		return githubChatTitle(p.Channel, p.ThreadTS)
+	case p.ChannelType == "channel":
+		return channelName // "" when unresolved → placeholder fallback
+	case p.ChannelType == "im":
+		if authorName != "" {
+			return "DM · " + authorName
+		}
+	case p.ChannelType == "mpim":
+		if authorName != "" {
+			return "Group · " + authorName
+		}
+	}
+	return ""
+}
+
+// githubChatTitle builds "owner/repo#N" from the repo + the link tag
+// ("gh-pr:owner/repo#N"). repo alone when the number can't be parsed.
+func githubChatTitle(repo, linkTag string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return ""
+	}
+	if i := strings.LastIndex(linkTag, "#"); i >= 0 {
+		if n := strings.TrimSpace(linkTag[i+1:]); n != "" {
+			return repo + "#" + n
+		}
+	}
+	return repo
+}
+
+// resolveSteererChatTitle resolves the best human title for a steerer chat at
+// creation (GAP-13): Slack #channel / DM · Name / Group · Name via the name
+// resolver, GitHub owner/repo#N from the delivery, placeholder otherwise.
+func (s *Server) resolveSteererChatTitle(ctx context.Context, p steering.SteererDelivery, key string) string {
+	var channelName, authorName string
+	if s.nameResolver != nil {
+		switch p.ChannelType {
+		case "channel":
+			channelName = s.nameResolver.ChannelName(ctx, p.Channel)
+		case "im", "mpim":
+			authorName = s.nameResolver.UserName(ctx, p.Author)
+		}
+	}
+	if authorName == "" {
+		authorName = strings.TrimSpace(p.Author)
+	}
+	if t := steererTitleFor(p, channelName, authorName); t != "" {
+		return t
+	}
+	return steererChatTitleFallback(key)
+}
+
+// maybeUpgradeSteererTitle upgrades a chat still showing the placeholder
+// "Steering: <key>" to a resolved human title once names become resolvable. Never
+// touches a custom (operator-renamed) or already-resolved title. Best-effort.
+func (s *Server) maybeUpgradeSteererTitle(chat *flowdb.Chat, p steering.SteererDelivery, key string) {
+	if chat == nil || s.cfg.DB == nil || chat.Title != steererChatTitleFallback(key) {
+		return
+	}
+	title := s.resolveSteererChatTitle(context.Background(), p, key)
+	if title == "" || title == chat.Title {
+		return
+	}
+	if err := flowdb.SetChatTitle(s.cfg.DB, chat.Slug, title, flowdb.NowISO()); err == nil {
+		s.publishUIChange("chats")
+	}
+}
 
 // switchSteererProvider switches a live steerer chat to a new provider
 // (claude↔codex), shared by the manual settings/Chats switch (GAP-11) and the auto

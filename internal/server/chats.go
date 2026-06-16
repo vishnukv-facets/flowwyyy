@@ -261,6 +261,16 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: true, Message: "deleted chat"}, http.StatusOK
 	case "chat-reopen":
 		return s.reopenChat(slug)
+	case "chat-rename":
+		title := strings.TrimSpace(req.Name)
+		if title == "" {
+			return actionResponse{OK: false, Message: "name required"}, http.StatusBadRequest
+		}
+		if err := flowdb.SetChatTitle(s.cfg.DB, slug, title, flowdb.NowISO()); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "renamed chat"}, http.StatusOK
 	case "chat-set-provider":
 		// Manual provider switch on a steerer chat (GAP-11) — same switch path as
 		// the auto-fork (GAP-9), either direction (claude↔codex). Re-primes the new

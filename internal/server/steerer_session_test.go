@@ -18,6 +18,31 @@ func TestSteererChatSlug(t *testing.T) {
 	}
 }
 
+func TestSteererTitleFor(t *testing.T) {
+	cases := []struct {
+		name        string
+		p           steering.SteererDelivery
+		channelName string
+		authorName  string
+		want        string
+	}{
+		{"slack channel resolved", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "#facets-coinswitch", "", "#facets-coinswitch"},
+		{"slack channel unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "", "", ""},
+		{"slack dm", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "U9"}, "", "Nayan Kalita", "DM · Nayan Kalita"},
+		{"slack mpim", steering.SteererDelivery{Source: "slack", ChannelType: "mpim", Channel: "G1", Author: "U9"}, "", "Rohit", "Group · Rohit"},
+		{"github pr", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "vishnukv-facets/flowwyyy", ThreadTS: "gh-pr:vishnukv-facets/flowwyyy#17"}, "", "", "vishnukv-facets/flowwyyy#17"},
+		{"github issue", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "o/r", ThreadTS: "gh-issue:o/r#3"}, "", "", "o/r#3"},
+		{"github no number → repo only", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "o/r", ThreadTS: "garbage"}, "", "", "o/r"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := steererTitleFor(tc.p, tc.channelName, tc.authorName); got != tc.want {
+				t.Errorf("steererTitleFor = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSteererSessionProvider(t *testing.T) {
 	cases := []struct {
 		env  string
