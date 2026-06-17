@@ -612,6 +612,16 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		if s.terminals == nil {
 			return actionResponse{OK: false, Message: "terminal hub is not running — cannot open a send session"}, http.StatusServiceUnavailable
 		}
+		// Prefer the channel's existing per-channel steerer chat: it already holds the
+		// thread's memory and has the Slack MCP, so it posts in-context (and in-thread)
+		// instead of spinning a context-blind ephemeral session. The ephemeral path
+		// below stays the fallback when no chat exists / the session model is off.
+		if handled, herr := s.postApprovedReplyViaChat(item, text, instructions); herr != nil {
+			return actionResponse{OK: false, Message: herr.Error()}, http.StatusInternalServerError
+		} else if handled {
+			_ = s.recordAttentionFeedback(item, "send_reply", "approved", text)
+			return actionResponse{OK: true, Message: "handed your reply to this channel's steering session — it's posting in-thread"}, http.StatusOK
+		}
 		launch, err := s.prepareSendReplyFloatingLaunch(item, text, instructions)
 		if err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError

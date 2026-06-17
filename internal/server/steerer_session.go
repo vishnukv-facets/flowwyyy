@@ -201,6 +201,67 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 	}
 }
 
+// steererSendReplyPrompt builds the one-shot, operator-authorized SEND instruction
+// handed to an existing per-channel chat so IT posts an approved reply — it already
+// holds the thread's memory and the Slack MCP, so it posts in the right context
+// instead of a context-blind ephemeral session. It explicitly overrides the chat's
+// surface-only default for this one approved turn and tells it to mark the card sent
+// on a confirmed post (mirrors the ephemeral send session's doneCmd).
+func steererSendReplyPrompt(item flowdb.FeedItem, channel, threadTS, text, instructions string) string {
+	var b strings.Builder
+	b.WriteString("[operator-approved reply — SEND IT NOW]\n")
+	b.WriteString("The operator reviewed and APPROVED a reply for the thread you watch. This overrides your usual surface-only stance for THIS message only — you are authorized to post it.\n\n")
+	fmt.Fprintf(&b, "Post it in-thread by CALLING the Slack MCP tool mcp__claude_ai_Slack__slack_send_message DIRECTLY with channel=%s, thread_ts=%s, and the approved text below (a real tool call — never Bash/echo/print). ", channel, threadTS)
+	if strings.TrimSpace(instructions) != "" {
+		fmt.Fprintf(&b, "Revise the text per these instructions before posting: %s. ", strings.TrimSpace(instructions))
+	} else {
+		b.WriteString("Post it as-is. ")
+	}
+	b.WriteString("Never sign it or add any attribution footer.\n")
+	fmt.Fprintf(&b, "On a CONFIRMED post ONLY, run the shell command: flow attention sent %s\n\n", item.ID)
+	b.WriteString("Approved text:\n")
+	b.WriteString(text)
+	return b.String()
+}
+
+// postApprovedReplyViaChat routes an operator-approved send-reply through the
+// channel's existing per-channel steerer chat instead of an ephemeral send session.
+// Returns handled=false (caller falls back to the ephemeral floating session) when
+// sessions are off, the source isn't Slack, or no chat exists for the channel yet.
+// Per-slug serialized like DeliverToChannelSession so it never races a live turn.
+func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructions string) (bool, error) {
+	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
+		return false, nil
+	}
+	if item.Source != "slack" {
+		return false, nil // GitHub posts via the gh agent; only Slack posts via the chat
+	}
+	channel, threadTS := splitThreadKey(item.ThreadKey)
+	if strings.TrimSpace(channel) == "" {
+		return false, nil
+	}
+	slug := steererChatSlug(channel)
+	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	if err != nil || chat == nil {
+		return false, nil // no live chat for this channel → fall back to ephemeral
+	}
+	slot := s.steererSlot(slug)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	prompt := steererSendReplyPrompt(item, channel, threadTS, text, instructions)
+	if s.terminals.running(slug) {
+		slot.state = steererSlotLive
+		if err := s.terminals.wakeTask(slug, prompt); err != nil {
+			return false, fmt.Errorf("steerer send-reply: wake %q: %w", slug, err)
+		}
+		return true, nil
+	}
+	if err := s.resumeSteererChat(slot, chat, prompt); err != nil {
+		return false, fmt.Errorf("steerer send-reply: resume %q: %w", slug, err)
+	}
+	return true, nil
+}
+
 // startNewSteererChat launches a fresh detached steerer session primed with the
 // steerer brief + the first turn (mirrors openNewSlackChat), records its durable
 // chats row with origin="steerer", and launches with NO --model so it runs the
