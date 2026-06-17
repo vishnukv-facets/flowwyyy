@@ -2787,6 +2787,17 @@ under the `tags:` line), follow this bootstrap:
   new thread, they add a reaction. Don't manually create slack-reply
   tasks for threads they didn't consent to.
 
+### Slack app command DM (AFK control)
+
+The operator can also DM the Flow Slack app directly as a private AFK command
+channel. This is not a `slack-reply` customer/colleague thread. When the
+operator's own DM to the Flow Slack app is accepted by the command-channel
+ingress, flow adds a `:eyes:` reaction to that incoming Slack message as a
+receipt that processing has started. The reaction is left in place; it is not
+swapped or removed when the reply completes. This ack applies
+only to the operator's app DM command surface, never to external participants,
+customer/colleague threads, or the operator's messages in ordinary channels.
+
 ## 10c. GitHub PR and issue tasks (monitor pipeline)
 
 `flow ui serve` ingests GitHub activity through **signed webhook deliveries from
