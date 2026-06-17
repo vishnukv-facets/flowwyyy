@@ -53,6 +53,7 @@ type chatView struct {
 	CreatedAt      string `json:"created_at"`
 	LastActivityAt string `json:"last_activity_at"`
 	Archived       bool   `json:"archived"`
+	Muted          bool   `json:"muted"`
 	Live           bool   `json:"live"`
 	// LastReply is a one-line preview of the agent's most recent response in
 	// this chat (last assistant text from the session transcript), so the list
@@ -91,6 +92,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 			CreatedAt:      c.CreatedAt,
 			LastActivityAt: c.LastActivityAt,
 			Archived:       c.ArchivedAt.Valid,
+			Muted:          c.MutedAt.Valid,
 			Live:           s.terminals != nil && s.terminals.running(c.Slug),
 			LastReply:      s.chatLastReply(c),
 			Tokens:         tokens,
@@ -302,6 +304,20 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 		}
 		return actionResponse{OK: true, Message: "switched chat provider to " + req.Provider}, http.StatusOK
+	case "chat-mute":
+		// Mute a steerer chat: the cascade stops forwarding events to it (gated in
+		// DeliverToChannelSession) until unmuted. The chat row + session survive.
+		if err := flowdb.SetChatMuted(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "muted chat — no events will be forwarded until you unmute"}, http.StatusOK
+	case "chat-unmute":
+		if err := flowdb.SetChatMuted(s.cfg.DB, slug, ""); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "unmuted chat"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown chat action " + req.Kind}, http.StatusBadRequest
 	}

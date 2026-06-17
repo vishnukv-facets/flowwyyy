@@ -184,6 +184,14 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 		return fmt.Errorf("steerer session: lookup chat %q: %w", slug, err)
 	}
 
+	// Muted chat: the operator silenced this conversation — consume the event
+	// without forwarding it to the session, and do NOT fall back to cold triage
+	// (returning nil marks it delivered). Self-echo/context_only included: a muted
+	// chat receives nothing until unmuted.
+	if exists && chat != nil && chat.MutedAt.Valid {
+		return nil
+	}
+
 	switch steererDeliveryPlan(exists, exists && s.terminals.running(slug)) {
 	case steererActWake:
 		slot.state = steererSlotLive

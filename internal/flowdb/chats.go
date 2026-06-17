@@ -19,6 +19,7 @@ type Chat struct {
 	LastActivityAt string
 	ArchivedAt     sql.NullString
 	DeletedAt      sql.NullString
+	MutedAt        sql.NullString // when set, the steerer stops forwarding events to this chat
 }
 
 // ChatFilter narrows ListChats.
@@ -28,7 +29,7 @@ type ChatFilter struct {
 
 // ---------- column list ----------
 
-const chatCols = "slug, title, provider, origin, session_id, created_at, last_activity_at, archived_at, deleted_at"
+const chatCols = "slug, title, provider, origin, session_id, created_at, last_activity_at, archived_at, deleted_at, muted_at"
 
 // ---------- scan ----------
 
@@ -38,7 +39,7 @@ func scanChat(row interface{ Scan(dest ...any) error }) (*Chat, error) {
 		&c.Slug, &c.Title, &c.Provider, &c.Origin,
 		&c.SessionID,
 		&c.CreatedAt, &c.LastActivityAt,
-		&c.ArchivedAt, &c.DeletedAt,
+		&c.ArchivedAt, &c.DeletedAt, &c.MutedAt,
 	)
 	if err != nil {
 		return nil, err
@@ -51,11 +52,11 @@ func scanChat(row interface{ Scan(dest ...any) error }) (*Chat, error) {
 // InsertChat writes a new chat row. Slug must be unique.
 func InsertChat(db *sql.DB, c Chat) error {
 	_, err := db.Exec(
-		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
 		c.Slug, c.Title, c.Provider, c.Origin,
 		c.SessionID,
 		c.CreatedAt, c.LastActivityAt,
-		c.ArchivedAt, c.DeletedAt,
+		c.ArchivedAt, c.DeletedAt, c.MutedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("flowdb: insert chat %q: %w", c.Slug, err)
@@ -86,7 +87,7 @@ func GetChat(db *sql.DB, slug string) (*Chat, error) {
 // always unique (UI overview-<uuid>) simply insert.
 func UpsertChat(db *sql.DB, c Chat) error {
 	_, err := db.Exec(
-		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?)
+		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(slug) DO UPDATE SET
 		   title = excluded.title,
 		   provider = excluded.provider,
@@ -95,11 +96,12 @@ func UpsertChat(db *sql.DB, c Chat) error {
 		   created_at = excluded.created_at,
 		   last_activity_at = excluded.last_activity_at,
 		   archived_at = NULL,
-		   deleted_at = NULL`,
+		   deleted_at = NULL,
+		   muted_at = NULL`,
 		c.Slug, c.Title, c.Provider, c.Origin,
 		c.SessionID,
 		c.CreatedAt, c.LastActivityAt,
-		c.ArchivedAt, c.DeletedAt,
+		c.ArchivedAt, c.DeletedAt, c.MutedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("flowdb: upsert chat %q: %w", c.Slug, err)
@@ -152,6 +154,24 @@ func SetChatTitle(db *sql.DB, slug, title, now string) error {
 	)
 	if err != nil {
 		return fmt.Errorf("flowdb: set chat title %q: %w", slug, err)
+	}
+	return nil
+}
+
+// SetChatMuted mutes (now != "") or unmutes (now == "") a chat. A muted chat
+// stops receiving forwarded steerer events until unmuted (see the gate in
+// DeliverToChannelSession). Deleted chats are never touched.
+func SetChatMuted(db *sql.DB, slug string, mutedAt string) error {
+	var val sql.NullString
+	if strings.TrimSpace(mutedAt) != "" {
+		val = sql.NullString{String: mutedAt, Valid: true}
+	}
+	_, err := db.Exec(
+		`UPDATE chats SET muted_at = ? WHERE slug = ? AND deleted_at IS NULL`,
+		val, slug,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: set chat muted %q: %w", slug, err)
 	}
 	return nil
 }

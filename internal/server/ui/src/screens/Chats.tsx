@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Archive, ArchiveRestore, ArrowLeftRight, Check, MessagesSquare, Pencil, Play, Trash2, X } from 'lucide-react'
+import { Archive, ArchiveRestore, ArrowLeftRight, Bell, BellOff, Check, MessagesSquare, Pencil, Play, Trash2, X } from 'lucide-react'
 import { useAction, useChats } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
@@ -105,6 +105,11 @@ function ChatRow({ chat }: { chat: Chat }) {
     action.mutate({ kind: chat.archived ? 'chat-unarchive' : 'chat-archive', slug: chat.slug })
   }
 
+  const toggleMute = () => {
+    if (action.isPending) return
+    action.mutate({ kind: chat.muted ? 'chat-unmute' : 'chat-mute', slug: chat.slug })
+  }
+
   const remove = async () => {
     if (action.isPending) return
     const ok = await confirmAction({
@@ -164,6 +169,7 @@ function ChatRow({ chat }: { chat: Chat }) {
             </button>
           )}
           {chat.live ? <span className="faint">working…</span> : null}
+          {chat.muted ? <span className="badge warn" title="Muted — no events are forwarded to this chat">muted</span> : null}
           {chat.archived ? <span className="badge">archived</span> : null}
         </div>
         {chat.last_reply ? (
@@ -215,6 +221,18 @@ function ChatRow({ chat }: { chat: Chat }) {
             onClick={switchProvider}
           >
             <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
+          </button>
+        ) : null}
+        {isSteerer ? (
+          <button
+            type="button"
+            className={`btn ghost sm${chat.muted ? ' primary' : ''}`}
+            disabled={action.isPending}
+            title={chat.muted ? 'Unmute — resume forwarding events to this chat' : 'Mute — stop forwarding events to this chat until unmuted'}
+            onClick={toggleMute}
+          >
+            {chat.muted ? <Bell size={13} /> : <BellOff size={13} />}
+            {chat.muted ? 'Unmute' : 'Mute'}
           </button>
         ) : null}
         <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>

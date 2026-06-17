@@ -444,7 +444,8 @@ CREATE TABLE IF NOT EXISTS chats (
     created_at       TEXT NOT NULL,
     last_activity_at TEXT NOT NULL,
     archived_at      TEXT,
-    deleted_at       TEXT
+    deleted_at       TEXT,
+    muted_at         TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_chats_last_activity ON chats(last_activity_at DESC);

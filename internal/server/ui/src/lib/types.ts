@@ -901,6 +901,8 @@ export interface Chat {
   created_at: string
   last_activity_at: string
   archived: boolean
+  /** When true, the steerer stops forwarding events to this chat until unmuted. */
+  muted: boolean
   live: boolean
   /** One-line preview of the agent's most recent response in this chat. */
   last_reply?: string

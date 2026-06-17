@@ -318,7 +318,7 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.overviewChat(req)
 	case "close-floating-terminal":
 		return s.closeFloatingTerminal(req)
-	case "chat-archive", "chat-unarchive", "chat-delete", "chat-reopen", "chat-rename", "chat-set-provider":
+	case "chat-archive", "chat-unarchive", "chat-delete", "chat-reopen", "chat-rename", "chat-set-provider", "chat-mute", "chat-unmute":
 		return s.chatAction(req)
 	case "update-settings":
 		return s.updateSettings(req)
