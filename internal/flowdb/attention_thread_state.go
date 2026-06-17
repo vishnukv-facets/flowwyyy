@@ -11,23 +11,23 @@ import (
 // coalescing upsert overwrites on every new event — this record ACCUMULATES
 // across events for one thread_key, so a resumed triage doesn't start from
 // scratch. It lives in its own table (attention_thread_state) so it outlives any
-// single card and survives clubbed thread_key rewrites. Downstream tasks
+// single card and dismissal/re-surface cycles. Downstream tasks
 // (steerer-context-assembly, steerer-operator-reply-learning) read and enrich
 // it; this task only persists it and its slots.
 type ThreadState struct {
-	ThreadKey         string
-	Source            string
-	CurrentAction     string
-	CurrentConfidence float64
-	CurrentReason     string
-	Summary           string
-	OperatorActions   []ThreadOperatorAction
-	OperatorReplies   []ThreadOperatorReply
+	ThreadKey           string
+	Source              string
+	CurrentAction       string
+	CurrentConfidence   float64
+	CurrentReason       string
+	Summary             string
+	OperatorActions     []ThreadOperatorAction
+	OperatorReplies     []ThreadOperatorReply
 	OperatorCorrections []ThreadOperatorCorrection
-	EventCount        int
-	LastSeenTS        string
-	FirstSeenAt       string
-	UpdatedAt         string
+	EventCount          int
+	LastSeenTS          string
+	FirstSeenAt         string
+	UpdatedAt           string
 }
 
 // ThreadOperatorAction is one operator/autonomous resolution recorded against a

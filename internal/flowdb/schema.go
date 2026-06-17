@@ -282,8 +282,8 @@ CREATE TABLE IF NOT EXISTS attention_handoffs (
 -- for one thread_key: the current decision, a rolling summary, the operator
 -- actions taken on the thread, the operator's own replies seen, and the
 -- last-seen source ts. It lives in its own table so it outlives any single card
--- (survives dismissal/re-surface) and survives clubbed thread_key rewrites; the
--- feed's coalescing behavior is unchanged. PK on thread_key covers every lookup.
+-- and dismissal/re-surface cycles; the feed's coalescing behavior is unchanged.
+-- PK on thread_key covers every lookup.
 CREATE TABLE IF NOT EXISTS attention_thread_state (
     thread_key         TEXT PRIMARY KEY,
     source             TEXT NOT NULL DEFAULT '',

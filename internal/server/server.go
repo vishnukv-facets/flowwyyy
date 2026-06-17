@@ -469,27 +469,6 @@ func (s *Server) ListenAndServe(addr string) int {
 			}
 		}()
 	}
-	// One-shot conversation dedupe: collapse open cards that fragmented into many
-	// because each standalone message (every DM message, fresh channel post)
-	// anchored its own thread_key before context-aware clubbing existed. Replays
-	// each channel's open cards through the same matcher used live and merges
-	// same-conversation cards into one (dismissing the rest — reversible). Runs
-	// after EnableClassifierSessions so it shares the primed Haiku session.
-	// Idempotent: once a conversation is collapsed there's nothing left to merge.
-	// Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
-	if s.cfg.DB != nil && s.cascade != nil && steeringDedupeEnabled() {
-		go func() {
-			res, err := s.cascade.DedupeOpenFeedConversations(context.Background())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[feed dedupe] %v\n", err)
-				return
-			}
-			if res.Merged > 0 {
-				fmt.Fprintf(os.Stderr, "[feed dedupe] collapsed %d duplicate card(s) into their conversations\n", res.Merged)
-				s.publishUIChange("attention")
-			}
-		}()
-	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.
 	if s.githubListener != nil {
@@ -540,17 +519,6 @@ func (s *Server) ListenAndServe(addr string) int {
 // rest of the steerer wired.
 func steeringBackfillEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL"))) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
-}
-
-// steeringDedupeEnabled reports whether the one-shot conversation-dedupe pass
-// should run at boot. Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
-func steeringDedupeEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_DEDUPE"))) {
 	case "0", "false", "no", "off":
 		return false
 	default:

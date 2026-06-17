@@ -89,13 +89,6 @@ type Cascade struct {
 	// event-only fallback pack rather than asking the model to fetch context.
 	FetchContext func(context.Context, monitor.InboundEvent) (ThreadContext, error)
 
-	// MatchConversation powers context-aware card clubbing: when a standalone
-	// message can't coalesce via thread_key, it judges whether the message
-	// continues an existing open conversation in the same channel. NewCascade
-	// defaults it to a cheap Haiku matcher; tests swap it. Nil disables clubbing
-	// (every standalone message gets its own card — the pre-clubbing behavior).
-	MatchConversation ConversationMatcher
-
 	// KBDir is the operator's knowledge-base directory (…/kb). When set, the
 	// operator-reply learning path distills durable facts out of hand-written
 	// replies into it. Empty (NewCascade default; tests) ⇒ KB capture is skipped.
@@ -121,17 +114,16 @@ type Cascade struct {
 // a 10-minute verdict TTL, and an env-configurable hourly deep-triage budget).
 func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 	return &Cascade{
-		DB:                db,
-		Config:            cfg,
-		now:               time.Now,
-		newID:             randomID,
-		cache:             newVerdictCache(10 * time.Minute),
-		budget:            newBudgetGuard(deepBudgetPerHour()),
-		classifierBudget:  newBudgetGuard(classifierBudgetPerHour()),
-		log:               monitor.NewStderrLogger("[steering] "),
-		trace:             func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
-		Autonomy:          DefaultAutonomy(),
-		MatchConversation: defaultConversationMatcher,
+		DB:               db,
+		Config:           cfg,
+		now:              time.Now,
+		newID:            randomID,
+		cache:            newVerdictCache(10 * time.Minute),
+		budget:           newBudgetGuard(deepBudgetPerHour()),
+		classifierBudget: newBudgetGuard(classifierBudgetPerHour()),
+		log:              monitor.NewStderrLogger("[steering] "),
+		trace:            func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		Autonomy:         DefaultAutonomy(),
 	}
 }
 
@@ -305,19 +297,7 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	}
 	// Gate: only learn on threads flow already triaged (same test as priorUnderstanding).
 	if !hadPrior || threadStateEmpty(prior) {
-		// DM/MPDM replies aren't threaded, so the operator's message keys to ITSELF,
-		// never the clubbed card's key (clubbing keeps the framing message's key). The
-		// raw-key lookup above misses every time on a direct conversation — recover the
-		// owning clubbed card by channel and retry, so a hand-typed reply actually
-		// resolves the card instead of leaving it surfaced.
-		if recovered, ok := c.clubbedThreadKeyForReply(ev); ok && recovered != key {
-			if p2, had2, e2 := flowdb.GetThreadState(c.DB, recovered); e2 == nil && had2 && !threadStateEmpty(p2) {
-				key, prior, hadPrior = recovered, p2, had2
-			}
-		}
-		if !hadPrior || threadStateEmpty(prior) {
-			return
-		}
+		return
 	}
 	// De-dup against replay / backfill double-processing of the same message
 	// (self-authored events drop before the verdict cache, so they aren't deduped
@@ -602,9 +582,6 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	// no longer stateless across events — the prior decision plus any operator
 	// actions/replies feed the incremental deep-triage prompt below
 	// ([[steerer-context-assembly]] layer 2).
-	// ponytail: read-back resolves the stable-key case (threaded conversations);
-	// the clubbed-key case (a standalone DM whose state lives under the
-	// conversation anchor) is that task's job, not this keystone's.
 	prior, hadPrior, perr := flowdb.GetThreadState(c.DB, in.ThreadKey)
 	if perr != nil {
 		c.log("thread-state: load %s: %v", in.ThreadKey, perr)
@@ -1336,7 +1313,7 @@ func preview(s string) string {
 // returns the upserted item's id plus whether it actually surfaced a live card.
 // surfaced == false means the operator already dismissed this thread/message and
 // the upsert left it dismissed — the caller must not re-surface or auto-act.
-func (c *Cascade) writeFeed(ctx context.Context, v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
+func (c *Cascade) writeFeed(_ context.Context, v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
 	item := flowdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
@@ -1364,13 +1341,6 @@ func (c *Cascade) writeFeed(ctx context.Context, v Verdict, ev monitor.InboundEv
 	if item.SuggestedAction == "" {
 		item.SuggestedAction = string(ActionDrop)
 	}
-	// Context-aware clubbing: a standalone top-level message anchors its own
-	// thread_key, so the deterministic coalesce can never group it with the rest
-	// of its conversation (true for every DM message, and for fresh channel
-	// posts). maybeClub asks the matcher whether it continues an existing open
-	// card and, on a match, rewrites item.ThreadKey so the upsert below merges
-	// them into one card. It fails open (no rewrite) on any error.
-	c.maybeClub(ctx, &item)
 	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(c.DB, item)
 	if err != nil {
 		return "", false, fmt.Errorf("steering: write feed item: %w", err)
@@ -1442,8 +1412,7 @@ func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
 
 // threadStateEmpty reports that a thread-state row carries no triage decision yet
 // (the inverse of priorUnderstanding's "has decision" test). The operator-reply
-// learn path uses it to decide a thread was never deep-triaged here — and to know
-// when a clubbed-key recovery is needed.
+// learn path uses it to decide a thread was never deep-triaged here.
 func threadStateEmpty(s flowdb.ThreadState) bool {
 	return s.EventCount == 0 && strings.TrimSpace(s.CurrentAction) == ""
 }

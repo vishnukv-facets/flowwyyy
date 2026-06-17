@@ -94,6 +94,18 @@ func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) st
 	return rawKey
 }
 
+func anchorIndex(anchors []flowdb.FeedItem, threadKey string) int {
+	if threadKey == "" {
+		return -1
+	}
+	for i, a := range anchors {
+		if a.ThreadKey == threadKey {
+			return i
+		}
+	}
+	return -1
+}
+
 func recordSurfaceThreadDecision(db *sql.DB, key string, v Verdict, ts, at string) {
 	_ = flowdb.RecordThreadDecision(db, flowdb.ThreadDecision{
 		ThreadKey:  key,

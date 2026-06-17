@@ -228,9 +228,9 @@ func scanFeedItemRows(rows *sql.Rows) ([]FeedItem, error) {
 // incoming standalone message might continue: same channel, created at/after
 // `since` (RFC3339; empty = no lower bound), excluding `excludeThreadKey` (the
 // incoming message's own thread_key), newest first, capped at `limit`. The
-// cascade's context-aware clubbing uses this to find existing cards a new
-// top-level message belongs to. An empty channel never clubs (returns nil): a
-// card without a channel anchor has no conversation to join.
+// surface validation uses this to find existing cards around a new top-level
+// message. An empty channel returns nil: a card without a channel anchor has no
+// conversation to compare against.
 func ListOpenClubCandidates(db *sql.DB, channel, excludeThreadKey, since string, limit int) ([]FeedItem, error) {
 	if strings.TrimSpace(channel) == "" {
 		return nil, nil
