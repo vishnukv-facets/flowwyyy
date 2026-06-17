@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 func cmdUI(args []string) int {
@@ -60,10 +61,90 @@ func cmdUIServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: ui serve takes no positional arguments")
 		return 2
 	}
+	// Free the port from a stale `flow ui serve` first, so a rebuild + restart
+	// actually takes over instead of leaving the OLD binary serving (a fresh bind
+	// would fail with "address already in use" and, under --bg, die in the log
+	// unnoticed). Done in the parent for both paths: foreground binds next, and the
+	// --bg child re-execs into a now-free port.
+	stopExistingFlowServer(*port)
 	if *bg {
 		return startUIBackground(*host, *port, *noQuote)
 	}
 	return serveUI(*host, *port, *noQuote)
+}
+
+// stopExistingFlowServer frees `port` by stopping an existing `flow ui serve`
+// bound to it. It ONLY terminates a process it can confirm is a flow ui-serve —
+// never an unrelated service that happens to hold the port — with SIGTERM,
+// escalating to SIGKILL if the port isn't released. Best-effort: if lsof/ps are
+// missing or the holder is foreign, it leaves the bind attempt to surface the
+// conflict (and logs why it stood down).
+func stopExistingFlowServer(port int) {
+	for _, pid := range portListenerPIDs(port) {
+		if pid <= 0 || pid == os.Getpid() {
+			continue
+		}
+		cmdline := processCommandLine(pid)
+		if !isFlowUIServeCommand(cmdline) {
+			fmt.Fprintf(os.Stderr, "warning: port %d held by a non-flow process (pid %d); not stopping it: %s\n", port, pid, cmdline)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "stopping existing flow ui server (pid %d) on port %d\n", pid, port)
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+		if waitPortFree(port, 3*time.Second) {
+			continue
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		waitPortFree(port, 2*time.Second)
+	}
+}
+
+// isFlowUIServeCommand reports whether a process command line is a flow ui-serve.
+// The guard that keeps stopExistingFlowServer from killing an unrelated service
+// that merely shares the port: an attacker/neighbor process won't carry the
+// distinctive "ui serve" invocation.
+func isFlowUIServeCommand(cmdline string) bool {
+	return strings.Contains(cmdline, "ui serve")
+}
+
+// portListenerPIDs returns the PIDs LISTENing on the given TCP port (via lsof).
+// Empty on any error (lsof absent, no listener) — the caller treats that as
+// "port free / can't tell" and proceeds to bind.
+func portListenerPIDs(port int) []int {
+	out, err := exec.Command("lsof", "-nP", "-iTCP:"+strconv.Itoa(port), "-sTCP:LISTEN", "-t").Output()
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, f := range strings.Fields(string(out)) {
+		if pid, err := strconv.Atoi(f); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+func processCommandLine(pid int) string {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// waitPortFree polls until no process LISTENs on the port (or timeout). Returns
+// whether the port came free.
+func waitPortFree(port int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if len(portListenerPIDs(port)) == 0 {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func serveUI(host string, port int, noQuote bool) int {
