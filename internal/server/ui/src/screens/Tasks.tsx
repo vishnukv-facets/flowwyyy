@@ -98,6 +98,39 @@ function actionRank(t: TaskView, start: Startability | undefined): number {
   return 0
 }
 
+const RUNTIME_LABEL: Record<string, string> = {
+  backlog: 'backlog',
+  'in-progress': 'in progress',
+  running: 'running',
+  waiting: 'waiting',
+  idle: 'idle',
+  stale: 'stalled',
+  dead: 'crashed',
+  released: 'released',
+  done: 'done',
+}
+
+function taskRuntimeStatus(task: TaskView): string {
+  if (task.status === 'done') return 'done'
+  const runtime = task.runtime_status?.trim()
+  if (runtime && task.status === 'in-progress') return runtime
+  if (task.live) return 'running'
+  if (task.waiting_on) return 'waiting'
+  return task.status
+}
+
+function RuntimeChip({ task }: { task: TaskView }) {
+  const status = taskRuntimeStatus(task)
+  const label = RUNTIME_LABEL[status] ?? status
+  const source = task.runtime_status ? 'agent runtime' : task.live ? 'live session' : 'task status'
+  return (
+    <span className={`runtime-chip ${status}`} title={`${source}: ${label}`}>
+      <StatusDot status={status} />
+      {label}
+    </span>
+  )
+}
+
 export function Tasks() {
   useDocumentTitle('Tasks')
   const [, navigate] = useLocation()
@@ -704,7 +737,7 @@ function TaskRow({
         />
       </td>
       <td>
-        <StatusDot status={task.live ? 'running' : task.waiting_on ? 'waiting' : task.status} />
+        <StatusDot status={taskRuntimeStatus(task)} />
       </td>
       <td className={tree ? 'tree-name-cell' : undefined}>
         {tree && <TreeGuides tree={tree} />}
@@ -748,6 +781,7 @@ function TaskRow({
             ) : (
               <div className="cell-name">
                 <span className="clip" style={{ fontWeight: 500 }}>{task.name}</span>
+                <RuntimeChip task={task} />
                 {isStartHead && (
                   <span className="ready-pill" title="Startable now — nothing blocks it">
                     ready

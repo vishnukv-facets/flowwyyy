@@ -4283,6 +4283,49 @@ select.input {
   gap: 6px;
   min-width: 0;
 }
+.runtime-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--border);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+  flex: none;
+}
+.runtime-chip .dot {
+  width: 6px;
+  height: 6px;
+}
+.runtime-chip.running,
+.runtime-chip.in-progress {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: color-mix(in srgb, var(--ok) 34%, transparent);
+}
+.runtime-chip.waiting {
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-color: color-mix(in srgb, var(--warn) 34%, transparent);
+}
+.runtime-chip.dead,
+.runtime-chip.stale {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 34%, transparent);
+}
+.runtime-chip.done,
+.runtime-chip.released {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 34%, transparent);
+}
 .rename-btn {
   opacity: 0;
   flex: none;
