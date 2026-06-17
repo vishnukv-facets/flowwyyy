@@ -11,7 +11,7 @@ INSTALL_DIR := $(HOME)/.local/bin
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -X main.version=$(VERSION)
 
-.PHONY: build ui ui-check rebuild install uninstall test clean
+.PHONY: build ui ui-check rebuild install uninstall clear-dev test clean
 
 # The web UI bundles under internal/server/static/assets are NOT committed (only
 # static/index.html + brand SVGs are), so on a fresh checkout they're absent.
@@ -93,6 +93,23 @@ uninstall:
 		echo "No installed flow binary found. Skill/hook may already be removed."; \
 	fi
 	@echo "If you added $(INSTALL_DIR) to your shell rc file, remove that line manually."
+
+# Remove locally-built dev binaries — the repo ./flow and the $(INSTALL_DIR) copy
+# from `make install` — WITHOUT touching the installed skill/hooks (use
+# `make uninstall` for that). Run this when switching to a Homebrew install: a dev
+# binary at $(INSTALL_DIR)/$(BINARY) shadows the Homebrew flow on PATH, so `flow`
+# keeps launching the old dev build even after `brew install flowwyyy`. After this,
+# `flow` resolves to the Homebrew copy — then restart the server to pick it up.
+clear-dev:
+	@rm -f "./$(BINARY)" "$(INSTALL_DIR)/$(BINARY)"
+	@echo "Removed dev binaries: ./$(BINARY) and $(INSTALL_DIR)/$(BINARY)"
+	@resolved="$$(command -v $(BINARY) 2>/dev/null || true)"; \
+	if [ -n "$$resolved" ]; then \
+		echo "flow now resolves to: $$resolved ($$($$resolved --version 2>/dev/null))"; \
+	else \
+		echo "No flow on PATH — install via Homebrew: brew install vishnukv-facets/flowwyyy/flowwyyy"; \
+	fi
+	@echo "Then restart the server to pick it up:  flow ui serve --bg"
 
 clean:
 	rm -f $(BINARY) flowde
