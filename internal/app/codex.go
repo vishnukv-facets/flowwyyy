@@ -13,6 +13,7 @@ import (
 	"flow/internal/agents"
 	"flow/internal/flowdb"
 	"flow/internal/spawner"
+	"flow/internal/worktree"
 )
 
 const (
@@ -345,22 +346,27 @@ func codexModelArgs(model string) []string {
 }
 
 func appendCodexWritableRoots(args []string, cwd, flowRootPath string) []string {
-	flowRootPath = strings.TrimSpace(flowRootPath)
-	if flowRootPath == "" {
+	args = appendCodexAddDir(args, cwd, flowRootPath)
+	return appendCodexAddDir(args, cwd, worktree.LinkedWorktreeGitCommonDir(cwd))
+}
+
+func appendCodexAddDir(args []string, cwd, dir string) []string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
 		return args
 	}
 	if cwd != "" {
 		if absCWD, err := filepath.Abs(cwd); err == nil {
 			cwd = absCWD
 		}
-		if absRoot, err := filepath.Abs(flowRootPath); err == nil {
-			flowRootPath = absRoot
+		if absDir, err := filepath.Abs(dir); err == nil {
+			dir = absDir
 		}
-		if cwd == flowRootPath {
+		if cwd == dir {
 			return args
 		}
 	}
-	return append(args, "--add-dir", flowRootPath)
+	return append(args, "--add-dir", dir)
 }
 
 func codexPermissionArgs(mode string) []string {
