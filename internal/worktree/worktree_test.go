@@ -211,3 +211,31 @@ func TestEnsureSecondGitignoreCallIdempotent(t *testing.T) {
 		t.Errorf(".gitignore was rewritten on second call; want idempotent.\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
+
+func TestRemoveDeletesRegisteredWorktreeAndBranch(t *testing.T) {
+	repo := initRepo(t)
+	res, err := Ensure(repo, AgentClaude, "clean-me")
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	if err := Remove(repo, AgentClaude, "clean-me"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if _, err := os.Stat(res.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("worktree path after Remove: stat err = %v, want not-exist", err)
+	}
+	if list := runGit(t, repo, "worktree", "list", "--porcelain"); strings.Contains(list, res.WorktreePath) {
+		t.Fatalf("git worktree list still contains %q:\n%s", res.WorktreePath, list)
+	}
+	if branch := runGit(t, repo, "branch", "--list", "flow/clean-me"); strings.TrimSpace(branch) != "" {
+		t.Fatalf("branch still exists after Remove: %q", branch)
+	}
+}
+
+func TestRemoveMissingWorktreeIsNoop(t *testing.T) {
+	repo := initRepo(t)
+	if err := Remove(repo, AgentClaude, "missing"); err != nil {
+		t.Fatalf("Remove missing worktree: %v", err)
+	}
+}
