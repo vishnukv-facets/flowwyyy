@@ -13,6 +13,8 @@ func TestSteererSessionBriefContract(t *testing.T) {
 		"flow attention surface",
 		"make_task", "forward", "capture_kb", "digest_only", "drop",
 		"context_only",
+		"operator acted directly",
+		"--context-only --thread-key",
 		"never", // surface-only: never auto-send a reply
 		"thread_key",
 	} {

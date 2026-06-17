@@ -132,7 +132,7 @@ func renderSteererTurn(p steering.SteererDelivery) string {
 	case p.SelfEcho:
 		kind = "your own sent reply echoed back — context_only delivery confirmation; do NOT re-surface"
 	case p.ContextOnly:
-		kind = "context_only update — absorb into memory; do NOT surface or reply"
+		kind = "context_only operator update — absorb into memory; may refresh or resolve an existing open card only; do NOT reply"
 	}
 	fmt.Fprintf(&b, "## Steerer turn — %s\n", kind)
 	fmt.Fprintf(&b, "source=%s channel=%s channel_type=%s ts=%s thread_ts=%s author=%s\n\n",
@@ -569,7 +569,9 @@ func steererForkEnabled() bool { return envBoolDefaultServer("FLOW_STEERER_FORK_
 
 // steererForkRecoveryEnabled gates the optional time-based Codex→Claude come-back.
 // Off by default — coming back to Claude is otherwise an operator (manual) action.
-func steererForkRecoveryEnabled() bool { return envBoolDefaultServer("FLOW_STEERER_FORK_RECOVERY", false) }
+func steererForkRecoveryEnabled() bool {
+	return envBoolDefaultServer("FLOW_STEERER_FORK_RECOVERY", false)
+}
 
 // steererForkRecoveryAfter is how long a chat stays on Codex after an auto-fork
 // before recovery retries Claude. A re-exhaustion re-forks and resets the timer,
