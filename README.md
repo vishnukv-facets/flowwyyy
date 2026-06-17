@@ -806,6 +806,8 @@ id, private key, and webhook secret in one shot — **secrets go to the OS keyri
 nothing pasted by hand.** It then guides installation. The wizard requires a
 running [public ingress](#public-ingress) first (the webhook URL must be public at
 creation). Personal and org install targets are both supported.
+One connected App can be installed on multiple accounts/orgs; creating a
+different App replaces the stored credentials and requires explicit confirmation.
 
 **Gap recovery is redelivery backfill.** If flow or the ingress was down, the
 wizard's **Replay missed deliveries** button lists the App's hook deliveries and

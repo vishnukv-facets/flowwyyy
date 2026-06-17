@@ -17,11 +17,16 @@ func TestMain(m *testing.M) {
 }
 
 // resetGitHubSecretsForTest gives a test a clean in-memory keyring and unsets
-// the env vars the secret store hydrates, restoring them when the test ends.
+// the env vars the GitHub wizard hydrates/writes.
 func resetGitHubSecretsForTest(t *testing.T) {
 	t.Helper()
 	keyring.MockInit()
 	for _, envKey := range githubSecretAccounts {
+		os.Unsetenv(envKey)
+		key := envKey
+		t.Cleanup(func() { os.Unsetenv(key) })
+	}
+	for _, envKey := range append(githubAppConfigKeys, "FLOW_GH_SELF_LOGINS") {
 		os.Unsetenv(envKey)
 		key := envKey
 		t.Cleanup(func() { os.Unsetenv(key) })

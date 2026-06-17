@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"net/http"
@@ -29,10 +30,11 @@ const githubManifestTTL = 30 * time.Minute
 // githubManifestPending is the server-side state of one in-flight Connect
 // GitHub attempt.
 type githubManifestPending struct {
-	state   string
-	target  string
-	org     string
-	created time.Time
+	state           string
+	target          string
+	org             string
+	replaceExisting bool
+	created         time.Time
 }
 
 func randomGitHubState() string {
@@ -146,9 +148,10 @@ func (s *Server) handleGitHubSetupCreateApp(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var req struct {
-		Name   string `json:"name"`
-		Target string `json:"target"` // "user" | "org"
-		Org    string `json:"org"`
+		Name            string `json:"name"`
+		Target          string `json:"target"` // "user" | "org"
+		Org             string `json:"org"`
+		ReplaceExisting bool   `json:"replace_existing"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONStatus(w, map[string]any{"ok": false, "error": "invalid JSON body"}, http.StatusBadRequest)
@@ -163,6 +166,13 @@ func (s *Server) handleGitHubSetupCreateApp(w http.ResponseWriter, r *http.Reque
 		writeJSONStatus(w, map[string]any{"ok": false, "error": "public ingress is not running — enable it first so GitHub can reach the webhook + setup callback"}, http.StatusServiceUnavailable)
 		return
 	}
+	if githubAppConfigured() && !req.ReplaceExisting {
+		writeJSONStatus(w, map[string]any{
+			"ok":    false,
+			"error": githubAppReplaceRequiredMessage(),
+		}, http.StatusConflict)
+		return
+	}
 
 	state := randomGitHubState()
 	createURL, err := githubManifestCreateURL(req.Target, req.Org, state)
@@ -172,7 +182,13 @@ func (s *Server) handleGitHubSetupCreateApp(w http.ResponseWriter, r *http.Reque
 	}
 
 	s.githubSetupMu.Lock()
-	s.githubSetup = &githubManifestPending{state: state, target: req.Target, org: strings.TrimSpace(req.Org), created: time.Now()}
+	s.githubSetup = &githubManifestPending{
+		state:           state,
+		target:          req.Target,
+		org:             strings.TrimSpace(req.Org),
+		replaceExisting: req.ReplaceExisting,
+		created:         time.Now(),
+	}
 	s.githubSetupMu.Unlock()
 
 	writeJSON(w, map[string]any{
@@ -249,7 +265,7 @@ func (s *Server) handleGitHubSetupCallback(w http.ResponseWriter, r *http.Reques
 		writeSetupResultHTML(w, callbackError, "GitHub setup failed", html.EscapeString(err.Error()))
 		return
 	}
-	if err := s.persistGitHubApp(conv); err != nil {
+	if err := s.persistGitHubApp(conv, pending.replaceExisting); err != nil {
 		writeSetupResultHTML(w, callbackError, "Couldn't save the GitHub App", html.EscapeString(err.Error()))
 		return
 	}
@@ -497,7 +513,11 @@ func mergeInstallationIDs(existing, add string) string {
 // secret, webhook secret) go to the OS keyring; non-secret metadata to
 // config.json. It flips the transport to webhook (the poller stays off) and
 // bounces the listener + ingress so the new signing secret takes effect live.
-func (s *Server) persistGitHubApp(conv githubManifestConversion) error {
+func (s *Server) persistGitHubApp(conv githubManifestConversion, replaceExisting ...bool) error {
+	replace := len(replaceExisting) > 0 && replaceExisting[0]
+	if githubAppConfigured() && !replace {
+		return errors.New(githubAppReplaceRequiredMessage())
+	}
 	if err := storeGitHubSecret(keyringAcctAppPEM, conv.PEM); err != nil {
 		return fmt.Errorf("store App private key: %w", err)
 	}
@@ -532,6 +552,17 @@ func (s *Server) persistGitHubApp(conv githubManifestConversion) error {
 	}
 	s.restartIngress()
 	return nil
+}
+
+func githubAppConfigured() bool {
+	return strings.TrimSpace(os.Getenv("FLOW_GH_APP_ID")) != "" ||
+		strings.TrimSpace(os.Getenv("FLOW_GH_APP_SLUG")) != "" ||
+		strings.TrimSpace(os.Getenv("FLOW_GH_APP_PEM")) != "" ||
+		githubWebhookSecret() != ""
+}
+
+func githubAppReplaceRequiredMessage() string {
+	return "a GitHub App is already connected; disconnect it first or confirm replacement before creating a new App"
 }
 
 // writeSetupResultHTML renders a minimal standalone result page for the OAuth /

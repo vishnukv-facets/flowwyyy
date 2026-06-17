@@ -2811,6 +2811,9 @@ GitHub's App-manifest flow, captures the app id + private key + webhook secret
 no manual `FLOW_GH_WEBHOOK_SECRET` paste and no `gh` CLI auth for the monitor. The
 wizard requires a running **public ingress** (zrok) first, since the App's
 webhook URL must be public at App-creation time.
+One connected public App can be installed on both personal and org accounts;
+creating a different App is an explicit replacement of the stored credentials,
+not additive multi-App support.
 
 On a delivery to `POST /api/github/webhook`, flow verifies the
 `X-Hub-Signature-256` HMAC, records the delivery for idempotency, normalizes the
