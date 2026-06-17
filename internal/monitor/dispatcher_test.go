@@ -400,6 +400,34 @@ func TestSlackTaskBrief_MentionsAutomaticDMMonitoring(t *testing.T) {
 	}
 }
 
+func TestSlackTaskBrief_UsesFlowSlackSendForThreadReplies(t *testing.T) {
+	decision := ReactionDecision{
+		Trigger:   true,
+		ThreadKey: "C123:1.01",
+		Channel:   "C123",
+		ThreadTS:  "1.01",
+		ItemTS:    "1.01",
+		Reactor:   "U_me",
+		Reaction:  "claude",
+		Event:     InboundEvent{Kind: "reaction_added", Channel: "C123", ChannelType: "channel", ThreadTS: "1.01"},
+	}
+	brief := slackTaskBrief(decision, "slack-c123-1-01", "Slack reply", nil, []string{"U_me"})
+
+	for _, want := range []string{
+		"flow slack send --channel C123",
+		"--thread-ts 1.01",
+		"--as user",
+		"--text-file",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("brief missing %q\n--- brief ---\n%s", want, brief)
+		}
+	}
+	if strings.Contains(brief, "mcp__claude_ai_Slack__slack_send_message") {
+		t.Errorf("brief should not require direct Slack MCP sends for thread replies:\n%s", brief)
+	}
+}
+
 func TestDispatcher_SteererOwnedRoutingSendsTrackedThreadToSteererOnly(t *testing.T) {
 	db := dispatcherTestDB(t)
 	seedSlackTask(t, db, "tracked-slack", "C123:1.000000")

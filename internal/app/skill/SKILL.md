@@ -2721,11 +2721,13 @@ under the `tags:` line), follow this bootstrap:
    thread_ts in your brief.
 6. **Reply.** Post into the originating thread (`channel` + `thread_ts`
    from your brief). Posts go as the user (User Token), not a bot, so
-   write in their voice and avoid claims you can't back up. The send
-   tool differs by provider:
-   - **Claude Code sessions:** use `mcp__claude_ai_Slack__slack_send_message`.
-   - **Codex sessions:** use the Slack plugin's send-message tool
-     (`slack@openai-curated`).
+   write in their voice and avoid claims you can't back up. For Slack
+   channel/thread replies, use Flow's Slack sender rather than the direct
+   Slack MCP send tool: write the final text to a temp file, then run
+   `flow slack send --channel <channel> --thread-ts <thread_ts> --as user --text-file <path>`.
+   This posts as the operator through the user token and is the Slack Connect-safe
+   path when direct MCP sends are restricted. If it fails with `missing_scope`,
+   the Slack app/user token needs reinstall with `chat:write`; do not mark sent.
 
    **NEVER sign the message. Do not add a manual `Sent using ...` footer —
    or ANY attribution line.** Your message body MUST end with your actual

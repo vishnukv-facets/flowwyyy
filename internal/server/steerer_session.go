@@ -228,16 +228,16 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 }
 
 // steererSendReplyPrompt builds the one-shot, operator-authorized SEND instruction
-// handed to an existing per-channel chat so IT posts an approved reply — it already
-// holds the thread's memory and the Slack MCP, so it posts in the right context
-// instead of a context-blind ephemeral session. It explicitly overrides the chat's
-// surface-only default for this one approved turn and tells it to mark the card sent
-// on a confirmed post (mirrors the ephemeral send session's doneCmd).
+// handed to an existing per-channel chat so IT posts an approved reply in the
+// watched thread instead of a context-blind ephemeral session. It explicitly
+// overrides the chat's surface-only default for this one approved turn and tells it
+// to mark the card sent on a confirmed post (mirrors the ephemeral send session's
+// doneCmd).
 func steererSendReplyPrompt(item flowdb.FeedItem, channel, threadTS, text, instructions string) string {
 	var b strings.Builder
 	b.WriteString("[operator-approved reply — SEND IT NOW]\n")
 	b.WriteString("The operator reviewed and APPROVED a reply for the thread you watch. This overrides your usual surface-only stance for THIS message only — you are authorized to post it.\n\n")
-	fmt.Fprintf(&b, "Post it in-thread by CALLING the Slack MCP tool mcp__claude_ai_Slack__slack_send_message DIRECTLY with channel=%s, thread_ts=%s, and the approved text below (a real tool call — never Bash/echo/print). ", channel, threadTS)
+	fmt.Fprintf(&b, "Post it in-thread through Flow's Slack sender, not the direct Slack MCP send tool. The direct MCP send path is blocked in some Slack Connect channels; flow slack send --as user uses the operator's user token. Write the final reply text exactly to a temp file, then run: flow slack send --channel %s --thread-ts %s --as user --text-file <path>. ", channel, threadTS)
 	if strings.TrimSpace(instructions) != "" {
 		fmt.Fprintf(&b, "Revise the text per these instructions before posting: %s. ", strings.TrimSpace(instructions))
 	} else {

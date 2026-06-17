@@ -430,6 +430,21 @@ func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Slack Connect",
+		"flow slack send",
+		"--as user",
+		"--thread-ts",
+		"--text-file",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Slack Connect-safe reply guidance %q", want)
+		}
+	}
+}
+
 func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, bad := range []string{

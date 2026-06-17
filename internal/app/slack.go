@@ -50,7 +50,7 @@ var postSlackSendFn = func(channel, threadTS, text, identity, file string) (stat
 
 func cmdSlack(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> --text <message>")
+		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> (--text <message>|--text-file <path>|--file <path>)")
 		return 2
 	}
 	switch args[0] {
@@ -67,6 +67,7 @@ func cmdSlackSend(args []string) int {
 	channel := fs.String("channel", "", "Slack channel/DM id to post to")
 	threadTS := fs.String("thread-ts", "", "Slack thread timestamp to reply into")
 	text := fs.String("text", "", "message body (or, with --file, the attachment's initial comment)")
+	textFile := fs.String("text-file", "", "read message body from a file; use '-' for stdin")
 	as := fs.String("as", "", "send identity: bot or user (default: server's FLOW_SLACK_SEND_AS). Use 'bot' for automation — the bot token carries chat:write/files:write.")
 	file := fs.String("file", "", "local path to a file (image, PDF, …) to upload as an attachment")
 	if err := fs.Parse(args); err != nil {
@@ -77,8 +78,21 @@ func cmdSlackSend(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --channel is required")
 		return 2
 	}
-	if strings.TrimSpace(*text) == "" && filePath == "" {
-		fmt.Fprintln(os.Stderr, "error: --text or --file is required")
+	body := *text
+	if source := strings.TrimSpace(*textFile); source != "" {
+		if strings.TrimSpace(*text) != "" {
+			fmt.Fprintln(os.Stderr, "error: --text and --text-file are mutually exclusive")
+			return 2
+		}
+		read, err := readSlackTextFile(source)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read --text-file: %v\n", err)
+			return 1
+		}
+		body = read
+	}
+	if strings.TrimSpace(body) == "" && filePath == "" {
+		fmt.Fprintln(os.Stderr, "error: --text, --text-file, or --file is required")
 		return 2
 	}
 	identity := strings.ToLower(strings.TrimSpace(*as))
@@ -93,7 +107,7 @@ func cmdSlackSend(args []string) int {
 	// (account_inactive). Only fall back to the in-process path when the
 	// server is unreachable.
 	thread := strings.TrimSpace(*threadTS)
-	status, body, err := postSlackSendFn(*channel, thread, *text, identity, filePath)
+	status, respBody, err := postSlackSendFn(*channel, thread, body, identity, filePath)
 	if err == nil {
 		if status >= 200 && status < 300 {
 			return 0
@@ -101,7 +115,7 @@ func cmdSlackSend(args []string) int {
 		// Reached the server but Slack rejected the send. The server's token
 		// is authoritative — do NOT fall back (a stale local token would just
 		// fail again). Surface the server's error.
-		msg := serverSlackError(body)
+		msg := serverSlackError(respBody)
 		fmt.Fprintf(os.Stderr, "error: %s\n", msg)
 		return 1
 	}
@@ -109,17 +123,26 @@ func cmdSlackSend(args []string) int {
 	// Server unreachable (no server / connection refused / timeout) — fall
 	// back to the in-process send so `flow slack send` still works standalone.
 	if filePath != "" {
-		if err := slackFileSendFn(*channel, thread, *text, filePath, identity); err != nil {
+		if err := slackFileSendFn(*channel, thread, body, filePath, identity); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
 		return 0
 	}
-	if err := slackSendFn(*channel, thread, *text, identity); err != nil {
+	if err := slackSendFn(*channel, thread, body, identity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+func readSlackTextFile(path string) (string, error) {
+	if path == "-" {
+		b, err := io.ReadAll(os.Stdin)
+		return string(b), err
+	}
+	b, err := os.ReadFile(path)
+	return string(b), err
 }
 
 // serverSlackError pulls a human message out of the server's error body
