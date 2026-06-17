@@ -47,7 +47,7 @@ export const CONNECTOR_CATEGORIES: ConnectorCategory[] = [
   {
     id: 'network',
     label: 'Network',
-    blurb: 'Public ingress for connector callbacks — the HTTPS base URL Slack OAuth and GitHub webhooks redirect to.',
+    blurb: 'Public ingress and keep-awake controls for connector callbacks, Slack Socket Mode, and GitHub webhooks.',
   },
 ]
 
@@ -73,7 +73,7 @@ export const CONNECTORS: ConnectorDef[] = [
     category: 'network',
     label: 'Public ingress',
     capabilityId: undefined,
-    powers: 'A public HTTPS base URL (zrok or your own) for inbound connector callbacks.',
+    powers: 'A public HTTPS base URL plus an opt-in keep-awake toggle for always-on connector delivery.',
   },
 ]
 

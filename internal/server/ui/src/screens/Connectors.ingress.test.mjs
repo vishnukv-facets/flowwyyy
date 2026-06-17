@@ -18,3 +18,10 @@ test('connectors screen renders live ingress status from the runtime endpoint', 
   assert.match(connectorsSource, /base_url/)
   assert.match(connectorsSource, /last_error/)
 })
+
+test('network connector copy covers keep-awake connectivity', () => {
+  const registry = readFileSync(resolve(here, '../lib/connectors.ts'), 'utf8')
+  assert.match(registry, /keep-awake/i)
+  assert.match(registry, /Slack Socket Mode/)
+  assert.match(registry, /GitHub webhooks/)
+})

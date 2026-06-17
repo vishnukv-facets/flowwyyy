@@ -277,6 +277,8 @@ func (s *Server) ListenAndServe(addr string) int {
 	// serving so the file matches the in-memory token by the time we accept
 	// connections.
 	s.writeSessionTokenFile()
+	s.syncPowerAssertion()
+	defer s.stopPowerAssertion()
 	httpSrv := &http.Server{
 		Addr:              addr,
 		Handler:           s.Handler(),
