@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"flow/internal/steering"
 
 	"github.com/google/uuid"
@@ -427,28 +428,27 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 func steererChatTitleFallback(key string) string { return "Steering: " + key }
 
 // steererTitleFor formats the human display title from already-resolved names
-// (GAP-13, pure/testable). channelName is the resolver's "#channel" output (empty
-// for DMs/MPDMs); authorName is the message author's display name. Returns "" when
-// it can't form a good title, so the caller falls back to the placeholder.
+// (GAP-13, pure/testable). channelName is the resolver's "#channel" output;
+// peerTitle is the DM peer / group members resolved from the CHANNEL (not the
+// message author). Resolving from the channel is what makes a DM name correct on
+// the operator's OWN first outbound message — the author is the operator, but the
+// title must name the other party. Returns "" when it can't form a good title, so
+// the caller falls back to the placeholder.
 // ponytail: external-org "(Org)" suffix for Slack-Connect partners is deferred —
 // it needs Slack team_id extraction + an operator-team source not wired yet.
-func steererTitleFor(p steering.SteererDelivery, channelName, authorName string) string {
+func steererTitleFor(p steering.SteererDelivery, channelName, peerTitle string) string {
 	switch {
 	case p.Source == "github" || p.ChannelType == "github":
 		return githubChatTitle(p.Channel, p.ThreadTS)
 	case p.ChannelType == "channel":
 		return channelName // "" when unresolved → placeholder fallback
 	case p.ChannelType == "im":
-		// A DM is named by the PEER, never the operator. A context_only delivery is
-		// the operator's own message (GAP-10 memory) or a bot self-echo — its author
-		// is not the peer, so titling from it produces "DM · <operator>". Skip it and
-		// leave the placeholder; the next genuine peer message upgrades the title.
-		if authorName != "" && !p.ContextOnly {
-			return "DM · " + authorName
+		if peerTitle != "" {
+			return "DM · " + peerTitle
 		}
 	case p.ChannelType == "mpim":
-		if authorName != "" && !p.ContextOnly {
-			return "Group · " + authorName
+		if peerTitle != "" {
+			return "Group · " + peerTitle
 		}
 	}
 	return ""
@@ -473,19 +473,18 @@ func githubChatTitle(repo, linkTag string) string {
 // creation (GAP-13): Slack #channel / DM · Name / Group · Name via the name
 // resolver, GitHub owner/repo#N from the delivery, placeholder otherwise.
 func (s *Server) resolveSteererChatTitle(ctx context.Context, p steering.SteererDelivery, key string) string {
-	var channelName, authorName string
+	var channelName, peerTitle string
 	if s.nameResolver != nil {
 		switch p.ChannelType {
 		case "channel":
 			channelName = s.nameResolver.ChannelName(ctx, p.Channel)
 		case "im", "mpim":
-			authorName = s.nameResolver.UserName(ctx, p.Author)
+			// Name the DM/group from the CHANNEL's participants, not the message
+			// author — correct even when the operator sent the first message.
+			peerTitle = s.nameResolver.ConversationPeerTitle(ctx, p.Channel, monitor.SelfUserIDs())
 		}
 	}
-	if authorName == "" {
-		authorName = strings.TrimSpace(p.Author)
-	}
-	if t := steererTitleFor(p, channelName, authorName); t != "" {
+	if t := steererTitleFor(p, channelName, peerTitle); t != "" {
 		return t
 	}
 	return steererChatTitleFallback(key)

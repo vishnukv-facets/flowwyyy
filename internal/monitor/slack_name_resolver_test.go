@@ -165,11 +165,11 @@ func TestSlackNameResolverCleanTextResolvesMentionsAndLinks(t *testing.T) {
 		want string
 	}{
 		{"hey <@U1> look", "hey @Vishnu look"},
-		{"cc <@U1|vishnu.kv>", "cc @vishnu.kv"},                 // inline label preferred
+		{"cc <@U1|vishnu.kv>", "cc @vishnu.kv"},                // inline label preferred
 		{"see <https://example.com|the docs>", "see the docs"}, // labelled link
 		{"raw <https://example.com>", "raw https://example.com"},
 		{"unknown <@U0MISSING> here", "unknown @user here"}, // unresolved → @user, never the id
-		{"line one\nline two", "line one\nline two"},         // newlines preserved
+		{"line one\nline two", "line one\nline two"},        // newlines preserved
 	}
 	for _, tc := range cases {
 		if got := r.CleanText(context.Background(), tc.in); got != tc.want {
@@ -251,5 +251,50 @@ func TestSlackNameResolverChannelFallback(t *testing.T) {
 	}
 	if user.chanCalls["C_PUB"] != 0 {
 		t.Fatalf("fallback should not be consulted when primary resolves; got %d calls", user.chanCalls["C_PUB"])
+	}
+}
+
+// A DM the bot client can't resolve (the operator's own DM, bot absent) must be
+// named from the CHANNEL's peer via the user-token fallback — so the first
+// outbound message shows "Anshul Sao", not the raw D… id.
+func TestConversationPeerTitle_DMViaFallback(t *testing.T) {
+	bot := newCountingNameClient() // bot isn't in the operator↔Anshul DM
+	user := newCountingNameClient()
+	user.chans["D_anshul"] = SlackConversation{ID: "D_anshul", IsIM: true, User: "U_ANSHUL"}
+	// users.info resolves any workspace user via either client; the bot has it.
+	bot.users["U_ANSHUL"] = SlackUser{ID: "U_ANSHUL", DisplayName: "Anshul Sao"}
+
+	r := NewSlackNameResolverWithClient(bot)
+	r.SetFallbackClient(user)
+
+	if got := r.ConversationPeerTitle(context.Background(), "D_anshul", nil); got != "Anshul Sao" {
+		t.Fatalf("ConversationPeerTitle = %q, want Anshul Sao", got)
+	}
+	// Second call is cached — no extra conversations.info round-trip.
+	r.ConversationPeerTitle(context.Background(), "D_anshul", nil)
+	if user.chanCalls["D_anshul"] != 1 {
+		t.Fatalf("DM peer title should cache; got %d conversations.info calls", user.chanCalls["D_anshul"])
+	}
+}
+
+// A group DM is named by its non-self members, resolved from the channel.
+func TestConversationPeerTitle_GroupExcludesSelf(t *testing.T) {
+	c := newCountingNameClient()
+	c.chans["G1"] = SlackConversation{ID: "G1", IsMpIM: true, Members: []string{"UOP", "U1", "U2"}}
+	c.users["U1"] = SlackUser{ID: "U1", DisplayName: "Rohit"}
+	c.users["U2"] = SlackUser{ID: "U2", RealName: "Anya"}
+
+	r := NewSlackNameResolverWithClient(c)
+	if got := r.ConversationPeerTitle(context.Background(), "G1", []string{"UOP"}); got != "Rohit, Anya" {
+		t.Fatalf("ConversationPeerTitle = %q, want \"Rohit, Anya\"", got)
+	}
+}
+
+// Unresolvable conversation → "" (never a raw id), so the caller keeps its
+// placeholder and a later message can upgrade the title.
+func TestConversationPeerTitle_UnresolvedEmpty(t *testing.T) {
+	r := NewSlackNameResolverWithClient(newCountingNameClient())
+	if got := r.ConversationPeerTitle(context.Background(), "D_unknown", nil); got != "" {
+		t.Fatalf("ConversationPeerTitle = %q, want empty", got)
 	}
 }

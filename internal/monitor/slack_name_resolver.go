@@ -2,6 +2,7 @@ package monitor
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +120,87 @@ func (r *SlackNameResolver) ChannelName(ctx context.Context, channelID string) s
 	}
 	r.store(r.chans, channelID, name)
 	return name
+}
+
+// ConversationPeerTitle names a Slack DM / group-DM by its PARTICIPANTS, resolved
+// from the CHANNEL — so it is correct on the operator's own first outbound message
+// (a DM is named by its peer, not by whoever spoke first). IM → the other party's
+// display name; MPIM → up to three non-self members ("A, B +N"). Tries the primary
+// (bot) client, then the user-token fallback for conversations the bot isn't a
+// member of (the operator's own DMs). selfUserIDs drops the operator from group
+// member lists. Returns "" when unresolved or not a DM — NEVER a raw ID, so the
+// caller keeps its placeholder and a later message can upgrade it. Cached per
+// channel id (distinct key, so it never collides with ChannelName's cache).
+func (r *SlackNameResolver) ConversationPeerTitle(ctx context.Context, channelID string, selfUserIDs []string) string {
+	channelID = strings.TrimSpace(channelID)
+	if r == nil || channelID == "" {
+		return ""
+	}
+	cacheKey := "peer:" + channelID
+	if name, ok := r.lookup(r.chans, cacheKey); ok {
+		return name
+	}
+	title := r.resolveConversationPeerTitle(ctx, channelID, selfUserIDs)
+	r.store(r.chans, cacheKey, title)
+	return title
+}
+
+func (r *SlackNameResolver) resolveConversationPeerTitle(ctx context.Context, channelID string, selfUserIDs []string) string {
+	conv, ok := r.conversationInfoWithFallback(ctx, channelID)
+	if !ok {
+		return ""
+	}
+	switch {
+	case conv.IsIM:
+		// users.info resolves any workspace user regardless of channel membership,
+		// so the bot-client UserName works even for the operator's own DM peer.
+		return r.UserName(ctx, conv.User)
+	case conv.IsMpIM:
+		// ponytail: trust conversations.info's Members; skip a separate
+		// UsersInConversation call. Empty members → "" (placeholder + retry later).
+		names := make([]string, 0, 3)
+		remaining := 0
+		for _, member := range conv.Members {
+			if containsUserID(selfUserIDs, member) {
+				continue
+			}
+			name := r.UserName(ctx, member)
+			if name == "" {
+				continue
+			}
+			if len(names) < 3 {
+				names = append(names, name)
+			} else {
+				remaining++
+			}
+		}
+		if len(names) == 0 {
+			return ""
+		}
+		out := strings.Join(names, ", ")
+		if remaining > 0 {
+			out += " +" + strconv.Itoa(remaining)
+		}
+		return out
+	}
+	return ""
+}
+
+// conversationInfoWithFallback resolves conversations.info via the primary (bot)
+// client, then the user-token fallback for conversations the bot can't see (the
+// operator's own DMs). ok is false when neither client can resolve it.
+func (r *SlackNameResolver) conversationInfoWithFallback(ctx context.Context, channelID string) (SlackConversation, bool) {
+	if r.client != nil {
+		if conv, err := r.client.ConversationInfo(ctx, channelID); err == nil {
+			return conv, true
+		}
+	}
+	if r.fallback != nil {
+		if conv, err := r.fallback.ConversationInfo(ctx, channelID); err == nil {
+			return conv, true
+		}
+	}
+	return SlackConversation{}, false
 }
 
 // resolveChannelNameVia resolves one channel id to a "#"-prefixed name via the

@@ -23,26 +23,31 @@ func TestSteererChatSlug(t *testing.T) {
 }
 
 func TestSteererTitleFor(t *testing.T) {
+	// peerTitle is resolved from the CHANNEL (the DM peer / group members /
+	// #channel), never from the message author — so a DM is named correctly even
+	// on the operator's OWN first outbound message (context_only), where the
+	// author is the operator but the title must name the other party.
 	cases := []struct {
 		name        string
 		p           steering.SteererDelivery
 		channelName string
-		authorName  string
+		peerTitle   string
 		want        string
 	}{
 		{"slack channel resolved", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "#facets-coinswitch", "", "#facets-coinswitch"},
 		{"slack channel unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "", "", ""},
 		{"slack dm", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "U9"}, "", "Nayan Kalita", "DM · Nayan Kalita"},
-		{"slack dm context_only (operator self / bot echo) → no title, never name DM after operator", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "UOP", ContextOnly: true}, "", "Vishnu kv", ""},
+		{"slack dm operator's own first message names the PEER from the channel", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "UOP", ContextOnly: true}, "", "Anshul Sao", "DM · Anshul Sao"},
+		{"slack dm peer unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "U9"}, "", "", ""},
 		{"slack mpim", steering.SteererDelivery{Source: "slack", ChannelType: "mpim", Channel: "G1", Author: "U9"}, "", "Rohit", "Group · Rohit"},
-		{"slack mpim context_only → no title", steering.SteererDelivery{Source: "slack", ChannelType: "mpim", Channel: "G1", Author: "UOP", ContextOnly: true}, "", "Vishnu kv", ""},
+		{"slack mpim operator's own first message names the members", steering.SteererDelivery{Source: "slack", ChannelType: "mpim", Channel: "G1", Author: "UOP", ContextOnly: true}, "", "Rohit, Anya", "Group · Rohit, Anya"},
 		{"github pr", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "vishnukv-facets/flowwyyy", ThreadTS: "gh-pr:vishnukv-facets/flowwyyy#17"}, "", "", "vishnukv-facets/flowwyyy#17"},
 		{"github issue", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "o/r", ThreadTS: "gh-issue:o/r#3"}, "", "", "o/r#3"},
 		{"github no number → repo only", steering.SteererDelivery{Source: "github", ChannelType: "github", Channel: "o/r", ThreadTS: "garbage"}, "", "", "o/r"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := steererTitleFor(tc.p, tc.channelName, tc.authorName); got != tc.want {
+			if got := steererTitleFor(tc.p, tc.channelName, tc.peerTitle); got != tc.want {
 				t.Errorf("steererTitleFor = %q, want %q", got, tc.want)
 			}
 		})
