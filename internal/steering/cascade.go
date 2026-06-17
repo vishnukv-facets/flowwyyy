@@ -460,6 +460,55 @@ func (c *Cascade) ObserveSelfAuthored(ctx context.Context, ev monitor.InboundEve
 	return nil
 }
 
+// deliverSurvivorToSession hands a Stage-0 survivor to its channel's steerer
+// session (GAP-8) when the session model is on. Returns true if the event was
+// delivered — the caller MUST stop (no stage1/2/3). On a sink error it records
+// the error on tr and returns false (fail-open: fall through to cold triage).
+// Shared by the single-event observe() and the batched ObserveBatch() so the
+// two paths can't drift — they did once, and backfill kept surfacing digest_only
+// FYI cards after the live path moved to sessions.
+func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time, cacheKey string) bool {
+	if !SteererSessionsEnabled() || c.SessionSink == nil {
+		return false
+	}
+	key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum)
+	if !ok {
+		return false
+	}
+	if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, false)); err != nil {
+		c.log("steerer session delivery failed for %s: %v; falling back to cold triage", key, err)
+		tr.Error = appendCascadeError(tr.Error, "session delivery failed: "+err.Error())
+		return false
+	}
+	c.cache.mark(cacheKey, c.now())
+	tr.Disposition, tr.StageReached = "delivered", "session"
+	c.emitTrace(tr, start)
+	return true
+}
+
+// deliverSelfAuthoredToSession feeds a dropped self-authored event into its
+// channel session as context_only memory (GAP-10) so the session reasons about
+// follow-ups. Returns true if delivered (caller stops); on any miss/error
+// returns false so the caller emits the normal Stage-0 drop trace (fail-open).
+// Mirror of the inline block observe() used to carry; shared so ObserveBatch
+// gets the same behavior.
+func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time) bool {
+	if !SteererSessionsEnabled() || c.SessionSink == nil {
+		return false
+	}
+	key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum)
+	if !ok {
+		return false
+	}
+	if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, true)); err != nil {
+		c.log("steerer session context-only delivery failed for %s: %v", key, err)
+		return false
+	}
+	tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-authored → context_only"
+	c.emitTrace(tr, start)
+	return true
+}
+
 // observe is the single-event triage path: Stage 0 → verdict cache →
 // single-event Stage 1 relevance, then the shared finishItem tail. It emits a
 // trace at every exit.
@@ -476,18 +525,9 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 			c.learnFromOperatorReply(ctx, ev, origin)
 			// Per-channel session model (GAP-10): feed the operator's own message to
 			// the channel session as context_only memory (never surfaced) so the
-			// session reasons correctly about follow-ups. Flag-gated; on any sink
-			// error fall through to the existing drop trace (fail-open).
-			if SteererSessionsEnabled() && c.SessionSink != nil {
-				if key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum); ok {
-					if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, true)); err == nil {
-						tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-authored → context_only"
-						c.emitTrace(tr, start)
-						return nil
-					} else {
-						c.log("steerer session context-only delivery failed for %s: %v", key, err)
-					}
-				}
+			// session reasons correctly about follow-ups.
+			if c.deliverSelfAuthoredToSession(ctx, ev, tr, start) {
+				return nil
 			}
 		}
 		tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
@@ -507,18 +547,8 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 	// channel's live steerer session instead of the stateless deep-triage stages.
 	// Placed BEFORE the classifier gate so the session path never shells out. Any
 	// sink error falls through to DeepTriageIncremental below (fail-open invariant).
-	if SteererSessionsEnabled() && c.SessionSink != nil {
-		if key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum); ok {
-			if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, false)); err == nil {
-				c.cache.mark(cacheKey, c.now())
-				tr.Disposition, tr.StageReached = "delivered", "session"
-				c.emitTrace(tr, start)
-				return nil
-			} else {
-				c.log("steerer session delivery failed for %s: %v; falling back to cold triage", key, err)
-				tr.Error = appendCascadeError(tr.Error, "session delivery failed: "+err.Error())
-			}
-		}
+	if c.deliverSurvivorToSession(ctx, ev, tr, start, cacheKey) {
+		return nil
 	}
 
 	in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}
@@ -829,6 +859,11 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		if !s0.Pass {
 			if s0.DropReason == "self-authored" {
 				c.learnFromOperatorReply(ctx, ev, "backfill")
+				// GAP-10 parity with observe(): feed the operator's own backfilled
+				// message into the channel session as context_only memory.
+				if c.deliverSelfAuthoredToSession(ctx, ev, tr, start) {
+					continue
+				}
 			}
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "stage0", s0.DropReason
 			c.emitTrace(tr, start)
@@ -839,6 +874,13 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		if c.cache.seenFn(cacheKey, c.now()) {
 			tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate within verdict TTL"
 			c.emitTrace(tr, start)
+			continue
+		}
+		// GAP-8 parity with observe(): when the session model is on, hand the
+		// survivor to its channel session instead of running stage1/2/3 here.
+		// Without this, backfilled messages skipped the session and surfaced as
+		// digest_only FYI cards — the high-bar fix never reached them.
+		if c.deliverSurvivorToSession(ctx, ev, tr, start, cacheKey) {
 			continue
 		}
 		in := ClassifyInput{ThreadKey: s0.ThreadKey, Source: connectorOf(ev), Author: ev.UserID, Text: cleaned}

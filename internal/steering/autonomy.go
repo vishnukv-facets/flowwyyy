@@ -106,9 +106,16 @@ var autonomyLadder = []AutonomyCapability{
 		Audit:         "Not auto-actable today; future implementation must write trace, feedback, and source-send proof.",
 	},
 	{
-		Key: "reply", Action: ActionReply, Label: "Substantive outbound reply", Risk: "critical", DefaultThreshold: 0.95,
-		Prerequisites: "Explicit operator approval for each individual reply.",
-		Audit:         "attention_feedback row plus agent-send confirmation; never autonomous today.",
+		Key: "reply", Action: ActionReply, Label: "Auto-send outbound reply", Risk: "critical", DefaultThreshold: 0.95,
+		Prerequisites: "Operator opted reply autonomy IN (off by default) and calibrated confidence meets the high threshold; the per-channel chat posts in-thread.",
+		// CRITICAL risk: an autonomous reply posts to a colleague's Slack thread/DM
+		// with no per-message click. OFF by default (DefaultEnabled unset) and gated at
+		// the highest default threshold (0.95). When enabled, the channel's own chat
+		// posts via postApprovedReplyViaChat — the autonomous path records NO
+		// attention_feedback row (audit is the steering trace + the agent's send
+		// confirmation), so it can't inflate the calibration it gates on.
+		Audit:       "steering_trace autonomy fields plus the channel chat's agent-send confirmation.",
+		AutoActable: true, Configurable: true,
 	},
 }
 

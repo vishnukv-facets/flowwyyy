@@ -439,11 +439,15 @@ func steererTitleFor(p steering.SteererDelivery, channelName, authorName string)
 	case p.ChannelType == "channel":
 		return channelName // "" when unresolved → placeholder fallback
 	case p.ChannelType == "im":
-		if authorName != "" {
+		// A DM is named by the PEER, never the operator. A context_only delivery is
+		// the operator's own message (GAP-10 memory) or a bot self-echo — its author
+		// is not the peer, so titling from it produces "DM · <operator>". Skip it and
+		// leave the placeholder; the next genuine peer message upgrades the title.
+		if authorName != "" && !p.ContextOnly {
 			return "DM · " + authorName
 		}
 	case p.ChannelType == "mpim":
-		if authorName != "" {
+		if authorName != "" && !p.ContextOnly {
 			return "Group · " + authorName
 		}
 	}

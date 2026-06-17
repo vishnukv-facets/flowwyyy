@@ -138,8 +138,43 @@ func cmdAttentionSurface(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	// A card actually surfaced — ask the running server to apply the operator's
+	// autonomy policy to it (auto-forward / auto-reply above threshold). The
+	// cascade gates inline; the session path can't (it has no live policy and no
+	// terminal hub for replies), so it delegates to the server here. Best-effort:
+	// no server / no autonomy opted in ⇒ the card simply waits for manual action.
+	if surfaced && strings.TrimSpace(id) != "" {
+		requestAttentionAutoActBestEffort(id)
+	}
 	fmt.Printf("surfaced=%v id=%s\n", surfaced, id)
 	return 0
+}
+
+// requestAttentionAutoActBestEffort asks the running flow server to apply the
+// autonomy gate to a just-surfaced feed card. Targets the server via
+// FLOW_HOOK_URL (set in every flow-spawned session's env) and never fails the
+// caller: the gate is additive on top of an already-surfaced card.
+func requestAttentionAutoActBestEffort(id string) {
+	base := serverBaseFromHookURL()
+	if base == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"kind":"attention-autoact","target":%q}`, id)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/actions", strings.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := uiSessionToken(); tok != "" {
+		req.Header.Set("X-Flow-Session-Token", tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	_ = resp.Body.Close()
 }
 
 func cmdAttentionAct(args []string) int {

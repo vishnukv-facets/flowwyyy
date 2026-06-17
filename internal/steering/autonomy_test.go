@@ -113,8 +113,11 @@ func TestAutonomyLadderDocumentsPolicyMatrix(t *testing.T) {
 	if step := byKey["dismiss"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.85 || step.Action != ActionDigestOnly {
 		t.Errorf("dismiss step = %+v, want configurable auto-actable off-by-default at 0.85 gating digest_only", step)
 	}
-	if step := byKey["reply"]; step.AutoActable || step.Configurable {
-		t.Errorf("reply step = %+v, want never auto-actable/configurable today", step)
+	if step := byKey["reply"]; !step.Configurable || !step.AutoActable || step.DefaultEnabled || step.DefaultThreshold != 0.95 {
+		t.Errorf("reply step = %+v, want configurable auto-actable OFF-by-default at 0.95 (opt-in only)", step)
+	}
+	if step := byKey["afk_reply"]; step.AutoActable || step.Configurable {
+		t.Errorf("afk_reply step = %+v, want never auto-actable/configurable today", step)
 	}
 	if step := byKey["clear_waiting_on"]; step.DefaultEnabled || step.Configurable {
 		t.Errorf("clear_waiting_on step = %+v, want documented but not controlled by FLOW_STEERING_AUTONOMY", step)
@@ -141,9 +144,16 @@ func TestAutonomyEvaluateExplainsDecision(t *testing.T) {
 		t.Fatalf("forward disabled decision = %+v, want disabled", disabled)
 	}
 
-	manualOnly := p.Evaluate(ActionReply, 1.0)
-	if manualOnly.Allowed || manualOnly.Decision != "manual_only" {
-		t.Fatalf("reply decision = %+v, want manual_only despite env enabling it", manualOnly)
+	// reply is now auto-actable, so an explicit opt-in policy allows it.
+	replyAllowed := p.Evaluate(ActionReply, 1.0)
+	if !replyAllowed.Allowed || replyAllowed.Decision != "allowed" {
+		t.Fatalf("reply decision = %+v, want allowed once operator opted in", replyAllowed)
+	}
+	// afk_reply remains manual-only — its send path isn't implemented, so it stays
+	// blocked even if a policy tries to enable it.
+	afkManual := p.Evaluate(ActionAFKReply, 1.0)
+	if afkManual.Allowed || afkManual.Decision != "manual_only" {
+		t.Fatalf("afk_reply decision = %+v, want manual_only (not auto-actable)", afkManual)
 	}
 
 	below := p.Evaluate(ActionMakeTask, 0.50)

@@ -11,8 +11,10 @@ const AUTONOMY_KEY = 'FLOW_STEERING_AUTONOMY'
 type ActionPolicy = { enabled: boolean; threshold: number }
 type Policy = Record<string, ActionPolicy>
 
-// Only these two actions are auto-actable today. Outward replies (afk_reply,
-// reply) always stay operator-confirmed, so they are deliberately not shown.
+// Auto-actable actions. make_task/forward are medium-risk. reply is CRITICAL —
+// it posts to a colleague's thread/DM with no per-message click — so it stays OFF
+// by default at a high (0.95) threshold; turning it on is an explicit opt-in.
+// afk_reply is still operator-confirmed-only (no send path) and not shown.
 const ACTIONS: {
   key: string
   label: string
@@ -33,6 +35,13 @@ const ACTIONS: {
     defaultThreshold: 0.85,
     risk: 'medium',
     audit: 'trace + feedback + inbox link',
+  },
+  {
+    key: 'reply',
+    label: 'Auto-send reply',
+    defaultThreshold: 0.95,
+    risk: 'critical',
+    audit: 'posts via the channel chat / gh agent — no per-message click',
   },
 ]
 

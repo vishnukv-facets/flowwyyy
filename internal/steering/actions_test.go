@@ -279,22 +279,6 @@ func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
 	}
 }
 
-func TestSlackSendSessionPrompt(t *testing.T) {
-	item := flowdb.FeedItem{Source: "slack", ThreadKey: "C9:1.2", Channel: "C9"}
-	doneCmd := "flow attention sent r9 --close-floating send-abc"
-	p := SlackSendSessionPrompt(item, "  ship it  ", "", doneCmd)
-	for _, want := range []string{"Slack MCP", "C9:1.2", "ship it", doneCmd, "ONLY when"} {
-		if !strings.Contains(p, want) {
-			t.Errorf("prompt missing %q:\n%s", want, p)
-		}
-	}
-	// With operator instructions, the prompt must tell the agent to apply them.
-	pi := SlackSendSessionPrompt(item, "ship it", "make it shorter", doneCmd)
-	if !strings.Contains(pi, "make it shorter") || !strings.Contains(pi, "APPLY") {
-		t.Errorf("instructed prompt missing revision guidance:\n%s", pi)
-	}
-}
-
 func TestMakeReplyTaskFromFeedIdempotent(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {

@@ -124,6 +124,56 @@ func TestObserveSelfEchoFeedsSelfEcho(t *testing.T) {
 	}
 }
 
+// TestObserveBatchDeliversSurvivorToSink is the regression guard for the backfill
+// bug: ObserveBatch (the steerer catch-up path) must hand survivors to the channel
+// session like the live Observe() does — not run stage1/2/3 and surface digest_only
+// FYI cards. Before the fix sink.calls was 0 here (backfill never touched sessions).
+func TestObserveBatchDeliversSurvivorToSink(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	evs := []monitor.InboundEvent{sessSlackMsg("C1", "100.1", "U2", "hello from backfill")}
+	if err := c.ObserveBatch(context.Background(), evs); err != nil {
+		t.Fatalf("ObserveBatch: %v", err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("want 1 backfill delivery to session, got %d", len(sink.calls))
+	}
+	if sink.calls[0].key != "C1" || sink.calls[0].p.ContextOnly {
+		t.Fatalf("bad delivery: %+v", sink.calls[0])
+	}
+	items, _ := flowdb.ListFeedItems(c.DB, "new")
+	if len(items) != 0 {
+		t.Fatalf("backfill must not surface a digest_only card on the session path, got %d", len(items))
+	}
+}
+
+func TestObserveBatchOperatorSelfFeedsContextOnly(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	evs := []monitor.InboundEvent{sessSlackMsg("C1", "100.1", "UOP", "ignore the last message")}
+	if err := c.ObserveBatch(context.Background(), evs); err != nil {
+		t.Fatalf("ObserveBatch: %v", err)
+	}
+	if len(sink.calls) != 1 || !sink.calls[0].p.ContextOnly {
+		t.Fatalf("operator-self backfill must feed context_only once, got %+v", sink.calls)
+	}
+}
+
+func TestObserveBatchFlagOffDoesNotDeliver(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "off")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink) // budget 0 ⇒ cold path drops at stage1, no claude
+	evs := []monitor.InboundEvent{sessSlackMsg("C1", "100.1", "U2", "hello")}
+	if err := c.ObserveBatch(context.Background(), evs); err != nil {
+		t.Fatalf("ObserveBatch: %v", err)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("flag off must not deliver to sink, got %d", len(sink.calls))
+	}
+}
+
 func TestObserveFailOpenFallsThrough(t *testing.T) {
 	t.Setenv("FLOW_STEERING_SESSIONS", "1")
 	sink := &fakeSessionSink{failNow: true}
