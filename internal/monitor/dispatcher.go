@@ -199,6 +199,9 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 				hintCommandChannelDisabled(ev.Channel)
 			case operator:
 				if d.ChatSink != nil {
+					if err := NewSlackWriter().AddReaction(ctx, ev.Channel, ev.TS, "eyes"); err != nil {
+						fmt.Fprintf(os.Stderr, "monitor: slack command-channel eyes ack %s/%s: %v\n", ev.Channel, ev.TS, err)
+					}
 					return d.ChatSink.OpenOrContinueChat(ctx, ev.Channel, ev.Text)
 				}
 			default:

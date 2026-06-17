@@ -416,6 +416,20 @@ func TestSkillMentionsDMMonitoring(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Slack app command DM",
+		"`:eyes:` reaction",
+		"operator's own DM to the Flow Slack app",
+		"left in place",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Slack command eyes ack guidance %q", want)
+		}
+	}
+}
+
 func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, bad := range []string{

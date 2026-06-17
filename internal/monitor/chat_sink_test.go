@@ -2,19 +2,55 @@ package monitor
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 )
 
 // fakeChatSink records OpenOrContinueChat calls so tests can assert the
 // dispatcher routed an authorized command-channel DM into the chat sink.
 type fakeChatSink struct {
-	calls []struct{ Channel, Text string }
-	err   error
+	calls  []struct{ Channel, Text string }
+	err    error
+	onCall func()
 }
 
 func (f *fakeChatSink) OpenOrContinueChat(_ context.Context, channel, text string) error {
+	if f.onCall != nil {
+		f.onCall()
+	}
 	f.calls = append(f.calls, struct{ Channel, Text string }{channel, text})
 	return f.err
+}
+
+type slackAPIRequest struct {
+	Path string
+	Body string
+}
+
+func withSlackAPIStub(t *testing.T) (*[]slackAPIRequest, func()) {
+	t.Helper()
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_WRITE_TOKEN", "xoxb-test")
+	var (
+		mu       sync.Mutex
+		requests []slackAPIRequest
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		requests = append(requests, slackAPIRequest{Path: r.URL.Path, Body: string(body)})
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Setenv("FLOW_SLACK_API_BASE_URL", srv.URL)
+	return &requests, func() {
+		srv.Close()
+	}
 }
 
 // withCommandChannel stubs conversationIsBotIMFn so IsCommandChannel reports
@@ -35,19 +71,38 @@ func TestDispatcher_CommandChannelDM_RoutesToChatSink(t *testing.T) {
 	t.Setenv("FLOW_SLACK_COMMAND_ENABLED", "1")
 	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
 	withCommandChannel(t, "D_bot")
+	slackRequests, cleanupSlack := withSlackAPIStub(t)
+	defer cleanupSlack()
 
 	db := dispatcherTestDB(t)
 	d := NewDispatcher(db, nil)
 	sink := &fakeChatSink{}
+	reactionsAtSink := -1
+	sink.onCall = func() { reactionsAtSink = len(*slackRequests) }
 	d.ChatSink = sink
 	// Wire a steerer too, to prove the command short-circuit fires BEFORE it.
 	steerer := &fakeSteerer{}
 	d.Steerer = steerer
 	d.SteererOwnsRouting = func() bool { return true }
 
-	msg := InboundEvent{Kind: "message", ChannelType: "im", Channel: "D_bot", UserID: "U_me", Text: "what's on my plate?"}
+	msg := InboundEvent{Kind: "message", ChannelType: "im", Channel: "D_bot", TS: "1710000000.000100", ThreadTS: "1710000000.000100", UserID: "U_me", Text: "what's on my plate?"}
 	if err := d.Dispatch(context.Background(), msg); err != nil {
 		t.Fatalf("Dispatch: %v", err)
+	}
+	if reactionsAtSink != 1 {
+		t.Fatalf("eyes reaction should be sent before the chat sink starts; reactions at sink = %d", reactionsAtSink)
+	}
+	if len(*slackRequests) != 1 {
+		t.Fatalf("expected one Slack reaction request, got %d: %+v", len(*slackRequests), *slackRequests)
+	}
+	req := (*slackRequests)[0]
+	if req.Path != "/reactions.add" {
+		t.Fatalf("Slack path = %q, want /reactions.add", req.Path)
+	}
+	for _, want := range []string{`"channel":"D_bot"`, `"timestamp":"1710000000.000100"`, `"name":"eyes"`} {
+		if !strings.Contains(req.Body, want) {
+			t.Errorf("reaction body missing %s: %s", want, req.Body)
+		}
 	}
 	if len(sink.calls) != 1 {
 		t.Fatalf("expected 1 chat-sink call, got %d", len(sink.calls))
@@ -57,6 +112,35 @@ func TestDispatcher_CommandChannelDM_RoutesToChatSink(t *testing.T) {
 	}
 	if len(steerer.events) != 0 {
 		t.Errorf("command-channel DM must NOT reach the steerer, got %d events", len(steerer.events))
+	}
+}
+
+func TestDispatcher_CommandChannelEyesAckOnlyForOperatorBotDM(t *testing.T) {
+	t.Setenv("FLOW_SLACK_COMMAND_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
+	withCommandChannel(t, "D_bot")
+	slackRequests, cleanupSlack := withSlackAPIStub(t)
+	defer cleanupSlack()
+	_ = withSendAsBotStub(t) // unauthorized bot DMs may send a static reject; do not hit Slack.
+	clearRejectedDMChannel(t, "D_bot")
+
+	db := dispatcherTestDB(t)
+	d := NewDispatcher(db, nil)
+	d.ChatSink = &fakeChatSink{}
+	d.Steerer = &fakeSteerer{}
+
+	cases := []InboundEvent{
+		{Kind: "message", ChannelType: "im", Channel: "D_bot", TS: "1.1", ThreadTS: "1.1", UserID: "U_other", Text: "let me in"},
+		{Kind: "message", ChannelType: "im", Channel: "D_colleague", TS: "2.1", ThreadTS: "2.1", UserID: "U_me", Text: "colleague DM"},
+		{Kind: "message", ChannelType: "channel", Channel: "C_general", TS: "3.1", ThreadTS: "3.1", UserID: "U_me", Text: "operator in channel"},
+	}
+	for _, ev := range cases {
+		if err := d.Dispatch(context.Background(), ev); err != nil {
+			t.Fatalf("Dispatch(%+v): %v", ev, err)
+		}
+	}
+	if len(*slackRequests) != 0 {
+		t.Fatalf("non-command/operator cases must not get eyes reactions, got %+v", *slackRequests)
 	}
 }
 
