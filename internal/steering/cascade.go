@@ -1233,7 +1233,7 @@ func (c *Cascade) stage(tr *flowdb.SteeringTrace, start time.Time, stage, status
 
 func verdictStatus(disposition string) string {
 	switch disposition {
-	case "surfaced", "dropped", "error":
+	case "surfaced", "dropped", "error", "delivered":
 		return disposition
 	default:
 		return "done"
@@ -1252,6 +1252,11 @@ func verdictDetail(tr *flowdb.SteeringTrace) string {
 			return fmt.Sprintf("%s · conf %.2f", tr.FinalAction, tr.FinalConfidence)
 		}
 		return tr.FinalAction
+	}
+	// Per-channel session model: a delivered survivor has no final cascade action
+	// — the chat owns triage downstream. Say so instead of leaving the verdict blank.
+	if tr.Disposition == "delivered" {
+		return "routed to the channel's steerer chat"
 	}
 	return ""
 }

@@ -30,6 +30,53 @@ function steererChatSlugFor(item: AttentionItem): string | null {
   return null
 }
 
+// steererChatSlugForTrace is steererChatSlugFor for a decision/trace row (same
+// Slack-only reconstruction; GitHub PR↔issue keying can't be rebuilt from a row).
+function steererChatSlugForTrace(source?: string, channel?: string): string | null {
+  if (source === 'slack' && channel) return 'chat-steer-' + sanitizeSlugSegment(channel)
+  return null
+}
+
+// SessionDecision replaces the Stage 1/2/3 "cascade decision" grid for
+// disposition=delivered rows. Under the per-channel session model the survivor is
+// handed to the channel's live steerer chat, which owns triage downstream
+// (relevance / reply / whether to surface) — so the cascade stages are empty and
+// showing them is misleading. We state where it went instead.
+function SessionDecision({ trace, navigate }: { trace: SteeringTrace; navigate: (to: string) => void }) {
+  const slug = steererChatSlugForTrace(trace.source, trace.channel)
+  const chatLabel = trace.channel_name || trace.channel || 'this channel'
+  const contextOnly = (trace.drop_reason || '').includes('context_only')
+  return (
+    <div className="td-section">
+      <div className="eyebrow">why · routed to chat session</div>
+      <div className="config-help" style={{ marginTop: 6 }}>
+        {contextOnly
+          ? 'Fed to the channel’s steerer chat as context only — it updates the chat’s running memory; the chat never surfaces or replies for this turn.'
+          : 'Handed to the channel’s live steerer chat, which now owns triage for this message — relevance, reply drafting, and whether to surface a card.'}
+      </div>
+      <div className="meta-grid" style={{ marginTop: 6 }}>
+        <KV k="disposition" v={<span className={DISPOSITION_TONE[trace.disposition] ?? 'badge'}>{trace.disposition}</span>} />
+        <KV
+          k="routed to"
+          v={
+            <span className="row gap">
+              <span>
+                <strong>{chatLabel}</strong>
+                {slug ? <span className="mono faint"> · {slug}</span> : null}
+              </span>
+              <button type="button" className="btn ghost sm" onClick={() => navigate('/chats')}>
+                <ArrowRight size={13} /> Chats
+              </button>
+            </span>
+          }
+        />
+        {trace.drop_reason ? <KV k="note" v={trace.drop_reason} /> : null}
+        <KV k="latency" v={trace.latency_ms != null ? `${trace.latency_ms} ms` : '—'} />
+      </div>
+    </div>
+  )
+}
+
 export function Attention() {
   useDocumentTitle('Attention')
   const search = useSearch()
@@ -113,13 +160,13 @@ function LiveTriageView() {
           <span className="faint mono" style={{ fontSize: 11 }}>idle</span>
         )}
         <div className="spacer" />
-        <span className="faint" style={{ fontSize: 12 }}>steerer cascade · newest first · run id = trace id</span>
+        <span className="faint" style={{ fontSize: 12 }}>steerer · newest first · run id = trace id</span>
       </div>
       {runs.length === 0 ? (
         <EmptyState
           icon={<Activity size={26} />}
           title="No triage activity yet"
-          hint="As the steerer observes new Slack/GitHub events, each one's cascade appears here live — scope, relevance, score, deep triage, verdict."
+          hint="As the steerer observes new Slack/GitHub events, each one appears here live — the scope gate, then routed to its channel chat (or, with sessions off, the relevance → score → deep-triage cascade)."
         />
       ) : (
         <div className="srun-list">
@@ -210,7 +257,7 @@ function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string
                 className={`sstage st-${e.status}${isOpen ? ' open' : ''}`}
                 onClick={() => setOpen(isOpen ? null : key)}
               >
-                {STAGE_LABEL[stage] || stage}
+                {stage === 'verdict' && e.status === 'delivered' ? '→ chat' : STAGE_LABEL[stage] || stage}
               </button>
             </Fragment>
           )
@@ -1122,6 +1169,9 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
           </div>
         </div>
 
+        {trace && trace.disposition === 'delivered' ? (
+          <SessionDecision trace={trace} navigate={navigate} />
+        ) : (
         <div className="td-section">
           <div className="eyebrow">why · cascade decision</div>
           {isLoading ? (
@@ -1131,7 +1181,7 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
           ) : isError || !trace ? (
             <>
               <div className="faint" style={{ marginTop: 6 }}>
-                No cascade trace recorded for this item (it predates decision logging).
+                No cascade trace for this card — it was surfaced directly by the channel’s steerer chat (or it predates decision logging).
               </div>
               {item.reason ? <div className="att-reason dim" style={{ marginTop: 6 }}>{item.reason}</div> : null}
             </>
@@ -1151,6 +1201,7 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
             </div>
           )}
         </div>
+        )}
       </div>
     </Modal>
   )
@@ -1163,7 +1214,7 @@ const WINDOWS = [
   { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
 ] as const
 
-const DISPOSITIONS = ['all', 'surfaced', 'dropped', 'error'] as const
+const DISPOSITIONS = ['all', 'surfaced', 'delivered', 'dropped', 'error'] as const
 const SOURCES = ['all', 'slack', 'github'] as const
 
 // A labeled segmented control reusing the same .btn sm primary/ghost pattern as
@@ -1326,6 +1377,7 @@ function FunnelStrip({ funnel }: { funnel: SteeringFunnel }) {
 
 const DISPOSITION_TONE: Record<string, string> = {
   surfaced: 'badge accent',
+  delivered: 'badge info',
   dropped: 'badge',
   error: 'badge warn',
 }
@@ -1465,6 +1517,9 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
           </div>
         </div>
 
+        {item.disposition === 'delivered' ? (
+          <SessionDecision trace={item} navigate={navigate} />
+        ) : (
         <div className="td-section">
           <div className="eyebrow">why · cascade decision</div>
           <div className="meta-grid" style={{ marginTop: 6 }}>
@@ -1499,6 +1554,7 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             {item.error ? <KV k="error" v={<span className="dim">{item.error}</span>} /> : null}
           </div>
         </div>
+        )}
 
         {item.feed_item_id ? (
           <div className="td-section">
