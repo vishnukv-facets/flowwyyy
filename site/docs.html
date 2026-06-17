@@ -296,17 +296,55 @@
         </div>
 
         <h2 id="c-attention">Attention</h2>
-        <p>The Attention Router is the cross-source triage queue. Review it as an operator — it surfaces, it doesn't autonomously act. (Full feed UI lives in Mission Control; see the <a href="api.html#ep-attention">API</a>.)</p>
+        <p>The Attention Router (the "steerer") is the cross-source triage queue. It watches connector events, records a decision trace for each, and writes promising items to a feed you review. Review it as an operator — it surfaces, it doesn't autonomously act unless you opt in. (Full feed + trace UI lives in Mission Control; see the <a href="api.html#ep-attention">API</a>.)</p>
         <div class="cmd">
           <pre><span class="prompt">$</span> flow attention list [--status new|acted|dismissed|all]
 <span class="prompt">$</span> flow attention act &lt;id&gt; &lt;make-task|forward|dismiss&gt;
+<span class="prompt">$</span> flow attention trace [--since 24h] [--disposition surfaced|delivered|dropped|all]
 <span class="prompt">$</span> flow attention feedback [--group &lt;dimension&gt;]</pre>
           <dl class="args">
             <dt>list --status</dt><dd>Filter cards by state. Default <code>new</code>.</dd>
             <dt>act &lt;id&gt; &lt;action&gt;</dt><dd><code>make-task</code> (tracked work), <code>forward</code> (route to a matched task), or <code>dismiss</code> (hide; doesn't mute the source).</dd>
+            <dt>trace --disposition</dt><dd>Audit the decision funnel — <code>surfaced</code>, <code>dropped</code>, or <code>delivered</code> (handed to a per-channel chat; see below).</dd>
             <dt>feedback --group</dt><dd>Approval/dismiss rates by <code>source|channel|author|thread-type|suggested-action|confidence-band</code>.</dd>
           </dl>
         </div>
+
+        <h3 id="c-chat-steering">Per-channel chat steering</h3>
+        <p>By default the steerer is <strong>stateless</strong> — each event gets its own <code>claude -p</code> classification, with no memory of the thread. Set <code>FLOW_STEERING_SESSIONS=1</code> and each Slack conversation (and each GitHub PR/issue) instead gets its own <strong>persistent chat session</strong>, <code>chat-steer-&lt;channel&gt;</code>, fed one message at a time. It keeps running memory, holds the Slack tools, reads files and images, and decides for itself what reaches you.</p>
+        <pre>Slack / GitHub event
+    │
+    ▼
+Stage 0 involvement gate ──▶ drop: mutes · keywords · "doesn't involve you"
+    │
+    │ survives: DM · @mention · watched channel · linked task
+    ▼
+FLOW_STEERING_SESSIONS ?
+    │
+    ├─ OFF ─▶ stateless cascade — a fresh `claude -p` per event:
+    │           Stage 1 relevance → Stage 2 score → Stage 3 deep triage ──┐
+    │                                                                     │
+    └─ ON  ─▶ per-channel chat  "chat-steer-&lt;channel&gt;"                    │
+               • running thread memory   → N messages collapse to ONE card│
+               • reads the thread, downloads files + images                │
+               • each turn it decides:                                     │
+                   surface a card  /  draft a reply  /                     │
+                   absorb as context_only  /  do nothing ──────────────────┤
+                                                                           ▼
+                                                                    attention_feed
+                                                                  (cards you review)
+    operator reviews a card
+        ├─ Send reply   → the SAME chat posts it in-thread (it has the context)
+        ├─ Make task · Forward · Dismiss · Mute-this-chat
+        └─ you reply in Slack yourself → context_only → the chat closes the card</pre>
+        <ul>
+          <li><strong>Conversation memory.</strong> A back-and-forth is one evolving card, not N fragments re-triaged from scratch — a noisy thread collapses to a single living card.</li>
+          <li><strong>It reads what you read.</strong> The chat downloads image/file attachments, so a screenshot-only "can you check this?" is actually looked at, not guessed from the caption.</li>
+          <li><strong>Replies come from context.</strong> Approve a reply and the channel's own chat posts it, in-thread — it already knows the conversation.</li>
+          <li><strong>Your own actions teach it.</strong> Messages you send (and replies the bot echoes back) arrive as <code>context_only</code> memory the chat absorbs but never surfaces — answer in Slack directly and the open card is revalidated and closed instead of nagging you.</li>
+          <li><strong>Per-chat mute.</strong> Silence one conversation without muting the whole channel.</li>
+        </ul>
+        <div class="callout"><strong>Cost stays lazy.</strong> Sessions are created one per conversation, only when a real event survives Stage 0 — no bulk replay of history on startup unless you turn on <code>FLOW_STEERING_BACKFILL</code> (with a capped cold-start lookback). Idle chats sleep their terminal (<code>FLOW_STEERER_IDLE_TTL</code>, default <code>30m</code>) but keep their memory, so cost tracks live activity, not the number of channels you watch. New chats launch with <code>FLOW_STEERER_DEFAULT_PROVIDER</code> (<code>claude</code> or <code>codex</code>).</div>
 
         <h2 id="c-owners">Owners</h2>
         <p>Owners orchestrate ongoing outcomes via short <em>ticks</em> — they dispatch tasks/runs, never do substantive work inline.</p>
