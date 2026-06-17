@@ -24,6 +24,8 @@ func cmdAttention(args []string) int {
 	switch sub {
 	case "list":
 		return cmdAttentionList(rest)
+	case "surface":
+		return cmdAttentionSurface(rest)
 	case "act":
 		return cmdAttentionAct(rest)
 	case "handoff":
@@ -37,7 +39,7 @@ func cmdAttention(args []string) int {
 	case "calibration":
 		return cmdAttentionCalibration(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|act|handoff|sent|trace|feedback|calibration)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|surface|act|handoff|sent|trace|feedback|calibration)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -47,6 +49,7 @@ func printAttentionUsage() {
 	fmt.Println(`flow attention — review and act on the attention feed
 
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
+  flow attention surface --channel <id> --ts <ts> [--thread-key <key>] [--context-only]
   flow attention act <id> <make-task|forward|confirm-handoff|dismiss>
   flow attention handoff accept <correlation-id> --reason "<why>"
   flow attention handoff decline <correlation-id> --reason "<why>"
@@ -82,6 +85,60 @@ func cmdAttentionList(args []string) int {
 		return 1
 	}
 	fmt.Print(renderAttentionFeed(items))
+	return 0
+}
+
+func cmdAttentionSurface(args []string) int {
+	fs := flagSet("attention surface")
+	source := fs.String("source", "slack", "event source: slack|github")
+	channel := fs.String("channel", "", "channel/DM/PR id")
+	channelType := fs.String("channel-type", "", "channel|im|mpim|github")
+	threadKey := fs.String("thread-key", "", "proposed thread_key to continue (validated)")
+	ts := fs.String("ts", "", "message ts")
+	threadTS := fs.String("thread-ts", "", "parent thread ts (defaults to ts)")
+	author := fs.String("author", "", "author id")
+	action := fs.String("action", string(steering.ActionDigestOnly), "make_task|capture_kb|forward|reply|digest_only|drop")
+	matchedTask := fs.String("matched-task", "", "task slug to forward to")
+	summary := fs.String("summary", "", "<=140 char card summary")
+	draft := fs.String("draft", "", "drafted reply, if any")
+	reason := fs.String("reason", "", "why")
+	confidence := fs.Float64("confidence", 0, "0..1")
+	contextOnly := fs.Bool("context-only", false, "memory-only: never surface a card")
+	if handled, rc := parseFlagSet(fs, args); handled {
+		return rc
+	}
+	if strings.TrimSpace(*channel) == "" || strings.TrimSpace(*ts) == "" {
+		fmt.Fprintln(os.Stderr, "error: --channel and --ts are required")
+		return 2
+	}
+
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+
+	id, surfaced, err := steering.SurfaceCard(context.Background(), db, steering.SurfaceCardParams{
+		Source:      *source,
+		Channel:     *channel,
+		ChannelType: *channelType,
+		ThreadKey:   *threadKey,
+		TS:          *ts,
+		ThreadTS:    *threadTS,
+		Author:      *author,
+		Action:      *action,
+		MatchedTask: *matchedTask,
+		Summary:     *summary,
+		Draft:       *draft,
+		Confidence:  *confidence,
+		Reason:      *reason,
+		ContextOnly: *contextOnly,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("surfaced=%v id=%s\n", surfaced, id)
 	return 0
 }
 

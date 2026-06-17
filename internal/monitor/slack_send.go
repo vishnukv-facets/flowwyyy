@@ -46,13 +46,20 @@ func resolveSendIdentity(channel, override string) (token string, asUser bool) {
 }
 
 // sendAsBotFn performs the actual post; a package var so tests don't hit Slack.
-var sendAsBotFn = func(channel, text, identity string) error {
+var sendAsBotFn = func(channel, threadTS, text, identity string) error {
 	token, asUser := resolveSendIdentity(channel, identity)
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
 	}
 	api := slack.New(token)
-	_, _, err := api.PostMessage(channel, slack.MsgOptionText(text, false), slack.MsgOptionAsUser(asUser))
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(text, false),
+		slack.MsgOptionAsUser(asUser),
+	}
+	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+	_, _, err := api.PostMessage(channel, opts...)
 	return err
 }
 
@@ -60,6 +67,12 @@ var sendAsBotFn = func(channel, text, identity string) error {
 // `identity` is "bot" or "user" and otherwise honoring the global
 // FLOW_SLACK_SEND_AS setting. Gated by FLOW_SLACK_WRITES_ENABLED.
 func SendAs(channel, text, identity string) error {
+	return SendAsThread(channel, "", text, identity)
+}
+
+// SendAsThread posts text to a Slack channel/DM or thread. An empty threadTS
+// preserves the root-channel behavior of SendAs.
+func SendAsThread(channel, threadTS, text, identity string) error {
 	if !slackWritesEnabled() {
 		return fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
 	}
@@ -69,7 +82,7 @@ func SendAs(channel, text, identity string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("text is required")
 	}
-	return sendAsBotFn(channel, text, identity)
+	return sendAsBotFn(channel, threadTS, text, identity)
 }
 
 // SendAsBot posts under flow's configured send identity (FLOW_SLACK_SEND_AS —
@@ -85,7 +98,7 @@ func SendAsBot(channel, text string) error {
 // completeUploadExternal), since the legacy files.upload is being sunset.
 // Uploads require the files:write scope, which the manifest grants to the BOT
 // token — pass identity "bot" (e.g. `flow slack send --as bot --file ...`).
-var uploadFileFn = func(channel, comment, filePath, identity string) error {
+var uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error {
 	token, _ := resolveSendIdentity(channel, identity)
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
@@ -115,9 +128,10 @@ var uploadFileFn = func(channel, comment, filePath, identity string) error {
 		return fmt.Errorf("upload file bytes: %w", err)
 	}
 	if _, err := api.CompleteUploadExternalContext(ctx, slack.CompleteUploadExternalParameters{
-		Files:          []slack.FileSummary{{ID: up.FileID, Title: name}},
-		Channel:        channel,
-		InitialComment: comment,
+		Files:           []slack.FileSummary{{ID: up.FileID, Title: name}},
+		Channel:         channel,
+		InitialComment:  comment,
+		ThreadTimestamp: strings.TrimSpace(threadTS),
 	}); err != nil {
 		return fmt.Errorf("complete upload: %w", err)
 	}
@@ -129,6 +143,13 @@ var uploadFileFn = func(channel, comment, filePath, identity string) error {
 // ""), but note only the bot token carries files:write — automation should pass
 // "bot". Gated by FLOW_SLACK_WRITES_ENABLED.
 func SendFileAs(channel, comment, filePath, identity string) error {
+	return SendFileAsThread(channel, "", comment, filePath, identity)
+}
+
+// SendFileAsThread uploads a local file as an attachment to a Slack channel/DM
+// or thread. An empty threadTS preserves the root-channel behavior of
+// SendFileAs.
+func SendFileAsThread(channel, threadTS, comment, filePath, identity string) error {
 	if !slackWritesEnabled() {
 		return fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
 	}
@@ -138,5 +159,5 @@ func SendFileAs(channel, comment, filePath, identity string) error {
 	if strings.TrimSpace(filePath) == "" {
 		return fmt.Errorf("file is required")
 	}
-	return uploadFileFn(channel, comment, filePath, identity)
+	return uploadFileFn(channel, threadTS, comment, filePath, identity)
 }

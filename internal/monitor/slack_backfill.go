@@ -53,7 +53,7 @@ func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, m := range msgs {
-		files := slackFilesFromAPIWithContent(ctx, api, m.Files)
+		files := slackFilesFromAPIWithContent(ctx, api, channelID, m.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(m.User, m.Username),
 			Text:     strings.TrimSpace(m.Text),
@@ -95,9 +95,13 @@ type SlackBackfill struct {
 	// normalized event through the same cascade as live traffic.
 	Observer           MessageObserver
 	SteererOwnsRouting func() bool
-	interval           time.Duration
-	limit              int
-	logFn              func(string, ...any)
+	// SteererSessionsEnabled mirrors the dispatcher field: when active, self-
+	// authored events are replayed into the per-channel session as context_only
+	// instead of being skipped, so post-restart replay rebuilds session memory.
+	SteererSessionsEnabled func() bool
+	interval               time.Duration
+	limit                  int
+	logFn                  func(string, ...any)
 }
 
 // NewSlackBackfill builds a backfiller. A zero interval defaults to 45s — well
@@ -271,7 +275,20 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 		}
 		// Never re-ingest flow's own bot messages (acks, agent replies) when
 		// reconciling history — same self-echo guard as the live Dispatch path.
+		// Exception (GAP-10): when the per-channel session model is active, replay
+		// self-authored events into the session as context_only so post-restart
+		// memory includes the operator's own messages and delivered replies.
 		if IsSelfAuthoredSlack(ev) {
+			if b.steererOwnsRouting() && b.SteererSessionsEnabled != nil && b.SteererSessionsEnabled() {
+				if obs, ok := b.Observer.(SelfAuthoredObserver); ok {
+					if err := obs.ObserveSelfAuthored(ctx, ev); err != nil {
+						return delivered, err
+					}
+					seen[ts] = true
+					delivered++
+					continue
+				}
+			}
 			continue
 		}
 		if steererOwned {

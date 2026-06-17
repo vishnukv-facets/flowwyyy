@@ -96,6 +96,29 @@ func TestCmdAttentionSentErrors(t *testing.T) {
 	}
 }
 
+func TestCmdAttentionSurface(t *testing.T) {
+	db := attentionTestDB(t)
+	if rc := cmdAttention([]string{
+		"surface",
+		"--source", "slack",
+		"--channel", "C1",
+		"--channel-type", "channel",
+		"--ts", "100.1",
+		"--action", "digest_only",
+		"--summary", "hi",
+		"--confidence", "0.5",
+	}); rc != 0 {
+		t.Fatalf("surface rc = %d, want 0", rc)
+	}
+	items, err := flowdb.ListFeedItems(db, "new")
+	if err != nil {
+		t.Fatalf("ListFeedItems: %v", err)
+	}
+	if len(items) != 1 || items[0].ThreadKey != "C1:100.1" {
+		t.Fatalf("want 1 card under C1:100.1, got %+v", items)
+	}
+}
+
 func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 	db := attentionTestDB(t)
 	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{

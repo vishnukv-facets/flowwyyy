@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { BellOff, Clock, Filter, Gauge, Hash, Loader2, Save } from 'lucide-react'
+import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, Save } from 'lucide-react'
 import { useSettings } from '../lib/query'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from './SettingsPanels'
 import { ChannelPicker } from './ChannelPicker'
@@ -14,6 +14,10 @@ import { AutonomyPanel } from './AutonomyPanel'
 // Steering keys driven by the generic ConfigField renderer (the rich pickers own
 // FLOW_STEERING_WATCH_CHANNELS / _MUTED_CHANNELS and _AUTONOMY). Module-level so
 // the arrays stay referentially stable across renders.
+// The per-channel session model master switch + its session provider. Both are
+// env-only registry keys; surfaced here so the steerer's defining setting is
+// operator-toggleable instead of requiring a shell export.
+const SESSION_KEYS = ['FLOW_STEERING_SESSIONS', 'FLOW_STEERER_DEFAULT_PROVIDER']
 const MUTED_KEYWORD_KEYS = ['FLOW_STEERING_MUTED_KEYWORDS']
 const WAITING_KEYS = ['FLOW_STEERING_AUTO_RESOLVE_WAITING']
 const PERFORMANCE_KEYS = [
@@ -59,6 +63,12 @@ function ConfigGroupPanel({ title, icon, fieldKeys }: { title: string; icon: Rea
 export function SteeringConfig() {
   return (
     <>
+      <SettingsSection title="Session model" hint="The per-channel live-session steerer. On = one persistent session per channel/DM/PR holds conversation memory; off = stateless per-event triage.">
+        <div className="settings-grid">
+          <ConfigGroupPanel title="Per-channel sessions" icon={<MessagesSquare size={17} />} fieldKeys={SESSION_KEYS} />
+        </div>
+      </SettingsSection>
+
       <SettingsSection title="Triage scope" hint="What the router watches, mutes, and drops before triage.">
         <div className="settings-grid">
           <ChannelPicker

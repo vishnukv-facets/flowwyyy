@@ -1,8 +1,9 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
-import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Pencil, Play, RefreshCw, Send, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useSteeringRuns, useWorkEvents } from '../lib/query'
+import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Pencil, Play, Send, Share2 } from 'lucide-react'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useChats, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
+import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
 import { WorkEventRow } from '../components/WorkEventRow'
 import { Modal } from '../components/Modal'
@@ -14,6 +15,67 @@ import type { AttentionItem, SteeringFunnel, SteeringRun, SteeringStageEvent, St
 const STATUSES = ['new', 'acted', 'dismissed', 'all'] as const
 const VIEWS = ['feed', 'live', 'trace', 'config'] as const
 type View = (typeof VIEWS)[number]
+
+// steererChatSlugFor mirrors the server's steererChatSlug(sessionKeyForEvent(...))
+// for the deterministic Slack case: a card's channel keys "chat-steer-<sanitized
+// channel>" (GAP-5 card→chat link). GitHub canonical PR↔issue keying can't be
+// reliably reconstructed from a card, so only Slack cards link for now.
+function sanitizeSlugSegment(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+}
+function steererChatSlugFor(item: AttentionItem): string | null {
+  if (item.source === 'slack' && item.channel) {
+    return 'chat-steer-' + sanitizeSlugSegment(item.channel)
+  }
+  return null
+}
+
+// steererChatSlugForTrace is steererChatSlugFor for a decision/trace row (same
+// Slack-only reconstruction; GitHub PR↔issue keying can't be rebuilt from a row).
+function steererChatSlugForTrace(source?: string, channel?: string): string | null {
+  if (source === 'slack' && channel) return 'chat-steer-' + sanitizeSlugSegment(channel)
+  return null
+}
+
+// SessionDecision replaces the Stage 1/2/3 "cascade decision" grid for
+// disposition=delivered rows. Under the per-channel session model the survivor is
+// handed to the channel's live steerer chat, which owns triage downstream
+// (relevance / reply / whether to surface) — so the cascade stages are empty and
+// showing them is misleading. We state where it went instead.
+function SessionDecision({ trace, navigate }: { trace: SteeringTrace; navigate: (to: string) => void }) {
+  const slug = steererChatSlugForTrace(trace.source, trace.channel)
+  const chatLabel = trace.channel_name || trace.channel || 'this channel'
+  const contextOnly = (trace.drop_reason || '').includes('context_only')
+  return (
+    <div className="td-section">
+      <div className="eyebrow">why · routed to chat session</div>
+      <div className="config-help" style={{ marginTop: 6 }}>
+        {contextOnly
+          ? 'Fed to the channel’s steerer chat as context only — it updates the chat’s running memory; the chat never surfaces or replies for this turn.'
+          : 'Handed to the channel’s live steerer chat, which now owns triage for this message — relevance, reply drafting, and whether to surface a card.'}
+      </div>
+      <div className="meta-grid" style={{ marginTop: 6 }}>
+        <KV k="disposition" v={<span className={DISPOSITION_TONE[trace.disposition] ?? 'badge'}>{trace.disposition}</span>} />
+        <KV
+          k="routed to"
+          v={
+            <span className="row gap">
+              <span>
+                <strong>{chatLabel}</strong>
+                {slug ? <span className="mono faint"> · {slug}</span> : null}
+              </span>
+              <button type="button" className="btn ghost sm" onClick={() => navigate('/chats')}>
+                <ArrowRight size={13} /> Chats
+              </button>
+            </span>
+          }
+        />
+        {trace.drop_reason ? <KV k="note" v={trace.drop_reason} /> : null}
+        <KV k="latency" v={trace.latency_ms != null ? `${trace.latency_ms} ms` : '—'} />
+      </div>
+    </div>
+  )
+}
 
 export function Attention() {
   useDocumentTitle('Attention')
@@ -98,13 +160,13 @@ function LiveTriageView() {
           <span className="faint mono" style={{ fontSize: 11 }}>idle</span>
         )}
         <div className="spacer" />
-        <span className="faint" style={{ fontSize: 12 }}>steerer cascade · newest first · run id = trace id</span>
+        <span className="faint" style={{ fontSize: 12 }}>steerer · newest first · run id = trace id</span>
       </div>
       {runs.length === 0 ? (
         <EmptyState
           icon={<Activity size={26} />}
           title="No triage activity yet"
-          hint="As the steerer observes new Slack/GitHub events, each one's cascade appears here live — scope, relevance, score, deep triage, verdict."
+          hint="As the steerer observes new Slack/GitHub events, each one appears here live — the scope gate, then routed to its channel chat (or, with sessions off, the relevance → score → deep-triage cascade)."
         />
       ) : (
         <div className="srun-list">
@@ -195,7 +257,7 @@ function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string
                 className={`sstage st-${e.status}${isOpen ? ' open' : ''}`}
                 onClick={() => setOpen(isOpen ? null : key)}
               >
-                {STAGE_LABEL[stage] || stage}
+                {stage === 'verdict' && e.status === 'delivered' ? '→ chat' : STAGE_LABEL[stage] || stage}
               </button>
             </Fragment>
           )
@@ -243,6 +305,27 @@ function FeedView({
   const switching = isLoading || (isFetching && isPlaceholderData)
   const { data: workEvents } = useWorkEvents({ limit: 200 })
   const action = useAction()
+  // Card → steering chat link (GAP-5): the set of live steerer chat slugs so a
+  // card only offers "View session" when its channel actually has one.
+  const { data: chats } = useChats(false)
+  const { open: openFloatingTerminal } = useFloatingTerminals()
+  const steererSlugs = useMemo(
+    () => new Set((chats ?? []).filter((c) => c.origin === 'steerer').map((c) => c.slug)),
+    [chats],
+  )
+  // slug → chat title, so a card can name the per-channel session that produced it.
+  const steererTitles = useMemo(
+    () => new Map((chats ?? []).filter((c) => c.origin === 'steerer').map((c) => [c.slug, c.title] as const)),
+    [chats],
+  )
+  const viewSession = (item: AttentionItem) => {
+    const slug = steererChatSlugFor(item)
+    if (!slug || action.isPending) return
+    action.mutate(
+      { kind: 'chat-reopen', slug },
+      { onSuccess: (resp) => { if (resp.floating_terminal) openFloatingTerminal(resp.floating_terminal) } },
+    )
+  }
   const eventByAttentionId = useMemo(() => {
     const map = new Map<string, WorkEvent>()
     for (const event of workEvents?.items ?? []) {
@@ -334,18 +417,23 @@ function FeedView({
         />
       ) : (
         <div className="att-list">
-          {(data ?? []).map((it) => (
-            <AttentionCard
-              key={it.id}
-              item={it}
-              workEvent={eventByAttentionId.get(it.id)}
-              disabled={action.isPending}
-              retriaging={!!retriaging[it.id]}
-              onAct={act}
-              onCorrect={correct}
-              onOpen={() => setDetail(it)}
-            />
-          ))}
+          {(data ?? []).map((it) => {
+            const sess = steererChatSlugFor(it)
+            return (
+              <AttentionCard
+                key={it.id}
+                item={it}
+                workEvent={eventByAttentionId.get(it.id)}
+                disabled={action.isPending}
+                retriaging={!!retriaging[it.id]}
+                onAct={act}
+                onCorrect={correct}
+                onOpen={() => setDetail(it)}
+                onViewSession={sess && steererSlugs.has(sess) ? () => viewSession(it) : undefined}
+                sessionTitle={sess ? steererTitles.get(sess) : undefined}
+              />
+            )
+          })}
         </div>
       )}
 
@@ -382,6 +470,8 @@ function AttentionCard({
   onAct,
   onCorrect,
   onOpen,
+  onViewSession,
+  sessionTitle,
 }: {
   item: AttentionItem
   workEvent?: WorkEvent
@@ -390,6 +480,12 @@ function AttentionCard({
   onAct: (item: AttentionItem, verb: string) => void
   onCorrect: (item: AttentionItem, text: string, remember: boolean) => void
   onOpen: () => void
+  // onViewSession, when set, opens this card's channel steerer chat (GAP-5). Set
+  // only when a steerer chat exists for the card's channel.
+  onViewSession?: () => void
+  // sessionTitle names the per-channel chat that produced this card (chat-origin
+  // label). Present when a steerer chat exists for the card's channel.
+  sessionTitle?: string
 }) {
   const urgent = item.urgency === 'urgent'
   // Re-triage is in flight if the client just fired it OR the server says so
@@ -464,6 +560,18 @@ function AttentionCard({
               <ExternalLink size={13} /> {linkLabel}
             </a>
           ) : null}
+          {onViewSession ? (
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={disabled}
+              title={sessionTitle ? `Surfaced by the "${sessionTitle}" steering session — open it` : "Open this channel's steering session"}
+              onClick={onViewSession}
+            >
+              <MessageSquare size={13} />{' '}
+              {sessionTitle ? <span className="clip" style={{ maxWidth: 160, display: 'inline-block', verticalAlign: 'bottom' }}>{sessionTitle}</span> : 'View session'}
+            </button>
+          ) : null}
         </div>
       ) : null}
 
@@ -483,43 +591,32 @@ function AttentionCard({
         <>
         <div className="att-actions row gap" onClick={stop}>
           {item.matched_task ? (
-            <>
-              <button
-                type="button"
-                className="btn primary sm"
-                disabled={disabled}
-                onClick={() => onAct(item, 'forward')}
-                title={matchedTaskLabel(item)}
-              >
-                <Share2 size={13} /> Forward to <span className="att-forward-target">{matchedTaskLabel(item)}</span>
-              </button>
-              <MatchedTaskMoreMenu item={item} disabled={disabled} onAct={onAct} />
-            </>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={disabled}
+              onClick={() => onAct(item, 'forward')}
+              title={matchedTaskLabel(item)}
+            >
+              <Share2 size={13} /> Forward to <span className="att-forward-target">{matchedTaskLabel(item)}</span>
+            </button>
+          ) : kbPrimary ? (
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={disabled}
+              title="Distill this into a durable KB fact (kb/*.md) — no task created"
+              onClick={() => onAct(item, 'capture-kb')}
+            >
+              <BookMarked size={13} /> Save to KB
+            </button>
           ) : (
-            <>
-              <button type="button" className={`btn ${kbPrimary ? '' : 'primary'} sm`} disabled={disabled} onClick={() => onAct(item, 'make-task')}>
-                <ListPlus size={13} /> Make task
-              </button>
-              <button type="button" className="btn sm" disabled={disabled} onClick={() => onAct(item, 'make-task-start')}>
-                <Play size={13} /> Make task & start
-              </button>
-            </>
+            <button type="button" className="btn primary sm" disabled={disabled} onClick={() => onAct(item, 'make-task')}>
+              <ListPlus size={13} /> Make task
+            </button>
           )}
-          {/* Capture durable knowledge into the KB instead of a task. Always
-              available; promoted to primary when the steerer suggested it. */}
-          <button
-            type="button"
-            className={`btn ${kbPrimary ? 'primary' : 'sm'} sm`}
-            disabled={disabled}
-            title="Distill this into a durable KB fact (kb/*.md) — no task created"
-            onClick={() => onAct(item, 'capture-kb')}
-          >
-            <BookMarked size={13} /> Save to KB
-          </button>
           {item.draft ? (
-            // Opens the detail modal (review/edit before sending) rather than
-            // blind-sending — the action row already stopPropagation's the
-            // card-body open, so call onOpen explicitly here.
+            // Opens the detail modal (review/edit before sending) rather than blind-sending.
             <button type="button" className="btn sm" disabled={disabled} onClick={onOpen}>
               <Send size={13} /> Send reply
             </button>
@@ -527,26 +624,15 @@ function AttentionCard({
           <button type="button" className="btn ghost sm" disabled={disabled} onClick={() => onAct(item, 'dismiss')}>
             <Check size={13} /> Dismiss
           </button>
-          <button
-            type="button"
-            className="btn ghost sm"
-            title="Got it wrong? Give it the real context and it re-reads the thread"
+          {busy ? <span className="dim mono" style={{ fontSize: 11.5 }}>working…</span> : null}
+          <CardMoreMenu
+            item={item}
             disabled={disabled || busy}
-            onClick={() => setCorrecting((v) => !v)}
-          >
-            <Pencil size={13} /> Correct
-          </button>
-          <button
-            type="button"
-            className="btn icon ghost sm"
-            title={busy ? 'Re-running triage…' : 'Re-run triage (re-read task context, refresh the decision)'}
-            aria-label="Re-run triage"
-            disabled={disabled || busy}
-            onClick={() => onAct(item, 'retriage')}
-          >
-            <RefreshCw size={13} className={busy ? 'spin' : undefined} />
-          </button>
-          {busy ? <span className="dim mono" style={{ fontSize: 11.5 }}>re-triaging…</span> : null}
+            matched={!!item.matched_task}
+            kbPrimary={kbPrimary}
+            onAct={onAct}
+            onStartCorrect={() => setCorrecting(true)}
+          />
           <MuteMenu item={item} disabled={disabled} onAct={onAct} />
         </div>
         {correcting ? (
@@ -615,20 +701,31 @@ function matchedTaskLabel(item: AttentionItem): string {
   return item.why?.matched_task?.name || item.why?.matched_task?.slug || item.matched_task || 'matched task'
 }
 
-function MatchedTaskMoreMenu({
+// CardMoreMenu holds the secondary card actions so the primary row stays to the
+// essentials (act · reply · dismiss). It adapts to the card: matched cards offer
+// make-new-task + ask-task-agent; every card offers make-task-&-start, Save to KB
+// (unless that's the promoted primary), and Correct (which opens the inline editor
+// via onStartCorrect rather than firing a verb).
+function CardMoreMenu({
   item,
   disabled,
+  matched,
+  kbPrimary,
   onAct,
+  onStartCorrect,
 }: {
   item: AttentionItem
   disabled?: boolean
+  matched: boolean
+  kbPrimary: boolean
   onAct: (item: AttentionItem, verb: string) => void
+  onStartCorrect: () => void
 }) {
   const [open, setOpen] = useState(false)
   const handoffPending = item.handoff?.status === 'pending'
-  const choose = (verb: string) => {
+  const run = (fn: () => void) => {
     setOpen(false)
-    onAct(item, verb)
+    fn()
   }
   return (
     <div className="mute-menu left">
@@ -647,21 +744,33 @@ function MatchedTaskMoreMenu({
         <>
           <button type="button" className="mute-backdrop" aria-label="Close actions menu" onClick={() => setOpen(false)} />
           <div className="mute-pop" role="menu">
-            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task')}>
-              <ListPlus size={12} className="faint" /> Make new task
+            {matched ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => run(() => onAct(item, 'make-task'))}>
+                <ListPlus size={12} className="faint" /> Make new task
+              </button>
+            ) : null}
+            <button type="button" role="menuitem" className="mute-item" onClick={() => run(() => onAct(item, 'make-task-start'))}>
+              <Play size={12} className="faint" /> Make {matched ? 'new ' : ''}task &amp; start
             </button>
-            <button type="button" role="menuitem" className="mute-item" onClick={() => choose('make-task-start')}>
-              <Play size={12} className="faint" /> Make new task & start
-            </button>
-            <button
-              type="button"
-              role="menuitem"
-              className="mute-item"
-              disabled={handoffPending}
-              title={handoffPending ? 'A handoff request is already pending' : undefined}
-              onClick={() => choose('confirm-handoff')}
-            >
-              <Handshake size={12} className="faint" /> Ask task agent
+            {matched ? (
+              <button
+                type="button"
+                role="menuitem"
+                className="mute-item"
+                disabled={handoffPending}
+                title={handoffPending ? 'A handoff request is already pending' : undefined}
+                onClick={() => run(() => onAct(item, 'confirm-handoff'))}
+              >
+                <Handshake size={12} className="faint" /> Ask task agent
+              </button>
+            ) : null}
+            {!kbPrimary ? (
+              <button type="button" role="menuitem" className="mute-item" onClick={() => run(() => onAct(item, 'capture-kb'))}>
+                <BookMarked size={12} className="faint" /> Save to KB
+              </button>
+            ) : null}
+            <button type="button" role="menuitem" className="mute-item" onClick={() => run(onStartCorrect)}>
+              <Pencil size={12} className="faint" /> Correct
             </button>
           </div>
         </>
@@ -1060,6 +1169,9 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
           </div>
         </div>
 
+        {trace && trace.disposition === 'delivered' ? (
+          <SessionDecision trace={trace} navigate={navigate} />
+        ) : (
         <div className="td-section">
           <div className="eyebrow">why · cascade decision</div>
           {isLoading ? (
@@ -1069,7 +1181,7 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
           ) : isError || !trace ? (
             <>
               <div className="faint" style={{ marginTop: 6 }}>
-                No cascade trace recorded for this item (it predates decision logging).
+                No cascade trace for this card — it was surfaced directly by the channel’s steerer chat (or it predates decision logging).
               </div>
               {item.reason ? <div className="att-reason dim" style={{ marginTop: 6 }}>{item.reason}</div> : null}
             </>
@@ -1089,6 +1201,7 @@ function FeedDetailOpen({ item, workEvent, onClose }: { item: AttentionItem; wor
             </div>
           )}
         </div>
+        )}
       </div>
     </Modal>
   )
@@ -1101,7 +1214,7 @@ const WINDOWS = [
   { id: '7d', label: '7d', ms: 7 * 24 * 60 * 60 * 1000 },
 ] as const
 
-const DISPOSITIONS = ['all', 'surfaced', 'dropped', 'error'] as const
+const DISPOSITIONS = ['all', 'surfaced', 'delivered', 'dropped', 'error'] as const
 const SOURCES = ['all', 'slack', 'github'] as const
 
 // A labeled segmented control reusing the same .btn sm primary/ghost pattern as
@@ -1264,6 +1377,7 @@ function FunnelStrip({ funnel }: { funnel: SteeringFunnel }) {
 
 const DISPOSITION_TONE: Record<string, string> = {
   surfaced: 'badge accent',
+  delivered: 'badge info',
   dropped: 'badge',
   error: 'badge warn',
 }
@@ -1403,6 +1517,9 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
           </div>
         </div>
 
+        {item.disposition === 'delivered' ? (
+          <SessionDecision trace={item} navigate={navigate} />
+        ) : (
         <div className="td-section">
           <div className="eyebrow">why · cascade decision</div>
           <div className="meta-grid" style={{ marginTop: 6 }}>
@@ -1437,6 +1554,7 @@ function TraceDetail({ item, onClose }: { item: SteeringTrace | null; onClose: (
             {item.error ? <KV k="error" v={<span className="dim">{item.error}</span>} /> : null}
           </div>
         </div>
+        )}
 
         {item.feed_item_id ? (
           <div className="td-section">

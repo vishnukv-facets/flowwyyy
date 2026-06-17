@@ -25,7 +25,7 @@ type Config struct {
 }
 
 type Server struct {
-	cfg            Config
+	cfg Config
 	// sessionToken gates the local data plane (WS handshakes + state-changing
 	// /api/* routes). Minted with crypto/rand in New(); see session_token.go.
 	sessionToken   string
@@ -33,6 +33,7 @@ type Server struct {
 	events         *eventHub
 	reconcile      *livenessReconciler
 	kbDistiller    *kbDistiller
+	steererCompact *steererCompactWorker
 	kbDreamer      *kbDreamer
 	kbWatcher      *kbWatcher
 	transcripts    *transcriptCache
@@ -124,6 +125,12 @@ type Server struct {
 	// (see rpc_bridge.go) without duplicating route wiring.
 	apiOnce sync.Once
 	apiMux  http.Handler
+
+	// steererSlots serializes concurrent deliveries to the same per-channel
+	// steerer session and carries its lifecycle state (GAP-5). Keyed by chat slug.
+	// Only used when FLOW_STEERING_SESSIONS is enabled.
+	steererSlots   map[string]*steererSlot
+	steererSlotsMu sync.Mutex
 }
 
 type cachedFlowDBQuickCheck struct {

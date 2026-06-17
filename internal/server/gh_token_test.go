@@ -7,6 +7,8 @@ import (
 func TestTerminalEnvInjectsGHToken(t *testing.T) {
 	orig := ghAuthToken
 	t.Cleanup(func() { ghAuthToken = orig })
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
 
 	ghAuthToken = func() string { return "gho_testtoken" }
 	env := terminalEnv("", "")

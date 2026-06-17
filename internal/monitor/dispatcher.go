@@ -54,6 +54,15 @@ type ScopedMessageObserver interface {
 	ShouldObserve(ev InboundEvent) bool
 }
 
+// SelfAuthoredObserver receives self-authored events (the operator's own bot
+// echoes) that Dispatch normally drops, so the per-channel steerer session can
+// absorb them as context_only memory (delivery confirmations). *steering.Cascade
+// implements it. Optional: a Steerer that does not implement it leaves self-
+// authored events dropped, unchanged.
+type SelfAuthoredObserver interface {
+	ObserveSelfAuthored(ctx context.Context, ev InboundEvent) error
+}
+
 // Dispatcher routes parsed InboundEvents into flow tasks. It is the
 // integration layer between the side-effect-free DecideReaction and the
 // actual filesystem / database / process effects (flow spawn, inbox
@@ -74,6 +83,12 @@ type Dispatcher struct {
 	// nil in CLI contexts and when the command channel feature is off — then
 	// command-channel DMs fall through to normal routing.
 	ChatSink ChatCommandSink
+	// SteererSessionsEnabled gates the per-channel session model's self-authored
+	// route. When it returns true (and the Steerer is a SelfAuthoredObserver and
+	// owns routing), self-authored events are fed to the session as context_only
+	// instead of being dropped. nil ⇒ off (current drop behavior). Mirrors
+	// SteererOwnsRouting; serve wiring sets it to steering.SteererSessionsEnabled.
+	SteererSessionsEnabled func() bool
 }
 
 // NewDispatcher constructs a dispatcher bound to db. opener may be nil
@@ -99,6 +114,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, ev InboundEvent) error {
 	// operator) and surfaces bogus self-acknowledgment attention. This guard sits
 	// above BOTH the command short-circuit and the steerer. See IsSelfAuthoredSlack.
 	if IsSelfAuthoredSlack(ev) {
+		// Per-channel session model (GAP-10): instead of dropping our own bot echo,
+		// feed it to the channel's steerer session as a context_only delivery
+		// confirmation so the session knows the thread advanced. Only when the model
+		// is active and the steerer can absorb it; otherwise drop as before.
+		if d.steererSessionsActive() {
+			if obs, ok := d.Steerer.(SelfAuthoredObserver); ok {
+				return obs.ObserveSelfAuthored(ctx, ev)
+			}
+		}
 		return nil
 	}
 	switch ev.Kind {
@@ -240,6 +264,13 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 
 func (d *Dispatcher) steererOwnsRouting() bool {
 	return d != nil && d.Steerer != nil && d.SteererOwnsRouting != nil && d.SteererOwnsRouting()
+}
+
+// steererSessionsActive reports whether self-authored events should be fed to the
+// per-channel steerer session instead of dropped: the steerer owns routing AND the
+// session model is enabled. Mirrors steererOwnsRouting.
+func (d *Dispatcher) steererSessionsActive() bool {
+	return d.steererOwnsRouting() && d.SteererSessionsEnabled != nil && d.SteererSessionsEnabled()
 }
 
 func (d *Dispatcher) observeWithSteerer(ctx context.Context, ev InboundEvent) error {

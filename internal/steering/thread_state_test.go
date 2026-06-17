@@ -14,7 +14,7 @@ import (
 // A single surfaced verdict seeds the thread's running understanding under the
 // card's thread_key.
 func TestWriteFeedRecordsThreadDecision(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	v := Verdict{Source: "slack", ThreadKey: "C9:1.1", SuggestedAction: ActionReply, Confidence: 0.8, Reason: "customer q", Summary: "asks about pricing"}
 	ev := monitor.InboundEvent{Channel: "C9", ChannelType: "channel", UserID: "U1", TS: "1.1", ThreadTS: "1.1"}
 	if _, _, err := c.writeFeed(context.Background(), v, ev, ThreadContext{}); err != nil {
@@ -29,16 +29,11 @@ func TestWriteFeedRecordsThreadDecision(t *testing.T) {
 	}
 }
 
-// The keystone clubbed-rewrite case: two standalone DM messages within the
-// conversation gap club into ONE card; their thread state must accumulate under
-// the SAME anchor key (proving state survives the clubbed thread_key rewrite),
-// not fragment into a row per message.
-func TestThreadStateSurvivesClubbedRewrite(t *testing.T) {
-	c := newClubTestCascade(t)
-	c.MatchConversation = func(_ context.Context, _ ClubMessage, _ []ClubCandidate) (string, string, error) {
-		t.Fatal("matcher must not be called for a 1:1 DM")
-		return "", "", nil
-	}
+// Once per-channel steerer sessions own conversation memory, writeFeed keeps
+// standalone DM cards keyed by their raw Slack ts. The session path can
+// explicitly merge by calling SurfaceCard with an existing thread_key.
+func TestWriteFeedStandaloneDMsDoNotClubAfterSessionCleanup(t *testing.T) {
+	c := newSteeringTestCascade(t)
 
 	first := Verdict{Source: "slack", ThreadKey: "D7:1000.0", SuggestedAction: ActionReply, Summary: "why does PR #2101 fail?"}
 	ev1 := monitor.InboundEvent{Channel: "D7", ChannelType: "im", UserID: "U1", TS: "1000.0"}
@@ -46,27 +41,30 @@ func TestThreadStateSurvivesClubbedRewrite(t *testing.T) {
 		t.Fatalf("first writeFeed: surfaced=%v err=%v", surf, err)
 	}
 
-	// 100s later, within the 30-min gap → clubbed onto the first card's key.
+	// 100s later, inside the old grouping window. Post-cleanup this stays a
+	// separate raw-key card; only the steerer session's SurfaceCard path merges.
 	second := Verdict{Source: "slack", ThreadKey: "D7:1100.0", SuggestedAction: ActionForward, Summary: "lgtm"}
 	ev2 := monitor.InboundEvent{Channel: "D7", ChannelType: "im", UserID: "U1", TS: "1100.0"}
 	if _, surf, err := c.writeFeed(context.Background(), second, ev2, ThreadContext{}); err != nil || !surf {
 		t.Fatalf("second writeFeed: surfaced=%v err=%v", surf, err)
 	}
 
-	if n := openCardCount(t, c); n != 1 {
-		t.Fatalf("open cards = %d, want 1 (DM burst clubbed)", n)
+	if n := openCardCount(t, c); n != 2 {
+		t.Fatalf("open cards = %d, want 2 (standalone DMs no longer merge here)", n)
 	}
-	// State under the anchor key accumulated both events; the standalone key for
-	// the second message must NOT have its own row.
-	anchor, ok, err := flowdb.GetThreadState(c.DB, "D7:1000.0")
+	firstState, ok, err := flowdb.GetThreadState(c.DB, "D7:1000.0")
 	if err != nil || !ok {
-		t.Fatalf("GetThreadState(anchor) ok=%v err=%v", ok, err)
+		t.Fatalf("GetThreadState(first) ok=%v err=%v", ok, err)
 	}
-	if anchor.EventCount != 2 {
-		t.Errorf("anchor EventCount = %d, want 2 (state survived club rewrite)", anchor.EventCount)
+	if firstState.EventCount != 1 {
+		t.Errorf("first EventCount = %d, want 1", firstState.EventCount)
 	}
-	if _, ok, _ := flowdb.GetThreadState(c.DB, "D7:1100.0"); ok {
-		t.Errorf("a separate state row exists for the clubbed-away key D7:1100.0; want none")
+	secondState, ok, err := flowdb.GetThreadState(c.DB, "D7:1100.0")
+	if err != nil || !ok {
+		t.Fatalf("GetThreadState(second) ok=%v err=%v", ok, err)
+	}
+	if secondState.EventCount != 1 {
+		t.Errorf("second EventCount = %d, want 1", secondState.EventCount)
 	}
 }
 
@@ -196,7 +194,7 @@ func priorActionFromPrompt(prompt string) string {
 // An intentional operator resolution (dismiss) records onto the thread's
 // running understanding via the recordActionFeedback chokepoint.
 func TestOperatorActionRecordedOnDismiss(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	item := flowdb.FeedItem{
 		ID: "f1", Source: "slack", ThreadKey: "C1:5.5", SuggestedAction: "reply",
 		Status: "new", CreatedAt: "2026-06-12T06:40:00Z",
@@ -221,7 +219,7 @@ func TestOperatorActionRecordedOnDismiss(t *testing.T) {
 // the slot). The gate requires prior decision state — see the operator-reply
 // learning tests for the unwatched/new-thread drop case.
 func TestOperatorReplyRecorded(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
 		ThreadKey: "C1:1.1", Source: "slack", Action: "reply", Confidence: 0.7,
 		Reason: "prior card", At: "2026-06-12T06:40:00Z",

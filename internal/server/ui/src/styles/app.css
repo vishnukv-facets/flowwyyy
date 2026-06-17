@@ -6427,6 +6427,10 @@ a.srun-where:hover .srun-chan {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
 }
+.srun-status.delivered {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--border));
+}
 .sstrip {
   display: flex;
   align-items: center;
@@ -6474,6 +6478,10 @@ a.srun-where:hover .srun-chan {
 .sstage.st-error {
   color: var(--danger);
   border-color: color-mix(in srgb, var(--danger) 50%, var(--border));
+}
+.sstage.st-delivered {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 50%, var(--border));
 }
 .sstage-detail {
   display: flex;

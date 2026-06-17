@@ -53,11 +53,20 @@ type chatView struct {
 	CreatedAt      string `json:"created_at"`
 	LastActivityAt string `json:"last_activity_at"`
 	Archived       bool   `json:"archived"`
+	Muted          bool   `json:"muted"`
 	Live           bool   `json:"live"`
 	// LastReply is a one-line preview of the agent's most recent response in
 	// this chat (last assistant text from the session transcript), so the list
 	// shows what the agent is saying / working on without opening the session.
 	LastReply string `json:"last_reply,omitempty"`
+	// Tokens / CostUSD are the chat's cumulative session tokens (cache-excluded Σ)
+	// and full billed cost — same calc as Sessions/tasks (GAP-12). 0 when the chat
+	// has no resolvable session yet.
+	Tokens  int     `json:"tokens,omitempty"`
+	CostUSD float64 `json:"cost_usd,omitempty"`
+	// OccupancyPct is the chat's current context-window usage as 0–100 % (the same
+	// used/max the /compact worker reads) — the context-usage indicator (GAP-5).
+	OccupancyPct int `json:"occupancy_pct,omitempty"`
 }
 
 // listChats returns the chats for the Chats sidebar, newest activity first.
@@ -74,6 +83,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 		return nil, err
 	}
 	for _, c := range chats {
+		tokens, cost, occupancyPct := s.chatUsage(c)
 		out = append(out, chatView{
 			Slug:           c.Slug,
 			Title:          c.Title,
@@ -82,11 +92,55 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 			CreatedAt:      c.CreatedAt,
 			LastActivityAt: c.LastActivityAt,
 			Archived:       c.ArchivedAt.Valid,
+			Muted:          c.MutedAt.Valid,
 			Live:           s.terminals != nil && s.terminals.running(c.Slug),
 			LastReply:      s.chatLastReply(c),
+			Tokens:         tokens,
+			CostUSD:        cost,
+			OccupancyPct:   occupancyPct,
 		})
 	}
 	return out, nil
+}
+
+// chatUsage resolves a chat's session transcript ONCE and returns its cumulative
+// session tokens (cache-excluded Σ), full billed cost (cache included), and current
+// context-window occupancy as a 0–100 % (the same used/max the /compact worker
+// reads — GAP-5). All zero when the chat has no resolvable session yet. Memoized
+// via transcriptCache, so it stays cheap on the buildUIData hot path.
+func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyPct int) {
+	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
+		return 0, 0, 0
+	}
+	absRoot, err := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
+	if err != nil {
+		return 0, 0, 0
+	}
+	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
+	if err != nil {
+		return 0, 0, 0
+	}
+	path, err := resolveSessionJSONLPath(&flowdb.Task{
+		Slug:            c.Slug,
+		WorkDir:         absRoot,
+		SessionProvider: provider,
+		SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
+	})
+	if err != nil || path == "" {
+		return 0, 0, 0
+	}
+	entry, err := s.transcripts.get(path)
+	if err != nil {
+		return 0, 0, 0
+	}
+	for _, v := range entry.usage.CostByDay {
+		cost += v
+	}
+	tokens = entry.usage.TokensSession
+	if used, max := steererCompactUsage(provider, entry.usage); max > 0 {
+		occupancyPct = min(used*100/max, 100)
+	}
+	return tokens, cost, occupancyPct
 }
 
 // chatLastReply returns a one-line preview of the agent's most recent response
@@ -156,53 +210,24 @@ func (s *Server) chatStatAgents() []uiAgent {
 	if err != nil {
 		return nil
 	}
-	absRoot, aerr := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
-	if aerr != nil {
-		return nil
-	}
 	var out []uiAgent
 	for _, c := range chats {
-		if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
+		if c == nil {
 			continue
 		}
 		provider, perr := flowdb.NormalizeSessionProvider(c.Provider)
 		if perr != nil {
 			continue
 		}
-		task := &flowdb.Task{
-			Slug:            c.Slug,
-			WorkDir:         absRoot,
-			SessionProvider: provider,
-			SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
-		}
-		tokens, cost := s.chatSessionUsage(task)
+		tokens, cost, _ := s.chatUsage(c)
 		if tokens == 0 && cost == 0 {
 			continue // nothing burned yet / transcript unresolved — don't inflate the count
 		}
-		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, TokensSession: tokens, CostSession: cost})
+		// Origin lets buildUIStats attribute steerer chats to the "Steering" slice
+		// (GAP-12) distinct from UI/Slack chats, while still counting in the totals.
+		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, Origin: c.Origin, TokensSession: tokens, CostSession: cost})
 	}
 	return out
-}
-
-// chatSessionUsage resolves a chat's session transcript and returns its
-// cumulative session tokens (cache-excluded, the CLI's Σ) and full billed cost
-// (cache included) — the same two figures sessionInsightsForTask derives for
-// tasks. The transcript parse is memoized by transcriptCache, so this stays cheap
-// on the buildUIData hot path. Any resolution/read error yields (0, 0).
-func (s *Server) chatSessionUsage(task *flowdb.Task) (int, float64) {
-	path, err := resolveSessionJSONLPath(task)
-	if err != nil || path == "" {
-		return 0, 0
-	}
-	entry, err := s.transcripts.get(path)
-	if err != nil {
-		return 0, 0
-	}
-	cost := 0.0
-	for _, c := range entry.usage.CostByDay {
-		cost += c
-	}
-	return entry.usage.TokensSession, cost
 }
 
 // handleChats serves GET /api/chats — the Chats sidebar list. The
@@ -261,6 +286,38 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 		return actionResponse{OK: true, Message: "deleted chat"}, http.StatusOK
 	case "chat-reopen":
 		return s.reopenChat(slug)
+	case "chat-rename":
+		title := strings.TrimSpace(req.Name)
+		if title == "" {
+			return actionResponse{OK: false, Message: "name required"}, http.StatusBadRequest
+		}
+		if err := flowdb.SetChatTitle(s.cfg.DB, slug, title, flowdb.NowISO()); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "renamed chat"}, http.StatusOK
+	case "chat-set-provider":
+		// Manual provider switch on a steerer chat (GAP-11) — same switch path as
+		// the auto-fork (GAP-9), either direction (claude↔codex). Re-primes the new
+		// session from a rendered transcript of the old one.
+		if err := s.switchSteererProvider(slug, req.Provider); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+		}
+		return actionResponse{OK: true, Message: "switched chat provider to " + req.Provider}, http.StatusOK
+	case "chat-mute":
+		// Mute a steerer chat: the cascade stops forwarding events to it (gated in
+		// DeliverToChannelSession) until unmuted. The chat row + session survive.
+		if err := flowdb.SetChatMuted(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "muted chat — no events will be forwarded until you unmute"}, http.StatusOK
+	case "chat-unmute":
+		if err := flowdb.SetChatMuted(s.cfg.DB, slug, ""); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		s.publishUIChange("chats")
+		return actionResponse{OK: true, Message: "unmuted chat"}, http.StatusOK
 	default:
 		return actionResponse{OK: false, Message: "unknown chat action " + req.Kind}, http.StatusBadRequest
 	}

@@ -61,6 +61,7 @@ func New(cfg Config) *Server {
 	s.steeringRuns = newSteeringRunStore()
 	s.reconcile = newLivenessReconciler(s)
 	s.kbDistiller = newKBDistiller(s)
+	s.steererCompact = newSteererCompactWorker(s)
 	s.kbDreamer = newKBDreamer(s)
 	s.kbWatcher = newKBWatcher(s)
 	s.transcripts = newTranscriptCache()
@@ -84,6 +85,7 @@ func New(cfg Config) *Server {
 	// the channel/ts/team_id columns existed (channel+ts are recoverable from
 	// thread_key). Nil when no token; all uses are nil-safe.
 	s.slackPermalinker = monitor.NewSlackPermalinker()
+	monitor.SetSlackImageFileSaver(s.saveSteererSlackImageAttachment, maxTerminalAttachmentUploadBytes)
 	// Slack Socket Mode listener: only constructed when a DB is available
 	// (the dispatcher needs one). Start()/Stop() are no-ops when the env
 	// isn't configured for Socket Mode, so wiring is safe to leave in
@@ -100,16 +102,16 @@ func New(cfg Config) *Server {
 		// "perma drop" mutes (channel/sender/thread) from steering_mutes.
 		cascade.ConfigFn = steering.WatchConfigFnWithMutes(cfg.DB)
 		cascade.AutonomyFn = steering.AutonomyFnWithFeedback(cfg.DB, steering.AutonomyFromEnv) // live per-action auto-act policy + learned threshold nudges
-	// Gate auto-acts on the CALIBRATED confidence (raw model score → empirical
-	// P(operator agrees), learned from attention_feedback). Re-loaded per surfaced
-	// verdict so it tracks new feedback; an error → nil → raw fallback.
-	cascade.CalibratorFn = func() *steering.ConfidenceCalibrator {
-		cal, err := steering.LoadConfidenceCalibrator(cfg.DB)
-		if err != nil {
-			return nil
+		// Gate auto-acts on the CALIBRATED confidence (raw model score → empirical
+		// P(operator agrees), learned from attention_feedback). Re-loaded per surfaced
+		// verdict so it tracks new feedback; an error → nil → raw fallback.
+		cascade.CalibratorFn = func() *steering.ConfidenceCalibrator {
+			cal, err := steering.LoadConfidenceCalibrator(cfg.DB)
+			if err != nil {
+				return nil
+			}
+			return cal
 		}
-		return cal
-	}
 		// De-ID feed text at ingest: clean Slack <@U…> mention markup to names
 		// BEFORE it reaches the classifier/LLM and the trace, so summaries and
 		// drafts never parrot raw IDs. nil resolver → no cleaner (identity).
@@ -133,6 +135,11 @@ func New(cfg Config) *Server {
 		// OFF by default inside the dispatcher (CommandChannelEnabled).
 		dispatcher.ChatSink = s
 		s.cascade = cascade
+		// Per-channel steerer session model (GAP-1, behind FLOW_STEERING_SESSIONS,
+		// default off). *Server implements steering.SteererSessionSink; the cold
+		// DeepTriageIncremental path stays the live fallback on any session error.
+		cascade.SessionSink = s
+		dispatcher.SteererSessionsEnabled = steering.SteererSessionsEnabled
 		// Reuse a primed Haiku session across the cheap classifier stages (the
 		// heavy framing + task index sent once at session creation, only the
 		// per-message payload on each resume). No-op when
@@ -151,6 +158,7 @@ func New(cfg Config) *Server {
 		if s.cascade != nil {
 			ghDispatcher.Steerer = s.cascade
 			ghDispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+			ghDispatcher.SessionsEnabled = steering.SteererSessionsEnabled
 		}
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}
@@ -295,6 +303,19 @@ func (s *Server) ListenAndServe(addr string) int {
 		s.kbDistiller.start()
 		defer s.kbDistiller.stop()
 	}
+	// Per-channel steerer session idle-sweep: tear down PTYs of steerer sessions
+	// whose transcript has been quiet past the TTL (the chat row + session_id
+	// survive; the next event resumes them). Only runs when FLOW_STEERING_SESSIONS
+	// is on, so it is a no-op by default.
+	if steering.SteererSessionsEnabled() {
+		sweepCtx, sweepCancel := context.WithCancel(context.Background())
+		defer sweepCancel()
+		go s.runSteererIdleSweep(sweepCtx)
+		if s.steererCompact != nil {
+			s.steererCompact.start()
+			defer s.steererCompact.stop()
+		}
+	}
 	// Start the KB dreamer: periodic hygiene pass that flags stale KB entries
 	// into each file's "Pending removal" section and auto-prunes ones left
 	// flagged past the max age.
@@ -368,6 +389,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			if s.cascade != nil {
 				backfill.Observer = s.cascade
 				backfill.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+				backfill.SteererSessionsEnabled = steering.SteererSessionsEnabled
 			}
 			// DM channels the agent registered (slack-dm: tags) are reconciled
 			// via conversations.history on the user token — the bot can't read
@@ -448,27 +470,6 @@ func (s *Server) ListenAndServe(addr string) int {
 			}
 		}()
 	}
-	// One-shot conversation dedupe: collapse open cards that fragmented into many
-	// because each standalone message (every DM message, fresh channel post)
-	// anchored its own thread_key before context-aware clubbing existed. Replays
-	// each channel's open cards through the same matcher used live and merges
-	// same-conversation cards into one (dismissing the rest — reversible). Runs
-	// after EnableClassifierSessions so it shares the primed Haiku session.
-	// Idempotent: once a conversation is collapsed there's nothing left to merge.
-	// Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
-	if s.cfg.DB != nil && s.cascade != nil && steeringDedupeEnabled() {
-		go func() {
-			res, err := s.cascade.DedupeOpenFeedConversations(context.Background())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "[feed dedupe] %v\n", err)
-				return
-			}
-			if res.Merged > 0 {
-				fmt.Fprintf(os.Stderr, "[feed dedupe] collapsed %d duplicate card(s) into their conversations\n", res.Merged)
-				s.publishUIChange("attention")
-			}
-		}()
-	}
 	// Start the GitHub polling listener when explicitly enabled. Like
 	// Slack, Start() is a no-op when env config is incomplete.
 	if s.githubListener != nil {
@@ -519,17 +520,6 @@ func (s *Server) ListenAndServe(addr string) int {
 // rest of the steerer wired.
 func steeringBackfillEnabled() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_BACKFILL"))) {
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return true
-	}
-}
-
-// steeringDedupeEnabled reports whether the one-shot conversation-dedupe pass
-// should run at boot. Defaults on; set FLOW_STEERING_DEDUPE=0 to disable.
-func steeringDedupeEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("FLOW_STEERING_DEDUPE"))) {
 	case "0", "false", "no", "off":
 		return false
 	default:

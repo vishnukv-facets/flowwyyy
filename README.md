@@ -409,9 +409,10 @@ you decide what happens next. It's an operator-review queue — it surfaces, it
 doesn't autonomously post, mute, or create work unless you opt in.
 
 ```
-   connector event ─▶ Stage 0 involvement gate ─▶ Stage 1/2 classifier ─▶ attention_feed
-                       (drop noise that doesn't       (Claude/Codex            (cards you
-                        involve you)                   subprocess, budgeted)     review)
+   connector event ─▶ Stage 0 involvement gate ─▶ triage ──────────────▶ attention_feed
+                       (drop noise / mutes that      (a stateless classifier   (cards you
+                        don't involve you)            cascade, OR a per-channel  review)
+                                                      chat session — see below)
 ```
 
 **Review it from the CLI:**
@@ -434,12 +435,99 @@ and send-reply on top.
   <br><sub><em>The Attention feed — each card carries a source, a confidence score, a "why this," and one-click actions.</em></sub>
 </p>
 
+### Per-channel chat steering (`FLOW_STEERING_SESSIONS`)
+
+By default the steerer is **stateless**: each event gets its own `claude -p`
+subprocess that classifies it in isolation. Cheap and predictable — but it has no
+memory. Three messages in one thread are three unrelated decisions, and it can't
+open a linked file or remember that you already answered.
+
+Turn on **`FLOW_STEERING_SESSIONS`** and the model changes. Each Slack
+conversation (channel, DM, group DM) and each GitHub PR/issue gets its own
+**persistent chat session** — `chat-steer-<channel>` — that the steerer feeds one
+message at a time. The session keeps running memory of the thread, holds the
+Slack MCP tools, and decides for itself whether a message is worth your
+attention:
+
+```
+  Slack / GitHub event
+        │
+        ▼
+  Stage 0 involvement gate ──▶ drop: mutes · keywords · "doesn't involve you"  (still traced)
+        │
+        │ survives:  DM · @mention · watched channel · linked task
+        ▼
+  FLOW_STEERING_SESSIONS ?
+        │
+        ├─ OFF ─▶ stateless cascade — a fresh claude -p per event, no memory:
+        │           Stage 1 relevance → Stage 2 score → Stage 3 deep triage ──────┐
+        │                                                                         │
+        └─ ON  ─▶ per-channel chat  "chat-steer-<channel>"  (one live session     │
+                  per conversation, resumed across events):                       │
+                   • running memory of the thread  → N messages = ONE card        │
+                   • Slack MCP: reads the thread, downloads files + images         │
+                   • each delivered turn it decides:                              │
+                       surface a card ───────────────────────────────────────────┼─▶ attention_feed
+                       draft a reply (rides on the card)                          │   (cards you
+                       absorb as context_only (your msgs / bot echoes; never      │    review)
+                         surfaced — keeps memory honest)                          │
+                       do nothing                                                 │
+                                                                                  │
+  operator reviews a card ◀───────────────────────────────────────────────────────┘
+        │
+        ├─ Send reply  ─▶ routed BACK to the SAME chat → it posts in-thread via the
+        │                 Slack MCP (the wording fits, it already knows the thread)
+        ├─ Make task · Forward · Dismiss · Mute-this-chat
+        └─ you reply in Slack yourself ─▶ fed to the chat as context_only → it
+                                          revalidates / closes the open card
+```
+
+**What the session model buys you**
+
+- **Conversation memory.** A back-and-forth is reasoned about as one evolving
+  situation, not re-triaged from scratch each message — a noisy thread collapses
+  to a single living card instead of a pile of fragments.
+- **It reads what you read.** The chat pulls the thread over the Slack MCP and
+  downloads image/file attachments, so a screenshot-only "can you check this?"
+  is actually looked at, not guessed from the caption.
+- **Replies come from context.** Approve a reply and the channel's *own* chat
+  posts it — it already knows the thread. (Model off → an ephemeral
+  `FLOW_STEERING_SEND_MODEL` session posts instead.)
+- **Your own actions teach it.** Messages you send, and replies the bot echoes
+  back, arrive as `context_only` memory the chat absorbs but never surfaces — so
+  if you answer in Slack directly, the open card is revalidated and closed
+  instead of nagging you.
+- **Per-chat mute.** Silence one conversation without muting the whole channel.
+
+**Watching it work.** The **Attention → trace** view records every decision. A
+session-routed event reads `delivered · routed to the channel's steerer chat`
+(with a link to the chat) instead of the stateless `Stage 1/2/3` grid; the
+**live** view shows each event pass the scope gate and flow into its chat
+(`→ chat`). Filter the trace by the **delivered** disposition to see exactly what
+the chats are handling.
+
+**Tuning.**
+
+| variable | default | what it does |
+|---|---|---|
+| `FLOW_STEERING_SESSIONS` | `false` | turn the per-channel chat model on (routing is immediate; idle-sweep + compact workers start on next restart) |
+| `FLOW_STEERER_DEFAULT_PROVIDER` | `claude` | agent a new steerer chat launches with (`claude` / `codex`) |
+| `FLOW_STEERER_IDLE_TTL` | `30m` | how long a chat's terminal stays warm before idle-sleep — the chat row + its memory survive; the next event wakes it |
+| `FLOW_STEERING_SEND_MODEL` | `claude-sonnet-4-6` | fallback model for the ephemeral send session (no chat exists / sessions off) |
+
+> Sessions are created **lazily** — one per conversation, only when a real event
+> survives Stage 0. There is no bulk replay of historical channels on startup
+> unless you enable it (`FLOW_STEERING_BACKFILL`, with a capped cold-start
+> lookback). Idle chats sleep their terminal but keep their memory, so cost
+> tracks live activity, not the number of channels you watch.
+
 **Autonomy is surface-only by default.** Every outward action is disabled unless
 you explicitly enable it. Only `make_task` and `forward` are auto-actable in
 settings, and both require explicit enablement, confidence thresholds, and
 traceable audit records. Substantive outbound replies are always manual: the
-server never posts Slack replies directly — it opens an ephemeral, watchable
-session that posts the *approved* text. Classifier work is budgeted
+server never posts to Slack directly — it routes your *approved* text to the
+conversation's own steerer chat (or, with the session model off, an ephemeral,
+watchable session) to post. Classifier work is budgeted
 (`FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR`, default `30`) and backs off on
 quota/auth failures (`FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN`, default `30m`).
 Operator clicks authorize one action — never future autonomous behavior.

@@ -503,6 +503,19 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 				}
 			}(item.ThreadKey, item.Source, text)
 		}
+		// Under the session model the channel's own chat owns this thread's
+		// understanding — teach IT directly (context_only) instead of a stateless
+		// re-triage. Falls back to the cold correction-retriage when no chat exists.
+		if handled, herr := s.postCorrectionToChat(item, text); herr != nil {
+			return actionResponse{OK: false, Message: herr.Error()}, http.StatusInternalServerError
+		} else if handled {
+			s.publishUIChange("attention")
+			msg := "told this channel's steering session — it'll update its read"
+			if req.Remember {
+				msg += "; saving it to your KB"
+			}
+			return actionResponse{OK: true, Message: msg}, http.StatusOK
+		}
 		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, now)
 		s.publishUIChange("attention")
 		launchAttentionCorrectionRetriage(s, item)
@@ -611,6 +624,16 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		// Tasks list. On failure it stays open so the operator can see why.
 		if s.terminals == nil {
 			return actionResponse{OK: false, Message: "terminal hub is not running — cannot open a send session"}, http.StatusServiceUnavailable
+		}
+		// Prefer the channel's existing per-channel steerer chat: it already holds the
+		// thread's memory and has the Slack MCP, so it posts in-context (and in-thread)
+		// instead of spinning a context-blind ephemeral session. The ephemeral path
+		// below stays the fallback when no chat exists / the session model is off.
+		if handled, herr := s.postApprovedReplyViaChat(item, text, instructions); herr != nil {
+			return actionResponse{OK: false, Message: herr.Error()}, http.StatusInternalServerError
+		} else if handled {
+			_ = s.recordAttentionFeedback(item, "send_reply", "approved", text)
+			return actionResponse{OK: true, Message: "handed your reply to this channel's steering session — it's posting in-thread"}, http.StatusOK
 		}
 		launch, err := s.prepareSendReplyFloatingLaunch(item, text, instructions)
 		if err != nil {

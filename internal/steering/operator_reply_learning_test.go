@@ -38,7 +38,7 @@ func operatorReplyEvent(channel, threadTS, ts, text string) monitor.InboundEvent
 // recorded into thread memory, the card resolved, an operator action logged, a
 // calibration feedback row emitted, and (live + substantive) KB capture attempted.
 func TestOperatorReplyLearnsOnStatefulThread(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	c.KBDir = "/tmp/flow/kb"
 	prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
 	seedTriagedThread(t, c, "C1:1.1", "C1", "reply", 0.6)
@@ -80,7 +80,7 @@ func TestOperatorReplyLearnsOnStatefulThread(t *testing.T) {
 // A self-authored message on a thread flow never triaged is still a plain drop —
 // no thread-state row, no feedback, no KB call. This is the no-firehose guarantee.
 func TestOperatorReplyDroppedOnNewThread(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	c.KBDir = "/tmp/flow/kb"
 	prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
 
@@ -102,7 +102,7 @@ func TestOperatorReplyDroppedOnNewThread(t *testing.T) {
 // Backfill replay learns into memory but does NOT fire the expensive KB agent
 // (avoids burst LLM spend on catch-up).
 func TestOperatorReplyNoKBCaptureOnBackfill(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	c.KBDir = "/tmp/flow/kb"
 	prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
 	seedTriagedThread(t, c, "C1:2.2", "C1", "reply", 0.6)
@@ -121,7 +121,7 @@ func TestOperatorReplyNoKBCaptureOnBackfill(t *testing.T) {
 
 // Replaying the same reply (same ts) must not double-record it.
 func TestOperatorReplyDedupSameTS(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	stubCaptureKBRunner(t, func(string) (string, error) { return "NOTHING-DURABLE", nil })
 	seedTriagedThread(t, c, "C1:3.3", "C1", "reply", 0.6)
 
@@ -142,57 +142,10 @@ func TestOperatorReplyDedupSameTS(t *testing.T) {
 	}
 }
 
-// A hand-typed reply in a DM/MPDM resolves the CLUBBED card even though the
-// reply's own (un-threaded) key differs from the card's clubbed thread_key. This
-// is the bug where the operator replied in an MPDM and the card kept nagging:
-// learnFromOperatorReply looked up by the raw key and missed the clubbed card.
-func TestOperatorReplyResolvesClubbedDMCard(t *testing.T) {
-	c := newClubTestCascade(t)
-	c.KBDir = "/tmp/flow/kb"
-	stubCaptureKBRunner(t, func(string) (string, error) { return "NOTHING-DURABLE", nil })
-
-	clubbedKey := "C_DM:1718000000.000100"
-	if _, _, err := flowdb.UpsertFeedItemSurfaced(c.DB, flowdb.FeedItem{
-		ID: "dm-card", Source: "slack", ThreadKey: clubbedKey, Channel: "C_DM",
-		ChannelType: chanTypeMPDM, SuggestedAction: "digest_only", Confidence: 0.6,
-		TS: "1718000000.000100", Status: "new", CreatedAt: "2026-06-12T06:00:00Z",
-	}); err != nil {
-		t.Fatalf("seed clubbed card: %v", err)
-	}
-	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
-		ThreadKey: clubbedKey, Source: "slack", Action: "digest_only", Confidence: 0.6,
-		Reason: "prior card", At: "2026-06-12T06:00:00Z",
-	}); err != nil {
-		t.Fatalf("seed prior decision: %v", err)
-	}
-
-	// Operator replies as a NEW top-level message: its own key (≠ clubbed key),
-	// within the conversation gap of the card.
-	ev := monitor.InboundEvent{
-		Channel: "C_DM", ChannelType: chanTypeMPDM,
-		ThreadTS: "1718000600.000200", TS: "1718000600.000200",
-		UserID: "U_ME", Text: "Let's push the demo to 2pm, I have a hard stop at 3:30.",
-	}
-	c.learnFromOperatorReply(context.Background(), ev, "live")
-
-	card, err := flowdb.GetFeedItem(c.DB, "dm-card")
-	if err != nil {
-		t.Fatalf("GetFeedItem: %v", err)
-	}
-	if card.Status != "acted" {
-		t.Errorf("clubbed DM card status = %q, want acted (operator replied by hand)", card.Status)
-	}
-	s, ok, _ := flowdb.GetThreadState(c.DB, clubbedKey)
-	if !ok || len(s.OperatorReplies) != 1 {
-		t.Errorf("clubbed thread OperatorReplies = %+v (ok=%v), want the reply recorded under the clubbed key", s.OperatorReplies, ok)
-	}
-}
-
-// In a regular channel (not DM/MPDM) the channel-level recovery must NOT fire —
-// else a reply in one thread would wrongly resolve an unrelated open card in the
-// same busy channel. Only DM/MPDM (one conversation per channel) recover.
+// A reply in one thread must not resolve an unrelated open card in the same
+// busy channel.
 func TestOperatorReplyNoChannelRecoveryInRegularChannel(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	seedTriagedThread(t, c, "C1:1.1", "C1", "reply", 0.6) // channelType "channel"
 
 	ev := operatorReplyEvent("C1", "9.9", "9.9", "Unrelated message in the same channel, a different thread.")
@@ -209,7 +162,7 @@ func TestOperatorReplyNoChannelRecoveryInRegularChannel(t *testing.T) {
 // no new operator_reply action, no operator_handled calibration row, no KB capture.
 // The open card is still stood down.
 func TestAgentSentReplyEchoNotRelearned(t *testing.T) {
-	c := newClubTestCascade(t)
+	c := newSteeringTestCascade(t)
 	c.KBDir = "/tmp/flow/kb"
 	prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
 	seedTriagedThread(t, c, "C1:4.4", "C1", "reply", 0.6)

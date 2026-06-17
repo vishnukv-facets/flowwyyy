@@ -150,6 +150,16 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	has, err = columnExists(db, "chats", "muted_at")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE chats ADD COLUMN muted_at TEXT`); err != nil {
+			return fmt.Errorf("add chats.muted_at: %w", err)
+		}
+	}
+
 	has, err = columnExists(db, "attention_feed", "channel")
 	if err != nil {
 		return err
