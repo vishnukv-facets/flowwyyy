@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/http"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/slack-go/slack"
 	"rsc.io/pdf"
@@ -72,6 +74,7 @@ type SlackFile struct {
 	Content            string
 	ContentTruncated   bool
 	SecurityReport     string
+	LocalPath          string
 }
 
 // DisplayText returns the message body, falling back to file titles for
@@ -127,6 +130,32 @@ var slackFileDownloadFn = func(ctx context.Context, api *slack.Client, downloadU
 	return append([]byte(nil), buf.buf.Bytes()...), buf.truncated, nil
 }
 
+type SlackImageFileSaver func(ctx context.Context, channel string, file SlackFile, data []byte) (string, error)
+
+var slackImageSaver = struct {
+	sync.Mutex
+	fn       SlackImageFileSaver
+	maxBytes int
+}{}
+
+func SetSlackImageFileSaver(fn SlackImageFileSaver, maxBytes int) func() {
+	slackImageSaver.Lock()
+	oldFn, oldMax := slackImageSaver.fn, slackImageSaver.maxBytes
+	slackImageSaver.fn, slackImageSaver.maxBytes = fn, maxBytes
+	slackImageSaver.Unlock()
+	return func() {
+		slackImageSaver.Lock()
+		slackImageSaver.fn, slackImageSaver.maxBytes = oldFn, oldMax
+		slackImageSaver.Unlock()
+	}
+}
+
+func currentSlackImageFileSaver() (SlackImageFileSaver, int) {
+	slackImageSaver.Lock()
+	defer slackImageSaver.Unlock()
+	return slackImageSaver.fn, slackImageSaver.maxBytes
+}
+
 type limitedSlackFileBuffer struct {
 	buf       bytes.Buffer
 	limit     int
@@ -158,9 +187,15 @@ func (b *limitedSlackFileBuffer) String() string {
 	return b.buf.String()
 }
 
-func slackFilesFromAPIWithContent(ctx context.Context, api *slack.Client, files []slack.File) []SlackFile {
+func slackFilesFromAPIWithContent(ctx context.Context, api *slack.Client, channel string, files []slack.File) []SlackFile {
 	out := slackFilesFromAPI(files)
 	for i := range out {
+		if out[i].isImageLike() {
+			if !saveSlackImageFile(ctx, api, channel, &out[i]) && strings.TrimSpace(out[i].SecurityReport) == "" {
+				out[i].SecurityReport = "Security report: content not fetched; image download unavailable for model attachment."
+			}
+			continue
+		}
 		if !out[i].isReadableBySafeExtractor() {
 			out[i].SecurityReport = "Security report: content not fetched; unsupported file type for safe text extraction."
 			continue
@@ -202,6 +237,56 @@ func slackFilesFromAPIWithContent(ctx context.Context, api *slack.Client, files 
 		out[i].SecurityReport = slackFileSecurityReport(out[i].Content, out[i].isPDFLike())
 	}
 	return out
+}
+
+func saveSlackImageFile(ctx context.Context, api *slack.Client, channel string, file *SlackFile) bool {
+	if file == nil {
+		return false
+	}
+	saveFn, maxBytes := currentSlackImageFileSaver()
+	if saveFn == nil {
+		return false
+	}
+	if maxBytes <= 0 {
+		maxBytes = slackFileContentMaxBytes
+	}
+	if file.Size > maxBytes {
+		file.SecurityReport = fmt.Sprintf("Security report: image not fetched; file size %d bytes exceeds attachment limit %d bytes.", file.Size, maxBytes)
+		return false
+	}
+	url := firstNonEmpty(file.URLPrivateDownload, file.URLPrivate)
+	if url == "" {
+		file.SecurityReport = "Security report: image not fetched; Slack file download URL unavailable."
+		return false
+	}
+	data, downloadTruncated, err := slackFileDownloadFn(ctx, api, url, maxBytes)
+	if err != nil || len(data) == 0 {
+		if err != nil {
+			file.SecurityReport = "Security report: image not fetched; " + err.Error()
+		}
+		return false
+	}
+	if downloadTruncated {
+		file.SecurityReport = fmt.Sprintf("Security report: image not attached; file exceeds attachment limit %d bytes.", maxBytes)
+		return false
+	}
+	if slackDownloadedContentLooksHTML(data) {
+		file.SecurityReport = "Security report: image not attached; Slack returned an HTML page instead of file bytes. Reinstall Slack with files:read scope if this persists."
+		return false
+	}
+	if detected, ok := safeRasterImageContentType(data); !ok {
+		file.SecurityReport = fmt.Sprintf("Security report: image not attached; downloaded content type %q is not a verified raster image.", detected)
+		return false
+	}
+	path, err := saveFn(ctx, strings.TrimSpace(channel), *file, data)
+	if err != nil || strings.TrimSpace(path) == "" {
+		if err != nil {
+			file.SecurityReport = "Security report: image not saved for model attachment; " + err.Error()
+		}
+		return false
+	}
+	file.LocalPath = strings.TrimSpace(path)
+	return true
 }
 
 var slackPDFExtractTextFn = extractSlackPDFText
@@ -310,7 +395,11 @@ func (f SlackFile) displayText() string {
 	}
 	content := strings.TrimSpace(f.Content)
 	report := strings.TrimSpace(f.SecurityReport)
+	localPath := strings.TrimSpace(f.LocalPath)
 	if content == "" {
+		if localPath != "" {
+			return header + "\n\nImage attachment saved for model vision: " + localPath
+		}
 		if report != "" {
 			return header + "\n\n" + report
 		}
@@ -335,6 +424,53 @@ func (f SlackFile) isPDFLike() bool {
 	pretty := strings.ToLower(strings.TrimSpace(f.PrettyType))
 	name := strings.ToLower(firstNonEmpty(f.Name, f.Title))
 	return mime == "application/pdf" || filetype == "pdf" || strings.Contains(pretty, "pdf") || strings.HasSuffix(name, ".pdf")
+}
+
+func (f SlackFile) isImageLike() bool {
+	if f.isSVGLike() {
+		return false
+	}
+	mime := strings.ToLower(strings.TrimSpace(f.Mimetype))
+	if strings.HasPrefix(mime, "image/") {
+		return true
+	}
+	filetype := strings.ToLower(strings.TrimSpace(f.Filetype))
+	pretty := strings.ToLower(strings.TrimSpace(f.PrettyType))
+	switch filetype {
+	case "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "bmp":
+		return true
+	}
+	if strings.Contains(pretty, "image") || strings.Contains(pretty, "png") || strings.Contains(pretty, "jpeg") || strings.Contains(pretty, "gif") {
+		return true
+	}
+	name := strings.ToLower(firstNonEmpty(f.Name, f.Title))
+	for _, ext := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp"} {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
+}
+
+func (f SlackFile) isSVGLike() bool {
+	mime := strings.ToLower(strings.TrimSpace(f.Mimetype))
+	filetype := strings.ToLower(strings.TrimSpace(f.Filetype))
+	pretty := strings.ToLower(strings.TrimSpace(f.PrettyType))
+	name := strings.ToLower(firstNonEmpty(f.Name, f.Title))
+	return strings.Contains(mime, "svg") ||
+		filetype == "svg" ||
+		strings.Contains(pretty, "svg") ||
+		strings.HasSuffix(name, ".svg")
+}
+
+func safeRasterImageContentType(data []byte) (string, bool) {
+	detected := strings.ToLower(strings.TrimSpace(strings.Split(http.DetectContentType(data), ";")[0]))
+	switch detected {
+	case "image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp":
+		return detected, true
+	default:
+		return detected, false
+	}
 }
 
 func (f SlackFile) downloadMaxBytes() int {
@@ -495,7 +631,7 @@ func (c slackTitleAPIClient) ConversationReplies(ctx context.Context, channelID,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, msg := range msgs {
-		files := slackFilesFromAPIWithContent(ctx, api, msg.Files)
+		files := slackFilesFromAPIWithContent(ctx, api, channelID, msg.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(msg.User, msg.Username),
 			Text:     strings.TrimSpace(msg.Text),

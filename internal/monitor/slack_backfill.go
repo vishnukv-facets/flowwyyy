@@ -53,7 +53,7 @@ func (c slackRepliesAPIClient) Replies(ctx context.Context, channelID, threadTS,
 	}
 	out := make([]SlackMessage, 0, len(msgs))
 	for _, m := range msgs {
-		files := slackFilesFromAPIWithContent(ctx, api, m.Files)
+		files := slackFilesFromAPIWithContent(ctx, api, channelID, m.Files)
 		out = append(out, SlackMessage{
 			User:     firstNonEmpty(m.User, m.Username),
 			Text:     strings.TrimSpace(m.Text),
@@ -100,8 +100,8 @@ type SlackBackfill struct {
 	// instead of being skipped, so post-restart replay rebuilds session memory.
 	SteererSessionsEnabled func() bool
 	interval               time.Duration
-	limit              int
-	logFn              func(string, ...any)
+	limit                  int
+	logFn                  func(string, ...any)
 }
 
 // NewSlackBackfill builds a backfiller. A zero interval defaults to 45s — well

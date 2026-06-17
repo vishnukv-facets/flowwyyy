@@ -132,16 +132,17 @@ type ContextMessage struct {
 // ThreadContext is a normalized bundle of richer context a connector fetches
 // on demand for the deep triage stage.
 type ThreadContext struct {
-	Source       string           `json:"source,omitempty"`
-	ThreadKey    string           `json:"thread_key,omitempty"`
-	Summary      string           `json:"summary,omitempty"`
-	Participants []string         `json:"participants,omitempty"`
-	Timestamps   []string         `json:"timestamps,omitempty"`
-	Parent       *ContextMessage  `json:"parent,omitempty"`
-	Messages     []ContextMessage `json:"messages,omitempty"`
-	Permalink    string           `json:"permalink,omitempty"`
-	FetchStatus  string           `json:"fetch_status,omitempty"`
-	FetchError   string           `json:"fetch_error,omitempty"`
+	Source          string           `json:"source,omitempty"`
+	ThreadKey       string           `json:"thread_key,omitempty"`
+	Summary         string           `json:"summary,omitempty"`
+	Participants    []string         `json:"participants,omitempty"`
+	Timestamps      []string         `json:"timestamps,omitempty"`
+	Parent          *ContextMessage  `json:"parent,omitempty"`
+	Messages        []ContextMessage `json:"messages,omitempty"`
+	AttachmentPaths []string         `json:"attachment_paths,omitempty"`
+	Permalink       string           `json:"permalink,omitempty"`
+	FetchStatus     string           `json:"fetch_status,omitempty"`
+	FetchError      string           `json:"fetch_error,omitempty"`
 }
 
 // PriorUnderstanding is the model-facing snapshot of a thread's persistent

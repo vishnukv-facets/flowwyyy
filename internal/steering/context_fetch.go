@@ -96,6 +96,7 @@ func (f SlackContextFetcher) FetchContext(ctx context.Context, ev monitor.Inboun
 	if parentIdx >= 0 {
 		m := slackContextMessage(ctx, f, msgs[parentIdx], "parent")
 		pack.Parent = &m
+		pack.AttachmentPaths = append(pack.AttachmentPaths, slackMessageAttachmentPaths(msgs[parentIdx])...)
 	}
 	if pack.Permalink == "" {
 		if f.Permalink != nil {
@@ -113,6 +114,7 @@ func (f SlackContextFetcher) FetchContext(ctx context.Context, ev monitor.Inboun
 			continue
 		}
 		pack.Messages = append(pack.Messages, slackContextMessage(ctx, f, msg, "reply"))
+		pack.AttachmentPaths = append(pack.AttachmentPaths, slackMessageAttachmentPaths(msg)...)
 	}
 	if pack.Parent == nil {
 		pack.Parent = &ContextMessage{
@@ -134,6 +136,16 @@ func slackContextMessage(ctx context.Context, f SlackContextFetcher, msg monitor
 		Text:   cleanContextText(ctx, f.CleanText, msg.DisplayText()),
 		TS:     ts,
 	}
+}
+
+func slackMessageAttachmentPaths(msg monitor.SlackMessage) []string {
+	var paths []string
+	for _, file := range msg.Files {
+		if path := strings.TrimSpace(file.LocalPath); path != "" {
+			paths = append(paths, path)
+		}
+	}
+	return paths
 }
 
 // GitHubContextFetcher deterministically reads a PR/issue body plus comments
