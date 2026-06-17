@@ -270,6 +270,53 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 	return true, nil
 }
 
+// steererCorrectionPrompt builds a context_only teach turn: the operator corrected
+// the chat's read of this thread, so it must update its running understanding
+// without replying or surfacing.
+func steererCorrectionPrompt(text string) string {
+	return "[operator correction — context_only, update your understanding]\n" +
+		"The operator corrected your read of this conversation. Absorb this into your running memory so it adjusts your future decisions on this thread. Do NOT reply and do NOT surface a card for this turn — this exists solely to keep your memory correct.\n\n" +
+		"Correction:\n" + text
+}
+
+// postCorrectionToChat teaches an operator correction to the channel's existing
+// per-channel chat (context_only) instead of running a stateless re-triage — under
+// the session model the chat owns this thread's understanding. Returns handled=false
+// (caller keeps the cold correction-retriage path) when sessions are off, the source
+// isn't Slack, the chat is muted, or no chat exists. Per-slug serialized.
+func (s *Server) postCorrectionToChat(item flowdb.FeedItem, text string) (bool, error) {
+	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
+		return false, nil
+	}
+	if item.Source != "slack" {
+		return false, nil
+	}
+	channel, _ := splitThreadKey(item.ThreadKey)
+	if strings.TrimSpace(channel) == "" {
+		return false, nil
+	}
+	slug := steererChatSlug(channel)
+	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	if err != nil || chat == nil || chat.MutedAt.Valid {
+		return false, nil // no chat (or muted) → fall back to stateless correction-retriage
+	}
+	slot := s.steererSlot(slug)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	prompt := steererCorrectionPrompt(text)
+	if s.terminals.running(slug) {
+		slot.state = steererSlotLive
+		if err := s.terminals.wakeTask(slug, prompt); err != nil {
+			return false, fmt.Errorf("steerer correction: wake %q: %w", slug, err)
+		}
+		return true, nil
+	}
+	if err := s.resumeSteererChat(slot, chat, prompt); err != nil {
+		return false, fmt.Errorf("steerer correction: resume %q: %w", slug, err)
+	}
+	return true, nil
+}
+
 // startNewSteererChat launches a fresh detached steerer session primed with the
 // steerer brief + the first turn (mirrors openNewSlackChat), records its durable
 // chats row with origin="steerer", and launches with NO --model so it runs the
