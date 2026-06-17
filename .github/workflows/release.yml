@@ -23,6 +23,18 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # The embedded UI (internal/server/static/) is gitignored and built by
+      # `make ui`. Without this the binary embeds only the brand SVGs and serves
+      # "static assets unavailable". Must run BEFORE `go build` (which embeds via
+      # //go:embed all:static).
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build UI
+        run: make ui
       - name: Build ${{ matrix.asset }}
         env:
           GOOS: darwin
