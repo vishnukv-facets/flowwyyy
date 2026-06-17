@@ -91,11 +91,48 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		chans = append(chans, it.Channel)
 	}
 	s.warmSlackNames(r.Context(), users, chans)
+	// Warm permalinks concurrently too: the per-row lookup is CachedPermalink (no
+	// network), so without this a cold tab (e.g. dismissed, hundreds of rows in
+	// many channels) resolved one chat.getPermalink each — serially — and stalled
+	// for tens of seconds. Warm does them in parallel, time-boxed; unresolved rows
+	// fall back to the deep-link and resolve on a later load.
+	s.warmSlackPermalinks(r.Context(), items)
 	views := make([]AttentionItemView, 0, len(items))
 	for _, it := range items {
 		views = append(views, s.attentionItemView(r.Context(), it))
 	}
 	writeJSON(w, views)
+}
+
+// warmSlackPermalinks concurrently pre-resolves the (channel, ts) permalinks for
+// the feed rows so the per-row CachedPermalink lookups are all cache hits. Derives
+// channel/ts the same way attentionItemView does (column, else thread_key).
+func (s *Server) warmSlackPermalinks(ctx context.Context, items []flowdb.FeedItem) {
+	if s.slackPermalinker == nil || len(items) == 0 {
+		return
+	}
+	chans := make([]string, 0, len(items))
+	tss := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.Source == "github" {
+			continue
+		}
+		ch, ts := it.Channel, it.TS
+		if ch == "" || ts == "" {
+			tkChan, tkTS := splitThreadKey(it.ThreadKey)
+			if ch == "" {
+				ch = tkChan
+			}
+			if ts == "" {
+				ts = tkTS
+			}
+		}
+		chans = append(chans, ch)
+		tss = append(tss, ts)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	s.slackPermalinker.Warm(wctx, chans, tss)
 }
 
 // warmSlackNames concurrently pre-resolves the given user/channel IDs (bounded,
@@ -169,9 +206,11 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 				v.ChannelName = "Direct message"
 			}
 		}
-		// Prefer a real https permalink (resolved from channel+ts, no team_id
-		// needed); fall back to the slack:// deep link.
-		v.Permalink = s.slackPermalinker.Permalink(ctx, ch, ts)
+		// Prefer a real https permalink — but CACHE-ONLY here (warmSlackPermalinks
+		// did the network resolution concurrently up front). A per-row network
+		// getPermalink would stall a cold tab for tens of seconds. On a cache miss,
+		// fall back to the slack:// deep link (and it resolves on a later load).
+		v.Permalink = s.slackPermalinker.CachedPermalink(ch, ts)
 		if v.Permalink == "" {
 			v.Permalink = connectorPermalink(it.Source, it.TeamID, ch, ts, it.URL)
 		}

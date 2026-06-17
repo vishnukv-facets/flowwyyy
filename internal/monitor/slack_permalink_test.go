@@ -84,3 +84,50 @@ func TestSlackPermalinkerBlankAndNilSafe(t *testing.T) {
 		t.Errorf("nil resolver: Permalink = %q, want empty", got)
 	}
 }
+
+// Warm pre-resolves a batch into the cache so CachedPermalink (no network) hits;
+// this is what keeps the feed list from making one serial getPermalink per row.
+func TestSlackPermalinkerWarmThenCachedHit(t *testing.T) {
+	old := slackPermalinkFn
+	t.Cleanup(func() { slackPermalinkFn = old })
+	slackPermalinkFn = func(_ context.Context, _, channel, ts string) (string, error) {
+		return "https://slack.example/" + channel + "/p" + ts, nil
+	}
+	p := newTestPermalinker()
+
+	// Cache-only lookup is empty before warming — it must NOT hit the network.
+	if got := p.CachedPermalink("C1", "1.1"); got != "" {
+		t.Fatalf("CachedPermalink before warm = %q, want empty", got)
+	}
+
+	p.Warm(context.Background(), []string{"C1", "C2", "C1"}, []string{"1.1", "2.2", "1.1"})
+
+	if got, want := p.CachedPermalink("C1", "1.1"), "https://slack.example/C1/p1.1"; got != want {
+		t.Errorf("CachedPermalink(C1) = %q, want %q", got, want)
+	}
+	if got, want := p.CachedPermalink("C2", "2.2"), "https://slack.example/C2/p2.2"; got != want {
+		t.Errorf("CachedPermalink(C2) = %q, want %q", got, want)
+	}
+	// An unwarmed pair is still a cache miss (no network in CachedPermalink).
+	if got := p.CachedPermalink("C9", "9.9"); got != "" {
+		t.Errorf("CachedPermalink(unwarmed) = %q, want empty", got)
+	}
+}
+
+// A timed-out Warm must NOT negative-cache — a transient stall can't blank a real
+// link for the TTL. After the deadline passes, the pair is simply uncached.
+func TestSlackPermalinkerWarmCanceledLeavesUncached(t *testing.T) {
+	old := slackPermalinkFn
+	t.Cleanup(func() { slackPermalinkFn = old })
+	slackPermalinkFn = func(ctx context.Context, _, _, _ string) (string, error) {
+		<-ctx.Done() // never resolves before the deadline
+		return "", ctx.Err()
+	}
+	p := newTestPermalinker()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled
+	p.Warm(ctx, []string{"C1"}, []string{"1.1"})
+	if _, cached := p.cache["C1:1.1"]; cached {
+		t.Errorf("a cancelled Warm must not cache the pair")
+	}
+}
