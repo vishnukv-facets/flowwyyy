@@ -171,6 +171,7 @@ func TestSettingsExposeConnectorMetadata(t *testing.T) {
 		"FLOW_GH_ENABLED":          {"git", "github"},
 		"FLOW_GH_SELF_LOGINS":      {"git", "github"},
 		"FLOW_INGRESS_PROVIDER":    {"network", "ingress"},
+		"FLOW_UI_KEEP_AWAKE":       {"network", "ingress"},
 	}
 	for key, want := range wantTaxonomy {
 		got, ok := byKey[key]

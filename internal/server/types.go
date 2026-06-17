@@ -76,6 +76,9 @@ type Server struct {
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
+	powerAssertionMu sync.Mutex
+	powerAssertion   *powerAssertion
+
 	// zrok manages an optional `zrok share reserved` subprocess when
 	// FLOW_ZROK_AUTO_START is enabled. Always non-nil after New().
 	zrok *zrokManager

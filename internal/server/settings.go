@@ -129,6 +129,7 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_PUBLIC_BASE_URL", Label: "Public base URL (manual only)", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingString, Help: "Only for the 'manual' GitHub webhook provider: your own public HTTPS base URL, e.g. https://flow.example.com (own reverse proxy/tunnel). Ignored for zrok, which discovers its URL at runtime."},
 	{Key: "FLOW_ZROK_SHARE_NAME", Label: "zrok reserved share name", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingString, Help: "Optional reserved share unique-name. Set it to pin a stable GitHub webhook URL across restarts. Leave empty for an ephemeral share whose URL changes each restart."},
 	{Key: "FLOW_ZROK_AUTO_START", Label: "Auto-start zrok share", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingBool, Default: "false", Help: "Create the zrok public share for signed GitHub webhooks automatically when Flow starts. Requires zrok enablement and FLOW_GH_WEBHOOK_SECRET."},
+	{Key: "FLOW_UI_KEEP_AWAKE", Label: "Keep Mac awake", Group: "Ingress", Category: categoryNetwork, Connector: connectorIngress, Type: settingBool, Default: "false", Help: "Off by default. While flow ui serve runs, hold a macOS idle-sleep assertion (caffeinate -i) so Slack Socket Mode and GitHub webhooks stay connected. Lid-close, full hibernation, and battery policy can still sleep the Mac."},
 	// General
 	{Key: "FLOW_STALE_DAYS", Label: "Stale threshold (days)", Group: "General", Type: settingInt, Default: "3", Help: "In-progress sessions quiet longer than this are flagged stale."},
 	{Key: "FLOW_MISSION_QUOTE", Label: "Mission Control quote", Group: "General", Type: settingBool, Default: "true", Help: "Show the rotating anime quote beside the greeting on Mission Control."},
@@ -451,6 +452,9 @@ func (s *Server) applySettingsRestart(changed []string) {
 		}
 		if strings.HasPrefix(k, "FLOW_ZROK_") || strings.HasPrefix(k, "FLOW_INGRESS_") || k == "FLOW_PUBLIC_BASE_URL" || k == "FLOW_GH_WEBHOOK_SECRET" {
 			ingressTouched = true
+		}
+		if k == "FLOW_UI_KEEP_AWAKE" {
+			s.syncPowerAssertion()
 		}
 	}
 	if slackTouched {
