@@ -85,6 +85,7 @@ func New(cfg Config) *Server {
 	// the channel/ts/team_id columns existed (channel+ts are recoverable from
 	// thread_key). Nil when no token; all uses are nil-safe.
 	s.slackPermalinker = monitor.NewSlackPermalinker()
+	monitor.SetSlackImageFileSaver(s.saveSteererSlackImageAttachment, maxTerminalAttachmentUploadBytes)
 	// Slack Socket Mode listener: only constructed when a DB is available
 	// (the dispatcher needs one). Start()/Stop() are no-ops when the env
 	// isn't configured for Socket Mode, so wiring is safe to leave in

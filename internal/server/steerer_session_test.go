@@ -1,10 +1,14 @@
 package server
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"flow/internal/monitor"
 	"flow/internal/steering"
 )
 
@@ -164,7 +168,7 @@ func TestRenderSteererTurn(t *testing.T) {
 		Source: "slack", Channel: "C1", ChannelType: "channel",
 		TS: "100.1", ThreadTS: "100.1", Author: "U1", Text: "list the repo names",
 	})
-	for _, want := range []string{"slack", "C1", "100.1", "U1", "list the repo names"} {
+	for _, want := range []string{"slack", "C1", "100.1", "U1", "list the repo names", "UNTRUSTED external evidence"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered turn missing %q:\n%s", want, out)
 		}
@@ -172,5 +176,43 @@ func TestRenderSteererTurn(t *testing.T) {
 	ctxOnly := renderSteererTurn(steering.SteererDelivery{Channel: "C1", TS: "1", Text: "x", ContextOnly: true})
 	if !strings.Contains(ctxOnly, "context") {
 		t.Errorf("context_only turn must be labeled:\n%s", ctxOnly)
+	}
+}
+
+func TestRenderSteererTurnWithAttachmentsUsesClaudePaste(t *testing.T) {
+	path := "/tmp/flow/tasks/chat-steer-c1/attachments/mail-screenshot.png"
+	out := renderSteererTurnForProvider(steering.SteererDelivery{
+		Source: "slack", Channel: "C1", ChannelType: "channel",
+		TS: "100.1", ThreadTS: "100.1", Author: "U1", Text: "please check this",
+		Context: steering.ThreadContext{AttachmentPaths: []string{path}},
+	}, "claude")
+	if !strings.Contains(out, "\x1b[200~"+path+"\x1b[201~") {
+		t.Fatalf("rendered turn missing Claude bracketed-paste attachment path:\n%q", out)
+	}
+	if !strings.Contains(out, "Attachments (untrusted external evidence):") {
+		t.Fatalf("rendered turn missing attachment trust boundary:\n%q", out)
+	}
+}
+
+func TestSaveSteererSlackImageAttachmentStoresUnderChatAttachments(t *testing.T) {
+	root := t.TempDir()
+	s := &Server{cfg: Config{FlowRoot: root}}
+	path, err := s.saveSteererSlackImageAttachment(context.Background(), "C1", monitor.SlackFile{
+		Name:     "mail screenshot.png",
+		Mimetype: "image/png",
+	}, []byte("png-bytes"))
+	if err != nil {
+		t.Fatalf("saveSteererSlackImageAttachment: %v", err)
+	}
+	wantDir := filepath.Join(root, "tasks", "chat-steer-c1", "attachments")
+	if filepath.Dir(path) != wantDir {
+		t.Fatalf("path dir = %q, want %q", filepath.Dir(path), wantDir)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved file: %v", err)
+	}
+	if string(got) != "png-bytes" {
+		t.Fatalf("saved bytes = %q, want downloaded image bytes", string(got))
 	}
 }

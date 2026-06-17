@@ -2,6 +2,7 @@ package steering
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -92,6 +93,39 @@ func TestSlackContextFetcherIncludesTextFileContent(t *testing.T) {
 	}
 	if !strings.Contains(pack.Parent.Text, "PHASE2-PHASE3-EXECUTION-PLAN.md") {
 		t.Fatalf("parent text = %q, want file name retained", pack.Parent.Text)
+	}
+}
+
+func TestSlackContextFetcherCollectsAttachmentPaths(t *testing.T) {
+	f := SlackContextFetcher{
+		Replies: fakeSlackReplies{msgs: []monitor.SlackMessage{
+			{
+				User:     "U_ISHAN",
+				TS:       "1780916901.021529",
+				ThreadTS: "1780916901.021529",
+				Files: []monitor.SlackFile{{
+					Title:     "mail-screenshot.png",
+					Mimetype:  "image/png",
+					LocalPath: "/tmp/flow/tasks/chat-steer-d03/attachments/mail-screenshot.png",
+				}},
+			},
+		}},
+	}
+	pack, err := f.FetchContext(context.Background(), monitor.InboundEvent{
+		Kind: "message", ChannelType: "im", Channel: "D03", TS: "1780916901.021529", ThreadTS: "1780916901.021529", UserID: "U_ISHAN",
+	})
+	if err != nil {
+		t.Fatalf("FetchContext: %v", err)
+	}
+	if len(pack.AttachmentPaths) != 1 || pack.AttachmentPaths[0] != "/tmp/flow/tasks/chat-steer-d03/attachments/mail-screenshot.png" {
+		t.Fatalf("AttachmentPaths = %#v, want local image path", pack.AttachmentPaths)
+	}
+	raw, err := json.Marshal(pack)
+	if err != nil {
+		t.Fatalf("marshal context: %v", err)
+	}
+	if !strings.Contains(string(raw), "attachment_paths") {
+		t.Fatalf("context JSON = %s, want attachment_paths", raw)
 	}
 }
 

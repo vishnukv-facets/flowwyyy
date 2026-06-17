@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"database/sql"
 	"errors"
 	"flow/internal/flowdb"
+	"flow/internal/monitor"
 	"fmt"
 	"io"
 	"io/fs"
@@ -198,14 +201,8 @@ func (s *Server) saveTaskAttachmentFiles(taskSlug string, headers []*multipart.F
 	if len(headers) == 0 {
 		return nil, errors.New("no files uploaded")
 	}
-	if err := validateSlug(taskSlug); err != nil {
-		return nil, err
-	}
-	destDir := filepath.Join(s.cfg.FlowRoot, "tasks", taskSlug, "attachments")
-	if !strings.HasPrefix(filepath.Clean(destDir), filepath.Join(s.cfg.FlowRoot, "tasks")+string(os.PathSeparator)) {
-		return nil, errors.New("invalid task attachment path")
-	}
-	if err := os.MkdirAll(destDir, 0o755); err != nil {
+	destDir, err := s.taskAttachmentDir(taskSlug)
+	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
@@ -215,35 +212,79 @@ func (s *Server) saveTaskAttachmentFiles(taskSlug string, headers []*multipart.F
 		if err != nil {
 			return nil, err
 		}
-		name := uploadedAttachmentFilename(header.Filename, header.Header.Get("Content-Type"), now, i)
-		path := uniqueAttachmentPath(destDir, name)
-		dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := writeTaskAttachment(destDir, header.Filename, header.Header.Get("Content-Type"), src, now, i)
 		if err != nil {
 			_ = src.Close()
 			return nil, err
 		}
-		n, copyErr := io.Copy(dst, src)
-		closeErr := dst.Close()
 		_ = src.Close()
-		if copyErr != nil {
-			_ = os.Remove(path)
-			return nil, copyErr
-		}
-		if closeErr != nil {
-			_ = os.Remove(path)
-			return nil, closeErr
-		}
-		if abs, err := filepath.Abs(path); err == nil {
-			path = abs
-		}
-		files = append(files, FileRef{
-			Filename: filepath.Base(path),
-			Path:     path,
-			MTime:    now.Format(time.RFC3339),
-			Size:     n,
-		})
+		files = append(files, file)
 	}
 	return files, nil
+}
+
+func (s *Server) saveSteererSlackImageAttachment(_ context.Context, channel string, file monitor.SlackFile, data []byte) (string, error) {
+	if len(data) == 0 {
+		return "", errors.New("empty image")
+	}
+	slug := steererChatSlug(channel)
+	destDir, err := s.taskAttachmentDir(slug)
+	if err != nil {
+		return "", err
+	}
+	now := time.Now()
+	name := firstNonEmpty(file.Name, file.Title, "slack-image"+attachmentExtForContentType(file.Mimetype))
+	ref, err := writeTaskAttachment(destDir, name, file.Mimetype, bytes.NewReader(data), now, 0)
+	if err != nil {
+		return "", err
+	}
+	return ref.Path, nil
+}
+
+func (s *Server) taskAttachmentDir(taskSlug string) (string, error) {
+	if err := validateSlug(taskSlug); err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(s.cfg.FlowRoot)
+	if root == "" {
+		return "", errors.New("flow root unavailable")
+	}
+	destDir := filepath.Join(root, "tasks", taskSlug, "attachments")
+	if !strings.HasPrefix(filepath.Clean(destDir), filepath.Join(filepath.Clean(root), "tasks")+string(os.PathSeparator)) {
+		return "", errors.New("invalid task attachment path")
+	}
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return "", err
+	}
+	return destDir, nil
+}
+
+func writeTaskAttachment(destDir, filename, contentType string, src io.Reader, now time.Time, index int) (FileRef, error) {
+	name := uploadedAttachmentFilename(filename, contentType, now, index)
+	path := uniqueAttachmentPath(destDir, name)
+	dst, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		return FileRef{}, err
+	}
+	n, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	if copyErr != nil {
+		_ = os.Remove(path)
+		return FileRef{}, copyErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(path)
+		return FileRef{}, closeErr
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return FileRef{
+		Filename: filepath.Base(path),
+		Path:     path,
+		MTime:    now.Format(time.RFC3339),
+		Size:     n,
+	}, nil
 }
 
 func uploadedAttachmentFilename(name, contentType string, now time.Time, index int) string {
