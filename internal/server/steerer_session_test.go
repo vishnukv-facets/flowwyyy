@@ -177,6 +177,9 @@ func TestRenderSteererTurn(t *testing.T) {
 	if !strings.Contains(ctxOnly, "context") {
 		t.Errorf("context_only turn must be labeled:\n%s", ctxOnly)
 	}
+	if !strings.Contains(ctxOnly, "may refresh or resolve an existing open card") {
+		t.Errorf("operator context_only turn must mention existing-card revalidation:\n%s", ctxOnly)
+	}
 }
 
 func TestRenderSteererTurnWithAttachmentsUsesClaudePaste(t *testing.T) {

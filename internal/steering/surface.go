@@ -48,13 +48,7 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 		Confidence:      p.Confidence,
 		Reason:          p.Reason,
 	}
-
-	if p.ContextOnly || Action(action) == ActionDrop {
-		recordSurfaceThreadDecision(db, key, v, p.TS, now)
-		return "", false, nil
-	}
-
-	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, flowdb.FeedItem{
+	item := flowdb.FeedItem{
 		ID:              randomUUID(),
 		Source:          p.Source,
 		ThreadKey:       key,
@@ -70,12 +64,47 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 		TS:              p.TS,
 		Status:          "new",
 		CreatedAt:       now,
-	})
+	}
+
+	if Action(action) == ActionDrop {
+		id, _, err := resolveOpenSurfaceCard(db, key, now)
+		recordSurfaceThreadDecision(db, key, v, p.TS, now)
+		return id, false, err
+	}
+
+	if p.ContextOnly {
+		id, refreshed, err := refreshOpenSurfaceCard(db, item)
+		recordSurfaceThreadDecision(db, key, v, p.TS, now)
+		return id, refreshed, err
+	}
+
+	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, item)
 	if err != nil {
 		return "", false, err
 	}
 	recordSurfaceThreadDecision(db, key, v, p.TS, now)
 	return id, surfaced, nil
+}
+
+func refreshOpenSurfaceCard(db *sql.DB, item flowdb.FeedItem) (string, bool, error) {
+	existing, ok, err := flowdb.LatestFeedItemByThread(db, item.ThreadKey)
+	if err != nil || !ok || existing.Status != "new" {
+		return "", false, err
+	}
+	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, item)
+	if err != nil {
+		return "", false, err
+	}
+	return id, surfaced, nil
+}
+
+func resolveOpenSurfaceCard(db *sql.DB, threadKey, at string) (string, bool, error) {
+	existing, ok, err := flowdb.LatestFeedItemByThread(db, threadKey)
+	if err != nil || !ok || existing.Status != "new" {
+		return "", false, err
+	}
+	n, err := flowdb.ResolveOpenFeedItemsByThread(db, threadKey, at)
+	return existing.ID, n > 0, err
 }
 
 func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) string {

@@ -112,3 +112,117 @@ func TestSurfaceCardContextOnlyDoesNotSurface(t *testing.T) {
 		t.Fatalf("context_only should not create feed items, got %+v", items)
 	}
 }
+
+func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
+	db := surfaceTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID:              "a1",
+		Source:          "slack",
+		ThreadKey:       "C1:50.0",
+		SuggestedAction: "reply",
+		Summary:         "please respond",
+		Draft:           "checking",
+		Channel:         "C1",
+		ChannelType:     "channel",
+		Author:          "U1",
+		TS:              "50.0",
+		Status:          "new",
+		CreatedAt:       flowdb.NowISO(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	id, surfaced, err := SurfaceCard(context.Background(), db, SurfaceCardParams{
+		Source:      "slack",
+		Channel:     "C1",
+		ChannelType: "channel",
+		TS:          "60.0",
+		ThreadKey:   "C1:50.0",
+		Action:      "reply",
+		Summary:     "operator replied but follow-up still needs tracking",
+		Draft:       "Thanks, will follow up with the repo names.",
+		Reason:      "operator response changed the draft",
+		Confidence:  0.8,
+		ContextOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("SurfaceCard: %v", err)
+	}
+	if !surfaced || id != "a1" {
+		t.Fatalf("context_only should refresh existing card a1, got surfaced=%v id=%q", surfaced, id)
+	}
+	got, err := flowdb.GetFeedItem(db, "a1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Summary != "operator replied but follow-up still needs tracking" || got.Draft == "checking" {
+		t.Fatalf("card was not refreshed: %+v", got)
+	}
+
+	id, surfaced, err = SurfaceCard(context.Background(), db, SurfaceCardParams{
+		Source:      "slack",
+		Channel:     "C1",
+		ChannelType: "channel",
+		TS:          "70.0",
+		ThreadKey:   "C1:missing",
+		Action:      "reply",
+		Summary:     "should not create a new card",
+		ContextOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("SurfaceCard missing card: %v", err)
+	}
+	if surfaced || id != "" {
+		t.Fatalf("missing context_only card must no-op, got surfaced=%v id=%q", surfaced, id)
+	}
+	items, err := flowdb.ListFeedItems(db, "new")
+	if err != nil {
+		t.Fatalf("ListFeedItems: %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "a1" {
+		t.Fatalf("context_only refresh must not create extra cards, got %+v", items)
+	}
+}
+
+func TestSurfaceCardContextOnlyDropResolvesExistingCard(t *testing.T) {
+	db := surfaceTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID:              "a1",
+		Source:          "slack",
+		ThreadKey:       "C1:50.0",
+		SuggestedAction: "reply",
+		Summary:         "please respond",
+		Channel:         "C1",
+		ChannelType:     "channel",
+		Author:          "U1",
+		TS:              "50.0",
+		Status:          "new",
+		CreatedAt:       flowdb.NowISO(),
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	id, surfaced, err := SurfaceCard(context.Background(), db, SurfaceCardParams{
+		Source:      "slack",
+		Channel:     "C1",
+		ChannelType: "channel",
+		TS:          "60.0",
+		ThreadKey:   "C1:50.0",
+		Action:      "drop",
+		Summary:     "operator already answered",
+		ContextOnly: true,
+	})
+	if err != nil {
+		t.Fatalf("SurfaceCard: %v", err)
+	}
+	if surfaced || id != "a1" {
+		t.Fatalf("drop should resolve existing card a1 without surfacing, got surfaced=%v id=%q", surfaced, id)
+	}
+	got, err := flowdb.GetFeedItem(db, "a1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" || got.ActedAt == "" {
+		t.Fatalf("card was not resolved: %+v", got)
+	}
+}
