@@ -9,18 +9,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.1.0-alpha.2] — 2026-06-17
 
-Steerer hardening: the per-channel session model is now the single, authoritative
-steering path — with opt-in autonomous replies, cleaner routing, and a much
-faster attention feed.
+The steerer grows up: a **per-channel live session model** replaces stateless
+per-event triage, and it becomes the single authoritative steering path — with
+conversation memory, opt-in autonomous replies, and a much faster attention feed.
 
 ### Added
 
+- **Per-channel session steering model** (`FLOW_STEERING_SESSIONS`). One
+  persistent Claude/Codex session per channel/DM/PR holds conversation memory and
+  groups related activity, instead of a stateless `claude -p` per event. Includes
+  chat auto-naming with sticky title upgrades, a card→chat link with a
+  context-usage indicator, per-chat token/cost accounting + a Steering analytics
+  slice, a configured default provider, bidirectional provider-fork on token
+  exhaustion, session compaction + idle sweep, and a deleted-chat PTY reconciler.
 - **Opt-in autonomous replies.** A new **Auto-send reply** autonomy toggle (off by
-  default, gated at a high threshold). When enabled, a high-confidence reply is
-  posted by the channel's own per-channel chat (Slack) or the `gh` agent (GitHub),
-  then forwarded to the matched task. Session-surfaced cards now also honor the
-  existing forward / make-task autonomy server-side (they previously bypassed the
-  gate entirely).
+  default, high threshold): when enabled, a high-confidence reply is posted by the
+  channel's own chat (Slack) or the `gh` agent (GitHub), then forwarded to the
+  matched task. Session-surfaced cards now also honor the existing forward /
+  make-task autonomy server-side (they previously bypassed the gate entirely).
+- **Session-aware Attention trace + live views**, and a session-model toggle +
+  provider surfaced in the Attention config.
+- **Safe Slack image attachments** in steerer chats.
+- **Task runtime status** shown in the task list.
+- **`:eyes:` acknowledgement** on Slack command DMs to the bot.
 
 ### Changed
 
@@ -31,6 +42,9 @@ faster attention feed.
 - **Replies always post through the connector's own send path** — Slack via the
   per-channel chat, GitHub via the `gh` agent — never by forwarding to a matched
   task and asking it to send.
+- **Per-chat mute** stops forwarding events to a muted chat.
+- **Codex agents may write to git from flow worktrees** (the worktree git-lock
+  fix), so worktree-based Codex sessions can commit.
 - **Dev builds are version-stamped** via `git describe --tags --always --dirty`
   (e.g. `v0.1.0-alpha.2-3-g<sha>`), so a local `make build` is distinguishable
   from a tagged release at a glance.
@@ -39,6 +53,7 @@ faster attention feed.
 
 - The ephemeral Slack send session and its `FLOW_STEERING_SEND_MODEL` setting —
   replies post through the channel chat / `gh` agent instead.
+- The feed-clubbing cleanup path.
 
 ### Fixed
 
@@ -50,9 +65,12 @@ faster attention feed.
   agent to go idle, which left the prompt unsent during long turns.
 - **DMs and group chats were titled by the operator** instead of the other
   participant.
+- **Cards are revalidated on operator context**, and non-actionable thread
+  progress is dropped rather than surfaced as `digest_only`.
 - **`flow ui serve` left a stale server running.** It now takes over the port from
   an existing flow ui-serve, so a rebuild + restart actually serves the new binary
   instead of silently failing to bind.
+- Chat rename / set-provider actions route correctly to the chat handler.
 
 ### Performance
 
