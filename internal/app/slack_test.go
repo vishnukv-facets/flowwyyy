@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"os"
 	"testing"
 )
 
@@ -190,6 +191,26 @@ func TestCmdSlackSendForwardsFile(t *testing.T) {
 	}
 	if gotFile != "/tmp/x.pdf" || gotText != "see attached" {
 		t.Errorf("forwarded file=%q text=%q, want /tmp/x.pdf/see attached", gotFile, gotText)
+	}
+}
+
+func TestCmdSlackSendReadsTextFile(t *testing.T) {
+	path := t.TempDir() + "/reply.txt"
+	if err := os.WriteFile(path, []byte("hello from a file\nwith punctuation: \"ok\""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotText string
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+		gotText = text
+		return 200, `{"ok":true}`, nil
+	})
+
+	rc := cmdSlack([]string{"send", "--channel", "C1", "--thread-ts", "1234.000100", "--text-file", path, "--as", "user"})
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0", rc)
+	}
+	if gotText != "hello from a file\nwith punctuation: \"ok\"" {
+		t.Errorf("text = %q", gotText)
 	}
 }
 

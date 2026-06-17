@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"flow/internal/flowdb"
 	"flow/internal/monitor"
 	"flow/internal/steering"
 )
@@ -51,6 +52,28 @@ func TestSteererTitleFor(t *testing.T) {
 				t.Errorf("steererTitleFor = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSteererSendReplyPromptUsesFlowSlackSendAsUser(t *testing.T) {
+	item := flowdb.FeedItem{ID: "sr1", Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"}
+
+	got := steererSendReplyPrompt(item, "C0AL6LAGKUK", "1781260302.168129", "approved reply", "")
+
+	for _, want := range []string{
+		"flow slack send",
+		"--channel C0AL6LAGKUK",
+		"--thread-ts 1781260302.168129",
+		"--as user",
+		"--text-file",
+		"flow attention sent sr1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "mcp__claude_ai_Slack__slack_send_message DIRECTLY") {
+		t.Errorf("prompt should not require the direct Slack MCP send tool:\n%s", got)
 	}
 }
 
