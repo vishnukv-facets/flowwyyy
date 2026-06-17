@@ -62,6 +62,7 @@ function ChatRow({ chat }: { chat: Chat }) {
   const providerLabel = PROVIDER_LABEL[chat.provider] ?? chat.provider
   const isSlack = chat.origin === 'slack'
   const isSteerer = chat.origin === 'steerer'
+  const src = chatSource(chat)
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(chat.title)
 
@@ -123,7 +124,7 @@ function ChatRow({ chat }: { chat: Chat }) {
   }
 
   return (
-    <div className="card row gap" style={{ alignItems: 'center', padding: '12px 14px' }}>
+    <div className="card row gap chat-row" style={{ alignItems: 'center', padding: '12px 14px' }}>
       <span
         className={`dot ${chat.live ? 'running' : 'idle'}`}
         title={chat.live ? 'working — agent is processing a command' : 'idle'}
@@ -145,6 +146,17 @@ function ChatRow({ chat }: { chat: Chat }) {
           ) : (
             <strong className="clip">{chat.title || 'New chat'}</strong>
           )}
+          {!editing && src ? (
+            <span
+              className="chat-source"
+              title={`${src.source === 'github' ? 'GitHub' : 'Slack'} · ${src.id}`}
+            >
+              <SourceIcon source={src.source} size={11} />
+              {/* Skip the text when it would just repeat the chat name (channels,
+                  where name === id) — keep it where it adds info (DMs/groups). */}
+              {src.id !== chat.title.trim() ? <span className="chat-source-id">{src.id}</span> : null}
+            </span>
+          ) : null}
           {editing ? (
             <>
               <button type="button" className="btn icon ghost sm" title="Save name" aria-label="Save name" onClick={saveRename}>
@@ -157,7 +169,7 @@ function ChatRow({ chat }: { chat: Chat }) {
           ) : (
             <button
               type="button"
-              className="btn icon ghost sm"
+              className="btn icon ghost sm chat-rename"
               title="Rename chat"
               aria-label="Rename chat"
               onClick={() => {
@@ -196,60 +208,116 @@ function ChatRow({ chat }: { chat: Chat }) {
               {compactTokens(chat.tokens)} tok · ~{fmtUSD(chat.cost_usd ?? 0)}
             </span>
           ) : null}
-          {chat.occupancy_pct ? (
-            <span
-              className="mono"
-              title="Current context-window usage (the session /compacts at 60%)"
-              style={chat.occupancy_pct >= 60 ? { color: 'var(--warn, #c80)' } : undefined}
-            >
-              {chat.occupancy_pct}% ctx
-            </span>
-          ) : null}
+          {chat.occupancy_pct ? <CtxDial pct={chat.occupancy_pct} /> : null}
           <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
         </div>
       </div>
-      <div className="row gap" style={{ alignItems: 'center' }}>
-        <button type="button" className="btn sm" disabled={action.isPending} onClick={reopen}>
+      <div className="chat-actions">
+        {/* Secondary actions roll out to the LEFT of Reopen on hover/focus (grid
+            0fr→1fr) so Reopen stays pinned to the right corner. State that matters
+            at rest (muted/archived) is shown as a badge by the title. */}
+        <div className="chat-actions-rollout">
+          <div className="row gap chat-actions-secondary" style={{ alignItems: 'center' }}>
+          {isSteerer ? (
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={action.isPending}
+              title={`Switch to ${chat.provider === 'codex' ? 'Claude' : 'Codex'}`}
+              onClick={switchProvider}
+            >
+              <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
+            </button>
+          ) : null}
+          {isSteerer ? (
+            <button
+              type="button"
+              className={`btn ghost sm${chat.muted ? ' primary' : ''}`}
+              disabled={action.isPending}
+              title={chat.muted ? 'Unmute — resume forwarding events to this chat' : 'Mute — stop forwarding events to this chat until unmuted'}
+              onClick={toggleMute}
+            >
+              {chat.muted ? <Bell size={13} /> : <BellOff size={13} />}
+              {chat.muted ? 'Unmute' : 'Mute'}
+            </button>
+          ) : null}
+          <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>
+            {chat.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+            {chat.archived ? 'Unarchive' : 'Archive'}
+          </button>
+          <button
+            type="button"
+            className="btn icon ghost sm"
+            title="Delete chat"
+            aria-label="Delete chat"
+            disabled={action.isPending}
+            onClick={remove}
+          >
+            <Trash2 size={13} />
+          </button>
+          </div>
+        </div>
+        <button type="button" className="btn sm chat-reopen" disabled={action.isPending} onClick={reopen}>
           <Play size={13} /> Reopen
-        </button>
-        {isSteerer ? (
-          <button
-            type="button"
-            className="btn ghost sm"
-            disabled={action.isPending}
-            title={`Switch to ${chat.provider === 'codex' ? 'Claude' : 'Codex'}`}
-            onClick={switchProvider}
-          >
-            <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
-          </button>
-        ) : null}
-        {isSteerer ? (
-          <button
-            type="button"
-            className={`btn ghost sm${chat.muted ? ' primary' : ''}`}
-            disabled={action.isPending}
-            title={chat.muted ? 'Unmute — resume forwarding events to this chat' : 'Mute — stop forwarding events to this chat until unmuted'}
-            onClick={toggleMute}
-          >
-            {chat.muted ? <Bell size={13} /> : <BellOff size={13} />}
-            {chat.muted ? 'Unmute' : 'Mute'}
-          </button>
-        ) : null}
-        <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>
-          {chat.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-          {chat.archived ? 'Unarchive' : 'Archive'}
-        </button>
-        <button
-          type="button"
-          className="btn icon ghost sm"
-          title="Delete chat"
-          aria-label="Delete chat"
-          disabled={action.isPending}
-          onClick={remove}
-        >
-          <Trash2 size={13} />
         </button>
       </div>
     </div>
+  )
+}
+
+// chatSource derives the connector + a compact identifier for a steering chat
+// from its title. The steerer mints titles in fixed shapes (#channel / DM · Name
+// / Group · Name for Slack, owner/repo#N for GitHub), so the source logo and the
+// channel/username/group pill come straight off the title — no backend field.
+// Returns null for non-steerer chats and for the unresolved "Steering: <key>"
+// placeholder (nothing trustworthy to show yet).
+// ponytail: title-pattern parse. If the steerer ever persists an explicit
+// source + identifier on the chat row, read those instead of re-parsing here.
+function chatSource(chat: Chat): { source: 'slack' | 'github'; id: string } | null {
+  if (chat.origin !== 'steerer') return null
+  const t = chat.title.trim()
+  if (!t || t.startsWith('Steering:')) return null // unresolved placeholder
+  if (t.startsWith('#')) return { source: 'slack', id: t }
+  // "DM · Name" / "Group · Name" — tolerate either separator the backend has used
+  // over time (middot · or a plain period), and any surrounding spacing.
+  const dm = t.match(/^DM\s*[·.]\s*(.+)$/)
+  if (dm) return { source: 'slack', id: dm[1].trim() }
+  const grp = t.match(/^Group\s*[·.]\s*(.+)$/)
+  if (grp) return { source: 'slack', id: grp[1].trim() }
+  if (/^[^/\s]+\/[^/\s]+(#\d+)?$/.test(t)) return { source: 'github', id: t }
+  return null
+}
+
+// CtxDial — a small radial gauge for a chat's context-window occupancy. The arc
+// fills with pct and the stroke grades through the theme tokens: it starts on the
+// brand accent (plenty of headroom), warms to --warn approaching the 60% /compact
+// line, then to --danger past it — so one glance reads both "how full" and "how
+// urgent". Built from theme vars via color-mix, so it tracks light/dark for free.
+const CTX_DIAL_R = 7
+const CTX_DIAL_CIRC = 2 * Math.PI * CTX_DIAL_R
+const CTX_COMPACT_AT = 60 // the session /compacts at 60% — the grading pivot
+
+function ctxDialColor(pct: number): string {
+  if (pct < CTX_COMPACT_AT) {
+    return `color-mix(in oklab, var(--accent), var(--warn) ${Math.round((pct / CTX_COMPACT_AT) * 100)}%)`
+  }
+  return `color-mix(in oklab, var(--warn), var(--danger) ${Math.round(((pct - CTX_COMPACT_AT) / (100 - CTX_COMPACT_AT)) * 100)}%)`
+}
+
+function CtxDial({ pct }: { pct: number }) {
+  const clamped = Math.max(0, Math.min(100, pct))
+  const dash = (clamped / 100) * CTX_DIAL_CIRC
+  return (
+    <span
+      className="ctx-dial"
+      title={`${Math.round(clamped)}% of the context window used — the session /compacts at ${CTX_COMPACT_AT}%`}
+      style={{ ['--ctx-color' as string]: ctxDialColor(clamped) }}
+    >
+      <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
+        <circle className="ctx-dial-track" cx="9" cy="9" r={CTX_DIAL_R} />
+        <circle className="ctx-dial-arc" cx="9" cy="9" r={CTX_DIAL_R} strokeDasharray={`${dash} ${CTX_DIAL_CIRC}`} />
+      </svg>
+      <span className="ctx-dial-label mono">{Math.round(clamped)}%</span>
+    </span>
   )
 }

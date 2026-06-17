@@ -7807,3 +7807,114 @@ a.owner-task-item:hover {
   line-height: 1.55;
   color: var(--text-3);
 }
+
+/* ------------------------------- Chats ---------------------------------- */
+/* Declutter the row at rest. The rename pencil fades in on hover/keyboard focus.
+   State that matters at rest (muted / archived) is carried by a badge next to the
+   title, so nothing important is hidden. */
+.chat-row .chat-rename {
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease);
+}
+.chat-row:hover .chat-rename,
+.chat-row:focus-within .chat-rename {
+  opacity: 1;
+}
+
+/* Action cluster: Reopen is pinned to the right corner; the rest (switch-provider
+   / mute / archive / delete) roll out to its LEFT on hover/focus. The reveal is a
+   grid 0fr→1fr animation (the column width interpolates) so the secondary group
+   grows leftward into the row's empty space and Reopen never moves. A slide +
+   fade rides along, and Reopen gains a left margin only while open so it sits
+   flush in the corner at rest. */
+.chat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0;
+}
+.chat-actions-rollout {
+  display: grid;
+  grid-template-columns: 0fr;
+  opacity: 0;
+  transition: grid-template-columns var(--dur-2, 0.26s) var(--ease), opacity var(--dur-1) var(--ease);
+}
+.chat-actions-rollout > .chat-actions-secondary {
+  overflow: hidden;
+  min-width: 0;
+  transform: translateX(8px);
+  transition: transform var(--dur-2, 0.26s) var(--ease);
+}
+.chat-reopen {
+  margin-left: 0;
+  transition: margin-left var(--dur-2, 0.26s) var(--ease);
+}
+.chat-row:hover .chat-actions-rollout,
+.chat-row:focus-within .chat-actions-rollout {
+  grid-template-columns: 1fr;
+  opacity: 1;
+}
+.chat-row:hover .chat-actions-rollout > .chat-actions-secondary,
+.chat-row:focus-within .chat-actions-rollout > .chat-actions-secondary {
+  transform: translateX(0);
+}
+.chat-row:hover .chat-reopen,
+.chat-row:focus-within .chat-reopen {
+  margin-left: 8px;
+}
+
+/* Source chip — for Slack/GitHub steering chats, a logo + a small pill carrying
+   the channel / username / group, sitting next to the chat name. */
+.chat-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 1;
+  max-width: 220px;
+}
+.chat-source svg {
+  flex: none;
+}
+.chat-source .chat-source-id {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Context dial — a radial occupancy gauge. The arc length tracks pct; its color
+   is graded inline (accent → warn → danger across the 60% /compact pivot) via the
+   --ctx-color custom property the component sets. */
+.ctx-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.ctx-dial svg {
+  /* start the arc at 12 o'clock, sweep clockwise */
+  transform: rotate(-90deg);
+  display: block;
+  flex: none;
+}
+.ctx-dial-track {
+  fill: none;
+  stroke: var(--border-strong, var(--border));
+  stroke-width: 2.5;
+}
+.ctx-dial-arc {
+  fill: none;
+  stroke: var(--ctx-color, var(--accent));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray var(--dur-2, 0.3s) var(--ease), stroke var(--dur-1) var(--ease);
+}
+.ctx-dial-label {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
