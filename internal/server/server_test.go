@@ -2094,6 +2094,25 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	}
 }
 
+func TestPrepareTerminalLaunchCodexAddsGitCommonDirForWorktree(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	repo := initGitRepoForServerTest(t)
+	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex', work_dir = ? WHERE slug = 'build-ui'`, repo); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	launch, err := srv.prepareTerminalLaunch("build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commonDir := runGitTest(t, launch.WorkDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if !containsString(launch.Args, "--add-dir") || !containsString(launch.Args, commonDir) {
+		t.Fatalf("codex launch args missing linked-worktree git common dir %q: %#v", commonDir, launch.Args)
+	}
+}
+
 func TestSlackTaskOpenerPreservesCodexProvider(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)

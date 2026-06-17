@@ -518,8 +518,13 @@ func terminalProcessAlive(pid int) bool {
 }
 
 func appendCodexWritableRoot(args []string, workDir, flowRootPath string) []string {
-	flowRootPath = strings.TrimSpace(flowRootPath)
-	if flowRootPath == "" {
+	args = appendCodexAddDir(args, workDir, flowRootPath)
+	return appendCodexAddDir(args, workDir, worktree.LinkedWorktreeGitCommonDir(workDir))
+}
+
+func appendCodexAddDir(args []string, workDir, dir string) []string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
 		return args
 	}
 	cleanWorkDir := strings.TrimSpace(workDir)
@@ -528,13 +533,13 @@ func appendCodexWritableRoot(args []string, workDir, flowRootPath string) []stri
 			cleanWorkDir = abs
 		}
 	}
-	if abs, err := filepath.Abs(flowRootPath); err == nil {
-		flowRootPath = abs
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
 	}
-	if cleanWorkDir == flowRootPath {
+	if cleanWorkDir == dir {
 		return args
 	}
-	return append(args, "--add-dir", flowRootPath)
+	return append(args, "--add-dir", dir)
 }
 
 func claudePermissionArgs(mode string) []string {

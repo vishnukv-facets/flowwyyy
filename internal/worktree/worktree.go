@@ -94,6 +94,44 @@ func RepoRoot(workDir string) string {
 	return root
 }
 
+// LinkedWorktreeGitCommonDir returns the shared .git directory for a linked
+// worktree. Commits need it for objects and refs; the per-worktree git dir only
+// covers HEAD/index state.
+func LinkedWorktreeGitCommonDir(workDir string) string {
+	workDir = strings.TrimSpace(workDir)
+	if workDir == "" {
+		return ""
+	}
+	gitDir, err := gitOutput(workDir, "rev-parse", "--path-format=absolute", "--git-dir")
+	if err != nil {
+		return ""
+	}
+	commonDir, err := gitOutput(workDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+	if err != nil {
+		return ""
+	}
+	gitDir = absGitDir(workDir, gitDir)
+	commonDir = absGitDir(workDir, commonDir)
+	if gitDir == "" || commonDir == "" || gitDir == commonDir {
+		return ""
+	}
+	return commonDir
+}
+
+func absGitDir(workDir, dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(workDir, dir)
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return filepath.Clean(abs)
+	}
+	return filepath.Clean(dir)
+}
+
 // BaseBranch picks the branch flow worktrees branch off of.
 //
 // If the current branch is a feature branch with unmerged work — a real branch

@@ -9,6 +9,7 @@ import (
 	"flow/internal/spawner"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -868,6 +869,24 @@ func TestCodexCLIArgsIncludesModel(t *testing.T) {
 	}
 	if testContainsString(none, "--model") {
 		t.Errorf("empty model should omit --model: %#v", none)
+	}
+}
+
+func TestCodexCLIArgsAddsGitCommonDirForLinkedWorktree(t *testing.T) {
+	repo := initGitRepoForWorktreeTest(t)
+	wt := filepath.Join(repo, ".codex", "worktrees", "codex-locks")
+	runGitForWorktreeTest(t, repo, "worktree", "add", "-b", "flow/codex-locks", wt)
+	commonDir, err := exec.Command("git", "-C", wt, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		t.Fatalf("git common dir: %v", err)
+	}
+
+	args, err := codexCLIArgs(codexModeFresh, "", "bootstrap", wt, t.TempDir(), "auto", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testContainsString(args, "--add-dir") || !testContainsString(args, strings.TrimSpace(string(commonDir))) {
+		t.Fatalf("codex args missing linked-worktree git common dir %q: %#v", strings.TrimSpace(string(commonDir)), args)
 	}
 }
 
