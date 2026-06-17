@@ -38,8 +38,14 @@ the minimum extra context you need (your tools), then decide — do not stall.
   make_task when there is work, capture_kb when the value is the knowledge itself.
 - ` + "`reply`" + ` — an operator reply is appropriate; DRAFT it in the operator's voice.
   Surface-only — you do NOT send it. The operator approves the send.
-- ` + "`digest_only`" + ` — FYI worth surfacing, but no action and no reply.
-- ` + "`drop`" + ` — noise; surface nothing.
+- ` + "`digest_only`" + ` — a SIGNIFICANT FYI the operator would genuinely want to know
+  passively: a decision reached, an outcome/resolution that affects them, an escalation.
+  NOT routine thread progress, and NOT anything whose next step is someone ELSE's action.
+  High bar.
+- ` + "`drop`" + ` — noise, routine chatter, or a thread merely advancing toward someone
+  else's action with no standalone value to the operator; surface nothing. When unsure
+  between digest_only and drop, DROP — the operator wants only what needs them or
+  genuinely informs them, not every thread that moves.
 
 ## matched_task — concrete linkage only (do NOT over-forward)
 Set matched_task ONLY when there is CONCRETE linkage, not mere topical similarity:
