@@ -7,6 +7,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] — 2026-06-17
+
+Steerer hardening: the per-channel session model is now the single, authoritative
+steering path — with opt-in autonomous replies, cleaner routing, and a much
+faster attention feed.
+
+### Added
+
+- **Opt-in autonomous replies.** A new **Auto-send reply** autonomy toggle (off by
+  default, gated at a high threshold). When enabled, a high-confidence reply is
+  posted by the channel's own per-channel chat (Slack) or the `gh` agent (GitHub),
+  then forwarded to the matched task. Session-surfaced cards now also honor the
+  existing forward / make-task autonomy server-side (they previously bypassed the
+  gate entirely).
+
+### Changed
+
+- **The per-channel session model is the master switch.** ON ⇒ the steerer owns
+  routing (triage → attention feed / per-channel sessions). OFF ⇒ the steerer
+  stands down and events route the old way (Slack reaction-trigger → task
+  `inbox.jsonl`, GitHub webhook → legacy task pipeline) — no attention, no triage.
+- **Replies always post through the connector's own send path** — Slack via the
+  per-channel chat, GitHub via the `gh` agent — never by forwarding to a matched
+  task and asking it to send.
+- **Dev builds are version-stamped** via `git describe --tags --always --dirty`
+  (e.g. `v0.1.0-alpha.2-3-g<sha>`), so a local `make build` is distinguishable
+  from a tagged release at a glance.
+
+### Removed
+
+- The ephemeral Slack send session and its `FLOW_STEERING_SEND_MODEL` setting —
+  replies post through the channel chat / `gh` agent instead.
+
+### Fixed
+
+- **Backfill bypassed the session model.** The steerer catch-up sweep ran the old
+  stateless cascade and surfaced `digest_only` FYI cards from backfilled Slack
+  traffic; it now delivers to the per-channel session like the live path.
+- **Wake prompts stranded mid-turn.** The session wake now pastes and presses
+  Enter (Claude Code / Codex queue mid-turn input) instead of waiting for the
+  agent to go idle, which left the prompt unsent during long turns.
+- **DMs and group chats were titled by the operator** instead of the other
+  participant.
+- **`flow ui serve` left a stale server running.** It now takes over the port from
+  an existing flow ui-serve, so a rebuild + restart actually serves the new binary
+  instead of silently failing to bind.
+
+### Performance
+
+- **Attention feed.** `acted` / `dismissed` / `all` no longer stall (a cold
+  `dismissed` tab took ~43s): Slack permalinks are resolved concurrently up front
+  and the per-row lookup is cache-only — ~43s → ~2s on a cold tab.
+
 ## [0.1.0-alpha.1] — 2026-06-15
 
 Initial offering. **flowwyyy is `flow`, with batteries** — the original
@@ -54,5 +107,6 @@ agent session from a brilliant new hire into the engineer on your team.
   `go vet` / `go build` / `go test ./...`.
 - **License.** MIT.
 
-[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.1

@@ -6,7 +6,6 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
 	"flow/internal/flowdb"
-	"flow/internal/steering"
 	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
@@ -286,58 +285,6 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 		// stub is already correct and no capture is needed. Mirrors openNewSlackChat.
 		NeedsCapture: provider == agents.ProviderCodex,
 		StartedAt:    time.Now().Add(-2 * time.Second),
-	}, nil
-}
-
-// prepareSendReplyFloatingLaunch builds an ephemeral, watchable floating session
-// that posts an operator-approved reply via the Slack MCP. A headless
-// `claude -p` has no claude.ai connector MCPs, so it CANNOT post to Slack — only
-// a real interactive session can. This launch is therefore a normal bypass
-// Claude PTY (Slack MCP available), primed to post the approved draft and then
-// run `flow attention sent <feed-id> --close-floating <slug>` to mark the card
-// sent and close its own window. It carries no task row (FreeAgent), so nothing
-// lands in the Tasks list. On a failure the agent leaves the window open so the
-// operator can see what went wrong, and the card stays 'new' for a retry.
-func (s *Server) prepareSendReplyFloatingLaunch(item flowdb.FeedItem, text, instructions string) (terminalLaunch, error) {
-	if strings.TrimSpace(text) == "" {
-		return terminalLaunch{}, errors.New("send-reply requires non-empty text")
-	}
-	flowRoot := strings.TrimSpace(s.cfg.FlowRoot)
-	if flowRoot == "" {
-		return terminalLaunch{}, errors.New("flow root is not configured")
-	}
-	absRoot, err := filepath.Abs(flowRoot)
-	if err != nil {
-		return terminalLaunch{}, err
-	}
-	// The Slack MCP is a Claude (claude.ai) connector, so the sending session
-	// must be Claude regardless of any provider hint on the item.
-	const provider = agents.ProviderClaude
-	// The operator approved the exact text via the feed — there is nothing left
-	// to gate, so bypass is correct (same rationale as SendReplyViaAgent).
-	const permissionMode = "bypass"
-	sessionID := uuid.NewString()
-	slug := "send-" + uuid.NewString()
-	doneCmd := fmt.Sprintf("flow attention sent %s --close-floating %s", item.ID, slug)
-	prompt := steering.SlackSendSessionPrompt(item, text, instructions, doneCmd)
-	// Build the Claude args directly (rather than agentTerminalArgs) so we can pin
-	// the model: posting an approved one-liner needs no frontier model, and the
-	// session would otherwise inherit the user's default (e.g. Opus 4.8). Prompt
-	// stays last (positional). Always Claude here — the Slack MCP is Claude-only.
-	args := []string{"--session-id", sessionID, "--model", steering.SendReplyModel()}
-	args = append(args, claudePermissionArgs(permissionMode)...)
-	args = append(args, prompt)
-	return terminalLaunch{
-		Slug:           slug,
-		SessionID:      sessionID,
-		Provider:       provider,
-		PermissionMode: permissionMode,
-		WorkDir:        absRoot,
-		Args:           args,
-		FreeAgent:      true,
-		Created:        true,
-		NeedsCapture:   false,
-		StartedAt:      time.Now().Add(-2 * time.Second),
 	}, nil
 }
 

@@ -106,56 +106,6 @@ error, etc.), reply with a single line: FAILED: <short reason>. Do NOT pretend
 you posted. Output nothing else.`
 }
 
-// SendReplyModel is the model the ephemeral Slack send session runs under.
-// Posting needs a tool-capable model: Haiku has the Slack MCP tool but reliably
-// fumbles the call (tries Bash/echo, then gives up "can't invoke the tool"),
-// whereas Sonnet/Opus invoke it cleanly. So this defaults to Sonnet — far cheaper
-// than the user's Opus default but reliable for the single MCP call — decoupled
-// from the classifier model (text classification is fine on Haiku; driving a tool
-// is not). Override via FLOW_STEERING_SEND_MODEL (e.g. to force opus, or to retry
-// haiku once tool-calling improves).
-func SendReplyModel() string {
-	if m := strings.TrimSpace(os.Getenv("FLOW_STEERING_SEND_MODEL")); m != "" {
-		return m
-	}
-	return "claude-sonnet-4-6"
-}
-
-// SlackSendSessionPrompt is the brief for the ephemeral, watchable floating send
-// session (see Server.prepareSendReplyFloatingLaunch). Unlike SendReplyViaAgent
-// — which uses a headless `claude -p` that has NO claude.ai connector MCPs and so
-// cannot post to Slack — this runs in a real interactive Claude session that DOES
-// have the Slack MCP. It posts the operator-approved reply and, on a confirmed
-// post ONLY, runs doneCmd (which marks the feed card sent and closes the window).
-// On any failure it stops and leaves the window open so the operator sees why.
-func SlackSendSessionPrompt(item flowdb.FeedItem, text, instructions, doneCmd string) string {
-	draftClause := "The operator has ALREADY APPROVED the reply below and asked you to POST it NOW. Do not ask for confirmation and do not redraft beyond minor wording — just post it."
-	if ins := strings.TrimSpace(instructions); ins != "" {
-		draftClause = "The operator approved sending a reply on this thread and gave you specific instructions. Start from the draft below, APPLY the operator's instructions to revise it, then POST the result. Do not ask for confirmation.\n\nOperator instructions:\n" + ins
-	}
-	channelLine := ""
-	if ch := strings.TrimSpace(item.Channel); ch != "" {
-		channelLine = "\nChannel: " + ch
-	}
-	return `MODE: send-reply (ephemeral session)
-
-You are a short-lived send agent for the operator's attention router. ` + draftClause + `
-
-1. Post the reply by CALLING the Slack MCP tool DIRECTLY — make a tool call to ` + "`mcp__claude_ai_Slack__slack_send_message`" + ` with the channel, the thread_ts (so it's threaded in-thread), and the message text. This is a TOOL CALL, not a shell command: do NOT use Bash, echo, cat, printf, or any shell to post — the shell cannot post to Slack, and "printing" or echoing the message does NOT send it. The thread_key is "<channel>:<thread_ts>" (channel id before the ":", thread_ts after).
-2. Refer to people and channels by name in the message body; never paste raw platform IDs.
-
-Source: ` + item.Source + ` thread ` + item.ThreadKey + channelLine + `
-
-Draft reply:
-` + strings.TrimSpace(text) + `
-
-When — and ONLY when — the Slack tool call has RETURNED SUCCESSFULLY, run this one shell command (the ONLY thing you use the shell for) to mark the card sent and close this window:
-
-    ` + doneCmd + `
-
-If you CANNOT post for ANY reason (the Slack tool errors or isn't available, a missing channel, etc.), do NOT run that command. Instead print one short line explaining what failed, then stop — leave this window open so the operator can see the problem. Do not fall back to Bash/echo to "send" — that is not a send.`
-}
-
 // sendHintFor gives the connector-specific POSTING instruction. Slack posts go
 // through the Slack MCP; GitHub posts go through the `gh` CLI (always available
 // via Bash under bypass — no GitHub MCP needed).

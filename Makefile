@@ -2,11 +2,13 @@ BINARY      := flow
 INSTALL_DIR := $(HOME)/.local/bin
 
 # VERSION is injected into the binary via -ldflags and shown in `flow
-# --version` and Mission Control. It tracks the latest git tag (flow's
-# 0.x.y-alpha.N pre-release convention until 1.0); a tagless checkout falls
-# back to "dev", which deliberately opts out of skill auto-upgrade. The
-# release workflow overrides it with the pushed tag (VERSION=<tag>).
-VERSION  ?= $(shell git describe --tags --abbrev=0 2>/dev/null || echo dev)
+# --version` and Mission Control. `git describe` yields the exact tag on a
+# released commit (e.g. v0.1.0-alpha.1) but a DEV stamp on anything past it —
+# v0.1.0-alpha.1-<N>-g<sha>[-dirty] — so a local `make build`/`make rebuild` is
+# always distinguishable from a release at a glance. A tagless checkout falls
+# back to the short sha (--always), or "dev" with no git at all. The release
+# workflow overrides this with the pushed tag (VERSION=<tag>).
+VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -X main.version=$(VERSION)
 
 .PHONY: build ui ui-check rebuild install uninstall test clean

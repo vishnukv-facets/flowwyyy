@@ -395,17 +395,20 @@ func TestAttentionSendReplyRecognized(t *testing.T) {
 	s, db := attentionTestServer(t)
 	// A draft is present, so the verb is recognized and routed PAST the
 	// empty-draft 400 gate (it does NOT fall through to the unknown-verb 400).
-	// The downstream inject shells out to the real `flow tell`, which has no
-	// task to talk to in this hermetic env → 500. We assert the contract: the
-	// verb is recognized (status != 400) and we get a definitive answer.
+	// This is a SLACK card: a Slack reply now always routes through the channel's
+	// per-channel chat / an ephemeral Slack session (never the matched task), and
+	// both need the terminal hub — which this hermetic server lacks, so the
+	// definitive answer is 503. We assert the contract: the verb is recognized
+	// (status != 400) and we get a definitive answer (200 sent / 500 shell-out /
+	// 503 no hub).
 	seedReplyFeedItem(t, db, "srr1", "t1", "stored draft")
 
 	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "srr1", AttentionAction: "send-reply"})
 	if status == http.StatusBadRequest {
 		t.Fatalf("recognized verb with a draft must not 400; got (%+v, %d)", resp, status)
 	}
-	if status != http.StatusOK && status != http.StatusInternalServerError {
-		t.Fatalf("send-reply → %d, want 200 (agent will send) or 500 (shell-out failed in CI)", status)
+	if status != http.StatusOK && status != http.StatusInternalServerError && status != http.StatusServiceUnavailable {
+		t.Fatalf("send-reply → %d, want 200 (agent sent) / 500 (shell-out) / 503 (no hub in test)", status)
 	}
 }
 

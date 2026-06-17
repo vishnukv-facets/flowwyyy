@@ -21,7 +21,6 @@ const SESSION_KEYS = ['FLOW_STEERING_SESSIONS', 'FLOW_STEERER_DEFAULT_PROVIDER']
 const MUTED_KEYWORD_KEYS = ['FLOW_STEERING_MUTED_KEYWORDS']
 const WAITING_KEYS = ['FLOW_STEERING_AUTO_RESOLVE_WAITING']
 const PERFORMANCE_KEYS = [
-  'FLOW_STEERING_SEND_MODEL',
   'FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR',
   'FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN',
 ]
@@ -100,9 +99,9 @@ export function SteeringConfig() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Performance" hint="Reply send model and classifier subprocess budget.">
+      <SettingsSection title="Performance" hint="Classifier subprocess budget.">
         <div className="settings-grid">
-          <ConfigGroupPanel title="Reply & classifier" icon={<Gauge size={17} />} fieldKeys={PERFORMANCE_KEYS} />
+          <ConfigGroupPanel title="Classifier" icon={<Gauge size={17} />} fieldKeys={PERFORMANCE_KEYS} />
         </div>
       </SettingsSection>
     </>

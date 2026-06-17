@@ -11,10 +11,6 @@ import (
 	"github.com/creack/pty"
 )
 
-func terminalPasteInput(prompt string) string {
-	return "\x1b[200~" + prompt + "\x1b[201~\r"
-}
-
 func (h *terminalHub) wakeTask(slug, prompt string) error {
 	// Paste the prompt WITHOUT a trailing newline, then submit with a separate
 	// Enter. A \r in the same write as the bracketed-paste terminator gets
@@ -26,6 +22,7 @@ func (h *terminalHub) wakeTask(slug, prompt string) error {
 	paste := "\x1b[200~" + prompt + "\x1b[201~"
 	baseline, _ := h.lastOutputAt(slug)
 	if err := h.sendInput(slug, paste); err != nil {
+		fmt.Fprintf(os.Stderr, "[term-wake %s] paste send failed (%v); re-attaching\n", slug, err)
 		if _, aerr := h.attach(slug, 120, 32); aerr != nil {
 			return aerr
 		}
@@ -38,74 +35,41 @@ func (h *terminalHub) wakeTask(slug, prompt string) error {
 	return nil
 }
 
-// sessionQuietFor reports whether a session whose last PTY output was at `last`
-// is ready to accept a submit keystroke as of `now`: it must have produced some
-// output (non-zero `last`, i.e. the paste rendered or a prior turn ran) AND have
-// since been quiet for at least `window`. A streaming agent keeps `last` fresh,
-// so this stays false until it returns to the prompt — which is exactly when an
-// Enter actually submits rather than being swallowed mid-turn.
-func sessionQuietFor(last, now time.Time, window time.Duration) bool {
-	if last.IsZero() {
-		return false
-	}
-	return now.Sub(last) >= window
-}
-
-// submitAfterPaste presses Enter to submit a wake paste, but only once the
-// session is READY — i.e. the paste has rendered and the agent is idle at the
-// prompt, not mid-turn. A blind fixed-delay Enter (the old behavior) was
-// swallowed when the wake landed while the agent was still streaming a previous
-// answer, or before the editor left paste mode under load — stranding the text
-// unsent in the input box. This: (1) waits for the paste to register and the
-// session to go quiet, (2) sends Enter, (3) confirms the submit took (a real
-// submit makes the agent react, so fresh output appears) and retries if it
-// didn't. Bounded by maxWait so the goroutine can't outlive a stuck session,
-// but long enough to outlast normal agent turns.
+// submitAfterPaste presses Enter to submit a wake paste. It does NOT wait for the
+// agent to be idle: Claude Code and Codex both QUEUE a message submitted mid-turn,
+// so waiting for "quiet" only strands the wake for the length of a long turn — the
+// streaming spinner keeps output fresh, so quiet never arrives and the prompt sits
+// unsent (the bug this replaces). We only wait for the bracketed paste to land
+// (output advances past the pre-paste marker, or a short grace elapses), THEN press
+// Enter regardless of whether the agent is mid-turn: busy ⇒ the host queues it, idle
+// ⇒ it runs now. The Enter must be a SEPARATE write from the paste (a \r in the same
+// write as the paste terminator is absorbed into the buffer). A second Enter after a
+// short grace is cheap insurance against a first Enter that landed before the editor
+// left paste mode — a no-op on an already-submitted/empty input.
 func (h *terminalHub) submitAfterPaste(slug string, baseline time.Time) {
 	const (
-		readyQuiet  = 450 * time.Millisecond // no output for this long ⇒ paste settled & agent idle
 		pollEvery   = 90 * time.Millisecond
-		renderGrace = 1500 * time.Millisecond // proceed even if no paste echo was observed
-		confirmFor  = 1200 * time.Millisecond // fresh output within this after Enter ⇒ it submitted
-		maxWait     = 5 * time.Minute         // outlasts normal turns; prevents a leaked goroutine
-		maxEnters   = 3
+		renderGrace = 1200 * time.Millisecond // press Enter by here even if no paste echo is seen
+		secondEnter = 700 * time.Millisecond
 	)
-	deadline := time.Now().Add(maxWait)
-	start := time.Now()
-	for enters := 0; enters < maxEnters && time.Now().Before(deadline); enters++ {
-		// Phase 1 — wait until the session is ready: the paste has rendered
-		// (output advanced past baseline, or the render grace elapsed) AND output
-		// has since been quiet for readyQuiet (the agent isn't mid-turn).
-		for {
-			if time.Now().After(deadline) {
-				return
-			}
-			if !h.running(slug) {
-				return // session gone — nothing to submit into
-			}
-			last, ok := h.lastOutputAt(slug)
-			rendered := (ok && last.After(baseline)) || time.Since(start) >= renderGrace
-			if rendered && sessionQuietFor(last, time.Now(), readyQuiet) {
-				break
-			}
-			time.Sleep(pollEvery)
-		}
-		// Phase 2 — submit.
-		before, _ := h.lastOutputAt(slug)
-		if err := h.sendInput(slug, "\r"); err != nil {
+	deadline := time.Now().Add(renderGrace)
+	for {
+		if !h.running(slug) {
+			fmt.Fprintf(os.Stderr, "[term-wake %s] session gone before submit\n", slug)
 			return
 		}
-		// Phase 3 — confirm. A successful submit makes the agent react, so fresh
-		// output appears. If none does, the Enter was absorbed: loop and retry
-		// (the session is already quiet, so the next attempt fires promptly). An
-		// extra Enter on an already-submitted/empty prompt is a harmless no-op.
-		confirmDeadline := time.Now().Add(confirmFor)
-		for time.Now().Before(confirmDeadline) {
-			if last, ok := h.lastOutputAt(slug); ok && last.After(before) {
-				return // submitted
-			}
-			time.Sleep(pollEvery)
+		if last, ok := h.lastOutputAt(slug); (ok && last.After(baseline)) || time.Now().After(deadline) {
+			break // paste landed (or grace elapsed) — submit now, mid-turn or not
 		}
+		time.Sleep(pollEvery)
+	}
+	if err := h.sendInput(slug, "\r"); err != nil {
+		fmt.Fprintf(os.Stderr, "[term-wake %s] submit enter send failed: %v\n", slug, err)
+		return
+	}
+	time.Sleep(secondEnter)
+	if h.running(slug) {
+		_ = h.sendInput(slug, "\r") // insurance; no-op if the first Enter already submitted
 	}
 }
 
@@ -162,67 +126,41 @@ func sharedTerminalCapturePane(name string) (string, bool) {
 }
 
 // submitAfterSharedPaste is the tmux-path twin of submitAfterPaste: it presses
-// Enter to submit a wake paste into a detached tmux session, but only once the
-// pane has gone STABLE (the agent is idle at the prompt, not mid-turn). It then
-// confirms the submit took — a real submit clears the input box, so the pane
-// changes — and retries if it didn't. Bounded by maxWait. This is the
-// post-`flow ui serve`-restart path where the agent is alive in tmux but absent
-// from the in-memory hub, so there is no lastOutputAt to gate on; pane snapshots
-// stand in for it.
+// Enter to submit a wake paste into a detached tmux session. Like its twin it does
+// NOT wait for the agent to be idle (the host queues a mid-turn message); it only
+// waits for the paste to land in the pane (pane content changes, or a short grace),
+// then sends Enter, then a second Enter as insurance against a first one absorbed
+// before paste mode exited. This is the post-`flow ui serve`-restart path where the
+// agent is alive in tmux but absent from the in-memory hub.
 func (h *terminalHub) submitAfterSharedPaste(name string) {
 	const (
-		readyQuiet = 450 * time.Millisecond // pane unchanged this long ⇒ agent idle/ready
-		pollEvery  = 150 * time.Millisecond // tmux exec is heavier than a mem read — poll gentler
-		confirmFor = 1500 * time.Millisecond
-		maxWait    = 5 * time.Minute
-		maxEnters  = 3
+		pollEvery   = 150 * time.Millisecond // tmux exec is heavier than a mem read — poll gentler
+		renderGrace = 1200 * time.Millisecond
+		secondEnter = 700 * time.Millisecond
 	)
-	deadline := time.Now().Add(maxWait)
-	for enters := 0; enters < maxEnters && time.Now().Before(deadline); enters++ {
-		// Phase 1 — wait until the pane is stable for readyQuiet.
-		prev, ok := sharedTerminalCapturePane(name)
+	prev, ok := sharedTerminalCapturePane(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "[term-wake %s] shared session gone before submit\n", name)
+		return
+	}
+	deadline := time.Now().Add(renderGrace)
+	for {
+		time.Sleep(pollEvery)
+		cur, ok := sharedTerminalCapturePane(name)
 		if !ok {
-			return // session gone
-		}
-		stableSince := time.Now()
-		for {
-			if time.Now().After(deadline) {
-				return
-			}
-			time.Sleep(pollEvery)
-			cur, ok := sharedTerminalCapturePane(name)
-			if !ok {
-				return
-			}
-			if cur != prev {
-				prev = cur
-				stableSince = time.Now()
-				continue
-			}
-			if time.Since(stableSince) >= readyQuiet {
-				break
-			}
-		}
-		// Phase 2 — submit.
-		beforeEnter := prev
-		if _, err := sharedTerminalCommand("send-keys", "-t", name, "Enter"); err != nil {
+			fmt.Fprintf(os.Stderr, "[term-wake %s] shared session gone before submit\n", name)
 			return
 		}
-		// Phase 3 — confirm: a real submit clears the input box, so the pane
-		// changes. If it doesn't, the Enter was absorbed; loop to retry. An extra
-		// Enter on an already-submitted/empty prompt is a harmless no-op.
-		confirmDeadline := time.Now().Add(confirmFor)
-		for time.Now().Before(confirmDeadline) {
-			time.Sleep(pollEvery)
-			cur, ok := sharedTerminalCapturePane(name)
-			if !ok {
-				return
-			}
-			if cur != beforeEnter {
-				return // submitted
-			}
+		if cur != prev || time.Now().After(deadline) {
+			break // paste landed (or grace elapsed) — submit now, mid-turn or not
 		}
 	}
+	if _, err := sharedTerminalCommand("send-keys", "-t", name, "Enter"); err != nil {
+		fmt.Fprintf(os.Stderr, "[term-wake %s] shared submit enter failed: %v\n", name, err)
+		return
+	}
+	time.Sleep(secondEnter)
+	_, _ = sharedTerminalCommand("send-keys", "-t", name, "Enter") // insurance; no-op if already submitted
 }
 
 func (h *terminalHub) lastOutputAt(slug string) (time.Time, bool) {

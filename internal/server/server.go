@@ -128,7 +128,12 @@ func New(cfg Config) *Server {
 		// Stream live stage progress to Mission Control's inbox (CI-style view).
 		cascade.Progress = s.publishSteeringStage
 		dispatcher.Steerer = cascade
-		dispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+		// The per-channel session model is the master switch: ON ⇒ the steerer owns
+		// routing (triage → attention feed / per-channel sessions); OFF ⇒ the steerer
+		// stands down entirely and events route the OLD way (Slack reaction-trigger →
+		// task inbox.jsonl, GitHub webhook → legacy task pipeline). No attention/triage
+		// when the session model is off.
+		dispatcher.SteererOwnsRouting = steering.SteererSessionsEnabled
 		// Slack AFK command channel: authorized operator DMs to the bot route into
 		// a durable chat agent session (the overview-chat model) instead of the
 		// task/steering pipeline. *Server satisfies monitor.ChatCommandSink. Gated
@@ -157,7 +162,7 @@ func New(cfg Config) *Server {
 		// task routing instead of also running the legacy monitor pipeline.
 		if s.cascade != nil {
 			ghDispatcher.Steerer = s.cascade
-			ghDispatcher.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+			ghDispatcher.SteererOwnsRouting = steering.SteererSessionsEnabled
 			ghDispatcher.SessionsEnabled = steering.SteererSessionsEnabled
 		}
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
@@ -388,7 +393,7 @@ func (s *Server) ListenAndServe(addr string) int {
 			backfill := monitor.NewSlackBackfill(s.cfg.DB, rc, 0)
 			if s.cascade != nil {
 				backfill.Observer = s.cascade
-				backfill.SteererOwnsRouting = steeringAutonomyRoutingEnabled
+				backfill.SteererOwnsRouting = steering.SteererSessionsEnabled
 				backfill.SteererSessionsEnabled = steering.SteererSessionsEnabled
 			}
 			// DM channels the agent registered (slack-dm: tags) are reconciled
@@ -525,16 +530,6 @@ func steeringBackfillEnabled() bool {
 	default:
 		return true
 	}
-}
-
-func steeringAutonomyRoutingEnabled() bool {
-	pol := steering.AutonomyFromEnv()
-	for _, action := range []steering.Action{steering.ActionMakeTask, steering.ActionForward} {
-		if p, ok := pol[action]; ok && p.Enabled {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {

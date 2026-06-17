@@ -213,42 +213,6 @@ func TestNewWiresInboxMonitorManager(t *testing.T) {
 	}
 }
 
-func TestTerminalPasteInputWrapsPromptForBracketedPaste(t *testing.T) {
-	got := terminalPasteInput("flow monitor wake")
-	want := "\x1b[200~flow monitor wake\x1b[201~\r"
-	if got != want {
-		t.Fatalf("terminalPasteInput() = %q, want %q", got, want)
-	}
-}
-
-// TestSessionQuietFor covers the readiness predicate that gates the wake-paste
-// submit: a session is "ready for input" only once it has produced output (the
-// paste rendered) AND has then gone quiet for the required window (the agent is
-// idle/waiting, not mid-turn streaming tokens).
-func TestSessionQuietFor(t *testing.T) {
-	now := time.Date(2026, 6, 13, 21, 0, 0, 0, time.UTC)
-	const window = 500 * time.Millisecond
-
-	cases := []struct {
-		name string
-		last time.Time
-		want bool
-	}{
-		{"no output yet (zero time) is never ready", time.Time{}, false},
-		{"output still streaming (just now) not ready", now, false},
-		{"output 200ms ago still within window", now.Add(-200 * time.Millisecond), false},
-		{"output exactly at the window is ready", now.Add(-window), true},
-		{"output long ago is ready", now.Add(-3 * time.Second), true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := sessionQuietFor(tc.last, now, window); got != tc.want {
-				t.Errorf("sessionQuietFor(last=%v, window=%v) = %v, want %v", tc.last, window, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestFormatInboxWakePromptIncludesSourceAndURL(t *testing.T) {
 	entries := []monitor.InboxEntry{{
 		Event: monitor.InboundEvent{

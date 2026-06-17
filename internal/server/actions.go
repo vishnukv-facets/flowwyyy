@@ -332,6 +332,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.compactFlowDB()
 	case "attention-act":
 		return s.attentionAct(req)
+	case "attention-autoact":
+		return s.attentionAutoAct(req)
 	default:
 		return actionResponse{OK: false, Message: "unknown action " + req.Kind}, http.StatusBadRequest
 	}

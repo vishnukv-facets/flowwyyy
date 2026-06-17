@@ -92,7 +92,6 @@ test('steering config consolidates every steering key', () => {
   for (const key of [
     'FLOW_STEERING_MUTED_KEYWORDS',
     'FLOW_STEERING_AUTO_RESOLVE_WAITING',
-    'FLOW_STEERING_SEND_MODEL',
     'FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR',
     'FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN',
   ]) {

@@ -91,11 +91,48 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 		chans = append(chans, it.Channel)
 	}
 	s.warmSlackNames(r.Context(), users, chans)
+	// Warm permalinks concurrently too: the per-row lookup is CachedPermalink (no
+	// network), so without this a cold tab (e.g. dismissed, hundreds of rows in
+	// many channels) resolved one chat.getPermalink each — serially — and stalled
+	// for tens of seconds. Warm does them in parallel, time-boxed; unresolved rows
+	// fall back to the deep-link and resolve on a later load.
+	s.warmSlackPermalinks(r.Context(), items)
 	views := make([]AttentionItemView, 0, len(items))
 	for _, it := range items {
 		views = append(views, s.attentionItemView(r.Context(), it))
 	}
 	writeJSON(w, views)
+}
+
+// warmSlackPermalinks concurrently pre-resolves the (channel, ts) permalinks for
+// the feed rows so the per-row CachedPermalink lookups are all cache hits. Derives
+// channel/ts the same way attentionItemView does (column, else thread_key).
+func (s *Server) warmSlackPermalinks(ctx context.Context, items []flowdb.FeedItem) {
+	if s.slackPermalinker == nil || len(items) == 0 {
+		return
+	}
+	chans := make([]string, 0, len(items))
+	tss := make([]string, 0, len(items))
+	for _, it := range items {
+		if it.Source == "github" {
+			continue
+		}
+		ch, ts := it.Channel, it.TS
+		if ch == "" || ts == "" {
+			tkChan, tkTS := splitThreadKey(it.ThreadKey)
+			if ch == "" {
+				ch = tkChan
+			}
+			if ts == "" {
+				ts = tkTS
+			}
+		}
+		chans = append(chans, ch)
+		tss = append(tss, ts)
+	}
+	wctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+	defer cancel()
+	s.slackPermalinker.Warm(wctx, chans, tss)
 }
 
 // warmSlackNames concurrently pre-resolves the given user/channel IDs (bounded,
@@ -169,9 +206,11 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 				v.ChannelName = "Direct message"
 			}
 		}
-		// Prefer a real https permalink (resolved from channel+ts, no team_id
-		// needed); fall back to the slack:// deep link.
-		v.Permalink = s.slackPermalinker.Permalink(ctx, ch, ts)
+		// Prefer a real https permalink — but CACHE-ONLY here (warmSlackPermalinks
+		// did the network resolution concurrently up front). A per-row network
+		// getPermalink would stall a cold tab for tens of seconds. On a cache miss,
+		// fall back to the slack:// deep link (and it resolves on a later load).
+		v.Permalink = s.slackPermalinker.CachedPermalink(ch, ts)
 		if v.Permalink == "" {
 			v.Permalink = connectorPermalink(it.Source, it.TeamID, ch, ts, it.URL)
 		}
@@ -590,16 +629,12 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		// Optional extra guidance: when present, the agent revises the draft per
 		// these instructions before posting; empty → post the draft as-is.
 		instructions := strings.TrimSpace(req.ReplyInstructions)
-		if target := strings.TrimSpace(item.MatchedTask); target != "" {
-			// A real flow task already owns this thread — hand it the reply (via
-			// its inbox) and resume its session so it posts. No new task.
-			if err := steering.InjectReplyToTask(context.Background(), s.cfg.DB, item, text, target, instructions); err != nil {
-				return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
-			}
-			s.startSessionAsync(target)
-			return actionResponse{OK: true, Message: "reply handed to session " + target + " — that agent is posting it"}, http.StatusOK
-		}
-		// No task owns this thread. How we post depends on the connector:
+		// A reply is ALWAYS posted by the connector's own send path — never by
+		// forwarding to a matched task and asking it to send. Slack posts via the
+		// channel's own per-channel steerer chat (it holds the thread memory + Slack
+		// MCP and posts in-thread); GitHub posts via the gh agent. A matched task may
+		// lack the Slack MCP / PR context, and the operator wants the reply to come
+		// straight from the channel/PR, so the match is irrelevant to HOW we send.
 		if item.Source == "github" {
 			// GitHub posts go through the `gh` CLI, which works in a headless
 			// `claude -p` (no MCP needed). Run it in the background — claude -p can
@@ -616,39 +651,24 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			}(item, text, instructions)
 			return actionResponse{OK: true, Message: "posting your reply via the gh agent — no task created"}, http.StatusOK
 		}
-		// Slack (and any other connector whose posting needs a claude.ai MCP): a
-		// headless `claude -p` has NO Slack MCP, so it cannot post. Spin an
-		// ephemeral, watchable floating session that DOES (a real interactive
-		// bypass Claude session). It posts the approved reply, then marks the card
-		// sent and closes itself — and it's not a task, so nothing lands in the
-		// Tasks list. On failure it stays open so the operator can see why.
+		// Slack: the channel's own per-channel steerer chat posts the reply — it holds
+		// the thread memory + Slack MCP and posts in-thread. There is no ephemeral
+		// fallback: the session model is the master switch, so a Slack card only ever
+		// exists (and is only repliable) while the session model is on and a chat
+		// exists. If no chat is found, surface that rather than spinning a
+		// context-blind ephemeral session.
 		if s.terminals == nil {
-			return actionResponse{OK: false, Message: "terminal hub is not running — cannot open a send session"}, http.StatusServiceUnavailable
+			return actionResponse{OK: false, Message: "terminal hub is not running — cannot post the reply"}, http.StatusServiceUnavailable
 		}
-		// Prefer the channel's existing per-channel steerer chat: it already holds the
-		// thread's memory and has the Slack MCP, so it posts in-context (and in-thread)
-		// instead of spinning a context-blind ephemeral session. The ephemeral path
-		// below stays the fallback when no chat exists / the session model is off.
-		if handled, herr := s.postApprovedReplyViaChat(item, text, instructions); herr != nil {
+		handled, herr := s.postApprovedReplyViaChat(item, text, instructions)
+		if herr != nil {
 			return actionResponse{OK: false, Message: herr.Error()}, http.StatusInternalServerError
-		} else if handled {
-			_ = s.recordAttentionFeedback(item, "send_reply", "approved", text)
-			return actionResponse{OK: true, Message: "handed your reply to this channel's steering session — it's posting in-thread"}, http.StatusOK
 		}
-		launch, err := s.prepareSendReplyFloatingLaunch(item, text, instructions)
-		if err != nil {
-			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
-		}
-		ft := s.terminals.registerFloatingLaunch(launch, "Send reply")
-		// Start it detached so the reply posts in the background whether or not the
-		// operator opens the window. It surfaces as a tray chip they can click to
-		// watch; on success it self-closes, on failure it stays for inspection.
-		if err := s.terminals.startFloatingDetached(ft.ID); err != nil {
-			s.terminals.stopFloating(ft.ID)
-			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		if !handled {
+			return actionResponse{OK: false, Message: "no per-channel chat for this conversation — the per-channel session model must be on to post replies"}, http.StatusConflict
 		}
 		_ = s.recordAttentionFeedback(item, "send_reply", "approved", text)
-		return actionResponse{OK: true, Message: "posting your reply in the background — open the Send reply terminal from the tray to watch", FloatingTerminal: &ft}, http.StatusOK
+		return actionResponse{OK: true, Message: "handed your reply to this channel's steering session — it's posting in-thread"}, http.StatusOK
 	case "open-source", "open_source", "open-session", "open_session":
 		action := strings.ToLower(strings.TrimSpace(req.AttentionAction))
 		if err := s.recordAttentionFeedback(item, action, "opened", ""); err != nil {
