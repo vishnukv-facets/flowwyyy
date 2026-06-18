@@ -3,7 +3,9 @@ package app
 import (
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestCmdSlackNoSubcommand(t *testing.T) {
@@ -21,7 +23,7 @@ func TestCmdSlackUnknownSubcommand(t *testing.T) {
 }
 
 // stubPostSlackSend swaps postSlackSendFn for the test and restores it.
-func stubPostSlackSend(t *testing.T, fn func(channel, threadTS, text, identity, file string) (int, string, error)) {
+func stubPostSlackSend(t *testing.T, fn func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error)) {
 	t.Helper()
 	orig := postSlackSendFn
 	t.Cleanup(func() { postSlackSendFn = orig })
@@ -36,10 +38,24 @@ func stubSlackSend(t *testing.T, fn func(channel, threadTS, text, identity strin
 	slackSendFn = fn
 }
 
+func stubSlackScheduleSend(t *testing.T, fn func(channel, threadTS, text, identity string, postAt int64) (string, error)) {
+	t.Helper()
+	orig := slackScheduleSendFn
+	t.Cleanup(func() { slackScheduleSendFn = orig })
+	slackScheduleSendFn = fn
+}
+
+func stubSlackSendNow(t *testing.T, now time.Time) {
+	t.Helper()
+	orig := slackSendNow
+	t.Cleanup(func() { slackSendNow = orig })
+	slackSendNow = func() time.Time { return now }
+}
+
 // Server POST succeeds -> rc 0, no fallback to in-process slackSendFn.
 func TestCmdSlackSendViaServerSuccess(t *testing.T) {
 	var gotChannel, gotText string
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		gotChannel, gotText = channel, text
 		return 200, `{"ok":true}`, nil
 	})
@@ -60,7 +76,7 @@ func TestCmdSlackSendViaServerSuccess(t *testing.T) {
 // --thread-ts forwards the thread target to the server POST.
 func TestCmdSlackSendForwardsThreadTS(t *testing.T) {
 	var gotThreadTS string
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		gotThreadTS = threadTS
 		return 200, `{"ok":true}`, nil
 	})
@@ -76,7 +92,7 @@ func TestCmdSlackSendForwardsThreadTS(t *testing.T) {
 
 // Server reached but Slack rejected (e.g. account_inactive) -> rc 1, no fallback.
 func TestCmdSlackSendViaServerSlackError(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 502, `{"error":"account_inactive"}`, nil
 	})
 	stubSlackSend(t, func(channel, threadTS, text, identity string) error {
@@ -92,7 +108,7 @@ func TestCmdSlackSendViaServerSlackError(t *testing.T) {
 
 // Server unreachable -> fall back to in-process slackSendFn.
 func TestCmdSlackSendFallsBackWhenServerUnreachable(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	var fellBack bool
@@ -116,7 +132,7 @@ func TestCmdSlackSendFallsBackWhenServerUnreachable(t *testing.T) {
 }
 
 func TestCmdSlackSendFallsBackWithThreadTS(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	var gotThreadTS string
@@ -136,7 +152,7 @@ func TestCmdSlackSendFallsBackWithThreadTS(t *testing.T) {
 
 // Server unreachable AND in-process fallback fails -> rc 1.
 func TestCmdSlackSendFallbackError(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	stubSlackSend(t, func(channel, threadTS, text, identity string) error {
@@ -152,7 +168,7 @@ func TestCmdSlackSendFallbackError(t *testing.T) {
 // --as bot forwards the identity override to the server POST.
 func TestCmdSlackSendForwardsAsBot(t *testing.T) {
 	var gotIdentity string
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		gotIdentity = identity
 		return 200, `{"ok":true}`, nil
 	})
@@ -168,7 +184,7 @@ func TestCmdSlackSendForwardsAsBot(t *testing.T) {
 }
 
 func TestCmdSlackSendRejectsBadAs(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		t.Fatal("must not POST when --as is invalid")
 		return 0, "", nil
 	})
@@ -181,7 +197,7 @@ func TestCmdSlackSendRejectsBadAs(t *testing.T) {
 // --file forwards the path to the server POST (text rides along as comment).
 func TestCmdSlackSendForwardsFile(t *testing.T) {
 	var gotFile, gotText string
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		gotFile, gotText = file, text
 		return 200, `{"ok":true}`, nil
 	})
@@ -200,7 +216,7 @@ func TestCmdSlackSendReadsTextFile(t *testing.T) {
 		t.Fatal(err)
 	}
 	var gotText string
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		gotText = text
 		return 200, `{"ok":true}`, nil
 	})
@@ -216,7 +232,7 @@ func TestCmdSlackSendReadsTextFile(t *testing.T) {
 
 // --file with no --text is allowed (attachment without a comment).
 func TestCmdSlackSendFileNoTextAllowed(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 200, `{"ok":true}`, nil
 	})
 	rc := cmdSlack([]string{"send", "--channel", "C1", "--file", "/tmp/x.png"})
@@ -227,7 +243,7 @@ func TestCmdSlackSendFileNoTextAllowed(t *testing.T) {
 
 // Server unreachable with --file -> fall back to slackFileSendFn, not slackSendFn.
 func TestCmdSlackSendFileFallsBack(t *testing.T) {
-	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string) (int, string, error) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
 		return 0, "", fmt.Errorf("connection refused")
 	})
 	stubSlackSend(t, func(channel, threadTS, text, identity string) error {
@@ -247,6 +263,105 @@ func TestCmdSlackSendFileFallsBack(t *testing.T) {
 	}
 	if gotFile != "/tmp/x.pdf" {
 		t.Errorf("file fallback path = %q, want /tmp/x.pdf", gotFile)
+	}
+}
+
+func TestParseSlackPostAtFormatsAndWindow(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, loc)
+	stubSlackSendNow(t, now)
+
+	cases := []struct {
+		name string
+		in   string
+		want int64
+	}{
+		{"relative", "+30m", now.Add(30 * time.Minute).Unix()},
+		{"absolute local", "2026-06-18 12:45", time.Date(2026, 6, 18, 12, 45, 0, 0, loc).Unix()},
+		{"epoch", fmt.Sprint(now.Add(2 * time.Hour).Unix()), now.Add(2 * time.Hour).Unix()},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseSlackPostAt(c.in)
+			if err != nil {
+				t.Fatalf("parseSlackPostAt(%q): %v", c.in, err)
+			}
+			if got != c.want {
+				t.Errorf("post_at = %d, want %d", got, c.want)
+			}
+		})
+	}
+
+	for _, in := range []string{"+1m", fmt.Sprint(now.Add(121 * 24 * time.Hour).Unix())} {
+		if _, err := parseSlackPostAt(in); err == nil {
+			t.Errorf("parseSlackPostAt(%q) expected window error", in)
+		}
+	}
+}
+
+func TestCmdSlackSendAtForwardsPostAtAndPrintsConfirmation(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, loc)
+	stubSlackSendNow(t, now)
+	var gotPostAt int64
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
+		gotPostAt = postAt
+		return 200, `{"ok":true,"scheduled_message_id":"Q123"}`, nil
+	})
+
+	out := captureStdout(t, func() {
+		rc := cmdSlack([]string{"send", "--channel", "C1", "--text", "hi", "--at", "+30m"})
+		if rc != 0 {
+			t.Fatalf("rc = %d, want 0", rc)
+		}
+	})
+	if gotPostAt != now.Add(30*time.Minute).Unix() {
+		t.Errorf("post_at = %d, want %d", gotPostAt, now.Add(30*time.Minute).Unix())
+	}
+	if !strings.Contains(out, "Q123") || !strings.Contains(out, "2026-06-18T12:30:00+05:30") {
+		t.Errorf("confirmation = %q, want id and resolved time", out)
+	}
+}
+
+func TestCmdSlackSendAtRejectsFile(t *testing.T) {
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
+		t.Fatal("must not POST scheduled file uploads")
+		return 0, "", nil
+	})
+	rc := cmdSlack([]string{"send", "--channel", "C1", "--file", "/tmp/x.pdf", "--at", "+30m"})
+	if rc != 2 {
+		t.Errorf("rc = %d, want 2", rc)
+	}
+}
+
+func TestCmdSlackSendAtFallsBackToSchedule(t *testing.T) {
+	loc := time.FixedZone("IST", 5*60*60+30*60)
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, loc)
+	stubSlackSendNow(t, now)
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
+		return 0, "", fmt.Errorf("connection refused")
+	})
+	stubSlackSend(t, func(channel, threadTS, text, identity string) error {
+		t.Fatal("immediate fallback must not be used for scheduled sends")
+		return nil
+	})
+	var gotPostAt int64
+	stubSlackScheduleSend(t, func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+		gotPostAt = postAt
+		return "Q456", nil
+	})
+
+	out := captureStdout(t, func() {
+		rc := cmdSlack([]string{"send", "--channel", "C1", "--text", "hi", "--at", "+45m"})
+		if rc != 0 {
+			t.Fatalf("rc = %d, want 0", rc)
+		}
+	})
+	if gotPostAt != now.Add(45*time.Minute).Unix() {
+		t.Errorf("fallback post_at = %d, want %d", gotPostAt, now.Add(45*time.Minute).Unix())
+	}
+	if !strings.Contains(out, "Q456") || !strings.Contains(out, "2026-06-18T12:45:00+05:30") {
+		t.Errorf("confirmation = %q, want id and resolved time", out)
 	}
 }
 

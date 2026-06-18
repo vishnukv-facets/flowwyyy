@@ -98,6 +98,47 @@ func TestSendAsThreadForwardsThreadTS(t *testing.T) {
 	}
 }
 
+func TestScheduleAsThreadWritesDisabled(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "0")
+	called := false
+	orig := scheduleAsBotFn
+	defer func() { scheduleAsBotFn = orig }()
+	scheduleAsBotFn = func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+		called = true
+		return "", nil
+	}
+
+	if _, err := ScheduleAsThread("C1", "", "hello", "bot", 1781776200); err == nil {
+		t.Fatal("expected error when writes disabled")
+	}
+	if called {
+		t.Fatal("scheduleAsBotFn must not be called when writes disabled")
+	}
+}
+
+func TestScheduleAsThreadForwardsPostAtAndThreadTS(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	var gotChannel, gotThreadTS, gotText, gotIdentity string
+	var gotPostAt int64
+	orig := scheduleAsBotFn
+	defer func() { scheduleAsBotFn = orig }()
+	scheduleAsBotFn = func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+		gotChannel, gotThreadTS, gotText, gotIdentity, gotPostAt = channel, threadTS, text, identity, postAt
+		return "Q123", nil
+	}
+
+	id, err := ScheduleAsThread("C1", "1234.000100", "hello", "user", 1781776200)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "Q123" {
+		t.Errorf("scheduled id = %q, want Q123", id)
+	}
+	if gotChannel != "C1" || gotThreadTS != "1234.000100" || gotText != "hello" || gotIdentity != "user" || gotPostAt != 1781776200 {
+		t.Errorf("forwarded (%q,%q,%q,%q,%d)", gotChannel, gotThreadTS, gotText, gotIdentity, gotPostAt)
+	}
+}
+
 func TestSlackSendIdentity(t *testing.T) {
 	cases := []struct{ env, want string }{
 		{"", "bot"},

@@ -22,6 +22,13 @@ func stubSlackFileSend(t *testing.T, fn func(channel, threadTS, comment, filePat
 	slackFileSendFn = fn
 }
 
+func stubSlackScheduleSend(t *testing.T, fn func(channel, threadTS, text, identity string, postAt int64) (string, error)) {
+	t.Helper()
+	orig := slackScheduleSendFn
+	t.Cleanup(func() { slackScheduleSendFn = orig })
+	slackScheduleSendFn = fn
+}
+
 // Non-POST methods are rejected.
 func TestHandleSlackSendMethodGuard(t *testing.T) {
 	s := &Server{}
@@ -101,6 +108,61 @@ func TestHandleSlackSendFileForwardsThreadTS(t *testing.T) {
 	}
 	if gotThreadTS != "1234.000100" {
 		t.Errorf("thread_ts = %q, want 1234.000100", gotThreadTS)
+	}
+}
+
+func TestHandleSlackSendPostAtSchedulesText(t *testing.T) {
+	var gotChannel, gotThreadTS, gotText, gotIdentity string
+	var gotPostAt int64
+	stubSlackTextSend(t, func(channel, threadTS, text, identity string) error {
+		t.Fatal("immediate text send must not be used for scheduled payload")
+		return nil
+	})
+	stubSlackFileSend(t, func(channel, threadTS, comment, filePath, identity string) error {
+		t.Fatal("file send must not be used for scheduled text payload")
+		return nil
+	})
+	stubSlackScheduleSend(t, func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+		gotChannel, gotThreadTS, gotText, gotIdentity, gotPostAt = channel, threadTS, text, identity, postAt
+		return "Q123", nil
+	})
+
+	s := &Server{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/slack/send",
+		strings.NewReader(`{"channel":"C1","thread_ts":"1234.000100","text":"hi","as":"user","post_at":1781776200}`))
+	s.handleSlackSend(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, want %d; body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if gotChannel != "C1" || gotThreadTS != "1234.000100" || gotText != "hi" || gotIdentity != "user" || gotPostAt != 1781776200 {
+		t.Errorf("forwarded (%q,%q,%q,%q,%d)", gotChannel, gotThreadTS, gotText, gotIdentity, gotPostAt)
+	}
+	if !strings.Contains(rec.Body.String(), `"scheduled_message_id":"Q123"`) || !strings.Contains(rec.Body.String(), `"post_at":1781776200`) {
+		t.Errorf("body = %s, want scheduled id and post_at", rec.Body.String())
+	}
+}
+
+func TestHandleSlackSendRejectsPostAtWithFile(t *testing.T) {
+	stubSlackFileSend(t, func(channel, threadTS, comment, filePath, identity string) error {
+		t.Fatal("file send must not be used when post_at is set")
+		return nil
+	})
+	stubSlackScheduleSend(t, func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+		t.Fatal("schedule send must not be used for file payload")
+		return "", nil
+	})
+
+	s := &Server{}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/slack/send",
+		strings.NewReader(`{"channel":"C1","text":"caption","file":"/tmp/x.pdf","post_at":1781776200}`))
+	s.handleSlackSend(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want %d; body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "cannot schedule file uploads") {
+		t.Errorf("body = %q, want schedule/file error", rec.Body.String())
 	}
 }
 
