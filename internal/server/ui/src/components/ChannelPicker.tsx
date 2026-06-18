@@ -40,6 +40,20 @@ function kindOf(c: SlackChannel): string {
   return c.kind || 'channel'
 }
 
+// kindRank orders the list so 1:1 DMs surface first, then group DMs, then
+// channels — otherwise an unresolved DM (labelled by its raw U… id) sorts below
+// 90+ lowercase mpdm- group rows and is effectively hidden.
+function kindRank(c: SlackChannel): number {
+  switch (kindOf(c)) {
+    case 'im':
+      return 0
+    case 'mpim':
+      return 1
+    default:
+      return 2
+  }
+}
+
 // kindIcon picks the row icon: DM, group DM, or public/private channel.
 function kindIcon(c: SlackChannel): ReactNode {
   switch (kindOf(c)) {
@@ -108,12 +122,16 @@ export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLab
     const list = (channels ?? []).filter(
       (c) => allow.has(kindOf(c)) && (!q || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)),
     )
-    // Selected first, then alphabetical — so the current selection stays visible.
+    // Selected first, then DMs → group DMs → channels, then alphabetical — so the
+    // current selection stays visible and 1:1 DMs are never buried under groups.
     return list.sort((a, b) => {
       const aw = current.has(a.id) ? 0 : 1
       const bw = current.has(b.id) ? 0 : 1
       if (aw !== bw) return aw - bw
-      return a.name.localeCompare(b.name)
+      const ak = kindRank(a)
+      const bk = kindRank(b)
+      if (ak !== bk) return ak - bk
+      return (a.name || a.id).localeCompare(b.name || b.id)
     })
   }, [channels, filter, current, kindsKey])
 

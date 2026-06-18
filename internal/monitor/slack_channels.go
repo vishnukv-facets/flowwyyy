@@ -81,13 +81,14 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		return nil, nil
 	}
 	api := slack.New(SlackUserToken())
-	// Resolve a DM peer's display name. UserName uses the resolver's PRIMARY client
-	// only, so prefer the bot's users.info but fall back to the user token when no
-	// bot token is configured — otherwise every 1:1 DM is labelled by its raw U… id,
-	// which a name search ("manan") can't match and the operator can't recognize.
-	resolver := NewSlackNameResolver()
+	// Resolve a DM peer's display name via the USER token: these are the operator's
+	// own DM peers, which the user token's users.info resolves reliably — the bot may
+	// not share a channel with them, and UserName only consults the resolver's PRIMARY
+	// client. Without this every 1:1 DM falls back to its raw U… id, which a name
+	// search can't match and which sorts to the bottom of the list, effectively hidden.
+	resolver := NewSlackNameResolverWithClient(NewSlackTitleUserClient())
 	if resolver == nil {
-		resolver = NewSlackNameResolverWithClient(NewSlackTitleUserClient())
+		resolver = NewSlackNameResolver()
 	}
 	var out []SlackChannelInfo
 	ims, mpims := 0, 0
