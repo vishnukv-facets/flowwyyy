@@ -1235,3 +1235,36 @@ func TestGetSetMeta(t *testing.T) {
 		t.Fatalf("GetMeta after upsert = %q", v)
 	}
 }
+
+// The withheld-content marker must surface via waiting_on without clobbering an
+// operator's own note, and must clear only when it still matches the marker.
+func TestWaitingOnIfClearAndClearIfNote(t *testing.T) {
+	db := openTempDB(t)
+	const note = "withheld connector content — open this task in a supervised (non-bypass) session to review"
+
+	insertTask(t, db, "wh1", "wh1", "backlog", "medium", "/tmp", nil)
+	if set, err := SetTaskWaitingOnIfClear(db, "wh1", note); err != nil || !set {
+		t.Fatalf("set on empty: set=%v err=%v", set, err)
+	}
+	if set, _ := SetTaskWaitingOnIfClear(db, "wh1", note); set {
+		t.Fatal("second set must be a no-op (already non-empty)")
+	}
+
+	// An operator's own note must never be clobbered, and clearing our marker
+	// must not touch it.
+	insertTask(t, db, "wh2", "wh2", "backlog", "medium", "/tmp", nil)
+	if _, err := db.Exec(`UPDATE tasks SET waiting_on=? WHERE slug=?`, "waiting on Manan", "wh2"); err != nil {
+		t.Fatal(err)
+	}
+	if set, _ := SetTaskWaitingOnIfClear(db, "wh2", note); set {
+		t.Fatal("must not clobber an operator note")
+	}
+	if cleared, _ := ClearTaskWaitingOnIfNote(db, "wh2", note); cleared {
+		t.Fatal("must not clear an operator note that isn't our marker")
+	}
+
+	// Our marker clears once delivered (attended).
+	if cleared, err := ClearTaskWaitingOnIfNote(db, "wh1", note); err != nil || !cleared {
+		t.Fatalf("clear matching marker: cleared=%v err=%v", cleared, err)
+	}
+}
