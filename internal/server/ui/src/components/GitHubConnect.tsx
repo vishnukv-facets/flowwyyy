@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { AlertTriangle, Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
 import { ApiError, apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
-import { useGitHubInstallations, useGitHubOrgs, useGitHubSetupStatus } from '../lib/query'
+import { useGitHubInstallations, useGitHubSetupStatus } from '../lib/query'
 import { pushToast } from '../lib/toast'
 import type { GitHubInstallation, GitHubSetupStatus } from '../lib/types'
 
@@ -125,23 +125,14 @@ function StepIngress({ st, active }: { st: GitHubSetupStatus; active: boolean })
 
 function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: boolean; onDone: () => void }) {
   const [name, setName] = useState('')
-  const [target, setTarget] = useState<'user' | 'org'>('user')
-  const [org, setOrg] = useState('')
   const [busy, setBusy] = useState(false)
-  // Fetch the orgs the active gh account can target, but only once "Organization"
-  // is picked — keeps the gh shell-out off the common personal-account path.
-  const { data: orgsData, isLoading: orgsFetching } = useGitHubOrgs(target === 'org')
-  const orgs = orgsData?.orgs ?? []
-  const orgsLoading = target === 'org' && orgsFetching
 
   const create = async (replaceExisting = false) => {
-    if (target === 'org' && !org.trim()) return
     setBusy(true)
     try {
       const res = await apiPost<{ create_url: string; manifest: unknown }>('/api/github/setup/create-app', {
         name: name.trim(),
-        target,
-        org: org.trim(),
+        target: 'user',
         replace_existing: replaceExisting,
       })
       postManifestForm(res.create_url, res.manifest)
@@ -180,42 +171,14 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
       }
     >
       <p className="config-help">
-        Flow builds a GitHub App <strong>manifest</strong> (webhook URL, signing secret,
-        and the issue/PR events + permissions it needs) and hands it to GitHub. One
-        confirmation there creates the App and sends its credentials straight back —
-        the private key and webhook secret go into your OS keyring, never a config file.
+        Flow builds one public GitHub App <strong>manifest</strong> and hands it to
+        GitHub. Create it once here; the next step installs that same App on your
+        personal account and any orgs you want Flow to watch.
       </p>
       <div className="slack-step-controls">
-        <select className="input" value={target} onChange={(e) => setTarget(e.target.value as 'user' | 'org')}>
-          <option value="user">Personal account</option>
-          <option value="org">Organization</option>
-        </select>
-        {target === 'org' &&
-          (orgsLoading ? (
-            <select className="input" disabled>
-              <option>Loading orgs…</option>
-            </select>
-          ) : orgs.length > 0 ? (
-            <select className="input" value={org} onChange={(e) => setOrg(e.target.value)}>
-              <option value="">Select an organization…</option>
-              {orgs.map((o) => (
-                <option key={o} value={o}>
-                  {o}
-                </option>
-              ))}
-            </select>
-          ) : (
-            // No orgs found (gh missing / unauthenticated / none) — fall back to
-            // manual entry so the wizard never dead-ends.
-            <input
-              className="input"
-              placeholder="org login (e.g. acme)"
-              value={org}
-              onChange={(e) => setOrg(e.target.value)}
-            />
-          ))}
         <input
           className="input"
+          aria-label="GitHub App name"
           placeholder="App name (optional)"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -223,7 +186,7 @@ function StepCreateApp({ st, active, onDone }: { st: GitHubSetupStatus; active: 
         <button
           type="button"
           className="btn primary"
-          disabled={busy || !st.ingress_ready || (target === 'org' && !org.trim())}
+          disabled={busy || !st.ingress_ready}
           onClick={() => void create()}
           title={!st.ingress_ready ? 'Start public ingress first' : undefined}
         >

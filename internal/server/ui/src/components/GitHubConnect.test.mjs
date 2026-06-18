@@ -45,12 +45,11 @@ test('wizard offers a confirmed disconnect once connected', () => {
   assert.match(ghConnect, /Disconnect/)
 })
 
-test('org target uses a dropdown of fetched orgs', () => {
-  assert.match(ghConnect, /useGitHubOrgs/)
-  assert.match(ghConnect, /Select an organization/)
-  assert.match(query, /function useGitHubOrgs\(/)
-  assert.match(query, /\/api\/github\/setup\/orgs/)
-  assert.match(types, /export interface GitHubOrgs/)
+test('create step does not ask for install targets', () => {
+  assert.doesNotMatch(ghConnect, /useGitHubOrgs/)
+  assert.doesNotMatch(ghConnect, /Select an organization/)
+  assert.match(ghConnect, /target: 'user'/)
+  assert.match(ghConnect, /next step installs that same App/)
 })
 
 test('supports installing on both personal and org accounts', () => {
