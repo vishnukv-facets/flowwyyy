@@ -25,9 +25,15 @@ type SlackChannelInfo struct {
 	Kind      string `json:"kind,omitempty"`
 }
 
-// slackDMListLimit caps how many DMs/group-DMs the trusted-sources picker lists,
-// bounding the per-peer users.info resolution cost on a cold name cache.
-const slackDMListLimit = 100
+// Per-kind caps for the trusted-sources picker. They are SEPARATE because the
+// costs differ: a 1:1 DM (im) needs a users.info call to resolve its peer name
+// (so slackIMListLimit bounds cold-cache resolution cost), while a group DM
+// (mpim) carries a Slack-provided name and is free to list. A single shared cap
+// let numerous group DMs starve the 1:1 DMs out of the list entirely.
+const (
+	slackIMListLimit   = 300
+	slackMPIMListLimit = 300
+)
 
 type slackChannelCache struct {
 	CachedAt string             `json:"cached_at"`
@@ -86,7 +92,7 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 	var out []SlackChannelInfo
 	ims, mpims := 0, 0
 	cursor := ""
-	for len(out) < slackDMListLimit {
+	for {
 		convs, next, err := api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
 			Types:           []string{"im", "mpim"},
 			ExcludeArchived: true,
@@ -97,22 +103,23 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 			return out, err
 		}
 		for _, c := range convs {
-			info := SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true}
 			if c.IsMpIM {
-				info.Kind = "mpim"
-				info.Name = firstNonEmpty(strings.TrimSpace(c.Name), "group DM")
+				if mpims >= slackMPIMListLimit {
+					continue
+				}
+				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "mpim", Name: firstNonEmpty(strings.TrimSpace(c.Name), "group DM")})
 				mpims++
 			} else {
-				info.Kind = "im"
-				info.Name = firstNonEmpty(resolver.UserName(ctx, c.User), c.User)
+				if ims >= slackIMListLimit {
+					continue
+				}
+				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "im", Name: firstNonEmpty(resolver.UserName(ctx, c.User), c.User)})
 				ims++
 			}
-			out = append(out, info)
-			if len(out) >= slackDMListLimit {
-				break
-			}
 		}
-		if strings.TrimSpace(next) == "" {
+		// Keep paging until the cursor is exhausted so a flood of group DMs can
+		// never crowd out 1:1 DMs; stop early only once BOTH per-kind caps are met.
+		if strings.TrimSpace(next) == "" || (ims >= slackIMListLimit && mpims >= slackMPIMListLimit) {
 			break
 		}
 		cursor = next
