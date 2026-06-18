@@ -53,6 +53,23 @@ func (s *Server) handleKBDream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleKBPrune (POST /api/kb/prune) is the operator's "clean up flagged" action:
+// it strips the entire "Pending removal" section from every KB file now, instead
+// of waiting for the age-gated auto-prune. Returns the count of flagged entries
+// removed. The kb file watcher pushes a "kb" ui_change as the files change.
+func (s *Server) handleKBPrune(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if s.kbDreamer == nil {
+		writeJSON(w, map[string]any{"pruned": 0})
+		return
+	}
+	pruned := s.kbDreamer.purgeAllPendingRemoval()
+	writeJSON(w, map[string]any{"pruned": pruned})
+}
+
 func (s *Server) handleKBFile(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodPut {
 		w.WriteHeader(http.StatusMethodNotAllowed)

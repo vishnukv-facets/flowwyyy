@@ -205,6 +205,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/tags", s.handleTags)
 	mux.HandleFunc("/api/kb", s.handleKB)
 	mux.HandleFunc("/api/kb/dream", s.handleKBDream) // must precede the /api/kb/ subtree
+	mux.HandleFunc("/api/kb/prune", s.handleKBPrune) // exact match; precedes the /api/kb/ subtree
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
 	mux.HandleFunc("/api/memory/sources", s.handleMemorySources)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)

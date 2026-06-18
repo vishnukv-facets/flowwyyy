@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/slack-go/slack"
@@ -38,6 +39,19 @@ const (
 // slackDirectoryTimeout bounds the bulk users.list fetch used to name DM peers,
 // so a very large workspace degrades to raw ids instead of hanging the request.
 const slackDirectoryTimeout = 15 * time.Second
+
+// slackIMInfoFallbackLimit caps the per-user users.info calls made to name DM
+// peers the bulk users.list directory MISSED. The bulk list doesn't include
+// external/Slack-Connect peers, can omit deactivated members, and may be
+// truncated by paging or the directory timeout — so a handful of 1:1 DMs fall
+// back to a raw U… id. Those misses are the exception, so a bounded, concurrent
+// users.info sweep names them without reintroducing the per-DM-call cost the
+// bulk directory exists to avoid. Beyond the cap the rest keep their raw id
+// rather than risk a slow request.
+const (
+	slackIMInfoFallbackLimit = 100
+	slackUserInfoConcurrency = 8
+)
 
 type slackChannelCache struct {
 	CachedAt string             `json:"cached_at"`
@@ -99,6 +113,14 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		dir = nil
 	}
 	var out []SlackChannelInfo
+	// im rows are named in a second pass: the bulk directory covers most peers,
+	// but the misses need a bounded users.info sweep, so remember each im's slot
+	// and peer id and fill the names once paging is done.
+	type imRef struct {
+		idx  int
+		user string
+	}
+	var imRefs []imRef
 	ims, mpims := 0, 0
 	cursor := ""
 	for {
@@ -122,7 +144,8 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 				if ims >= slackIMListLimit {
 					continue
 				}
-				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "im", Name: firstNonEmpty(dir[c.User], c.User)})
+				imRefs = append(imRefs, imRef{idx: len(out), user: c.User})
+				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "im"})
 				ims++
 			}
 		}
@@ -133,10 +156,93 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		}
 		cursor = next
 	}
+	// Name the 1:1 DM peers: bulk directory first, bounded users.info fallback for
+	// the peers it missed. Unresolved peers keep their raw U… id.
+	peerIDs := make([]string, 0, len(imRefs))
+	for _, r := range imRefs {
+		peerIDs = append(peerIDs, r.user)
+	}
+	names := resolveIMNames(ctx, SlackUserToken(), peerIDs, dir, slackUserInfoFn)
+	for _, r := range imRefs {
+		out[r.idx].Name = firstNonEmpty(names[r.user], r.user)
+	}
 	// Diagnostic: if the API returns groups but zero DMs, the user token is missing
 	// im:read — a connector-scope problem, not a labelling one.
 	log.Printf("flow: trusted-source picker listed %d DM(s) + %d group DM(s)", ims, mpims)
 	return out, nil
+}
+
+// slackUserInfoFunc resolves one Slack user ID to a display name via the given
+// token. The seam below is the production impl; tests substitute a fake.
+type slackUserInfoFunc func(ctx context.Context, token, userID string) (string, error)
+
+// slackUserInfoFn resolves a single user via users.info — used as the per-user
+// fallback for DM peers the bulk users.list directory missed. Mockable in tests.
+var slackUserInfoFn slackUserInfoFunc = func(ctx context.Context, token, userID string) (string, error) {
+	u, err := slack.New(token).GetUserInfoContext(ctx, strings.TrimSpace(userID))
+	if err != nil {
+		return "", err
+	}
+	return firstNonEmpty(u.Profile.DisplayName, u.Profile.RealName, u.RealName, u.Name), nil
+}
+
+// resolveIMNames maps DM-peer user IDs to display names. It resolves from the
+// bulk users.list directory first (free — already fetched), then falls back to a
+// bounded, concurrent per-user users.info lookup for the peers the directory
+// missed (external/Slack-Connect peers, deactivated members, or anyone past a
+// paged/timed-out directory). Peers that still don't resolve are simply absent
+// from the returned map, so the caller keeps the raw id. Deduplicates ids,
+// caps the fallback at slackIMInfoFallbackLimit, and respects ctx.
+func resolveIMNames(ctx context.Context, token string, peerIDs []string, dir map[string]string, infoFn slackUserInfoFunc) map[string]string {
+	names := make(map[string]string, len(peerIDs))
+	var misses []string
+	seen := map[string]bool{}
+	for _, id := range peerIDs {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if n := strings.TrimSpace(dir[id]); n != "" {
+			names[id] = n
+			continue
+		}
+		misses = append(misses, id)
+	}
+	if len(misses) == 0 || infoFn == nil || strings.TrimSpace(token) == "" {
+		return names
+	}
+	if len(misses) > slackIMInfoFallbackLimit {
+		log.Printf("flow: trusted-source picker: %d DM peer(s) unresolved by directory; naming first %d via users.info, rest keep raw ids", len(misses), slackIMInfoFallbackLimit)
+		misses = misses[:slackIMInfoFallbackLimit]
+	}
+	var mu sync.Mutex
+	sem := make(chan struct{}, slackUserInfoConcurrency)
+	var wg sync.WaitGroup
+	for _, id := range misses {
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return names
+		case sem <- struct{}{}:
+		}
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			name, err := infoFn(ctx, token, id)
+			if err != nil {
+				return
+			}
+			if name = strings.TrimSpace(name); name != "" {
+				mu.Lock()
+				names[id] = name
+				mu.Unlock()
+			}
+		}(id)
+	}
+	wg.Wait()
+	return names
 }
 
 // slackUserDirectoryFn builds a userID→display-name map from a single bulk

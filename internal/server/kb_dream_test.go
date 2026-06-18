@@ -70,6 +70,127 @@ func TestPruneExpiredPendingRemovalBadDate(t *testing.T) {
 	}
 }
 
+// TestStripAllPendingRemoval verifies the operator "clean up flagged" purge:
+// the whole Pending-removal section goes (regardless of flag age), live content
+// above and any heading after it stays, and a file with no such section is
+// returned byte-identical.
+func TestStripAllPendingRemoval(t *testing.T) {
+	content := strings.Join([]string{
+		"# User",
+		"",
+		"- a live fact (keep)",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-10] stale one — why: superseded",
+		"- [flagged 2026-06-13] another — why: old",
+		"- a non-flagged line in the section",
+		"",
+		"## Another section",
+		"- keep this too",
+	}, "\n")
+
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 2 {
+		t.Fatalf("removed (flagged count) = %d, want 2", removed)
+	}
+	for _, gone := range []string{"⚠️ Pending removal", "stale one", "another — why: old", "a non-flagged line in the section"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("purge should have removed %q:\n%s", gone, got)
+		}
+	}
+	for _, keep := range []string{"# User", "a live fact (keep)", "## Another section", "keep this too"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("purge should have kept %q:\n%s", keep, got)
+		}
+	}
+}
+
+func TestStripAllPendingRemovalNoSection(t *testing.T) {
+	content := "# User\n\n- a fact\n- another fact\n"
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+	if got != content {
+		t.Errorf("content with no Pending-removal section must round-trip unchanged")
+	}
+}
+
+// TestComputeNextRunInterval is the restart-no-reset guarantee for interval mode:
+// an overdue last-run catches up promptly, a recent one waits out the remainder,
+// and a fresh worker schedules one interval ahead — never a hard reset to now+24h
+// on every boot.
+func TestComputeNextRunInterval(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "")
+	t.Setenv("FLOW_KB_DREAM_INTERVAL", "24h")
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.Local)
+	d := &kbDreamer{}
+
+	// Fresh (no last run) → one interval out.
+	if got := d.computeNextRun(now); !got.Equal(now.Add(24 * time.Hour)) {
+		t.Errorf("fresh next = %v, want now+24h", got)
+	}
+
+	// Recent last run (1h ago) → resumes at last+24h, NOT reset to now+24h.
+	d.lastRun = now.Add(-1 * time.Hour)
+	if got := d.computeNextRun(now); !got.Equal(d.lastRun.Add(24 * time.Hour)) {
+		t.Errorf("recent next = %v, want lastRun+24h (%v)", got, d.lastRun.Add(24*time.Hour))
+	}
+
+	// Overdue last run (25h ago, e.g. across a restart) → catch up soon.
+	d.lastRun = now.Add(-25 * time.Hour)
+	if got := d.computeNextRun(now); !got.Equal(now.Add(kbDreamCatchupDelay)) {
+		t.Errorf("overdue next = %v, want now+catchup (%v)", got, now.Add(kbDreamCatchupDelay))
+	}
+}
+
+// TestComputeNextRunFixedSchedule verifies the playbook-style fixed schedule:
+// a daily clock time resumes at that time (no reset), and a missed day catches up.
+func TestComputeNextRunFixedSchedule(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "daily at 3am")
+	d := &kbDreamer{}
+
+	// Before today's 03:00, last run was yesterday's pass → next is today 03:00.
+	now := time.Date(2026, 6, 18, 2, 0, 0, 0, time.Local)
+	d.lastRun = time.Date(2026, 6, 17, 3, 0, 0, 0, time.Local)
+	want := time.Date(2026, 6, 18, 3, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(want) {
+		t.Errorf("pre-slot next = %v, want today 03:00 (%v)", got, want)
+	}
+
+	// Server was down past 03:00 and hasn't run today → catch up soon.
+	now = time.Date(2026, 6, 18, 9, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(now.Add(kbDreamCatchupDelay)) {
+		t.Errorf("missed-slot next = %v, want now+catchup", got)
+	}
+
+	// Already ran today after 03:00 → next is tomorrow 03:00.
+	d.lastRun = time.Date(2026, 6, 18, 3, 0, 30, 0, time.Local)
+	want = time.Date(2026, 6, 19, 3, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(want) {
+		t.Errorf("post-run next = %v, want tomorrow 03:00 (%v)", got, want)
+	}
+}
+
+func TestKBDreamScheduleCronFallsBackToInterval(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_INTERVAL", "6h")
+	// Unset → @every fallback, no custom label.
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "")
+	if cron, label, custom := kbDreamScheduleCron(); custom || label != "" || cron != "@every 6h0m0s" {
+		t.Errorf("unset: got cron=%q label=%q custom=%v, want @every fallback", cron, label, custom)
+	}
+	// Set + valid → custom cron + label.
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "daily at 3am")
+	if cron, label, custom := kbDreamScheduleCron(); !custom || label == "" || cron == "" {
+		t.Errorf("set: got cron=%q label=%q custom=%v, want custom schedule", cron, label, custom)
+	}
+	// Set + invalid → falls back to interval (never stalls).
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "not a real schedule!!")
+	if _, _, custom := kbDreamScheduleCron(); custom {
+		t.Errorf("invalid schedule should fall back to interval, got custom=true")
+	}
+}
+
 func TestKBDreamEnabledDefault(t *testing.T) {
 	t.Setenv("FLOW_KB_DREAM_ENABLED", "")
 	if !kbDreamEnabled() {
