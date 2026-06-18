@@ -74,6 +74,43 @@ type ThreadDecision struct {
 
 // GetThreadState loads the running understanding for a thread. The bool is false
 // (with a zero ThreadState and nil error) when no row exists yet.
+// ThreadCursor is the minimal (thread_key, last_seen_ts) pair the steerer backfill
+// needs to gap-recover a watched thread that has no slack-reply task. last_seen_ts
+// is the newest message ts the steerer recorded for the thread — the floor to
+// fetch replies after.
+type ThreadCursor struct {
+	ThreadKey  string
+	LastSeenTS string
+}
+
+// ListRecentSlackThreadCursors returns up to `limit` most-recently-updated Slack
+// threads the steerer has tracked, each with its last_seen_ts recovery floor.
+// This is how the backfill finds steerer-watched threads with no slack-reply task
+// (closing the live-routing-vs-gap-recovery coverage gap that lost messages over
+// a laptop sleep). Bounded by limit so it can't fan out to every thread ever seen.
+func ListRecentSlackThreadCursors(db *sql.DB, limit int) ([]ThreadCursor, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := db.Query(
+		`SELECT thread_key, last_seen_ts FROM attention_thread_state
+		 WHERE source = 'slack' AND last_seen_ts <> ''
+		 ORDER BY updated_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ThreadCursor
+	for rows.Next() {
+		var tc ThreadCursor
+		if err := rows.Scan(&tc.ThreadKey, &tc.LastSeenTS); err != nil {
+			return nil, err
+		}
+		out = append(out, tc)
+	}
+	return out, rows.Err()
+}
+
 func GetThreadState(db *sql.DB, threadKey string) (ThreadState, bool, error) {
 	var s ThreadState
 	var action, reason, lastSeen sql.NullString

@@ -189,6 +189,9 @@ func (b *SlackBackfill) runOnce(ctx context.Context) {
 			}
 		}
 	}
+	// Beyond slack-reply tasks, recover gaps on steerer-watched threads that have
+	// no task (the coverage gap that lost messages over a laptop sleep).
+	b.reconcileSteererThreadsOnce(ctx)
 }
 
 // reconcile appends any thread replies newer than what's already in the task's
@@ -305,6 +308,149 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	}
 	if steererOwned && newMax != cursor {
 		if err := flowdb.SetSteeringWatermark(b.db, watermarkKey, newMax, flowdb.NowISO()); err != nil {
+			return delivered, err
+		}
+	}
+	return delivered, nil
+}
+
+// BackfillObserver is an optional refinement of MessageObserver: it tags
+// recovered events as "backfill" origin in the steering trace. *steering.Cascade
+// implements it; when absent (tests/CLI) we fall back to plain Observe.
+type BackfillObserver interface {
+	ObserveBackfill(ctx context.Context, ev InboundEvent) error
+}
+
+func (b *SlackBackfill) observeRecovered(ctx context.Context, ev InboundEvent) error {
+	if bo, ok := b.Observer.(BackfillObserver); ok {
+		return bo.ObserveBackfill(ctx, ev)
+	}
+	return b.Observer.Observe(ctx, ev)
+}
+
+// steererBackfillThreadLimit bounds how many recently-active steerer threads each
+// pass reconciles, so the backfill can't fan out one Slack API call per thread
+// ever seen. The watermark makes a caught-up thread a cheap no-op.
+const steererBackfillThreadLimit = 60
+
+// reconcileSteererThreadsOnce recovers replies the steerer missed (e.g. over a
+// laptop sleep) on watched threads that have NO slack-reply task — runOnce's
+// task-scoped loop never reaches those, so without this their gap messages were
+// lost forever. Each thread's recorded last_seen_ts is the recovery floor and a
+// steering watermark is the resume cursor, so it self-heals and never
+// re-delivers. Steerer-routing only; a no-op otherwise.
+//
+// Scope note: this recovers missed THREAD REPLIES (the common case — an ongoing
+// thread the steerer has already seen). Brand-new top-level channel messages that
+// arrived entirely during the gap are not covered here (they need
+// conversations.history, not conversations.replies); the live listener catches
+// those on reconnect.
+func (b *SlackBackfill) reconcileSteererThreadsOnce(ctx context.Context) {
+	if !b.steererOwnsRouting() {
+		return
+	}
+	cursors, err := flowdb.ListRecentSlackThreadCursors(b.db, steererBackfillThreadLimit)
+	if err != nil {
+		b.logFn("slack backfill (steerer threads): list: %v", err)
+		return
+	}
+	for _, tc := range cursors {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		channel, threadTS := splitBackfillThreadKey(tc.ThreadKey)
+		if channel == "" || threadTS == "" {
+			continue
+		}
+		n, err := b.reconcileSteererThread(ctx, channel, threadTS, tc.LastSeenTS)
+		if err != nil {
+			b.logFn("slack backfill (steerer thread %s): %v", tc.ThreadKey, err)
+			continue
+		}
+		if n > 0 {
+			b.logFn("slack backfill (steerer thread %s): recovered %d missed message(s)", tc.ThreadKey, n)
+		}
+	}
+}
+
+func splitBackfillThreadKey(key string) (channel, threadTS string) {
+	parts := strings.SplitN(strings.TrimSpace(key), ":", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+// reconcileSteererThread fetches a steerer thread's replies newer than the resume
+// cursor (max of the steering watermark and the last_seen_ts floor) and feeds each
+// through the cascade, advancing the watermark. Mirrors reconcile's client choice,
+// accept filter and self-echo handling, but is keyed by the steering watermark
+// rather than a task inbox (these threads have no task).
+func (b *SlackBackfill) reconcileSteererThread(ctx context.Context, channel, threadTS, floorTS string) (int, error) {
+	if botIsMemberOfIM(channel) {
+		return 0, nil // the operator↔bot command IM is never a steered conversation
+	}
+	wmKey := slackThreadSteeringWatermarkKey("steerer", channel, threadTS)
+	cursor := strings.TrimSpace(floorTS)
+	if wm, err := flowdb.GetSteeringWatermark(b.db, wmKey); err == nil && wm != "" && slackTSLess(cursor, wm) {
+		cursor = wm
+	}
+	if cursor == "" {
+		return 0, nil // no baseline; let the live listener establish the first entry
+	}
+	client := b.client
+	channelType := "channel"
+	if isDMChannel(channel) {
+		if b.dmClient != nil {
+			client = b.dmClient
+		}
+		channelType = "im"
+	}
+	msgs, err := client.Replies(ctx, channel, threadTS, cursor, b.limit)
+	if err != nil {
+		return 0, err
+	}
+	delivered := 0
+	newMax := cursor
+	for _, m := range msgs {
+		ts := strings.TrimSpace(m.TS)
+		if ts == "" || ts == threadTS || !slackTSLess(cursor, ts) {
+			continue // root, or not newer than the cursor
+		}
+		if slackTSLess(newMax, ts) {
+			newMax = ts
+		}
+		if !backfillAcceptMessage(m) {
+			continue
+		}
+		ev := InboundEvent{
+			Kind: "message", Channel: channel, ChannelType: channelType,
+			TS: ts, ThreadTS: threadTS, UserID: strings.TrimSpace(m.User),
+			Text: strings.TrimSpace(m.DisplayText()),
+		}
+		if IsSelfAuthoredSlack(ev) {
+			// Our own bot echo — feed as context_only when the session model is on
+			// (so the session knows its reply landed), otherwise skip. Same as the
+			// task-reconcile self-echo handling.
+			if b.SteererSessionsEnabled != nil && b.SteererSessionsEnabled() {
+				if obs, ok := b.Observer.(SelfAuthoredObserver); ok {
+					if err := obs.ObserveSelfAuthored(ctx, ev); err != nil {
+						return delivered, err
+					}
+					delivered++
+				}
+			}
+			continue
+		}
+		if err := b.observeRecovered(ctx, ev); err != nil {
+			return delivered, err
+		}
+		delivered++
+	}
+	if newMax != cursor {
+		if err := flowdb.SetSteeringWatermark(b.db, wmKey, newMax, flowdb.NowISO()); err != nil {
 			return delivered, err
 		}
 	}

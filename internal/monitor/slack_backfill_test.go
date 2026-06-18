@@ -155,6 +155,52 @@ func TestSlackBackfillReconcile_SteererOwnedRoutingDoesNotAppendDirectly(t *test
 	}
 }
 
+// A steerer-watched thread with NO slack-reply task must still be gap-recovered:
+// runOnce's task loop never reaches it, so reconcileSteererThreadsOnce reconciles
+// it off its recorded last_seen_ts and routes the missed reply to the steerer —
+// the laptop-sleep coverage gap (issue B).
+func TestSlackBackfill_SteererThreadRecoveredWithoutTask(t *testing.T) {
+	db := dispatcherTestDB(t)
+	const channel, root = "C1", "50.000000"
+	// The steerer has seen this thread up to ts 100; record that floor.
+	if err := flowdb.RecordThreadDecision(db, flowdb.ThreadDecision{
+		ThreadKey: channel + ":" + root, Source: "slack", Action: "surface",
+		Summary: "seen", LastSeenTS: "100.000000", At: flowdb.NowISO(),
+	}); err != nil {
+		t.Fatalf("seed thread state: %v", err)
+	}
+	fake := &fakeReplies{msgs: []SlackMessage{
+		{TS: root, User: "U1", Text: "thread root"},          // root — skipped
+		{TS: "90.000000", User: "U2", Text: "already seen"},  // older than floor — skipped
+		{TS: "120.000000", User: "U3", Text: "missed reply"}, // newer than floor — recovered
+	}}
+	observer := &fakeMessageObserver{}
+	bf := &SlackBackfill{
+		db:                 db,
+		client:             fake,
+		limit:              200,
+		Observer:           observer,
+		SteererOwnsRouting: func() bool { return true },
+		logFn:              func(string, ...any) {},
+	}
+
+	bf.reconcileSteererThreadsOnce(context.Background())
+
+	if len(observer.events) != 1 || observer.events[0].Text != "missed reply" {
+		t.Fatalf("steerer events = %+v, want only the missed reply", observer.events)
+	}
+	if fake.gotOldest != "100.000000" {
+		t.Fatalf("Replies oldest = %q, want the last_seen_ts floor 100.000000", fake.gotOldest)
+	}
+
+	// Second pass advances via the steering watermark — no replay.
+	observer.events = nil
+	bf.reconcileSteererThreadsOnce(context.Background())
+	if len(observer.events) != 0 {
+		t.Fatalf("second pass replayed: %+v", observer.events)
+	}
+}
+
 func TestSlackBackfill_DMThreadUsesUserClient(t *testing.T) {
 	// A DM thread (slack-thread:<dm-channel>:<root>) reconciles via the USER
 	// token client — the bot can't read the operator's DMs — and recovers a

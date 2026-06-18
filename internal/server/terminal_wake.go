@@ -11,6 +11,40 @@ import (
 	"github.com/creack/pty"
 )
 
+// sessionBooted reports whether a freshly (re)started session looks ready to
+// accept input: it has produced some boot output AND that output has been quiet
+// for at least `stable`. A resuming `claude --resume` renders its prior
+// conversation then settles at the prompt; quiescence is our proxy for "the TUI
+// is now reading input". Pure so it's unit-testable without a live PTY.
+func sessionBooted(sawOutput bool, lastOutput, now time.Time, stable time.Duration) bool {
+	return sawOutput && !lastOutput.IsZero() && now.Sub(lastOutput) >= stable
+}
+
+// waitForSessionReady blocks until a just-started session has booted and gone
+// quiet at its prompt, so a wake paste lands in a ready input box instead of
+// racing the agent's boot. That race silently dropped steerer/Slack deliveries:
+// resume started the PTY and wakeTask pasted immediately, before `claude --resume`
+// was reading input, so the message vanished while the path still returned nil
+// ("delivered"). Best-effort: returns on quiescence, on the session going away,
+// or when `timeout` elapses (so a chatty session can't strand the wake forever).
+func (h *terminalHub) waitForSessionReady(slug string, stable, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	sawOutput := false
+	for time.Now().Before(deadline) {
+		if !h.running(slug) {
+			return // gone — nothing to wait for; caller's wake will no-op/err
+		}
+		last, ok := h.lastOutputAt(slug)
+		if ok {
+			sawOutput = true
+		}
+		if sessionBooted(sawOutput, last, time.Now(), stable) {
+			return
+		}
+		time.Sleep(120 * time.Millisecond)
+	}
+}
+
 func (h *terminalHub) wakeTask(slug, prompt string) error {
 	// Paste the prompt WITHOUT a trailing newline, then submit with a separate
 	// Enter. A \r in the same write as the bracketed-paste terminator gets
