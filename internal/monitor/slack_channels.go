@@ -35,6 +35,10 @@ const (
 	slackMPIMListLimit = 300
 )
 
+// slackDirectoryTimeout bounds the bulk users.list fetch used to name DM peers,
+// so a very large workspace degrades to raw ids instead of hanging the request.
+const slackDirectoryTimeout = 15 * time.Second
+
 type slackChannelCache struct {
 	CachedAt string             `json:"cached_at"`
 	Channels []SlackChannelInfo `json:"channels"`
@@ -81,14 +85,18 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		return nil, nil
 	}
 	api := slack.New(SlackUserToken())
-	// Resolve a DM peer's display name via the USER token: these are the operator's
-	// own DM peers, which the user token's users.info resolves reliably — the bot may
-	// not share a channel with them, and UserName only consults the resolver's PRIMARY
-	// client. Without this every 1:1 DM falls back to its raw U… id, which a name
-	// search can't match and which sorts to the bottom of the list, effectively hidden.
-	resolver := NewSlackNameResolverWithClient(NewSlackTitleUserClient())
-	if resolver == nil {
-		resolver = NewSlackNameResolver()
+	// Resolve every DM peer name from ONE bulk users.list directory rather than a
+	// users.info call per DM: a 200+ DM operator would otherwise make 200+ sequential
+	// calls and blow the request timeout. Best-effort — a directory error degrades to
+	// raw U… ids (the DMs still list; they just aren't named until next refresh).
+	// Bound the directory fetch so a very large workspace can't hang the request:
+	// on timeout it degrades to raw ids (DMs still list), and the rest completes.
+	dctx, cancel := context.WithTimeout(ctx, slackDirectoryTimeout)
+	defer cancel()
+	dir, derr := slackUserDirectoryFn(dctx, SlackUserToken())
+	if derr != nil {
+		log.Printf("flow: trusted-source picker user directory: %v (DMs will show ids)", derr)
+		dir = nil
 	}
 	var out []SlackChannelInfo
 	ims, mpims := 0, 0
@@ -114,7 +122,7 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 				if ims >= slackIMListLimit {
 					continue
 				}
-				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "im", Name: firstNonEmpty(resolver.UserName(ctx, c.User), c.User)})
+				out = append(out, SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true, Kind: "im", Name: firstNonEmpty(dir[c.User], c.User)})
 				ims++
 			}
 		}
@@ -129,6 +137,23 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 	// im:read — a connector-scope problem, not a labelling one.
 	log.Printf("flow: trusted-source picker listed %d DM(s) + %d group DM(s)", ims, mpims)
 	return out, nil
+}
+
+// slackUserDirectoryFn builds a userID→display-name map from a single bulk
+// users.list (GetUsersContext paginates internally), so DM peer names resolve
+// without a per-DM users.info call. Mockable in tests.
+var slackUserDirectoryFn = func(ctx context.Context, token string) (map[string]string, error) {
+	users, err := slack.New(token).GetUsersContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dir := make(map[string]string, len(users))
+	for _, u := range users {
+		if name := firstNonEmpty(u.Profile.DisplayName, u.Profile.RealName, u.RealName, u.Name); name != "" {
+			dir[u.ID] = name
+		}
+	}
+	return dir, nil
 }
 
 // withSlackDMs appends the operator's DMs/group-DMs (best-effort) to a channel
@@ -159,6 +184,13 @@ func defaultChannelKind(channels []SlackChannelInfo) []SlackChannelInfo {
 // configured it returns an empty list (not an error) so the UI can render a
 // "configure Slack" empty state gracefully.
 func ListSlackChannels(ctx context.Context) ([]SlackChannelInfo, error) {
+	// Serve a fresh cache without re-listing. The live fetch is several Slack API
+	// calls (bot channels + DM/group list + the bulk user directory), and the UI
+	// polls this endpoint, so a short TTL keeps it snappy and well under the request
+	// timeout. A stale/missing/empty cache falls through to a live fetch + rewrite.
+	if cached, ok := readFreshSlackChannelCache(); ok {
+		return cached, nil
+	}
 	token := SlackBotToken()
 	if strings.TrimSpace(token) == "" {
 		cached, _ := readSlackChannelCache() // may be nil; DMs are still worth trying
@@ -186,6 +218,37 @@ func slackChannelCachePath() string {
 		root = filepath.Join(home, ".flow")
 	}
 	return filepath.Join(root, "cache", "slack_channels.json")
+}
+
+// slackChannelCacheTTL bounds how long a written channel list is served without
+// a live re-fetch. Short enough that a newly created DM/channel shows soon, long
+// enough that the expensive live listing runs rarely.
+const slackChannelCacheTTL = 10 * time.Minute
+
+// readFreshSlackChannelCache returns the cached list only when it was written
+// within slackChannelCacheTTL; otherwise ok=false so the caller re-fetches.
+func readFreshSlackChannelCache() ([]SlackChannelInfo, bool) {
+	path := slackChannelCachePath()
+	if path == "" {
+		return nil, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	var cache slackChannelCache
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		return nil, false
+	}
+	at, err := time.Parse(time.RFC3339, cache.CachedAt)
+	if err != nil || time.Since(at) > slackChannelCacheTTL {
+		return nil, false
+	}
+	channels := compactSlackChannels(cache.Channels)
+	if len(channels) == 0 {
+		return nil, false
+	}
+	return channels, true
 }
 
 func readSlackChannelCache() ([]SlackChannelInfo, bool) {
