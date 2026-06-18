@@ -77,6 +77,68 @@ func TestSteererSendReplyPromptUsesFlowSlackSendAsUser(t *testing.T) {
 	}
 }
 
+func TestSteererChatSlugForCard(t *testing.T) {
+	cases := []struct {
+		name     string
+		item     flowdb.FeedItem
+		wantSlug string
+		wantOK   bool
+	}{
+		{
+			name:     "slack card → channel chat",
+			item:     flowdb.FeedItem{Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"},
+			wantSlug: steererChatSlug("C0AL6LAGKUK"),
+			wantOK:   true,
+		},
+		{
+			name:     "slack card with only channel field",
+			item:     flowdb.FeedItem{Source: "slack", Channel: "D03HFQ402DU"},
+			wantSlug: steererChatSlug("D03HFQ402DU"),
+			wantOK:   true,
+		},
+		{
+			name:     "github card → gh-<repo>-<num> chat",
+			item:     flowdb.FeedItem{Source: "github", Channel: "Facets-cloud/agent-factory", ThreadKey: "Facets-cloud/agent-factory:gh-issue:Facets-cloud/agent-factory#7"},
+			wantSlug: steererChatSlug("gh-Facets-cloud-agent-factory-7"),
+			wantOK:   true,
+		},
+		{
+			name:   "github card without a number → no chat",
+			item:   flowdb.FeedItem{Source: "github", Channel: "o/r", ThreadKey: "o/r:gh-issue:o/r"},
+			wantOK: false,
+		},
+		{
+			name:   "no channel anywhere → no chat",
+			item:   flowdb.FeedItem{Source: "slack"},
+			wantOK: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			slug, ok := steererChatSlugForCard(tc.item)
+			if ok != tc.wantOK || (tc.wantOK && slug != tc.wantSlug) {
+				t.Fatalf("steererChatSlugForCard = (%q, %v), want (%q, %v)", slug, ok, tc.wantSlug, tc.wantOK)
+			}
+		})
+	}
+}
+
+func TestSteererCaptureKBPromptInstructsInContextWrite(t *testing.T) {
+	item := flowdb.FeedItem{ID: "ck1", Source: "slack", ThreadKey: "C1:123.45", Summary: "Team standardized on RFC3339 timestamps everywhere"}
+	got := steererCaptureKBPrompt(item, "/Users/x/.flow/kb")
+	for _, want := range []string{
+		"SAVE TO KB NOW",
+		"/Users/x/.flow/kb",
+		"Team standardized on RFC3339 timestamps everywhere",
+		"keep in your running memory", // the backprop-to-this-chat point
+		"Do not reply in the watched thread",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("capture-kb prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestSteererSessionProvider(t *testing.T) {
 	cases := []struct {
 		env  string
