@@ -75,10 +75,18 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		return nil, nil
 	}
 	api := slack.New(SlackUserToken())
-	resolver := NewSlackNameResolver() // bot users.info resolves any workspace user
+	// Resolve a DM peer's display name. UserName uses the resolver's PRIMARY client
+	// only, so prefer the bot's users.info but fall back to the user token when no
+	// bot token is configured — otherwise every 1:1 DM is labelled by its raw U… id,
+	// which a name search ("manan") can't match and the operator can't recognize.
+	resolver := NewSlackNameResolver()
+	if resolver == nil {
+		resolver = NewSlackNameResolverWithClient(NewSlackTitleUserClient())
+	}
 	var out []SlackChannelInfo
+	ims, mpims := 0, 0
 	cursor := ""
-	for {
+	for len(out) < slackDMListLimit {
 		convs, next, err := api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
 			Types:           []string{"im", "mpim"},
 			ExcludeArchived: true,
@@ -93,13 +101,15 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 			if c.IsMpIM {
 				info.Kind = "mpim"
 				info.Name = firstNonEmpty(strings.TrimSpace(c.Name), "group DM")
+				mpims++
 			} else {
 				info.Kind = "im"
 				info.Name = firstNonEmpty(resolver.UserName(ctx, c.User), c.User)
+				ims++
 			}
 			out = append(out, info)
 			if len(out) >= slackDMListLimit {
-				return out, nil
+				break
 			}
 		}
 		if strings.TrimSpace(next) == "" {
@@ -107,6 +117,9 @@ var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, erro
 		}
 		cursor = next
 	}
+	// Diagnostic: if the API returns groups but zero DMs, the user token is missing
+	// im:read — a connector-scope problem, not a labelling one.
+	log.Printf("flow: trusted-source picker listed %d DM(s) + %d group DM(s)", ims, mpims)
 	return out, nil
 }
 
