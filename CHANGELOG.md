@@ -7,6 +7,69 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] — 2026-06-18
+
+Untrusted connector content can reach an unattended session now — but only when
+you say so. A three-part gate (opt-in **and** trusted source **and** calibrated
+confidence) governs auto-permit; the steerer survives a laptop sleep without
+dropping deliveries; and "Save to KB" happens inside the conversation that
+surfaced it instead of a context-blind agent.
+
+### Added
+
+- **Auto-permit for unattended sessions** (`FLOW_STEERING_AUTO_PERMIT_UNATTENDED`,
+  off by default). To block prompt injection, the security gate withholds untrusted
+  Slack/GitHub message bodies from bypass/`--auto` sessions. When you opt in, a
+  forwarded item is delivered instead of withheld **only when all three hold**: the
+  opt-in is on, the source is trusted, and the calibrated routing confidence clears
+  the floor (`FLOW_STEERING_AUTO_PERMIT_MIN_CONF`, default `0.90`). Fails closed
+  everywhere else, the dead-session respawn path stays always-closed, and delivered
+  bodies still carry the data-not-instructions fence (#31).
+- **Trusted sources picker** (Attention → config). Pick the DMs, group DMs, and
+  channels whose forwarded content may be auto-permitted (`FLOW_STEERING_TRUSTED_CHANNELS`);
+  your own messages are always trusted. The picker lists 1:1 DMs and group DMs, not
+  just channels, with DMs surfaced first (#31).
+- **Withheld-content signal.** When an unattended session parks untrusted content,
+  the task's `waiting_on` says so (surfaced in Tasks, Sessions, and standup) instead
+  of looking like ordinary "waiting for input"; it clears once a supervised session
+  receives the bodies (#31).
+- **Opt-in keep-awake for connector delivery** — hold a macOS idle-sleep assertion
+  while `flow ui serve` runs so Slack Socket Mode and GitHub webhooks stay connected
+  (#28).
+
+### Changed
+
+- **"Save to KB" runs in the conversation that surfaced the card.** `capture_kb`
+  now routes the write into the originating per-channel steerer chat (Slack channel
+  or GitHub PR/issue) so the fact is captured in-context and that chat knows it
+  captured — falling back to the ephemeral agent only when the session model is off
+  or no chat exists for the conversation (#31).
+- **Chats page declutter.** Row actions roll out on hover (Reopen pinned right),
+  context is a color-graded dial, and Slack/GitHub steering chats show a source
+  logo + identifier pill.
+- **Slack Connect replies post through `flow slack send`** — the direct Slack MCP
+  send path is blocked in some Connect channels, so replies go through the
+  operator's user-token sender (#29).
+- `make clear-dev` removes dev binaries shadowing a Homebrew install.
+
+### Fixed
+
+- **Self-assigned GitHub issues were dropped at triage.** An issues webhook stamps
+  the issue *creator* as the event author, so filing an issue and assigning it to
+  yourself looked self-authored and was dropped. Assignment and review-request
+  events now survive the self-authored drop (echoes — your own comments/pushes —
+  still drop) (#31).
+- **Steerer deliveries were lost across a laptop sleep.** Session wake now waits for
+  the resumed session to be ready before pasting, the idle sweep won't tear down a
+  session that just received a delivery, and backfill reconciles steerer threads
+  after a Socket Mode gap.
+- **The channel/trusted-source pickers timed out with a large DM count.** Peer names
+  resolve from one bulk `users.list` directory instead of a call per DM, the list is
+  served from a short-lived cache, and DM names resolve via the user token — so a
+  200+ DM account no longer blows the request timeout (#31).
+- **GitHub App reconnection** — guard and unblock replacing a previously connected
+  app (#19, #30).
+
 ## [0.1.0-alpha.2] — 2026-06-17
 
 The steerer grows up: a **per-channel live session model** replaces stateless
@@ -125,6 +188,7 @@ agent session from a brilliant new hire into the engineer on your team.
   `go vet` / `go build` / `go test ./...`.
 - **License.** MIT.
 
-[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/vishnukv-facets/flowwyyy/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/vishnukv-facets/flowwyyy/releases/tag/v0.1.0-alpha.1
