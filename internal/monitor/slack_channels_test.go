@@ -30,6 +30,69 @@ func TestListSlackChannels(t *testing.T) {
 	}
 }
 
+func TestListSlackChannelsMergesDMsAndDefaultsKind(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
+
+	oldCh, oldDM := slackConversationsFn, slackDMConversationsFn
+	slackConversationsFn = func(_ context.Context, _ string) ([]SlackChannelInfo, error) {
+		return []SlackChannelInfo{{ID: "C1", Name: "general", IsMember: true}}, nil // no Kind → defaults to channel
+	}
+	slackDMConversationsFn = func(_ context.Context) ([]SlackChannelInfo, error) {
+		return []SlackChannelInfo{
+			{ID: "D1", Name: "Anshul Sao", Kind: "im", IsPrivate: true},
+			{ID: "G1", Name: "group DM", Kind: "mpim", IsPrivate: true},
+		}, nil
+	}
+	t.Cleanup(func() { slackConversationsFn, slackDMConversationsFn = oldCh, oldDM })
+
+	chans, err := ListSlackChannels(context.Background())
+	if err != nil {
+		t.Fatalf("ListSlackChannels: %v", err)
+	}
+	byID := map[string]SlackChannelInfo{}
+	for _, c := range chans {
+		byID[c.ID] = c
+	}
+	if len(chans) != 3 {
+		t.Fatalf("want 3 (channel + DM + group), got %d: %+v", len(chans), chans)
+	}
+	if byID["C1"].Kind != "channel" {
+		t.Errorf("channel kind = %q, want defaulted to channel", byID["C1"].Kind)
+	}
+	if byID["D1"].Kind != "im" || byID["G1"].Kind != "mpim" {
+		t.Errorf("DM/group kinds wrong: %+v %+v", byID["D1"], byID["G1"])
+	}
+}
+
+func TestListSlackChannelsDMErrorDegradesToChannels(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "")
+	t.Setenv("FLOW_SLACK_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_USER_TOKEN", "")
+	t.Setenv("SLACK_TOKEN", "")
+
+	oldCh, oldDM := slackConversationsFn, slackDMConversationsFn
+	slackConversationsFn = func(_ context.Context, _ string) ([]SlackChannelInfo, error) {
+		return []SlackChannelInfo{{ID: "C1", Name: "general"}}, nil
+	}
+	slackDMConversationsFn = func(_ context.Context) ([]SlackChannelInfo, error) {
+		return nil, errors.New("missing_scope")
+	}
+	t.Cleanup(func() { slackConversationsFn, slackDMConversationsFn = oldCh, oldDM })
+
+	chans, err := ListSlackChannels(context.Background())
+	if err != nil {
+		t.Fatalf("ListSlackChannels should degrade, not error: %v", err)
+	}
+	if len(chans) != 1 || chans[0].ID != "C1" {
+		t.Errorf("want channels-only on DM error, got %+v", chans)
+	}
+}
+
 func TestListSlackChannelsCachesSuccessfulList(t *testing.T) {
 	t.Setenv("FLOW_ROOT", t.TempDir())
 	t.Setenv("SLACK_BOT_TOKEN", "")

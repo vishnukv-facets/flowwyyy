@@ -1,5 +1,5 @@
 import { useMemo, type ReactNode } from 'react'
-import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, Save } from 'lucide-react'
+import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, Save, ShieldCheck } from 'lucide-react'
 import { useSettings } from '../lib/query'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from './SettingsPanels'
 import { ChannelPicker } from './ChannelPicker'
@@ -20,6 +20,7 @@ import { AutonomyPanel } from './AutonomyPanel'
 const SESSION_KEYS = ['FLOW_STEERING_SESSIONS', 'FLOW_STEERER_DEFAULT_PROVIDER']
 const MUTED_KEYWORD_KEYS = ['FLOW_STEERING_MUTED_KEYWORDS']
 const WAITING_KEYS = ['FLOW_STEERING_AUTO_RESOLVE_WAITING']
+const AUTO_PERMIT_KEYS = ['FLOW_STEERING_AUTO_PERMIT_UNATTENDED', 'FLOW_STEERING_AUTO_PERMIT_MIN_CONF']
 const PERFORMANCE_KEYS = [
   'FLOW_STEERING_CLASSIFIER_BUDGET_PER_HOUR',
   'FLOW_STEERING_CLASSIFIER_FAILURE_COOLDOWN',
@@ -89,6 +90,16 @@ export function SteeringConfig() {
             savedActiveHint="Your saved mute list is still active."
           />
           <ConfigGroupPanel title="Muted keywords" icon={<Filter size={17} />} fieldKeys={MUTED_KEYWORD_KEYS} />
+          <ChannelPicker
+            settingKey="FLOW_STEERING_TRUSTED_CHANNELS"
+            title="Trusted sources"
+            icon={<ShieldCheck size={17} />}
+            help="DMs, group DMs, and channels whose forwarded content may be auto-permitted into an unattended (bypass/auto) session. Your own messages are always trusted; tick others you trust. Pairs with Auto-permit below."
+            pillNoun="trusted"
+            saveLabel="Save trusted sources"
+            savedActiveHint="Your saved trusted list is still active."
+            kinds={['channel', 'im', 'mpim']}
+          />
         </div>
       </SettingsSection>
 
@@ -96,6 +107,7 @@ export function SteeringConfig() {
         <div className="settings-grid">
           <AutonomyPanel />
           <ConfigGroupPanel title="Waiting follow-up" icon={<Clock size={17} />} fieldKeys={WAITING_KEYS} />
+          <ConfigGroupPanel title="Auto-permit (unattended)" icon={<ShieldCheck size={17} />} fieldKeys={AUTO_PERMIT_KEYS} />
         </div>
       </SettingsSection>
 

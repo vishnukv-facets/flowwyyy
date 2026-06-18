@@ -1330,4 +1330,6 @@ export interface SlackChannel {
   name: string
   is_private: boolean
   is_member: boolean
+  /** "channel" | "im" (DM) | "mpim" (group DM). Absent → treat as "channel". */
+  kind?: string
 }

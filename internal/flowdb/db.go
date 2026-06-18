@@ -527,6 +527,37 @@ func ClearTaskWaitingOn(db *sql.DB, slug string) (bool, error) {
 	return n > 0, nil
 }
 
+// SetTaskWaitingOnIfClear sets a task's waiting_on note only when it is currently
+// empty, so an automated marker (e.g. "withheld connector content") never
+// clobbers an operator's own waiting note. Idempotent: once set, the note is
+// non-empty so a repeat is a no-op. Returns true only when it actually set it.
+func SetTaskWaitingOnIfClear(db *sql.DB, slug, note string) (bool, error) {
+	res, err := db.Exec(
+		`UPDATE tasks SET waiting_on=?, updated_at=? WHERE slug=? AND (waiting_on IS NULL OR TRIM(waiting_on) = '')`,
+		note, NowISO(), slug,
+	)
+	if err != nil {
+		return false, fmt.Errorf("flowdb: set waiting_on %q: %w", slug, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// ClearTaskWaitingOnIfNote clears waiting_on only when it exactly matches note —
+// the auto-resolve twin of SetTaskWaitingOnIfClear, so clearing an automated
+// marker never wipes an operator's own note. Returns true on a real clear.
+func ClearTaskWaitingOnIfNote(db *sql.DB, slug, note string) (bool, error) {
+	res, err := db.Exec(
+		`UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE slug=? AND waiting_on=?`,
+		NowISO(), slug, note,
+	)
+	if err != nil {
+		return false, fmt.Errorf("flowdb: clear waiting_on %q: %w", slug, err)
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // NullIfEmpty returns a *string pointing to s, or nil if s is empty.
 func NullIfEmpty(s string) any {
 	if s == "" {

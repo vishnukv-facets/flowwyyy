@@ -3,10 +3,67 @@ package server
 import (
 	"context"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"flow/internal/monitor"
 )
+
+// defaultAutoPermitMinConf is the calibrated-confidence floor for auto-permitting
+// untrusted connector bodies into an unattended session when no explicit
+// FLOW_STEERING_AUTO_PERMIT_MIN_CONF is set. Deliberately high — auto-permit
+// loosens a prompt-injection control, so it should fire only on strong signals.
+const defaultAutoPermitMinConf = 0.90
+
+// autoPermitUnattendedConfig reads the operator opt-in for delivering untrusted
+// connector bodies to an UNATTENDED (bypass/auto) session. It is OFF unless
+// FLOW_STEERING_AUTO_PERMIT_UNATTENDED parses to a true boolean — an unset,
+// empty, or unparseable value leaves it disabled (fail closed). minConf is the
+// calibrated-confidence floor, clamped to (0,1]; a missing/invalid value uses
+// defaultAutoPermitMinConf.
+func autoPermitUnattendedConfig() (enabled bool, minConf float64) {
+	enabled, err := strconv.ParseBool(strings.TrimSpace(os.Getenv("FLOW_STEERING_AUTO_PERMIT_UNATTENDED")))
+	if err != nil {
+		enabled = false
+	}
+	minConf = defaultAutoPermitMinConf
+	if raw := strings.TrimSpace(os.Getenv("FLOW_STEERING_AUTO_PERMIT_MIN_CONF")); raw != "" {
+		if v, perr := strconv.ParseFloat(raw, 64); perr == nil && v > 0 && v <= 1 {
+			minConf = v
+		}
+	}
+	return enabled, minConf
+}
+
+// entriesAutoPermitted reports whether EVERY untrusted entry in the batch may be
+// delivered to an unattended session under the operator's auto-permit opt-in.
+// It returns true only when the feature is enabled AND each untrusted entry was
+// stamped (by the forward path) as trusted-source with calibrated confidence at
+// or above minConf. Trusted-flow entries (flow_tell) are ignored — they are
+// delivered regardless. The whole batch is the unit: one un-permitted untrusted
+// entry withholds the entire batch, and a legacy/unstamped row (trusted=false,
+// confidence=0) can never pass — both fail CLOSED.
+func entriesAutoPermitted(entries []monitor.InboxEntry, enabled bool, minConf float64) bool {
+	if !enabled {
+		return false
+	}
+	sawUntrusted := false
+	for _, entry := range entries {
+		meta := entry.Meta
+		if meta.Source == "" {
+			meta = monitor.ClassifyInboxEvent(entry.Event)
+		}
+		if !untrustedInboxSource(meta.Source) {
+			continue // trusted flow coordination — not gated by auto-permit
+		}
+		sawUntrusted = true
+		if !entry.Meta.TrustedSource || entry.Meta.CalibratedConfidence < minConf {
+			return false
+		}
+	}
+	return sawUntrusted
+}
 
 type inboxWakeTarget struct {
 	server *Server

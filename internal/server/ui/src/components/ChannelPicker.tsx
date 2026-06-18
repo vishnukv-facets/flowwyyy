@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
-import { Hash, Loader2, Lock, Save, Search } from 'lucide-react'
+import { Hash, Loader2, Lock, MessageCircle, Save, Search, Users } from 'lucide-react'
 import { useAction, useSettings, useSlackChannels } from '../lib/query'
+import type { SlackChannel } from '../lib/types'
 
 // ChannelPicker is a checkbox picker over the live Slack channel list bound to a
 // single comma-separated channel-ID setting. It's the shared control behind both
@@ -26,6 +27,43 @@ export interface ChannelPickerProps {
   saveLabel: string
   /** Shown in the Slack-error fallback when a saved selection still exists. */
   savedActiveHint: string
+  /**
+   * Conversation kinds this picker offers. Defaults to channels only so the
+   * watched/muted pickers are unchanged; the trusted-sources picker passes
+   * ['channel','im','mpim'] to also offer DMs and group DMs.
+   */
+  kinds?: string[]
+}
+
+// kindOf normalizes a channel's kind (absent → "channel").
+function kindOf(c: SlackChannel): string {
+  return c.kind || 'channel'
+}
+
+// kindRank orders the list so 1:1 DMs surface first, then group DMs, then
+// channels — otherwise an unresolved DM (labelled by its raw U… id) sorts below
+// 90+ lowercase mpdm- group rows and is effectively hidden.
+function kindRank(c: SlackChannel): number {
+  switch (kindOf(c)) {
+    case 'im':
+      return 0
+    case 'mpim':
+      return 1
+    default:
+      return 2
+  }
+}
+
+// kindIcon picks the row icon: DM, group DM, or public/private channel.
+function kindIcon(c: SlackChannel): ReactNode {
+  switch (kindOf(c)) {
+    case 'im':
+      return <MessageCircle size={12} className="faint" />
+    case 'mpim':
+      return <Users size={12} className="faint" />
+    default:
+      return c.is_private ? <Lock size={12} className="faint" /> : <Hash size={12} className="faint" />
+  }
 }
 
 function parseIds(csv: string): string[] {
@@ -37,7 +75,7 @@ function parseIds(csv: string): string[] {
     })
 }
 
-export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLabel, savedActiveHint }: ChannelPickerProps) {
+export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLabel, savedActiveHint, kinds }: ChannelPickerProps) {
   const { data: settings } = useSettings()
   const { data: channels, isLoading, error } = useSlackChannels()
   const action = useAction()
@@ -77,19 +115,25 @@ export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLab
     )
   }
 
+  const kindsKey = (kinds ?? ['channel']).join(',')
   const shown = useMemo(() => {
+    const allow = new Set(kindsKey.split(','))
     const q = filter.trim().toLowerCase()
     const list = (channels ?? []).filter(
-      (c) => !q || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q),
+      (c) => allow.has(kindOf(c)) && (!q || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)),
     )
-    // Selected first, then alphabetical — so the current selection stays visible.
+    // Selected first, then DMs → group DMs → channels, then alphabetical — so the
+    // current selection stays visible and 1:1 DMs are never buried under groups.
     return list.sort((a, b) => {
       const aw = current.has(a.id) ? 0 : 1
       const bw = current.has(b.id) ? 0 : 1
       if (aw !== bw) return aw - bw
-      return a.name.localeCompare(b.name)
+      const ak = kindRank(a)
+      const bk = kindRank(b)
+      if (ak !== bk) return ak - bk
+      return (a.name || a.id).localeCompare(b.name || b.id)
     })
-  }, [channels, filter, current])
+  }, [channels, filter, current, kindsKey])
 
   return (
     <section className="settings-card">
@@ -145,8 +189,8 @@ export function ChannelPicker({ settingKey, title, icon, help, pillNoun, saveLab
               {shown.map((c) => (
                 <label key={c.id} className={`wc-row${current.has(c.id) ? ' on' : ''}`}>
                   <input type="checkbox" checked={current.has(c.id)} onChange={() => toggle(c.id)} />
-                  {c.is_private ? <Lock size={12} className="faint" /> : <Hash size={12} className="faint" />}
-                  <span className="wc-name clip">{c.name}</span>
+                  {kindIcon(c)}
+                  <span className="wc-name clip">{c.name || c.id}</span>
                   <span className="spacer" />
                   <span className="wc-id mono faint">{c.id}</span>
                 </label>

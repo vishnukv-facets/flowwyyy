@@ -193,9 +193,57 @@ func (r *monitorReconciler) tick() {
 // no untrusted content always uses the normal prompt.
 func (s *Server) inboxWakePrompt(slug string, entries []monitor.InboxEntry) string {
 	if entriesIncludeUntrusted(entries) && !s.sessionConfirmedAttended(slug) {
+		// Auto-permit escape hatch: the operator may opt IN to delivering
+		// untrusted bodies to an unattended session when every untrusted entry was
+		// stamped trusted-source with calibrated confidence over the floor. All
+		// three guardrails (opt-in + calibrated + trusted) must hold; this is the
+		// ONLY path that delivers untrusted content without a confirmed human.
+		if enabled, minConf := autoPermitUnattendedConfig(); entriesAutoPermitted(entries, enabled, minConf) {
+			log.Printf("flow monitor: auto-permitted %d untrusted inbox entr(ies) to unattended task %s (calibrated >= %.2f, trusted source)", len(entries), slug, minConf)
+			s.clearWithheldContent(slug)
+			return formatInboxWakePrompt(slug, entries)
+		}
+		// Flag the task so the operator SEES the content was withheld — without
+		// this it just reads "waiting for input" and looks like it's working.
+		s.noteWithheldContent(slug)
 		return formatGuardedInboxWakePrompt(slug, entries)
 	}
+	// Attended delivery actually hands over the bodies — clear any prior withheld
+	// marker so the loop closes once the task is opened supervised.
+	s.clearWithheldContent(slug)
 	return formatInboxWakePrompt(slug, entries)
+}
+
+// withheldWaitingNote is the waiting_on marker set when an unattended session
+// parks untrusted connector content. Reuses waiting_on (surfaced in Tasks,
+// Sessions, and standup) because the task genuinely waits on a supervised open.
+const withheldWaitingNote = "withheld connector content — open this task in a supervised (non-bypass) session to review"
+
+// noteWithheldContent flags the task's waiting_on (best-effort, never clobbers an
+// operator's own note) so withheld content is visible instead of silently parked.
+func (s *Server) noteWithheldContent(slug string) {
+	if s == nil || s.cfg.DB == nil {
+		return
+	}
+	set, err := flowdb.SetTaskWaitingOnIfClear(s.cfg.DB, slug, withheldWaitingNote)
+	if err != nil {
+		log.Printf("flow monitor: note withheld content for %s: %v", slug, err)
+		return
+	}
+	if set {
+		s.publishUIChange("tasks")
+	}
+}
+
+// clearWithheldContent removes the withheld marker once content is delivered to an
+// attended session. Only clears our own marker (never an operator's waiting note).
+func (s *Server) clearWithheldContent(slug string) {
+	if s == nil || s.cfg.DB == nil {
+		return
+	}
+	if cleared, err := flowdb.ClearTaskWaitingOnIfNote(s.cfg.DB, slug, withheldWaitingNote); err == nil && cleared {
+		s.publishUIChange("tasks")
+	}
 }
 
 // sessionConfirmedAttended reports whether we can POSITIVELY confirm a human can

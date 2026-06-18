@@ -58,7 +58,17 @@ func Stage0(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 // gh-pr/gh-issue link tag.
 func stage0GitHub(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	taskLinked := githubTaskLinked(ev, cfg)
-	if containsFold(cfg.GitHubIdentity, ev.UserID) && !(taskLinked && githubLifecycleNeedsTaskAttention(ev.Kind)) {
+	// The self-authored drop suppresses ECHOES of your own activity (comments,
+	// pushes, reviews). It must NOT swallow an inbound ASK — being assigned an
+	// issue/PR or having your review requested. The webhook stamps the issue/PR
+	// *creator* as the event author, so an issue you filed and assigned to
+	// yourself looks self-authored even though the assignment is the canonical
+	// "track this" signal (the legacy poller's assignee:@me trigger). The scope
+	// gate below still requires the operator to be a participant, so this only
+	// lets through asks that genuinely involve them.
+	if containsFold(cfg.GitHubIdentity, ev.UserID) &&
+		!(taskLinked && githubLifecycleNeedsTaskAttention(ev.Kind)) &&
+		!githubInboundAsk(ev.Kind) {
 		return Stage0Result{DropReason: "self-authored"}
 	}
 	if strings.TrimSpace(ev.UserID) == "" && !(taskLinked && githubLifecycleNeedsTaskAttention(ev.Kind)) {
@@ -125,6 +135,19 @@ func githubInScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
 	// Participants, so we fail open rather than drop them. Webhook events always
 	// carry the subject author, so the gate above applies and fails closed.
 	if len(ev.Participants) == 0 {
+		return true
+	}
+	return false
+}
+
+// githubInboundAsk reports whether a GitHub event is an inbound work assignment
+// (you were assigned an issue/PR, or your review was requested) rather than an
+// echo of your own activity. These survive the self-authored drop because the
+// webhook stamps the issue/PR creator as the event author — so a self-filed,
+// self-assigned issue would otherwise be dropped as self-authored.
+func githubInboundAsk(kind string) bool {
+	switch kind {
+	case "issue_assigned", "pr_assigned", "pr_review_requested":
 		return true
 	}
 	return false

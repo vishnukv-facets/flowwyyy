@@ -15,9 +15,18 @@ import (
 // InboxEventMeta stores derived routing metadata for a normalized source
 // event. Older inbox.jsonl rows may omit it; readers treat an empty meta as
 // legacy data and can reclassify from Event when needed.
+//
+// CalibratedConfidence and TrustedSource are the auto-permit stamp written ONLY
+// by the attention forward path (AppendInboxEventStamped). They let the
+// unattended wake gate decide whether to deliver untrusted bodies to a
+// no-human-approval session. Both are omitempty: a legacy/connector row that was
+// never stamped reads back as confidence 0 / untrusted, so the gate fails CLOSED
+// (withholds) by default — the stamp can only ever open the gate, never close it.
 type InboxEventMeta struct {
-	Source     string `json:"source,omitempty"`
-	Actionable bool   `json:"actionable,omitempty"`
+	Source               string  `json:"source,omitempty"`
+	Actionable           bool    `json:"actionable,omitempty"`
+	CalibratedConfidence float64 `json:"calibrated_confidence,omitempty"`
+	TrustedSource        bool    `json:"trusted_source,omitempty"`
 }
 
 // InboxEntry is the on-disk form of one source event appended to a task's
@@ -157,11 +166,29 @@ func MonitorCursorPath(slug string) string {
 // atomic writes under PIPE_BUF size, and a single JSON line of a Slack
 // event is well under 4KB).
 func AppendInboxEvent(slug string, ev InboundEvent) error {
+	return appendInboxEntry(slug, ev, InboxEventMeta{})
+}
+
+// AppendInboxEventStamped appends like AppendInboxEvent but overlays the
+// auto-permit stamp (calibrated routing confidence + trusted-source verdict)
+// onto the classified meta. Used ONLY by the attention forward path so the
+// unattended wake gate can decide whether to deliver this untrusted body to a
+// no-human-approval session. Source/Actionable are still derived from the event.
+func AppendInboxEventStamped(slug string, ev InboundEvent, calibratedConfidence float64, trustedSource bool) error {
+	return appendInboxEntry(slug, ev, InboxEventMeta{CalibratedConfidence: calibratedConfidence, TrustedSource: trustedSource})
+}
+
+// appendInboxEntry is the shared core: classify the event, overlay any caller
+// stamp, dedup, and append one JSONL row. stamp carries only the auto-permit
+// fields (Source/Actionable always come from classification).
+func appendInboxEntry(slug string, ev InboundEvent, stamp InboxEventMeta) error {
 	path := InboxPath(slug)
 	if path == "" {
 		return errors.New("monitor: cannot resolve inbox path (no FLOW_ROOT or HOME)")
 	}
 	meta := ClassifyInboxEvent(ev)
+	meta.CalibratedConfidence = stamp.CalibratedConfidence
+	meta.TrustedSource = stamp.TrustedSource
 	// Dedup Slack events by (channel, ts). The same Slack event can be
 	// delivered twice over one socket when it's visible to both the bot and
 	// the authorizing user (user-scoped event subscriptions overlap the

@@ -581,6 +581,16 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("attention")
+		// Prefer the per-channel chat that SURFACED this card: it writes the fact in
+		// its own context and so knows it captured (instead of a context-blind
+		// ephemeral agent doing it invisibly). Fall back to the ephemeral agent when
+		// the session model is off or no chat exists for the conversation.
+		if handled, herr := s.captureKBViaChat(item, kbDir); herr != nil {
+			fmt.Fprintf(os.Stderr, "attention: capture-kb via chat: %v (falling back to agent)\n", herr)
+		} else if handled {
+			_ = s.recordAttentionFeedback(item, "capture_kb", "captured", "")
+			return actionResponse{OK: true, Message: "handed it to this conversation's steering chat to save to your KB"}, http.StatusOK
+		}
 		go func(it flowdb.FeedItem) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()

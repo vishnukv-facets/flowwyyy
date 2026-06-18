@@ -311,6 +311,109 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 	return true, nil
 }
 
+// steererChatSlugForCard derives the chat slug of the per-channel session that
+// SURFACED a feed card, so an operator-approved action (capture-kb) can be routed
+// back into that same conversation instead of a stateless agent. Slack → the
+// channel id; GitHub → "gh-<repo>-<num>" from the card's repo + link-tag number.
+// ponytail: GitHub uses the link-tag number directly, skipping the PR↔issue
+// canonical-num collapse the cascade applies — a linked-pair card whose chat lives
+// under the sibling's number falls back to the ephemeral agent (GetChat misses),
+// which is correct, not broken. ok=false ⇒ no derivable chat → caller falls back.
+func steererChatSlugForCard(item flowdb.FeedItem) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(item.Source)) {
+	case "github":
+		repo := strings.TrimSpace(item.Channel)
+		num := numFromLinkTag(item.ThreadKey)
+		if repo == "" || num == "" {
+			return "", false
+		}
+		return steererChatSlug("gh-" + strings.ReplaceAll(repo, "/", "-") + "-" + num), true
+	default: // slack and Slack-shaped sources
+		channel, _ := splitThreadKey(item.ThreadKey)
+		if strings.TrimSpace(channel) == "" {
+			channel = strings.TrimSpace(item.Channel)
+		}
+		if strings.TrimSpace(channel) == "" {
+			return "", false
+		}
+		return steererChatSlug(channel), true
+	}
+}
+
+// numFromLinkTag returns the trailing issue/PR number from a GitHub link tag or
+// thread key (…#<num>), or "" when absent.
+func numFromLinkTag(s string) string {
+	i := strings.LastIndex(s, "#")
+	if i < 0 {
+		return ""
+	}
+	num := strings.TrimSpace(s[i+1:])
+	for _, r := range num {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return num
+}
+
+// steererCaptureKBPrompt builds the one-shot turn that asks the channel's own chat
+// to save an operator-approved fact to the KB — in its own context, so the chat
+// knows it captured (instead of a stateless agent doing it invisibly). Writing
+// kb/*.md is local file work the chat does natively; no connector MCP needed.
+func steererCaptureKBPrompt(item flowdb.FeedItem, kbDir string) string {
+	kbDir = strings.TrimRight(strings.TrimSpace(kbDir), "/")
+	summary := strings.TrimSpace(item.Summary)
+	if summary == "" {
+		summary = strings.TrimSpace(item.Reason)
+	}
+	today := time.Now().UTC().Format("2006-01-02")
+	var b strings.Builder
+	b.WriteString("[operator-approved — SAVE TO KB NOW]\n")
+	b.WriteString("The operator clicked \"Save to KB\" on the card you surfaced for this conversation. Capture the durable knowledge below into their knowledge base now — local file work you can do directly. Do not ask for confirmation.\n\n")
+	fmt.Fprintf(&b, "The KB lives at %s — one durable-facts file per scope: user.md (the operator), org.md (people/teams/who-owns-what), products.md (systems/architecture), processes.md (how things are done), business.md (customers/priorities).\n\n", kbDir)
+	b.WriteString("Steps: READ the best-fit file; distill ONE concise durable fact (1–3 lines) written as a standing truth (not \"someone said today\"); APPEND it with a dated provenance line, e.g. ")
+	fmt.Fprintf(&b, "\"(source: %s thread %s, captured %s)\"; DEDUP if it's already present (refine in place); refer to people and channels by name, never raw IDs.\n\n", item.Source, item.ThreadKey, today)
+	b.WriteString("Knowledge to capture:\n")
+	b.WriteString(summary)
+	b.WriteString("\n\nAfter writing it, keep in your running memory for this conversation that this fact is now in the KB, and continue watching as usual. Do not reply in the watched thread.")
+	return b.String()
+}
+
+// captureKBViaChat routes an operator-approved Save-to-KB through the per-channel
+// chat that surfaced the card, so the fact is written in-context and the chat
+// knows it captured — instead of a context-blind ephemeral agent. Returns
+// handled=false (caller falls back to the ephemeral CaptureKBViaAgent) when
+// sessions are off, no chat slug is derivable, or no chat exists for the
+// conversation. Per-slug serialized like postApprovedReplyViaChat.
+func (s *Server) captureKBViaChat(item flowdb.FeedItem, kbDir string) (bool, error) {
+	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
+		return false, nil
+	}
+	slug, ok := steererChatSlugForCard(item)
+	if !ok {
+		return false, nil
+	}
+	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	if err != nil || chat == nil {
+		return false, nil // no live chat for this conversation → fall back to ephemeral
+	}
+	slot := s.steererSlot(slug)
+	slot.mu.Lock()
+	defer slot.mu.Unlock()
+	prompt := steererCaptureKBPrompt(item, kbDir)
+	if s.terminals.running(slug) {
+		slot.state = steererSlotLive
+		if err := s.terminals.wakeTask(slug, prompt); err != nil {
+			return false, fmt.Errorf("steerer capture-kb: wake %q: %w", slug, err)
+		}
+		return true, nil
+	}
+	if err := s.resumeSteererChat(slot, chat, prompt); err != nil {
+		return false, fmt.Errorf("steerer capture-kb: resume %q: %w", slug, err)
+	}
+	return true, nil
+}
+
 // steererCorrectionPrompt builds a context_only teach turn: the operator corrected
 // the chat's read of this thread, so it must update its running understanding
 // without replying or surfacing.

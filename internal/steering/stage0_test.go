@@ -134,6 +134,32 @@ func TestStage0GitHubDropsUninvolved(t *testing.T) {
 	}
 }
 
+func TestStage0GitHubSelfAssignedIssuePasses(t *testing.T) {
+	// You file an issue and assign it to yourself. The webhook stamps the issue
+	// CREATOR (you) as the event author, so it looks self-authored — but an
+	// assignment is the canonical "track this" signal, not an echo, so it must
+	// pass Stage 0 rather than drop.
+	ev := ghEvent("o/r", "octocat-self", "## Summary\nIntegrate the SDK")
+	ev.Kind = "issue_assigned"
+	ev.ThreadTS = "gh-issue:o/r#7"
+	ev.Participants = []string{"octocat-self"} // operator is author + assignee
+	got := Stage0(ev, githubCfg())
+	if !got.Pass {
+		t.Fatalf("Pass = false (reason %q), want self-assigned issue to pass Stage 0", got.DropReason)
+	}
+}
+
+func TestStage0GitHubSelfAuthoredCommentStillDrops(t *testing.T) {
+	// The echo case the self-authored drop exists for: your own PR comment must
+	// still drop so the steerer doesn't loop on its own activity.
+	ev := ghEvent("o/r", "octocat-self", "lgtm") // pr_comment (default kind) — an echo
+	ev.Participants = []string{"octocat-self"}
+	got := Stage0(ev, githubCfg())
+	if got.DropReason != "self-authored" {
+		t.Errorf("DropReason = %q, want self-authored (echo still dropped)", got.DropReason)
+	}
+}
+
 func TestStage0GitHubFailsOpenWithoutParticipantData(t *testing.T) {
 	// A poller-sourced event carries no Participants and is pre-filtered to
 	// involve the operator — must pass (we can't and shouldn't gate it).

@@ -114,6 +114,34 @@ func TestAppendInboxEvent_DedupsSlackByChannelAndTS(t *testing.T) {
 	}
 }
 
+func TestAppendInboxEventStamped_RoundTripsAutoPermitMeta(t *testing.T) {
+	// The auto-permit stamp (calibrated confidence + trusted-source) must survive
+	// the JSONL round-trip so the unattended wake gate can read it. A plain
+	// AppendInboxEvent must leave both zero (fail-closed default).
+	slug := inboxTestSlug(t)
+	stamped := InboundEvent{Kind: "message", Channel: "C_TEAM", ChannelType: "slack", TS: "1700000300.000003", ThreadTS: "1700000300.000003", UserID: "U_self", Text: "stamped"}
+	if err := AppendInboxEventStamped(slug, stamped, 0.93, true); err != nil {
+		t.Fatalf("append stamped: %v", err)
+	}
+	plain := InboundEvent{Kind: "message", Channel: "C_TEAM", ChannelType: "slack", TS: "1700000400.000004", ThreadTS: "1700000400.000004", UserID: "U_x", Text: "plain"}
+	if err := AppendInboxEvent(slug, plain); err != nil {
+		t.Fatalf("append plain: %v", err)
+	}
+	entries, err := ReadInboxEntries(slug)
+	if err != nil {
+		t.Fatalf("read err = %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("want 2 entries, got %d", len(entries))
+	}
+	if got := entries[0].Meta; !got.TrustedSource || got.CalibratedConfidence != 0.93 || got.Source != "slack" {
+		t.Errorf("stamped meta = %+v, want trusted=true conf=0.93 source=slack", got)
+	}
+	if got := entries[1].Meta; got.TrustedSource || got.CalibratedConfidence != 0 {
+		t.Errorf("plain meta = %+v, want trusted=false conf=0 (fail-closed)", got)
+	}
+}
+
 func TestAppendInboxEvent_DistinctSlackTSBothAppend(t *testing.T) {
 	// Dedup must key on ts, not just channel — two different messages in the
 	// same DM channel are distinct events and both belong in the inbox.

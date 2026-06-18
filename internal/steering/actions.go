@@ -48,7 +48,8 @@ var taskForwarder = func(ctx context.Context, db *sql.DB, slug string, item flow
 	if err := appendForwardInboxMarkdown(slug, feedForwardSender(item), message, now); err != nil {
 		return err
 	}
-	if err := monitor.AppendInboxEvent(slug, feedForwardInboxEvent(item, message, now)); err != nil {
+	conf, trusted := forwardAutoPermitStamp(db, item)
+	if err := monitor.AppendInboxEventStamped(slug, feedForwardInboxEvent(item, message, now), conf, trusted); err != nil {
 		return err
 	}
 	if db != nil {
