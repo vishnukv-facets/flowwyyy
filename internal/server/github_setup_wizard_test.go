@@ -195,8 +195,27 @@ func TestHandleGitHubSetupCreateApp_RequiresReplaceConfirmation(t *testing.T) {
 	}
 }
 
+func TestHandleGitHubSetupCreateApp_AllowsPlaceholderWebhookSecret(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_GH_WEBHOOK_SECRET", "placeholder-before-app")
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/api/github/setup/create-app", strings.NewReader(`{"target":"user","name":"flow-new"}`))
+	srv.handleGitHubSetupCreateApp(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d, want 200 with only a placeholder secret: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 	srv, _ := githubSetupTestServer(t)
+	cfg := loadConfigFile(srv.configPath())
+	cfg["FLOW_GH_WEBHOOK_SECRET"] = "placeholder-before-app"
+	if err := saveConfigFile(srv.configPath(), cfg); err != nil {
+		t.Fatalf("seed placeholder secret: %v", err)
+	}
+	t.Setenv("FLOW_GH_WEBHOOK_SECRET", "placeholder-before-app")
+
 	useMockHTTPTransport(t, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{
@@ -232,7 +251,7 @@ func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 		t.Errorf("client secret not in keyring: %q", v)
 	}
 	// Metadata persisted to config + env; secrets live (env hydrated).
-	cfg := loadConfigFile(srv.configPath())
+	cfg = loadConfigFile(srv.configPath())
 	if cfg["FLOW_GH_APP_ID"] != "99" || cfg["FLOW_GH_APP_SLUG"] != "flow-dev" || cfg["FLOW_GH_CLIENT_ID"] != "Iv1.cid" {
 		t.Errorf("metadata not persisted to config: %#v", cfg)
 	}
@@ -242,6 +261,9 @@ func TestHandleGitHubSetupCallback_ConvertsAndPersists(t *testing.T) {
 	// Transport flipped to webhook so the scheduled poller stays off.
 	if cfg["FLOW_GH_TRANSPORT"] != "webhook" {
 		t.Errorf("transport = %q, want webhook", cfg["FLOW_GH_TRANSPORT"])
+	}
+	if cfg["FLOW_GH_WEBHOOK_SECRET"] != "" {
+		t.Errorf("placeholder webhook secret should be removed from config after real App secret is stored: %q", cfg["FLOW_GH_WEBHOOK_SECRET"])
 	}
 }
 
@@ -467,6 +489,33 @@ func TestHandleGitHubSetupDisconnect_ForgetsCredentials(t *testing.T) {
 	}
 	if st.Transport == "webhook" {
 		t.Errorf("transport still webhook after disconnect: %q", st.Transport)
+	}
+}
+
+func TestHandleGitHubSetupDisconnect_ZrokKeepsIngressRecreatable(t *testing.T) {
+	srv, _ := githubSetupTestServer(t)
+	t.Setenv("FLOW_INGRESS_PROVIDER", "zrok")
+	t.Setenv("FLOW_ZROK_AUTO_START", "1")
+	t.Setenv("FLOW_ZROK_SHARE_NAME", "flowrecreate01")
+
+	if err := srv.persistGitHubApp(githubManifestConversion{
+		AppID: 99, Slug: "flow-dev", ClientID: "Iv1.cid",
+		ClientSecret: "cs", WebhookSecret: "wh", PEM: "PEMDATA",
+		HTMLURL: "https://github.com/settings/apps/flow-dev",
+	}); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	srv.handleGitHubSetupDisconnect(rec, httptest.NewRequest("POST", "/api/github/setup/disconnect", nil))
+	if rec.Code != 200 {
+		t.Fatalf("disconnect status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := githubWebhookSecret(); got == "" {
+		t.Fatal("zrok recreate path needs a placeholder webhook secret after disconnect")
+	}
+	if githubAppConfigured() {
+		t.Fatal("placeholder webhook secret alone must not count as a connected App")
 	}
 }
 

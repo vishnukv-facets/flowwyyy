@@ -355,6 +355,7 @@ func (s *Server) forgetGitHubApp() error {
 		s.githubListener.Stop()
 		_ = s.githubListener.Start()
 	}
+	s.ensureZrokIngressCredentials()
 	s.restartIngress()
 	return nil
 }
@@ -535,6 +536,7 @@ func (s *Server) persistGitHubApp(conv githubManifestConversion, replaceExisting
 	cfg["FLOW_GH_HTML_URL"] = conv.HTMLURL
 	// Webhook-first: the App's webhook delivers events, so stop the poller.
 	cfg["FLOW_GH_TRANSPORT"] = "webhook"
+	delete(cfg, "FLOW_GH_WEBHOOK_SECRET")
 	for k, v := range cfg {
 		if strings.HasPrefix(k, "FLOW_GH_APP_") || k == "FLOW_GH_CLIENT_ID" || k == "FLOW_GH_HTML_URL" || k == "FLOW_GH_TRANSPORT" {
 			os.Setenv(k, v)
@@ -558,7 +560,8 @@ func githubAppConfigured() bool {
 	return strings.TrimSpace(os.Getenv("FLOW_GH_APP_ID")) != "" ||
 		strings.TrimSpace(os.Getenv("FLOW_GH_APP_SLUG")) != "" ||
 		strings.TrimSpace(os.Getenv("FLOW_GH_APP_PEM")) != "" ||
-		githubWebhookSecret() != ""
+		strings.TrimSpace(os.Getenv("FLOW_GH_CLIENT_ID")) != "" ||
+		strings.TrimSpace(os.Getenv("FLOW_GH_CLIENT_SECRET")) != ""
 }
 
 func githubAppReplaceRequiredMessage() string {
