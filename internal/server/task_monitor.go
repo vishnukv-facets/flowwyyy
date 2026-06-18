@@ -193,6 +193,16 @@ func (r *monitorReconciler) tick() {
 // no untrusted content always uses the normal prompt.
 func (s *Server) inboxWakePrompt(slug string, entries []monitor.InboxEntry) string {
 	if entriesIncludeUntrusted(entries) && !s.sessionConfirmedAttended(slug) {
+		// Auto-permit escape hatch: the operator may opt IN to delivering
+		// untrusted bodies to an unattended session when every untrusted entry was
+		// stamped trusted-source with calibrated confidence over the floor. All
+		// three guardrails (opt-in + calibrated + trusted) must hold; this is the
+		// ONLY path that delivers untrusted content without a confirmed human.
+		if enabled, minConf := autoPermitUnattendedConfig(); entriesAutoPermitted(entries, enabled, minConf) {
+			log.Printf("flow monitor: auto-permitted %d untrusted inbox entr(ies) to unattended task %s (calibrated >= %.2f, trusted source)", len(entries), slug, minConf)
+			s.clearWithheldContent(slug)
+			return formatInboxWakePrompt(slug, entries)
+		}
 		// Flag the task so the operator SEES the content was withheld — without
 		// this it just reads "waiting for input" and looks like it's working.
 		s.noteWithheldContent(slug)
