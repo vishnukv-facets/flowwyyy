@@ -110,6 +110,13 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},
 	{Key: "FLOW_STEERING_MUTED_KEYWORDS", Label: "Muted keywords", Group: "Steering", Type: settingString, Help: "Comma-separated keywords; messages containing them are dropped before triage."},
+	// Trusted sources + auto-permit (deliver withheld connector content to an
+	// UNATTENDED session). Owned by the Attention → config Trusted-sources picker
+	// (the channel CSV) and the Auto-permit panel (toggle + threshold); excluded
+	// from the generic Settings form because they're Steering-group keys.
+	{Key: "FLOW_STEERING_TRUSTED_CHANNELS", Label: "Trusted sources", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel/DM/group IDs whose forwarded content may be auto-permitted into an unattended session. The operator's own messages are always trusted."},
+	{Key: "FLOW_STEERING_AUTO_PERMIT_UNATTENDED", Label: "Auto-permit to unattended sessions", Group: "Steering", Type: settingBool, Default: "false", Help: "OFF by default. When on, forwarded connector content from a trusted source with high calibrated confidence is delivered to a bypass/auto session instead of being withheld for supervised review. Loosens a prompt-injection control — leave off unless you understand the trade-off."},
+	{Key: "FLOW_STEERING_AUTO_PERMIT_MIN_CONF", Label: "Auto-permit min confidence", Group: "Steering", Type: settingString, Default: "0.90", Help: "Calibrated-confidence floor (0–1) a forwarded item must meet before auto-permit delivers it to an unattended session. Higher is stricter."},
 	// Per-action autonomy policy as JSON ({"make_task":{"enabled":true,"threshold":0.8},...}).
 	// Exposed through /api/settings so the dedicated Settings → Steering autonomy
 	// panel can reload saved values, but filtered out of the generic form.

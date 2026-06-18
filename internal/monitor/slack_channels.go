@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,12 +13,21 @@ import (
 )
 
 // SlackChannelInfo is the compact channel shape used by the channel picker.
+// Kind distinguishes a public/private channel ("channel") from a direct message
+// ("im") or a group DM ("mpim") so the picker can label and group them — needed
+// by the trusted-sources picker, which lets the operator trust DMs and groups,
+// not just channels. Empty Kind is treated as "channel" (legacy/cached rows).
 type SlackChannelInfo struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	IsPrivate bool   `json:"is_private"`
 	IsMember  bool   `json:"is_member"`
+	Kind      string `json:"kind,omitempty"`
 }
+
+// slackDMListLimit caps how many DMs/group-DMs the trusted-sources picker lists,
+// bounding the per-peer users.info resolution cost on a cold name cache.
+const slackDMListLimit = 100
 
 type slackChannelCache struct {
 	CachedAt string             `json:"cached_at"`
@@ -55,16 +65,83 @@ var slackConversationsFn = func(ctx context.Context, token string) ([]SlackChann
 	return out, nil
 }
 
-// ListSlackChannels returns the channels visible to the configured bot token.
-// When no token is configured it returns an empty list (not an error) so the
-// UI can render a "configure Slack" empty state gracefully.
+// slackDMConversationsFn lists the operator's DMs (im) and group DMs (mpim) via
+// the USER token — a bot token can't see the operator's personal DMs. Best-effort
+// and mockable: returns nil,nil when no user token is configured so the picker
+// degrades to channels-only. An im is labelled by its peer's display name; an
+// mpim by Slack's group name. Capped at slackDMListLimit to bound resolution cost.
+var slackDMConversationsFn = func(ctx context.Context) ([]SlackChannelInfo, error) {
+	if strings.TrimSpace(SlackUserToken()) == "" {
+		return nil, nil
+	}
+	api := slack.New(SlackUserToken())
+	resolver := NewSlackNameResolver() // bot users.info resolves any workspace user
+	var out []SlackChannelInfo
+	cursor := ""
+	for {
+		convs, next, err := api.GetConversationsContext(ctx, &slack.GetConversationsParameters{
+			Types:           []string{"im", "mpim"},
+			ExcludeArchived: true,
+			Limit:           200,
+			Cursor:          cursor,
+		})
+		if err != nil {
+			return out, err
+		}
+		for _, c := range convs {
+			info := SlackChannelInfo{ID: c.ID, IsPrivate: true, IsMember: true}
+			if c.IsMpIM {
+				info.Kind = "mpim"
+				info.Name = firstNonEmpty(strings.TrimSpace(c.Name), "group DM")
+			} else {
+				info.Kind = "im"
+				info.Name = firstNonEmpty(resolver.UserName(ctx, c.User), c.User)
+			}
+			out = append(out, info)
+			if len(out) >= slackDMListLimit {
+				return out, nil
+			}
+		}
+		if strings.TrimSpace(next) == "" {
+			break
+		}
+		cursor = next
+	}
+	return out, nil
+}
+
+// withSlackDMs appends the operator's DMs/group-DMs (best-effort) to a channel
+// list. A listing error degrades to channels-only — the picker still works, the
+// operator just can't trust a DM until the user-token scopes are in place.
+func withSlackDMs(ctx context.Context, channels []SlackChannelInfo) []SlackChannelInfo {
+	dms, err := slackDMConversationsFn(ctx)
+	if err != nil {
+		log.Printf("flow: list Slack DMs/groups for trusted-source picker: %v", err)
+		return channels
+	}
+	return append(channels, dms...)
+}
+
+// defaultChannelKind stamps Kind="channel" on any entry that lacks one (the
+// channel-listing seam and legacy cache rows don't set it).
+func defaultChannelKind(channels []SlackChannelInfo) []SlackChannelInfo {
+	for i := range channels {
+		if strings.TrimSpace(channels[i].Kind) == "" {
+			channels[i].Kind = "channel"
+		}
+	}
+	return channels
+}
+
+// ListSlackChannels returns the channels visible to the bot token plus the
+// operator's DMs/group-DMs (via the user token, best-effort). When no token is
+// configured it returns an empty list (not an error) so the UI can render a
+// "configure Slack" empty state gracefully.
 func ListSlackChannels(ctx context.Context) ([]SlackChannelInfo, error) {
 	token := SlackBotToken()
 	if strings.TrimSpace(token) == "" {
-		if cached, ok := readSlackChannelCache(); ok {
-			return cached, nil
-		}
-		return nil, nil
+		cached, _ := readSlackChannelCache() // may be nil; DMs are still worth trying
+		return withSlackDMs(ctx, defaultChannelKind(cached)), nil
 	}
 	channels, err := slackConversationsFn(ctx, token)
 	if err != nil {
@@ -73,6 +150,7 @@ func ListSlackChannels(ctx context.Context) ([]SlackChannelInfo, error) {
 		}
 		return nil, err
 	}
+	channels = withSlackDMs(ctx, defaultChannelKind(channels))
 	writeSlackChannelCache(channels)
 	return channels, nil
 }
@@ -153,6 +231,7 @@ func compactSlackChannels(channels []SlackChannelInfo) []SlackChannelInfo {
 			Name:      name,
 			IsPrivate: ch.IsPrivate,
 			IsMember:  ch.IsMember,
+			Kind:      strings.TrimSpace(ch.Kind),
 		})
 	}
 	return out
