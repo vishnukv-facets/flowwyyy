@@ -193,6 +193,13 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 		enabled := CommandChannelEnabled()
 		operator := AuthorizedOperator(ev.UserID)
 		if (enabled || operator) && IsCommandChannel(ev) {
+			if operator {
+				if routed, err := d.routeTrackedThreadMessage(ev, true); err != nil {
+					return err
+				} else if routed {
+					return nil
+				}
+			}
 			switch {
 			case !enabled:
 				// Feature off + operator DMed the bot → nudge once to enable it.
@@ -224,20 +231,10 @@ func (d *Dispatcher) dispatchMessage(ctx context.Context, ev InboundEvent) error
 	}
 	// Thread match: a message inside a tracked channel thread, keyed by
 	// (channel, thread_ts).
-	if key := ThreadKey(ev.Channel, ev.ThreadTS); key != "" {
-		slug, found, err := d.findTaskByThreadKey(key)
-		if err != nil {
-			return fmt.Errorf("monitor: lookup task by thread key: %w", err)
-		}
-		if found {
-			if err := AppendInboxEvent(slug, ev); err != nil {
-				return err
-			}
-			if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
-				fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (reply from %s)\n", slug, ev.UserID)
-			}
-			return nil
-		}
+	if routed, err := d.routeTrackedThreadMessage(ev, false); err != nil {
+		return err
+	} else if routed {
+		return nil
 	}
 	// Cross-conversation correlation: the message arrived somewhere untracked,
 	// but it forwards/shares (or unfurls) a message from a thread a task DOES
@@ -284,6 +281,40 @@ func (d *Dispatcher) observeWithSteerer(ctx context.Context, ev InboundEvent) er
 		return nil
 	}
 	return d.Steerer.Observe(ctx, ev)
+}
+
+func (d *Dispatcher) routeTrackedThreadMessage(ev InboundEvent, clearOperatorQuestion bool) (bool, error) {
+	key := ThreadKey(ev.Channel, ev.ThreadTS)
+	if key == "" {
+		return false, nil
+	}
+	slug, found, err := d.findTaskByThreadKey(key)
+	if err != nil {
+		return false, fmt.Errorf("monitor: lookup task by thread key: %w", err)
+	}
+	if !found {
+		return false, nil
+	}
+	if clearOperatorQuestion && isThreadRootMessage(ev) {
+		return true, nil
+	}
+	if err := AppendInboxEvent(slug, ev); err != nil {
+		return false, err
+	}
+	if clearOperatorQuestion {
+		if clearOperatorQuestionWaitingOn(d.DB, slug) {
+			fmt.Fprintf(os.Stderr, "monitor: cleared operator question waiting_on for %s (reply from %s)\n", slug, ev.UserID)
+		}
+	} else if autoResolveWaitingOn(d.DB, slug, ev.UserID, SelfUserIDs()) {
+		fmt.Fprintf(os.Stderr, "monitor: auto-resolved waiting_on for %s (reply from %s)\n", slug, ev.UserID)
+	}
+	return true, nil
+}
+
+func isThreadRootMessage(ev InboundEvent) bool {
+	ts := strings.TrimSpace(ev.TS)
+	threadTS := strings.TrimSpace(ev.ThreadTS)
+	return ts != "" && threadTS != "" && ts == threadTS
 }
 
 // routeViaSharedRef tries to deliver a forwarded/shared message to the task that
@@ -338,6 +369,26 @@ func autoResolveWaitingOn(db *sql.DB, slug, authorID string, selfIDs []string) b
 	cleared, err := flowdb.ClearTaskWaitingOn(db, slug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "monitor: auto-resolve waiting_on %s: %v\n", slug, err)
+		return false
+	}
+	return cleared
+}
+
+func clearOperatorQuestionWaitingOn(db *sql.DB, slug string) bool {
+	if db == nil {
+		return false
+	}
+	task, err := flowdb.GetTask(db, slug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: read waiting_on %s: %v\n", slug, err)
+		return false
+	}
+	if !task.WaitingOn.Valid || !strings.HasPrefix(strings.TrimSpace(task.WaitingOn.String), OperatorQuestionWaitingPrefix) {
+		return false
+	}
+	cleared, err := flowdb.ClearTaskWaitingOn(db, slug)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: clear operator question waiting_on %s: %v\n", slug, err)
 		return false
 	}
 	return cleared

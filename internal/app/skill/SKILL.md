@@ -321,6 +321,13 @@ Orchestration (parent-child agents — see §4.17)
        otherwise the receiving agent sees the message on next SessionStart.
        Use this to nudge a sibling task without spawning a new conversation.
 
+  flow ask operator [--task <slug>] "<question>"
+       Ask the human operator in the Slack command DM and tag that DM thread
+       back to this task. The operator's threaded reply is appended to this
+       task's inbox.jsonl and clears the automated operator-question waiting
+       note. Default task resolution is --task, then $FLOW_TASK, then current
+       session reverse-lookup.
+
   flow wait <task-slug> --until <state> [--timeout <dur>]
        Block until the task reaches the requested state. <state> can be
        a task lifecycle (backlog|in-progress|done) or an agent runtime

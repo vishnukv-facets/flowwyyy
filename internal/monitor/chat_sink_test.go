@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"flow/internal/flowdb"
 )
 
 // fakeChatSink records OpenOrContinueChat calls so tests can assert the
@@ -112,6 +114,111 @@ func TestDispatcher_CommandChannelDM_RoutesToChatSink(t *testing.T) {
 	}
 	if len(steerer.events) != 0 {
 		t.Errorf("command-channel DM must NOT reach the steerer, got %d events", len(steerer.events))
+	}
+}
+
+func TestDispatcher_CommandChannelThreadReplyRoutesToTrackedTask(t *testing.T) {
+	t.Setenv("FLOW_SLACK_COMMAND_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
+	withCommandChannel(t, "D_bot")
+
+	db := dispatcherTestDB(t)
+	seedSlackTask(t, db, "asking-task", "D_bot:1700000000.000100")
+	if _, err := flowdb.SetTaskWaitingOnIfClear(db, "asking-task", "operator question: choose deployment window"); err != nil {
+		t.Fatalf("set waiting_on: %v", err)
+	}
+	d := NewDispatcher(db, nil)
+	sink := &fakeChatSink{}
+	d.ChatSink = sink
+
+	msg := InboundEvent{Kind: "message", ChannelType: "im", Channel: "D_bot", TS: "1700000000.000200", ThreadTS: "1700000000.000100", UserID: "U_me", Text: "Use option B"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("tracked command-DM thread reply must not open chat sink, got %+v", sink.calls)
+	}
+	entries, err := ReadInboxEntries("asking-task")
+	if err != nil {
+		t.Fatalf("ReadInboxEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox entries = %d, want 1", len(entries))
+	}
+	if entries[0].Event.Text != "Use option B" || entries[0].Event.Channel != "D_bot" {
+		t.Fatalf("inbox event = %+v", entries[0].Event)
+	}
+	task, err := flowdb.GetTask(db, "asking-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.WaitingOn.Valid {
+		t.Fatalf("waiting_on should be cleared after operator answer, got %q", task.WaitingOn.String)
+	}
+}
+
+func TestDispatcher_CommandChannelAskRootEchoDoesNotClearWaiting(t *testing.T) {
+	t.Setenv("FLOW_SLACK_COMMAND_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
+	withCommandChannel(t, "D_bot")
+
+	db := dispatcherTestDB(t)
+	seedSlackTask(t, db, "asking-task", "D_bot:1700000000.000100")
+	if _, err := flowdb.SetTaskWaitingOnIfClear(db, "asking-task", "operator question: choose deployment window"); err != nil {
+		t.Fatalf("set waiting_on: %v", err)
+	}
+	d := NewDispatcher(db, nil)
+	sink := &fakeChatSink{}
+	d.ChatSink = sink
+
+	msg := InboundEvent{Kind: "message", ChannelType: "im", Channel: "D_bot", TS: "1700000000.000100", ThreadTS: "1700000000.000100", UserID: "U_me", Text: "Task `asking-task` needs your input"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("ask root echo must not open chat sink, got %+v", sink.calls)
+	}
+	entries, err := ReadInboxEntries("asking-task")
+	if err != nil {
+		t.Fatalf("ReadInboxEntries: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("ask root echo must not be appended as an answer, got %+v", entries)
+	}
+	task, err := flowdb.GetTask(db, "asking-task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.WaitingOn.Valid {
+		t.Fatalf("waiting_on should remain set after ask root echo")
+	}
+}
+
+func TestDispatcher_CommandChannelDisabledTrackedThreadReplyStillRoutes(t *testing.T) {
+	t.Setenv("FLOW_SLACK_COMMAND_ENABLED", "")
+	t.Setenv("FLOW_SLACK_SELF_USER_IDS", "U_me")
+	withCommandChannel(t, "D_bot")
+	sends := withSendAsBotStub(t)
+	clearHintedDMChannel(t, "D_bot")
+
+	db := dispatcherTestDB(t)
+	seedSlackTask(t, db, "asking-task", "D_bot:1700000000.000100")
+	d := NewDispatcher(db, nil)
+	d.ChatSink = &fakeChatSink{}
+
+	msg := InboundEvent{Kind: "message", ChannelType: "im", Channel: "D_bot", TS: "1700000000.000200", ThreadTS: "1700000000.000100", UserID: "U_me", Text: "Use option B"}
+	if err := d.Dispatch(context.Background(), msg); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(*sends) != 0 {
+		t.Fatalf("tracked reply should not get command-channel disabled hint, got %+v", *sends)
+	}
+	entries, err := ReadInboxEntries("asking-task")
+	if err != nil {
+		t.Fatalf("ReadInboxEntries: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Event.Text != "Use option B" {
+		t.Fatalf("inbox entries = %+v", entries)
 	}
 }
 

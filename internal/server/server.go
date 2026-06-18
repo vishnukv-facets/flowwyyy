@@ -211,6 +211,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
 	mux.HandleFunc("/api/ask-flow", s.handleAskFlow)
+	mux.HandleFunc("/api/operator/ask", s.handleOperatorAsk)
 	mux.HandleFunc("/api/quote", s.handleQuote)
 	// Slack OAuth callback. The install flow uses a short-lived localhost TLS
 	// listener (loopback mode); in public-ingress mode it also rides the ingress

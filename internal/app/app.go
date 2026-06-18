@@ -85,6 +85,8 @@ func Run(args []string) int {
 		return cmdSpawn(rest)
 	case "tell":
 		return cmdTell(rest)
+	case "ask":
+		return cmdAsk(rest)
 	case "slack":
 		return cmdSlack(rest)
 	case "wait":
@@ -122,6 +124,7 @@ Sessions:
   flow do                <ref> [--agent claude|codex] [--fresh] [--dangerously-skip-permissions]
   flow do --auto         <ref> [--with "<instruction>"|--with-file <path>]  (headless autonomous run; no tab; Claude or Codex)
   flow done              <ref>
+  flow ask operator      [--task <slug>] "<question>"  (ask the operator in Slack and route the thread answer back)
   flow hook session-start                      (SessionStart hook handler — wire via ~/.claude/settings.json)
   flow hook agent-event --provider claude|codex (forwards lifecycle hooks to the local UI)
 
