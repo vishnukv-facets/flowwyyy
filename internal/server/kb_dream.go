@@ -426,36 +426,65 @@ func pruneExpiredPendingRemoval(content string, now time.Time, maxAge time.Durat
 // any hand-written variant.
 var pendingRemovalHeadingRe = regexp.MustCompile(`(?i)^#{1,6}\s+.*pending removal\s*$`)
 
-// stripAllPendingRemoval removes the ENTIRE "Pending removal" section — the
-// heading and every line under it up to the next heading (or EOF). Unlike
-// pruneExpiredPendingRemoval (date-gated auto-prune), this is the operator's
-// explicit "clear all flagged now": it deletes flagged entries regardless of age.
-// Returns the rewritten content and the count of flagged bullets removed (for
-// reporting). Content with no such section round-trips unchanged.
+// pendingRemovalSpan returns the [start,end) line range of the Pending-removal
+// section: the heading line plus the run of FLAGGED bullets and blank lines that
+// follow it, stopping at the first non-flagged, non-blank line (live content) or
+// the next heading. ok is false when there is no heading.
+//
+// This is the SAFE extent and the load-bearing invariant of the whole feature:
+// the span NEVER includes a live (non-flagged) entry, so moving or purging it
+// cannot delete real KB facts — even when the section sits at the top of the file
+// with live entries directly below it (the layout that caused data loss when the
+// boundary was naively "until the next heading").
+func pendingRemovalSpan(lines []string) (start, end int, ok bool) {
+	start = -1
+	for i, ln := range lines {
+		if pendingRemovalHeadingRe.MatchString(ln) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return 0, 0, false
+	}
+	end = start + 1
+	for end < len(lines) {
+		t := strings.TrimSpace(lines[end])
+		if t == "" { // blank inside the section
+			end++
+			continue
+		}
+		if flaggedBulletRe.MatchString(lines[end]) { // a flagged entry
+			end++
+			continue
+		}
+		break // live content or next heading → section ends here
+	}
+	for end > start+1 && strings.TrimSpace(lines[end-1]) == "" {
+		end-- // don't claim trailing blank lines that separate from live content
+	}
+	return start, end, true
+}
+
+// stripAllPendingRemoval removes the "Pending removal" section — the heading and
+// the flagged bullets under it — regardless of age (the operator's explicit
+// "clear all flagged now"; pruneExpiredPendingRemoval is the date-gated auto
+// variant). It removes ONLY flagged entries: any live content is preserved even
+// if it sits immediately below the section. Returns the rewritten content and the
+// count of flagged bullets removed. Content with no section round-trips unchanged.
 func stripAllPendingRemoval(content string) (string, int) {
 	lines := strings.Split(content, "\n")
-	out := make([]string, 0, len(lines))
-	removed := 0
-	inSection := false
-	for _, line := range lines {
-		if pendingRemovalHeadingRe.MatchString(line) {
-			inSection = true
-			continue // drop the heading
-		}
-		if inSection {
-			// The section ends at the next heading of any level.
-			if strings.HasPrefix(strings.TrimSpace(line), "#") {
-				inSection = false
-				out = append(out, line)
-				continue
-			}
-			if flaggedBulletRe.MatchString(line) {
-				removed++
-			}
-			continue // drop everything inside the section (bullets, blanks, prose)
-		}
-		out = append(out, line)
+	start, end, ok := pendingRemovalSpan(lines)
+	if !ok {
+		return content, 0
 	}
+	removed := 0
+	for _, ln := range lines[start:end] {
+		if flaggedBulletRe.MatchString(ln) {
+			removed++
+		}
+	}
+	out := append(append([]string{}, lines[:start]...), lines[end:]...)
 	return strings.Join(out, "\n"), removed
 }
 
@@ -516,19 +545,9 @@ func movePendingRemovalToTop(content string) (string, bool) {
 	if start == insertAfterH1(lines) {
 		return content, false // already at the top
 	}
-	// Extract the section: heading through the line before the next heading / EOF,
-	// trimming trailing blanks so we control the spacing on reinsert.
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-			end = i
-			break
-		}
-	}
+	// Extract the SAFE span (heading + flagged bullets only) — never live content.
+	_, end, _ := pendingRemovalSpan(lines)
 	section := append([]string{}, lines[start:end]...)
-	for len(section) > 0 && strings.TrimSpace(section[len(section)-1]) == "" {
-		section = section[:len(section)-1]
-	}
 	rest := append(append([]string{}, lines[:start]...), lines[end:]...)
 	at := insertAfterH1(rest)
 	out := make([]string, 0, len(rest)+len(section)+1)

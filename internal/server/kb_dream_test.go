@@ -93,15 +93,47 @@ func TestStripAllPendingRemoval(t *testing.T) {
 	if removed != 2 {
 		t.Fatalf("removed (flagged count) = %d, want 2", removed)
 	}
-	for _, gone := range []string{"⚠️ Pending removal", "stale one", "another — why: old", "a non-flagged line in the section"} {
+	for _, gone := range []string{"⚠️ Pending removal", "stale one", "another — why: old"} {
 		if strings.Contains(got, gone) {
 			t.Errorf("purge should have removed %q:\n%s", gone, got)
 		}
 	}
-	for _, keep := range []string{"# User", "a live fact (keep)", "## Another section", "keep this too"} {
+	// Live content is preserved even when it sits inside/after the section —
+	// purge removes ONLY flagged bullets, never real entries.
+	for _, keep := range []string{"# User", "a live fact (keep)", "a non-flagged line in the section", "## Another section", "keep this too"} {
 		if !strings.Contains(got, keep) {
 			t.Errorf("purge should have kept %q:\n%s", keep, got)
 		}
+	}
+}
+
+// TestStripAllPendingRemovalAtTopKeepsLiveEntries is the regression test for the
+// data-loss bug: with the Pending-removal section moved to the TOP (right after
+// the H1) and live entries directly below it, purge must remove ONLY the flagged
+// bullets and leave every live entry intact.
+func TestStripAllPendingRemovalAtTopKeepsLiveEntries(t *testing.T) {
+	content := strings.Join([]string{
+		"# Organization",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-14] stale org fact — why: superseded",
+		"",
+		"- 2026-06-01 — live fact one",
+		"- 2026-06-02 — live fact two",
+		"- 2026-06-03 — live fact three",
+	}, "\n")
+
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (only the flagged bullet)", removed)
+	}
+	for i, keep := range []string{"# Organization", "live fact one", "live fact two", "live fact three"} {
+		if !strings.Contains(got, keep) {
+			t.Fatalf("DATA LOSS REGRESSION: live content %d %q was deleted:\n%s", i, keep, got)
+		}
+	}
+	if strings.Contains(got, "stale org fact") || strings.Contains(got, "⚠️ Pending removal") {
+		t.Errorf("flagged section should be gone:\n%s", got)
 	}
 }
 
