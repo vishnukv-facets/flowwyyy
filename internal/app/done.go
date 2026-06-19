@@ -2,6 +2,7 @@ package app
 
 import (
 	"flow/internal/agents"
+	"flow/internal/flowbackup"
 	"flow/internal/flowdb"
 	"fmt"
 	"io"
@@ -171,6 +172,13 @@ func cmdDone(args []string) int {
 			fmt.Fprintf(os.Stderr, "warning: close-out sweep failed: %v\n", err)
 		} else {
 			fmt.Println(" done")
+		}
+		// The sweep may have appended KB entries / a project update out-of-process;
+		// checkpoint the result so those durable writes are versioned. Best-effort.
+		if root, err := flowRoot(); err == nil {
+			if _, err := flowbackup.Checkpoint(root, "after close-out sweep "+task.Slug); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: backup checkpoint: %v\n", err)
+			}
 		}
 		if err := taskTmuxSessionCloser(taskTmuxSessionName(task.Slug)); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: tmux session close failed: %v\n", err)

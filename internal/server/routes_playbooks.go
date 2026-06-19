@@ -126,6 +126,7 @@ func (s *Server) savePlaybookBrief(w http.ResponseWriter, r *http.Request, pb *f
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	s.backupCheckpoint("before playbook brief edit " + pb.Slug)
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

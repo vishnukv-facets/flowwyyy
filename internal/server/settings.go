@@ -149,6 +149,9 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_KB_DREAM_MAX_AGE", Label: "KB hygiene — auto-remove after", Group: "General", Type: settingString, Default: "720h", Help: "Go duration (e.g. 720h = 30 days). Entries left in 'Pending removal' longer than this are permanently deleted."},
 	{Key: "FLOW_KB_DREAM_INTERVAL", Label: "KB hygiene — run every", Group: "General", Type: settingString, Default: "24h", Help: "Go duration (e.g. 24h). Fallback cadence used when no fixed schedule is set below. How often the hygiene pass reviews the KB and prunes expired flagged entries."},
 	{Key: "FLOW_KB_DREAM_SCHEDULE", Label: "KB hygiene — fixed schedule", Group: "General", Type: settingString, Help: "Optional fixed schedule for the hygiene pass, using the same phrases as playbooks: \"daily at 3am\", \"every 6 hours\", \"weekly\", \"Wednesday at 1pm\", or a cron like \"0 3 * * *\". When set it takes precedence over the interval above and survives server restarts (a missed pass catches up once). Leave empty to use the interval."},
+	{Key: "FLOW_BACKUP_ENABLED", Label: "Backups", Group: "General", Type: settingBool, Default: "true", Help: "Keep a durable, recoverable version history of your knowledge base and all briefs/updates (a self-managed git repo under the flow root) plus rotated database snapshots. Lets you roll any KB or brief file back to a previous version."},
+	{Key: "FLOW_BACKUP_SCHEDULE", Label: "Backup schedule", Group: "General", Type: settingString, Default: "daily", Help: "When the scheduled backup runs. Plain English (\"daily\", \"every 6 hours\", \"Wednesday at 1pm\") or a cron expression. Backups also happen automatically before risky operations and on server boot."},
+	{Key: "FLOW_BACKUP_OFFSITE", Label: "Offsite backup", Group: "General", Type: settingString, Default: "auto", Help: "auto: when the GitHub CLI (gh) is authenticated, flow backs up to a PRIVATE flow-backup repo in your personal GitHub account (provisioned automatically). local: keep backups on this machine only. Either way, local versioning + db snapshots always run."},
 }
 
 // missionQuoteEnabled reports whether the Mission Control anime quote should be
@@ -460,7 +463,7 @@ func validateSettingValue(sp settingSpec, val string) error {
 // tokens / Socket-Mode / enabled flags take effect without a server restart.
 // Stop()/Start() are safe and no-op when the new config disables the listener.
 func (s *Server) applySettingsRestart(changed []string) {
-	slackTouched, ghTouched, ingressTouched := false, false, false
+	slackTouched, ghTouched, ingressTouched, backupTouched := false, false, false, false
 	for _, k := range changed {
 		if strings.HasPrefix(k, "FLOW_SLACK_") || strings.HasPrefix(k, "SLACK_") {
 			slackTouched = true
@@ -471,9 +474,18 @@ func (s *Server) applySettingsRestart(changed []string) {
 		if strings.HasPrefix(k, "FLOW_ZROK_") || strings.HasPrefix(k, "FLOW_INGRESS_") || k == "FLOW_PUBLIC_BASE_URL" || k == "FLOW_GH_WEBHOOK_SECRET" {
 			ingressTouched = true
 		}
+		if k == "FLOW_BACKUP_SCHEDULE" || k == "FLOW_BACKUP_ENABLED" {
+			backupTouched = true
+		}
 		if k == "FLOW_UI_KEEP_AWAKE" {
 			s.syncPowerAssertion()
 		}
+	}
+	if backupTouched && s.backupSched != nil {
+		// Reload the schedule phrase and recompute the next fire from the
+		// persisted last-run.
+		s.backupSched.stop()
+		s.backupSched.start()
 	}
 	if slackTouched {
 		// Invalidate the operator↔bot IM channel cache. It depends on

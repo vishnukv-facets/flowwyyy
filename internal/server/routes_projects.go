@@ -156,6 +156,7 @@ func (s *Server) saveProjectBrief(w http.ResponseWriter, r *http.Request, projec
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	s.backupCheckpoint("before project brief edit " + project.Slug)
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

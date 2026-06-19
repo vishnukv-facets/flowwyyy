@@ -460,6 +460,16 @@ export function useKBDream() {
   // invalidates ['kb-dream'] directly so the running state shows immediately.
   return useQuery({ queryKey: ['kb-dream'], queryFn: () => apiGet<KBDreamStatus>('/api/kb/dream'), refetchInterval: 30_000 })
 }
+export function useBackupStatus() {
+  return useQuery({ queryKey: ['backup-status'], queryFn: () => apiGet<import('./types').BackupStatus>('/api/backup/status'), refetchInterval: 30_000 })
+}
+export function useBackupLog(file: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['backup-log', file ?? ''],
+    queryFn: () => apiGet<import('./types').BackupCommit[]>(`/api/backup/log?limit=50${file ? `&file=${encodeURIComponent(file)}` : ''}`),
+    enabled,
+  })
+}
 export function useMemorySources() {
   return useQuery({ queryKey: ['memory-sources'], queryFn: () => apiGet<MemorySource[]>('/api/memory/sources') })
 }

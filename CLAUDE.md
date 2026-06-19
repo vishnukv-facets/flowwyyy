@@ -70,7 +70,10 @@ flow/
     ├── worktree/           # per-task git worktrees
     ├── workdirreg/         # workdir registry + git-remote detection
     ├── listfmt/            # shared `flow list` table renderer
-    └── memorysrc/          # discover KB / agent-memory markdown sources
+    ├── memorysrc/          # discover KB / agent-memory markdown sources
+    └── flowbackup/         # data-safety net: a self-managed git repo over the
+                            #   flow root (curated markdown) + rotated DB snapshots
+                            #   + opt-in offsite remote. See "Data safety" below.
 ```
 
 ## Package responsibilities (the load-bearing ones)
@@ -113,6 +116,53 @@ flow/
 - **Skill embed path:** `internal/app/skill/SKILL.md` is embedded at compile
   time via `//go:embed` in `internal/app/skill.go`. Rebuild after editing for
   `flow skill update` to pick it up.
+
+## Data safety (`internal/flowbackup`)
+
+`~/.flow` has no inherent backups, and a 2026-06-19 incident wiped two KB files.
+`flowbackup` is the safety net, independent of any single feature's correctness:
+
+- **Versioned curated markdown.** A self-managed **go-git** repo (no `git` binary,
+  no CGO) versions `kb/*.md` and every project/task/playbook/owner
+  `brief.md` + `updates/*.md`. The file set is chosen in code (`walkCurated`),
+  not by `.gitignore` matching, so `flow.db`, the session token, logs, caches,
+  and agent session files are never committed.
+- **Separated gitdir — load-bearing invariant.** The repo lives in
+  `<root>/.backupgit` with the worktree pointed at the root, and the stray `.git`
+  link file go-git writes is **deleted** (`removeDotGitLink`). There must be NO
+  discoverable `.git` at the flow root — otherwise every adhoc task workspace
+  under `~/.flow` would look like it's inside a git repo and flow's
+  worktree-by-default logic would break. All ops rebuild the
+  `(storer=.backupgit, worktree=root)` pair by hand; nothing relies on git
+  discovery.
+- **Checkpoints** bracket every destructive write — `flow init`, `flow done`
+  (after the close-out sweep), the dreamer pass (before+after), and UI KB/brief
+  saves — plus a boot checkpoint and a scheduled run. Checkpoints are
+  serialized by an advisory file lock and are always best-effort (a failure
+  warns, never blocks the underlying write).
+- **DB snapshots.** `flow.db` is NOT in git (476MB, ~438MB of which is the
+  regenerable `search_docs*` FTS index). Instead a `VACUUM INTO` snapshot with
+  the FTS dropped (~30-40MB) is gzipped under `backups/db/`, rotated, on a
+  schedule. Restore = decompress + `flowdb.SyncSearchDocs` to rebuild the index.
+- **Scheduler** (`internal/server/backup_sched.go`) mirrors the playbook/dreamer
+  workers; cadence via `FLOW_BACKUP_SCHEDULE` (default daily), persists last-run
+  to `backups/.backup-sched.json` for restart catch-up.
+- **Offsite + new-laptop restore.** Controlled by `FLOW_BACKUP_OFFSITE`
+  (default `auto`): when a GitHub token is available, flow auto-provisions a
+  **private `flow-backup` repo** in the operator's personal GitHub account and
+  uses it; with no token it stays local-only. `local` keeps everything on this
+  machine. Repo provisioning (whoami / exists / create-private) uses the
+  **go-github SDK** (`google/go-github/v84`), authenticated with a token from
+  the env (`FLOW_BACKUP_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`) or, as a fallback,
+  `gh auth token` — the App connector is webhook-only and can't create repos.
+  Pushes go over https with the same token. The markdown branch is pushed and
+  the latest db snapshot is force-pushed to a single-commit `flow-db` branch
+  (bounded). `flow init --restore-from <url>` clones markdown + restores the db
+  + reindexes on a fresh machine. A custom remote can still be set with `flow
+  backup remote set`.
+- **Surfaces:** `flow backup status|list|show|diff|restore|now|remote|push`
+  (CLI), `/api/backup/*` + the Knowledge-page panel (Mission Control). Toggle the
+  whole subsystem with `FLOW_BACKUP_ENABLED` (default on).
 
 ## Data directory layout
 

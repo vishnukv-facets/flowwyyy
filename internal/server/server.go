@@ -73,6 +73,7 @@ func New(cfg Config) *Server {
 	s.monitorReconcile = newMonitorReconciler(s)
 	s.playbookSched = newPlaybookScheduler(s)
 	s.ownerSched = newOwnerScheduler(s)
+	s.backupSched = newBackupScheduler(s)
 	// Resolves Slack user/channel IDs to display names for the Inbox UI.
 	// Nil when no Slack token is configured; all uses are nil-safe.
 	s.nameResolver = monitor.NewSlackNameResolver()
@@ -207,6 +208,11 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/kb/dream", s.handleKBDream) // must precede the /api/kb/ subtree
 	mux.HandleFunc("/api/kb/prune", s.handleKBPrune) // exact match; precedes the /api/kb/ subtree
 	mux.HandleFunc("/api/kb/", s.handleKBFile)
+	mux.HandleFunc("/api/backup/status", s.handleBackupStatus)
+	mux.HandleFunc("/api/backup/log", s.handleBackupLog)
+	mux.HandleFunc("/api/backup/show", s.handleBackupShow)
+	mux.HandleFunc("/api/backup/restore", s.handleBackupRestore)
+	mux.HandleFunc("/api/backup/now", s.handleBackupNow)
 	mux.HandleFunc("/api/memory/sources", s.handleMemorySources)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)
@@ -358,6 +364,22 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.ownerSched != nil {
 		s.ownerSched.start()
 		defer s.ownerSched.stop()
+	}
+	// Backup safety net: checkpoint curated markdown on boot (catches anything an
+	// out-of-process agent or manual edit wrote while the server was down), then
+	// run scheduled backups (checkpoint + db snapshot + offsite push) on cadence.
+	// Boot backup runs ASYNC so it never blocks the server from listening (a
+	// full checkpoint over a large ~/.flow can take a moment, and the offsite
+	// push is network-bound). Best-effort.
+	go func() {
+		s.backupCheckpoint("ui serve boot")
+		if err := s.maybeBackupPush(context.Background()); err != nil {
+			fmt.Fprintf(os.Stderr, "flow backup: boot push: %v\n", err)
+		}
+	}()
+	if s.backupSched != nil {
+		s.backupSched.start()
+		defer s.backupSched.stop()
 	}
 	// Watch SQLite data_version so writes from external processes
 	// (notably the flow CLI) trigger an SSE refresh within ~1s without

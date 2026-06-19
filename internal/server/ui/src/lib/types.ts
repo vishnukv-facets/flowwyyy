@@ -1354,3 +1354,36 @@ export interface SlackChannel {
   /** "channel" | "im" (DM) | "mpim" (group DM). Absent → treat as "channel". */
   kind?: string
 }
+
+/** One checkpoint in the ~/.flow backup history. */
+export interface BackupCommit {
+  rev: string
+  short: string
+  when: string
+  subject: string
+}
+
+/** One completed scheduled backup run. */
+export interface BackupRunRecord {
+  at: string
+  status: string
+  committed: boolean
+  db_snapshot?: string
+  pushed: boolean
+  detail?: string
+}
+
+/** Observable state of the ~/.flow backup safety net. */
+export interface BackupStatus {
+  enabled: boolean
+  running: boolean
+  schedule: string
+  last_run_at?: string
+  next_run_at?: string
+  last_push_at?: string
+  commits: number
+  db_snapshots: number
+  remote_configured: boolean
+  remote_url?: string
+  history: BackupRunRecord[]
+}
