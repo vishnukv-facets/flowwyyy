@@ -18,12 +18,14 @@ type slackSendRequest struct {
 	As string `json:"as"`
 	// File is an optional local path to upload as an attachment; when set, Text
 	// becomes the initial comment. Requires files:write (bot scope).
-	File string `json:"file"`
+	File   string `json:"file"`
+	PostAt int64  `json:"post_at,omitempty"`
 }
 
 var (
-	slackTextSendFn = monitor.SendAsThread
-	slackFileSendFn = monitor.SendFileAsThread
+	slackTextSendFn     = monitor.SendAsThread
+	slackFileSendFn     = monitor.SendFileAsThread
+	slackScheduleSendFn = monitor.ScheduleAsThread
 )
 
 // handleSlackSend posts a Slack message as the flow bot using the SERVER's
@@ -50,8 +52,19 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "text or file is required", http.StatusBadRequest)
 		return
 	}
+	if hasFile && req.PostAt != 0 {
+		http.Error(w, "cannot schedule file uploads", http.StatusBadRequest)
+		return
+	}
 	var sendErr error
-	if hasFile {
+	if req.PostAt != 0 {
+		var scheduledMessageID string
+		scheduledMessageID, sendErr = slackScheduleSendFn(req.Channel, req.ThreadTS, req.Text, req.As, req.PostAt)
+		if sendErr == nil {
+			writeJSON(w, map[string]any{"ok": true, "scheduled_message_id": scheduledMessageID, "post_at": req.PostAt})
+			return
+		}
+	} else if hasFile {
 		// File upload; Text (if any) rides along as the initial comment.
 		sendErr = slackFileSendFn(req.Channel, req.ThreadTS, req.Text, req.File, req.As)
 	} else {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/slack-go/slack"
@@ -63,6 +64,23 @@ var sendAsBotFn = func(channel, threadTS, text, identity string) error {
 	return err
 }
 
+var scheduleAsBotFn = func(channel, threadTS, text, identity string, postAt int64) (string, error) {
+	token, asUser := resolveSendIdentity(channel, identity)
+	if strings.TrimSpace(token) == "" {
+		return "", fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
+	}
+	api := slack.New(token)
+	opts := []slack.MsgOption{
+		slack.MsgOptionText(text, false),
+		slack.MsgOptionAsUser(asUser),
+	}
+	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+	_, scheduledMessageID, err := api.ScheduleMessage(channel, strconv.FormatInt(postAt, 10), opts...)
+	return scheduledMessageID, err
+}
+
 // SendAs posts text to a Slack channel/DM, forcing the send identity when
 // `identity` is "bot" or "user" and otherwise honoring the global
 // FLOW_SLACK_SEND_AS setting. Gated by FLOW_SLACK_WRITES_ENABLED.
@@ -83,6 +101,22 @@ func SendAsThread(channel, threadTS, text, identity string) error {
 		return fmt.Errorf("text is required")
 	}
 	return sendAsBotFn(channel, threadTS, text, identity)
+}
+
+func ScheduleAsThread(channel, threadTS, text, identity string, postAt int64) (string, error) {
+	if !slackWritesEnabled() {
+		return "", fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
+	}
+	if strings.TrimSpace(channel) == "" {
+		return "", fmt.Errorf("channel is required")
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", fmt.Errorf("text is required")
+	}
+	if postAt <= 0 {
+		return "", fmt.Errorf("post_at is required")
+	}
+	return scheduleAsBotFn(channel, threadTS, text, identity, postAt)
 }
 
 // SendAsBot posts under flow's configured send identity (FLOW_SLACK_SEND_AS —

@@ -1,10 +1,12 @@
 package app
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,21 +17,35 @@ import (
 // locally). Stubbable in tests. identity is "" (global), "bot", or "user".
 var slackSendFn = monitor.SendAsThread
 
+var slackScheduleSendFn = monitor.ScheduleAsThread
+
 // slackFileSendFn is the in-process fallback for a file upload: (channel,
 // comment, filePath, identity). Stubbable in tests.
 var slackFileSendFn = monitor.SendFileAsThread
 
-// postSlackSendFn POSTs {channel,thread_ts,text} to the running flow server, which holds
+var slackSendNow = time.Now
+
+// postSlackSendFn POSTs to the running flow server, which holds
 // the freshly-validated Slack token. Returns:
 //   - (status, body, nil) when the server was reached (caller inspects status)
 //   - (0, "", err)        when the server was UNREACHABLE (connection refused,
 //     no server, timeout) — the caller falls back to slackSendFn.
 //
 // Stubbable in tests.
-var postSlackSendFn = func(channel, threadTS, text, identity, file string) (status int, body string, err error) {
+var postSlackSendFn = func(channel, threadTS, text, identity, file string, postAt int64) (status int, body string, err error) {
 	url := flowServerURL("/api/slack/send")
-	payload := fmt.Sprintf(`{"channel":%q,"thread_ts":%q,"text":%q,"as":%q,"file":%q}`, channel, threadTS, text, identity, file)
-	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(payload))
+	payload, err := json.Marshal(slackSendPayload{
+		Channel:  channel,
+		ThreadTS: threadTS,
+		Text:     text,
+		As:       identity,
+		File:     file,
+		PostAt:   postAt,
+	})
+	if err != nil {
+		return 0, "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(payload)))
 	if err != nil {
 		return 0, "", err
 	}
@@ -48,9 +64,18 @@ var postSlackSendFn = func(channel, threadTS, text, identity, file string) (stat
 	return resp.StatusCode, strings.TrimSpace(string(b)), nil
 }
 
+type slackSendPayload struct {
+	Channel  string `json:"channel"`
+	ThreadTS string `json:"thread_ts"`
+	Text     string `json:"text"`
+	As       string `json:"as"`
+	File     string `json:"file"`
+	PostAt   int64  `json:"post_at,omitempty"`
+}
+
 func cmdSlack(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> (--text <message>|--text-file <path>|--file <path>)")
+		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> (--text <message>|--text-file <path>|--file <path>) [--at <when>]")
 		return 2
 	}
 	switch args[0] {
@@ -70,6 +95,7 @@ func cmdSlackSend(args []string) int {
 	textFile := fs.String("text-file", "", "read message body from a file; use '-' for stdin")
 	as := fs.String("as", "", "send identity: bot or user (default: server's FLOW_SLACK_SEND_AS). Use 'bot' for automation — the bot token carries chat:write/files:write.")
 	file := fs.String("file", "", "local path to a file (image, PDF, …) to upload as an attachment")
+	at := fs.String("at", "", "schedule delivery at local YYYY-MM-DD HH:MM, +30m/+2h, or Unix epoch")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -100,6 +126,19 @@ func cmdSlackSend(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: --as must be 'bot' or 'user'")
 		return 2
 	}
+	var postAt int64
+	if strings.TrimSpace(*at) != "" {
+		if filePath != "" {
+			fmt.Fprintln(os.Stderr, "error: --at cannot be used with --file (Slack cannot schedule uploads)")
+			return 2
+		}
+		parsed, err := parseSlackPostAt(*at)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: --at: %v\n", err)
+			return 2
+		}
+		postAt = parsed
+	}
 
 	// Prefer routing through the running flow server: it holds the
 	// freshly-validated Slack token. A tmux-spawned agent may carry a stale
@@ -107,9 +146,12 @@ func cmdSlackSend(args []string) int {
 	// (account_inactive). Only fall back to the in-process path when the
 	// server is unreachable.
 	thread := strings.TrimSpace(*threadTS)
-	status, respBody, err := postSlackSendFn(*channel, thread, body, identity, filePath)
+	status, respBody, err := postSlackSendFn(*channel, thread, body, identity, filePath, postAt)
 	if err == nil {
 		if status >= 200 && status < 300 {
+			if postAt != 0 {
+				printSlackScheduleConfirmation(slackScheduledMessageID(respBody), postAt)
+			}
 			return 0
 		}
 		// Reached the server but Slack rejected the send. The server's token
@@ -122,6 +164,15 @@ func cmdSlackSend(args []string) int {
 
 	// Server unreachable (no server / connection refused / timeout) — fall
 	// back to the in-process send so `flow slack send` still works standalone.
+	if postAt != 0 {
+		id, err := slackScheduleSendFn(*channel, thread, body, identity, postAt)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		printSlackScheduleConfirmation(id, postAt)
+		return 0
+	}
 	if filePath != "" {
 		if err := slackFileSendFn(*channel, thread, body, filePath, identity); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -143,6 +194,65 @@ func readSlackTextFile(path string) (string, error) {
 	}
 	b, err := os.ReadFile(path)
 	return string(b), err
+}
+
+func parseSlackPostAt(raw string) (int64, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, fmt.Errorf("value is required")
+	}
+	now := slackSendNow()
+	var postAt int64
+	if strings.HasPrefix(s, "+") {
+		d, err := time.ParseDuration(s)
+		if err != nil || d <= 0 {
+			return 0, fmt.Errorf("relative value must look like +30m or +2h")
+		}
+		postAt = now.Add(d).Unix()
+	} else if allDigits(s) {
+		epoch, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("invalid Unix epoch")
+		}
+		postAt = epoch
+	} else {
+		t, err := time.ParseInLocation("2006-01-02 15:04", s, now.Location())
+		if err != nil {
+			return 0, fmt.Errorf("use YYYY-MM-DD HH:MM, +30m/+2h, or Unix epoch")
+		}
+		postAt = t.Unix()
+	}
+	if postAt < now.Add(2*time.Minute).Unix() || postAt > now.Add(120*24*time.Hour).Unix() {
+		return 0, fmt.Errorf("scheduled time must be between 2 minutes and 120 days from now")
+	}
+	return postAt, nil
+}
+
+func allDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func slackScheduledMessageID(body string) string {
+	var resp struct {
+		ScheduledMessageID string `json:"scheduled_message_id"`
+	}
+	_ = json.Unmarshal([]byte(body), &resp)
+	return resp.ScheduledMessageID
+}
+
+func printSlackScheduleConfirmation(id string, postAt int64) {
+	if strings.TrimSpace(id) != "" {
+		fmt.Fprintf(os.Stdout, "scheduled_message_id: %s\n", id)
+	}
+	fmt.Fprintf(os.Stdout, "scheduled_for: %s\n", time.Unix(postAt, 0).In(slackSendNow().Location()).Format(time.RFC3339))
 }
 
 // serverSlackError pulls a human message out of the server's error body
