@@ -116,6 +116,49 @@ func TestStripAllPendingRemovalNoSection(t *testing.T) {
 	}
 }
 
+// TestMovePendingRemovalToTop verifies the section is relocated just below the
+// H1, the live content order is otherwise preserved, and the operation is
+// idempotent (a second pass is a no-op — no churn on every dream).
+func TestMovePendingRemovalToTop(t *testing.T) {
+	content := strings.Join([]string{
+		"# Org",
+		"",
+		"- a live fact",
+		"- another live fact",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-18] stale fact — why: superseded",
+	}, "\n")
+
+	got, changed := movePendingRemovalToTop(content)
+	if !changed {
+		t.Fatal("expected the section to move")
+	}
+	lines := strings.Split(got, "\n")
+	if lines[0] != "# Org" {
+		t.Errorf("H1 should stay first, got %q", lines[0])
+	}
+	// The Pending-removal heading should now precede the live facts.
+	idxSection := strings.Index(got, "## ⚠️ Pending removal")
+	idxLive := strings.Index(got, "- a live fact")
+	if idxSection == -1 || idxLive == -1 || idxSection > idxLive {
+		t.Errorf("Pending removal should be above the live facts:\n%s", got)
+	}
+	// Idempotent: running again must not change it (no churn).
+	again, changedAgain := movePendingRemovalToTop(got)
+	if changedAgain || again != got {
+		t.Errorf("move should be idempotent; second pass changed the file:\n%s", again)
+	}
+}
+
+func TestMovePendingRemovalToTopNoSection(t *testing.T) {
+	content := "# User\n\n- a fact\n"
+	got, changed := movePendingRemovalToTop(content)
+	if changed || got != content {
+		t.Errorf("no Pending-removal section → unchanged, got changed=%v", changed)
+	}
+}
+
 // TestComputeNextRunInterval is the restart-no-reset guarantee for interval mode:
 // an overdue last-run catches up promptly, a recent one waits out the remainder,
 // and a fresh worker schedules one interval ahead — never a hard reset to now+24h

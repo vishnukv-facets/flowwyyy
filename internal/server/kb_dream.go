@@ -97,6 +97,11 @@ func (d *kbDreamer) start() {
 	// Restore the persisted last-run so a restart computes the next run from real
 	// history (catching up a missed pass) instead of resetting the countdown.
 	d.loadState()
+	// Normalize existing KB files once at boot so any "Pending removal" section
+	// sits at the top immediately, without waiting for the next dream pass.
+	if kbDreamEnabled() {
+		d.repositionPendingRemoval()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	d.cancel = cancel
 	d.done = make(chan struct{})
@@ -213,7 +218,10 @@ func (d *kbDreamer) tick(ctx context.Context) {
 		rec.Detail = truncate(err.Error(), 300)
 		// fall through — still run the deterministic prune below
 	}
-	// 2) Prune pass (deterministic): permanently remove entries flagged longer
+	// 2) Reposition (deterministic): move each file's Pending-removal section to
+	//    the top so flagged entries surface first, wherever the agent wrote it.
+	d.repositionPendingRemoval()
+	// 3) Prune pass (deterministic): permanently remove entries flagged longer
 	//    than maxAge.
 	rec.Pruned = d.pruneStaleKBFiles(time.Now(), kbDreamMaxAge())
 	rec.At = start.UTC().Format(time.RFC3339)
@@ -309,9 +317,18 @@ func (d *kbDreamer) persistState() {
 
 // dreamStatus returns the observable dreamer state for the KB UI.
 func (d *kbDreamer) dreamStatus() KBDreamStatus {
+	_, scheduleLabel, _ := kbDreamScheduleCron()
+	// Compute the next run LIVE from the current schedule + last-run, rather than
+	// the loop's cached nextRun (which only refreshes on the ≤5m re-eval). Without
+	// this, saving a new schedule or running "Dream now" leaves the UI showing the
+	// stale previous cadence (e.g. the old 24h interval) until the loop catches up.
+	// computeNextRun locks stateMu internally, so call it before taking the lock.
+	var nextRun time.Time
+	if kbDreamEnabled() {
+		nextRun = d.computeNextRun(time.Now())
+	}
 	d.stateMu.Lock()
 	defer d.stateMu.Unlock()
-	_, scheduleLabel, _ := kbDreamScheduleCron()
 	st := KBDreamStatus{
 		Enabled:    kbDreamEnabled(),
 		Running:    d.running,
@@ -323,8 +340,8 @@ func (d *kbDreamer) dreamStatus() KBDreamStatus {
 	if !d.lastRun.IsZero() {
 		st.LastRunAt = d.lastRun.UTC().Format(time.RFC3339)
 	}
-	if st.Enabled && !d.nextRun.IsZero() {
-		st.NextRunAt = d.nextRun.UTC().Format(time.RFC3339)
+	if !nextRun.IsZero() {
+		st.NextRunAt = nextRun.UTC().Format(time.RFC3339)
 	}
 	return st
 }
@@ -464,6 +481,85 @@ func (d *kbDreamer) purgeAllPendingRemoval() int {
 		fmt.Fprintf(os.Stderr, "kb dreamer: purged pending-removal section from %s (%d flagged)\n", filepath.Base(path), removed)
 	}
 	return total
+}
+
+// movePendingRemovalToTop relocates the "Pending removal" section to just after
+// the file's first H1 heading (or the very top if there is none), so flagged
+// entries are the first thing the operator sees. Returns the rewritten content
+// and whether anything moved. Idempotent: a section already at the top returns
+// changed=false, so re-running the dream pass never churns the file.
+func movePendingRemovalToTop(content string) (string, bool) {
+	lines := strings.Split(content, "\n")
+	start := -1
+	for i, line := range lines {
+		if pendingRemovalHeadingRe.MatchString(line) {
+			start = i
+			break
+		}
+	}
+	if start == -1 {
+		return content, false // no section to move
+	}
+	// Desired insert index: right after the first H1 and its blank line.
+	insertAfterH1 := func(ls []string) int {
+		for i, line := range ls {
+			if strings.HasPrefix(line, "# ") {
+				j := i + 1
+				if j < len(ls) && strings.TrimSpace(ls[j]) == "" {
+					j++ // keep the blank line that follows the title
+				}
+				return j
+			}
+		}
+		return 0 // no H1 → very top
+	}
+	if start == insertAfterH1(lines) {
+		return content, false // already at the top
+	}
+	// Extract the section: heading through the line before the next heading / EOF,
+	// trimming trailing blanks so we control the spacing on reinsert.
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
+			end = i
+			break
+		}
+	}
+	section := append([]string{}, lines[start:end]...)
+	for len(section) > 0 && strings.TrimSpace(section[len(section)-1]) == "" {
+		section = section[:len(section)-1]
+	}
+	rest := append(append([]string{}, lines[:start]...), lines[end:]...)
+	at := insertAfterH1(rest)
+	out := make([]string, 0, len(rest)+len(section)+1)
+	out = append(out, rest[:at]...)
+	out = append(out, section...)
+	out = append(out, "") // one blank separating the section from what follows
+	out = append(out, rest[at:]...)
+	joined := strings.Join(out, "\n")
+	if joined == content {
+		return content, false
+	}
+	return joined, true
+}
+
+// repositionPendingRemoval moves the Pending-removal section to the top of every
+// KB file. Best-effort per file; runs as part of the dream pass so flagged
+// entries surface first without the operator hand-editing.
+func (d *kbDreamer) repositionPendingRemoval() {
+	for _, path := range kbFiles(d.srv.cfg.FlowRoot) {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		moved, changed := movePendingRemovalToTop(string(raw))
+		if !changed {
+			continue
+		}
+		if err := os.WriteFile(path, []byte(moved), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "kb dreamer: reposition write %s: %v\n", path, err)
+		}
+	}
 }
 
 func plural(n int) string {

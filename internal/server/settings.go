@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"flow/internal/monitor"
+	"flow/internal/schedule"
 )
 
 type settingType string
@@ -442,6 +443,15 @@ func validateSettingValue(sp settingSpec, val string) error {
 			}
 		}
 		return fmt.Errorf("%s must be one of: %s", sp.Label, strings.Join(sp.Options, ", "))
+	}
+	// Key-specific validation the generic type can't express. The KB-dreaming
+	// schedule reuses the exact playbook validation (schedule.Parse) so a bad
+	// phrase/cron is rejected at save time instead of being silently accepted and
+	// falling back to the interval.
+	if sp.Key == "FLOW_KB_DREAM_SCHEDULE" && val != "" {
+		if _, err := schedule.Parse(val); err != nil {
+			return fmt.Errorf("%s: %v", sp.Label, err)
+		}
 	}
 	return nil
 }
