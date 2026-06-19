@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/openziti/zrok/environment"
 	"github.com/openziti/zrok/environment/env_core"
@@ -148,6 +149,55 @@ func zrokAutoStart() bool {
 	}
 }
 
+// zrokRetryDelays is the backoff schedule retryTransientZrok waits between
+// attempts after a transient zrok.io failure: len(delays)+1 total attempts.
+// A package var so tests can shrink it to zero. The cumulative wait (~7s)
+// runs in the background ingress goroutine, so it only delays bring-up — it
+// never blocks the request path.
+var zrokRetryDelays = []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+
+// isTransientZrokErr reports whether err looks like a transient zrok.io
+// control-plane failure worth retrying — a gateway 5xx (502/503/504) or 429
+// from the hosted API (the mandatory clientVersionCheck handshake inside
+// root.Client() surfaces its status here), or a transport-level
+// timeout/DNS/connection error. Permanent failures (auth, a real version
+// rejection, name-taken, environment-not-enabled) return false so callers fail
+// fast instead of burning the backoff budget on something a retry can't fix.
+func isTransientZrokErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, sig := range []string{
+		"(status 502)", "(status 503)", "(status 504)", "(status 429)",
+		"connection refused", "connection reset", "no such host",
+		"network is unreachable", "deadline exceeded", "i/o timeout",
+		"timeout exceeded", "tls handshake timeout",
+	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// retryTransientZrok runs fn, retrying on transient zrok.io errors per
+// zrokRetryDelays with a bounded backoff. A non-transient error or a success
+// returns immediately; once the delays are exhausted the last error is
+// returned. This lets a flaky hosted control plane (e.g. a 504 on
+// clientVersionCheck) self-heal instead of leaving the connector hard-failed.
+func retryTransientZrok(fn func() error) error {
+	err := fn()
+	for _, d := range zrokRetryDelays {
+		if !isTransientZrokErr(err) {
+			return err
+		}
+		time.Sleep(d)
+		err = fn()
+	}
+	return err
+}
+
 // ---------------------------------------------------------------------------
 // zrokManager — SDK share + listener lifecycle
 // ---------------------------------------------------------------------------
@@ -204,6 +254,21 @@ func (m *zrokManager) start() {
 			return
 		}
 
+		// Reclaim orphaned flow shares up front, keyed on the configured
+		// reserved name. The post-success prune below only runs once the
+		// listener is up, so a leftover share (e.g. from a manual rename or an
+		// aborted start) would otherwise linger whenever bring-up fails — which
+		// is exactly when zrok.io is flaky. Keyed on a non-empty name it's safe:
+		// it keeps the configured share and deletes the rest. Skipped for an
+		// ephemeral share (no stable keep token until CreateShare returns).
+		if name != "" {
+			if n, perr := pruneStaleZrokShares(root, name); perr != nil {
+				fmt.Fprintf(os.Stderr, "zrok prune (pre-start): %v\n", perr)
+			} else if n > 0 {
+				fmt.Fprintf(os.Stderr, "zrok: pruned %d stale flow share(s)\n", n)
+			}
+		}
+
 		shr, baseURL, reserved, err := ensureZrokShare(root, name)
 		if err != nil {
 			m.setErr(err)
@@ -229,8 +294,9 @@ func (m *zrokManager) start() {
 		m.runErr = nil
 		m.mu.Unlock()
 
-		// Reclaim leaked shares from earlier (re)starts — keep only the one we
-		// just brought up. Runs on every start, so reset/recreate cleans up too.
+		// Backstop prune keyed on the share we actually brought up — covers the
+		// ephemeral case (no name, so the pre-start prune above was skipped) and
+		// re-runs cheaply for reserved shares (shr.Token == name, nothing left).
 		if n, perr := pruneStaleZrokShares(root, shr.Token); perr != nil {
 			fmt.Fprintf(os.Stderr, "zrok prune: %v\n", perr)
 		} else if n > 0 {
@@ -364,8 +430,12 @@ func flowSharesToPrune(overviewJSON, keepToken string) []string {
 // other's share. That's already a broken setup (one zrok env per server); the
 // throwaway/smoke servers don't enable zrok auto-start, so they never prune.
 func pruneStaleZrokShares(root env_core.Root, keepToken string) (int, error) {
-	raw, err := zroksdk.Overview(root)
-	if err != nil {
+	var raw string
+	if err := retryTransientZrok(func() error {
+		var e error
+		raw, e = zroksdk.Overview(root)
+		return e
+	}); err != nil {
 		return 0, fmt.Errorf("zrok overview: %w", err)
 	}
 	pruned := 0
@@ -396,8 +466,12 @@ func ensureZrokShare(root env_core.Root, name string) (*zroksdk.Share, string, b
 		Reserved:    name != "",
 		UniqueName:  name,
 	}
-	shr, err := zroksdk.CreateShare(root, req)
-	if err != nil {
+	var shr *zroksdk.Share
+	if err := retryTransientZrok(func() error {
+		var e error
+		shr, e = zroksdk.CreateShare(root, req)
+		return e
+	}); err != nil {
 		return nil, "", false, fmt.Errorf("zrok create share: %w", err)
 	}
 	if len(shr.FrontendEndpoints) == 0 {
@@ -412,8 +486,12 @@ func ensureZrokShare(root env_core.Root, name string) (*zroksdk.Share, string, b
 // lookupReservedShare scans the zrok account overview for a reserved share
 // whose token matches name and returns it with its frontend endpoint URL.
 func lookupReservedShare(root env_core.Root, name string) (*zroksdk.Share, string, bool) {
-	raw, err := zroksdk.Overview(root)
-	if err != nil {
+	var raw string
+	if err := retryTransientZrok(func() error {
+		var e error
+		raw, e = zroksdk.Overview(root)
+		return e
+	}); err != nil {
 		return nil, "", false
 	}
 	var ov struct {

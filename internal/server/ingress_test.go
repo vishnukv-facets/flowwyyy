@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFlowSharesToPrune(t *testing.T) {
@@ -43,6 +45,91 @@ func TestFlowSharesToPrune_IgnoresGarbage(t *testing.T) {
 	if got := flowSharesToPrune("not json", "x"); got != nil {
 		t.Fatalf("garbage overview should prune nothing, got %#v", got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Transient-error classification + retry around zrok.io network calls
+// ---------------------------------------------------------------------------
+
+func TestIsTransientZrokErr(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		// The exact shape of the incident: a 504 on the clientVersionCheck
+		// handshake inside root.Client().
+		{"clientVersionCheck 504", errors.New("error getting zrok client: client version error accessing api endpoint 'https://api-v1.zrok.io': [POST /clientVersionCheck] clientVersionCheck (status 504): {}"), true},
+		{"502 bad gateway", errors.New("unable to create share: [POST /share] (status 502)"), true},
+		{"503 unavailable", errors.New("zrok overview: (status 503)"), true},
+		{"429 rate limited", errors.New("(status 429): too many requests"), true},
+		{"connection refused", errors.New("dial tcp 1.2.3.4:443: connect: connection refused"), true},
+		{"context deadline", errors.New(`Post "https://api-v1.zrok.io": context deadline exceeded (Client.Timeout exceeded while awaiting headers)`), true},
+		{"no such host", errors.New("dial tcp: lookup api-v1.zrok.io: no such host"), true},
+		// Permanent failures must NOT be retried.
+		{"400 version rejected", errors.New("clientVersionCheck (status 400): incompatible client version"), false},
+		{"401 unauthorized", errors.New("(status 401): unauthorized"), false},
+		{"500 internal", errors.New("(status 500): internal server error"), false},
+		{"name already taken", errors.New("unable to create share: share name 'flowx' already exists"), false},
+		{"not enabled", errors.New("environment is not enabled; enable with 'zrok enable' first!"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isTransientZrokErr(c.err); got != c.want {
+				t.Errorf("isTransientZrokErr(%q) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRetryTransientZrok(t *testing.T) {
+	// Shrink the backoff so the test never actually sleeps.
+	saved := zrokRetryDelays
+	zrokRetryDelays = []time.Duration{0, 0, 0}
+	t.Cleanup(func() { zrokRetryDelays = saved })
+
+	transient := errors.New("clientVersionCheck (status 504): {}")
+	permanent := errors.New("share name 'x' already exists")
+
+	t.Run("success first try", func(t *testing.T) {
+		calls := 0
+		err := retryTransientZrok(func() error { calls++; return nil })
+		if err != nil || calls != 1 {
+			t.Fatalf("calls=%d err=%v, want calls=1 err=nil", calls, err)
+		}
+	})
+
+	t.Run("transient then success", func(t *testing.T) {
+		calls := 0
+		err := retryTransientZrok(func() error {
+			calls++
+			if calls < 3 {
+				return transient
+			}
+			return nil
+		})
+		if err != nil || calls != 3 {
+			t.Fatalf("calls=%d err=%v, want calls=3 err=nil", calls, err)
+		}
+	})
+
+	t.Run("non-transient fails fast", func(t *testing.T) {
+		calls := 0
+		err := retryTransientZrok(func() error { calls++; return permanent })
+		if !errors.Is(err, permanent) || calls != 1 {
+			t.Fatalf("calls=%d err=%v, want calls=1 err=permanent", calls, err)
+		}
+	})
+
+	t.Run("persistent transient exhausts attempts", func(t *testing.T) {
+		calls := 0
+		err := retryTransientZrok(func() error { calls++; return transient })
+		want := len(zrokRetryDelays) + 1
+		if !errors.Is(err, transient) || calls != want {
+			t.Fatalf("calls=%d err=%v, want calls=%d err=transient", calls, err, want)
+		}
+	})
 }
 
 // clearIngressEnv zeros every env var the ingress subsystem reads so real
