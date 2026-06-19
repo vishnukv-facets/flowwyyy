@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, BookText, Check, Loader2, Moon, Plus, Sparkles } from 'lucide-react'
+import { AlertTriangle, BookText, Check, Loader2, Moon, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { useKB, useKBDream } from '../lib/query'
 import { queryClient } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -15,6 +15,17 @@ import type { KBDreamStatus, KBFileView } from '../lib/types'
 
 const baseName = (filename: string) => filename.replace(/\.md$/, '')
 
+// flaggedRe matches a "Pending removal" bullet ("- [flagged YYYY-MM-DD] …").
+// Mirrors the server's flaggedBulletRe so the Dreaming panel can show how many
+// entries are currently flagged and gate the "Clean up flagged" action.
+const flaggedRe = /^\s*-\s*\[flagged \d{4}-\d{2}-\d{2}\]/gm
+
+function countFlagged(files: KBFileView[]): number {
+  let n = 0
+  for (const f of files) n += (f.content || '').match(flaggedRe)?.length ?? 0
+  return n
+}
+
 export function KnowledgeBase() {
   useDocumentTitle('Knowledge Base')
   const { data, isLoading } = useKB()
@@ -24,6 +35,10 @@ export function KnowledgeBase() {
   useEffect(() => {
     if (!selected && data && data.length) setSelected(data[0].filename)
   }, [data, selected])
+
+  // How many entries are sitting in "Pending removal" across all files — drives
+  // the count badge on the Dreaming panel's "Clean up flagged" action.
+  const flaggedCount = useMemo(() => countFlagged(data ?? []), [data])
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
   const files = data ?? []
@@ -39,7 +54,7 @@ export function KnowledgeBase() {
             <Plus size={15} /> New document
           </button>
         </div>
-        <DreamPanel />
+        <DreamPanel flaggedCount={flaggedCount} />
         <EmptyState icon={<BookText size={30} />} title="Knowledge base empty" hint="flow seeds KB files under ~/.flow/kb." />
         <CreateKBModal open={createOpen} onClose={() => setCreateOpen(false)} onCreated={setSelected} />
       </div>
@@ -58,7 +73,7 @@ export function KnowledgeBase() {
         </button>
       </div>
       <div style={{ padding: '14px 28px 0' }}>
-        <DreamPanel />
+        <DreamPanel flaggedCount={flaggedCount} />
       </div>
       <div className="twopane">
         <div className="pane-list">
@@ -134,15 +149,18 @@ function KBDoc({ files, filename, onSelect }: { files: KBFileView[]; filename: s
 // runs (live countdown), what recent passes did, and a manual trigger. The
 // dreamer flags stale KB entries for removal and prunes ones left flagged too
 // long — invisible background work that the operator otherwise can't see.
-function DreamPanel() {
+function DreamPanel({ flaggedCount }: { flaggedCount: number }) {
   const { data, isLoading } = useKBDream()
   const [showHistory, setShowHistory] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [purging, setPurging] = useState(false)
   useNow(1000) // tick the countdown live
 
   if (isLoading || !data) return null
   const d: KBDreamStatus = data
   const history = d.history ?? []
+  // Fixed schedule label when set ("daily at 3am"), else the interval cadence.
+  const cadence = d.schedule || `every ${Math.round(d.interval_ms / 3_600_000)}h`
 
   const dreamNow = async () => {
     setBusy(true)
@@ -154,6 +172,20 @@ function DreamPanel() {
       pushToast('error', 'a dream pass is already running')
     } finally {
       setBusy(false)
+    }
+  }
+
+  const cleanUpFlagged = async () => {
+    setPurging(true)
+    try {
+      const res = await apiPost<{ pruned: number }>('/api/kb/prune', {})
+      pushToast('ok', res.pruned > 0 ? `cleared ${res.pruned} flagged entr${res.pruned === 1 ? 'y' : 'ies'}` : 'nothing flagged to clear')
+      await queryClient.invalidateQueries({ queryKey: ['kb'] })
+      await queryClient.invalidateQueries({ queryKey: ['kb-dream'] })
+    } catch {
+      pushToast('error', 'could not clean up flagged entries')
+    } finally {
+      setPurging(false)
     }
   }
 
@@ -192,11 +224,22 @@ function DreamPanel() {
         <div className="kb-dream-text">
           <div className="kb-dream-title">
             Dreaming {statusChip}
-            <span className="dim kb-dream-cadence">every {Math.round(d.interval_ms / 3_600_000)}h · prunes after {d.max_age_days}d flagged</span>
+            <span className="dim kb-dream-cadence">{cadence} · prunes after {d.max_age_days}d flagged</span>
           </div>
           <div className="kb-dream-sub">{line}</div>
         </div>
         <div className="kb-dream-actions">
+          {flaggedCount > 0 && (
+            <button
+              type="button"
+              className="btn ghost sm"
+              onClick={cleanUpFlagged}
+              disabled={purging}
+              title="Remove all entries currently in 'Pending removal' across every KB file"
+            >
+              {purging ? <Loader2 size={14} className="spin" /> : <Trash2 size={14} />} Clean up {flaggedCount} flagged
+            </button>
+          )}
           <button type="button" className="btn ghost sm" onClick={() => setShowHistory((v) => !v)}>
             History{history.length ? ` · ${history.length}` : ''}
           </button>
@@ -217,7 +260,7 @@ function DreamPanel() {
               <div className="kb-dream-empty-hint">
                 {d.enabled
                   ? <>The first hygiene pass runs <strong>{d.next_run_at ? countdown(d.next_run_at) : 'soon'}</strong>. It flags stale or superseded KB entries for removal and prunes ones left flagged over {d.max_age_days} days — completed passes will be logged here.</>
-                  : <>Enable dreaming (<code>FLOW_KB_DREAM_ENABLED</code>) to have flow tidy the knowledge base on a {Math.round(d.interval_ms / 3_600_000)}h cadence.</>}
+                  : <>Enable dreaming (<code>FLOW_KB_DREAM_ENABLED</code>) to have flow tidy the knowledge base ({cadence}).</>}
               </div>
             </div>
           ) : (

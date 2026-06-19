@@ -3,8 +3,66 @@ package monitor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 )
+
+func TestResolveIMNamesDirectoryThenInfoFallback(t *testing.T) {
+	dir := map[string]string{"U_DIR": "Directory Name"}
+	var mu sync.Mutex
+	infoCalls := map[string]int{}
+	infoFn := func(_ context.Context, _ string, userID string) (string, error) {
+		mu.Lock()
+		infoCalls[userID]++
+		mu.Unlock()
+		switch userID {
+		case "U_INFO":
+			return "Info Name", nil
+		case "U_GONE":
+			return "", errors.New("user_not_found")
+		}
+		return "", nil
+	}
+
+	// U_DIR resolves from the directory (no info call); U_INFO from the fallback;
+	// U_GONE stays unresolved (absent from the map). The duplicate U_DIR is deduped.
+	peers := []string{"U_DIR", "U_INFO", "U_GONE", "U_DIR", "  "}
+	names := resolveIMNames(context.Background(), "xoxp-test", peers, dir, infoFn)
+
+	if names["U_DIR"] != "Directory Name" {
+		t.Errorf("U_DIR = %q, want directory name", names["U_DIR"])
+	}
+	if names["U_INFO"] != "Info Name" {
+		t.Errorf("U_INFO = %q, want info-fallback name", names["U_INFO"])
+	}
+	if _, ok := names["U_GONE"]; ok {
+		t.Errorf("U_GONE should be absent (caller keeps raw id), got %q", names["U_GONE"])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if infoCalls["U_DIR"] != 0 {
+		t.Errorf("directory hit must not call users.info, got %d calls", infoCalls["U_DIR"])
+	}
+	if infoCalls["U_INFO"] != 1 {
+		t.Errorf("U_INFO info calls = %d, want exactly 1 (deduped)", infoCalls["U_INFO"])
+	}
+}
+
+func TestResolveIMNamesNoFallbackWithoutToken(t *testing.T) {
+	called := false
+	infoFn := func(_ context.Context, _ string, _ string) (string, error) {
+		called = true
+		return "Should Not Run", nil
+	}
+	// Empty token → no users.info fallback (degrade to directory-only).
+	names := resolveIMNames(context.Background(), "", []string{"U_MISS"}, nil, infoFn)
+	if called {
+		t.Error("users.info fallback must not run without a token")
+	}
+	if len(names) != 0 {
+		t.Errorf("want no names resolved, got %+v", names)
+	}
+}
 
 func TestListSlackChannels(t *testing.T) {
 	t.Setenv("FLOW_ROOT", t.TempDir())

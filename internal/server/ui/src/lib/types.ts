@@ -385,6 +385,27 @@ export interface KBFileView {
   content: string
 }
 
+// KBDreamRecord mirrors the Go server struct (internal/server/kb_dream.go).
+export interface KBDreamRecord {
+  at: string
+  status: 'ok' | 'error'
+  pruned: number
+  duration_ms: number
+  detail?: string
+}
+
+// KBDreamStatus is the observable state of the KB "dreaming" hygiene worker.
+export interface KBDreamStatus {
+  enabled: boolean
+  running: boolean
+  interval_ms: number
+  max_age_days: number
+  schedule?: string // human label when a fixed FLOW_KB_DREAM_SCHEDULE is set; "" = plain interval
+  last_run_at?: string
+  next_run_at?: string
+  history: KBDreamRecord[]
+}
+
 export interface WorkdirView {
   path: string
   name: string | null

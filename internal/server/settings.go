@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"flow/internal/monitor"
+	"flow/internal/schedule"
 )
 
 type settingType string
@@ -146,7 +147,8 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_KB_DISTILL_INTERVAL", Label: "Auto KB capture — check interval", Group: "General", Type: settingString, Default: "5m", Help: "Go duration (e.g. 5m). How often the distiller checks live sessions for eligible KB capture."},
 	{Key: "FLOW_KB_DREAM_ENABLED", Label: "KB hygiene (dreaming)", Group: "General", Type: settingBool, Default: "true", Help: "Periodically review the KB for stale/superseded/incorrect entries and move them into a 'Pending removal' section in each file. You review and Keep/remove them; anything left flagged past the max age below is auto-removed."},
 	{Key: "FLOW_KB_DREAM_MAX_AGE", Label: "KB hygiene — auto-remove after", Group: "General", Type: settingString, Default: "720h", Help: "Go duration (e.g. 720h = 30 days). Entries left in 'Pending removal' longer than this are permanently deleted."},
-	{Key: "FLOW_KB_DREAM_INTERVAL", Label: "KB hygiene — run every", Group: "General", Type: settingString, Default: "24h", Help: "Go duration (e.g. 24h). How often the hygiene pass reviews the KB and prunes expired flagged entries."},
+	{Key: "FLOW_KB_DREAM_INTERVAL", Label: "KB hygiene — run every", Group: "General", Type: settingString, Default: "24h", Help: "Go duration (e.g. 24h). Fallback cadence used when no fixed schedule is set below. How often the hygiene pass reviews the KB and prunes expired flagged entries."},
+	{Key: "FLOW_KB_DREAM_SCHEDULE", Label: "KB hygiene — fixed schedule", Group: "General", Type: settingString, Help: "Optional fixed schedule for the hygiene pass, using the same phrases as playbooks: \"daily at 3am\", \"every 6 hours\", \"weekly\", \"Wednesday at 1pm\", or a cron like \"0 3 * * *\". When set it takes precedence over the interval above and survives server restarts (a missed pass catches up once). Leave empty to use the interval."},
 }
 
 // missionQuoteEnabled reports whether the Mission Control anime quote should be
@@ -441,6 +443,15 @@ func validateSettingValue(sp settingSpec, val string) error {
 			}
 		}
 		return fmt.Errorf("%s must be one of: %s", sp.Label, strings.Join(sp.Options, ", "))
+	}
+	// Key-specific validation the generic type can't express. The KB-dreaming
+	// schedule reuses the exact playbook validation (schedule.Parse) so a bad
+	// phrase/cron is rejected at save time instead of being silently accepted and
+	// falling back to the interval.
+	if sp.Key == "FLOW_KB_DREAM_SCHEDULE" && val != "" {
+		if _, err := schedule.Parse(val); err != nil {
+			return fmt.Errorf("%s: %v", sp.Label, err)
+		}
 	}
 	return nil
 }

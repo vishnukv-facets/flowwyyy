@@ -70,6 +70,202 @@ func TestPruneExpiredPendingRemovalBadDate(t *testing.T) {
 	}
 }
 
+// TestStripAllPendingRemoval verifies the operator "clean up flagged" purge:
+// the whole Pending-removal section goes (regardless of flag age), live content
+// above and any heading after it stays, and a file with no such section is
+// returned byte-identical.
+func TestStripAllPendingRemoval(t *testing.T) {
+	content := strings.Join([]string{
+		"# User",
+		"",
+		"- a live fact (keep)",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-10] stale one — why: superseded",
+		"- [flagged 2026-06-13] another — why: old",
+		"- a non-flagged line in the section",
+		"",
+		"## Another section",
+		"- keep this too",
+	}, "\n")
+
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 2 {
+		t.Fatalf("removed (flagged count) = %d, want 2", removed)
+	}
+	for _, gone := range []string{"⚠️ Pending removal", "stale one", "another — why: old"} {
+		if strings.Contains(got, gone) {
+			t.Errorf("purge should have removed %q:\n%s", gone, got)
+		}
+	}
+	// Live content is preserved even when it sits inside/after the section —
+	// purge removes ONLY flagged bullets, never real entries.
+	for _, keep := range []string{"# User", "a live fact (keep)", "a non-flagged line in the section", "## Another section", "keep this too"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("purge should have kept %q:\n%s", keep, got)
+		}
+	}
+}
+
+// TestStripAllPendingRemovalAtTopKeepsLiveEntries is the regression test for the
+// data-loss bug: with the Pending-removal section moved to the TOP (right after
+// the H1) and live entries directly below it, purge must remove ONLY the flagged
+// bullets and leave every live entry intact.
+func TestStripAllPendingRemovalAtTopKeepsLiveEntries(t *testing.T) {
+	content := strings.Join([]string{
+		"# Organization",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-14] stale org fact — why: superseded",
+		"",
+		"- 2026-06-01 — live fact one",
+		"- 2026-06-02 — live fact two",
+		"- 2026-06-03 — live fact three",
+	}, "\n")
+
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1 (only the flagged bullet)", removed)
+	}
+	for i, keep := range []string{"# Organization", "live fact one", "live fact two", "live fact three"} {
+		if !strings.Contains(got, keep) {
+			t.Fatalf("DATA LOSS REGRESSION: live content %d %q was deleted:\n%s", i, keep, got)
+		}
+	}
+	if strings.Contains(got, "stale org fact") || strings.Contains(got, "⚠️ Pending removal") {
+		t.Errorf("flagged section should be gone:\n%s", got)
+	}
+}
+
+func TestStripAllPendingRemovalNoSection(t *testing.T) {
+	content := "# User\n\n- a fact\n- another fact\n"
+	got, removed := stripAllPendingRemoval(content)
+	if removed != 0 {
+		t.Fatalf("removed = %d, want 0", removed)
+	}
+	if got != content {
+		t.Errorf("content with no Pending-removal section must round-trip unchanged")
+	}
+}
+
+// TestMovePendingRemovalToTop verifies the section is relocated just below the
+// H1, the live content order is otherwise preserved, and the operation is
+// idempotent (a second pass is a no-op — no churn on every dream).
+func TestMovePendingRemovalToTop(t *testing.T) {
+	content := strings.Join([]string{
+		"# Org",
+		"",
+		"- a live fact",
+		"- another live fact",
+		"",
+		"## ⚠️ Pending removal",
+		"- [flagged 2026-06-18] stale fact — why: superseded",
+	}, "\n")
+
+	got, changed := movePendingRemovalToTop(content)
+	if !changed {
+		t.Fatal("expected the section to move")
+	}
+	lines := strings.Split(got, "\n")
+	if lines[0] != "# Org" {
+		t.Errorf("H1 should stay first, got %q", lines[0])
+	}
+	// The Pending-removal heading should now precede the live facts.
+	idxSection := strings.Index(got, "## ⚠️ Pending removal")
+	idxLive := strings.Index(got, "- a live fact")
+	if idxSection == -1 || idxLive == -1 || idxSection > idxLive {
+		t.Errorf("Pending removal should be above the live facts:\n%s", got)
+	}
+	// Idempotent: running again must not change it (no churn).
+	again, changedAgain := movePendingRemovalToTop(got)
+	if changedAgain || again != got {
+		t.Errorf("move should be idempotent; second pass changed the file:\n%s", again)
+	}
+}
+
+func TestMovePendingRemovalToTopNoSection(t *testing.T) {
+	content := "# User\n\n- a fact\n"
+	got, changed := movePendingRemovalToTop(content)
+	if changed || got != content {
+		t.Errorf("no Pending-removal section → unchanged, got changed=%v", changed)
+	}
+}
+
+// TestComputeNextRunInterval is the restart-no-reset guarantee for interval mode:
+// an overdue last-run catches up promptly, a recent one waits out the remainder,
+// and a fresh worker schedules one interval ahead — never a hard reset to now+24h
+// on every boot.
+func TestComputeNextRunInterval(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "")
+	t.Setenv("FLOW_KB_DREAM_INTERVAL", "24h")
+	now := time.Date(2026, 6, 18, 12, 0, 0, 0, time.Local)
+	d := &kbDreamer{}
+
+	// Fresh (no last run) → one interval out.
+	if got := d.computeNextRun(now); !got.Equal(now.Add(24 * time.Hour)) {
+		t.Errorf("fresh next = %v, want now+24h", got)
+	}
+
+	// Recent last run (1h ago) → resumes at last+24h, NOT reset to now+24h.
+	d.lastRun = now.Add(-1 * time.Hour)
+	if got := d.computeNextRun(now); !got.Equal(d.lastRun.Add(24 * time.Hour)) {
+		t.Errorf("recent next = %v, want lastRun+24h (%v)", got, d.lastRun.Add(24*time.Hour))
+	}
+
+	// Overdue last run (25h ago, e.g. across a restart) → catch up soon.
+	d.lastRun = now.Add(-25 * time.Hour)
+	if got := d.computeNextRun(now); !got.Equal(now.Add(kbDreamCatchupDelay)) {
+		t.Errorf("overdue next = %v, want now+catchup (%v)", got, now.Add(kbDreamCatchupDelay))
+	}
+}
+
+// TestComputeNextRunFixedSchedule verifies the playbook-style fixed schedule:
+// a daily clock time resumes at that time (no reset), and a missed day catches up.
+func TestComputeNextRunFixedSchedule(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "daily at 3am")
+	d := &kbDreamer{}
+
+	// Before today's 03:00, last run was yesterday's pass → next is today 03:00.
+	now := time.Date(2026, 6, 18, 2, 0, 0, 0, time.Local)
+	d.lastRun = time.Date(2026, 6, 17, 3, 0, 0, 0, time.Local)
+	want := time.Date(2026, 6, 18, 3, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(want) {
+		t.Errorf("pre-slot next = %v, want today 03:00 (%v)", got, want)
+	}
+
+	// Server was down past 03:00 and hasn't run today → catch up soon.
+	now = time.Date(2026, 6, 18, 9, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(now.Add(kbDreamCatchupDelay)) {
+		t.Errorf("missed-slot next = %v, want now+catchup", got)
+	}
+
+	// Already ran today after 03:00 → next is tomorrow 03:00.
+	d.lastRun = time.Date(2026, 6, 18, 3, 0, 30, 0, time.Local)
+	want = time.Date(2026, 6, 19, 3, 0, 0, 0, time.Local)
+	if got := d.computeNextRun(now); !got.Equal(want) {
+		t.Errorf("post-run next = %v, want tomorrow 03:00 (%v)", got, want)
+	}
+}
+
+func TestKBDreamScheduleCronFallsBackToInterval(t *testing.T) {
+	t.Setenv("FLOW_KB_DREAM_INTERVAL", "6h")
+	// Unset → @every fallback, no custom label.
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "")
+	if cron, label, custom := kbDreamScheduleCron(); custom || label != "" || cron != "@every 6h0m0s" {
+		t.Errorf("unset: got cron=%q label=%q custom=%v, want @every fallback", cron, label, custom)
+	}
+	// Set + valid → custom cron + label.
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "daily at 3am")
+	if cron, label, custom := kbDreamScheduleCron(); !custom || label == "" || cron == "" {
+		t.Errorf("set: got cron=%q label=%q custom=%v, want custom schedule", cron, label, custom)
+	}
+	// Set + invalid → falls back to interval (never stalls).
+	t.Setenv("FLOW_KB_DREAM_SCHEDULE", "not a real schedule!!")
+	if _, _, custom := kbDreamScheduleCron(); custom {
+		t.Errorf("invalid schedule should fall back to interval, got custom=true")
+	}
+}
+
 func TestKBDreamEnabledDefault(t *testing.T) {
 	t.Setenv("FLOW_KB_DREAM_ENABLED", "")
 	if !kbDreamEnabled() {

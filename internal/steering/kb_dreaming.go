@@ -61,7 +61,8 @@ Steps:
 3. For each entry you do flag, MOVE it (cut it from where it is) into a section
    in the SAME file titled EXACTLY:
    ` + PendingRemovalHeading + `
-   Create that section at the END of the file if it doesn't exist. Rewrite the
+   Create that section near the TOP of the file (right after the first heading)
+   if it doesn't exist, so flagged entries are visible first. Rewrite the
    moved entry on one line as:
    - [flagged ` + today + `] <the original entry text, trimmed to one line> — why: <one short reason it is stale>
 4. NEVER delete an entry outright — only MOVE it into Pending removal. The

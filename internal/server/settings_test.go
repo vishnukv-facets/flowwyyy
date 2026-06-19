@@ -8,6 +8,27 @@ import (
 	"testing"
 )
 
+// TestValidateKBDreamSchedule confirms the dreaming schedule setting reuses the
+// playbook schedule validation (schedule.Parse): valid phrases/cron pass, blank
+// passes (interval fallback), and gibberish is rejected instead of silently
+// accepted.
+func TestValidateKBDreamSchedule(t *testing.T) {
+	sp, ok := settingSpecFor("FLOW_KB_DREAM_SCHEDULE")
+	if !ok {
+		t.Fatal("FLOW_KB_DREAM_SCHEDULE not registered")
+	}
+	for _, good := range []string{"", "daily at 3am", "every 6 hours", "weekly", "0 3 * * *"} {
+		if err := validateSettingValue(sp, good); err != nil {
+			t.Errorf("valid schedule %q rejected: %v", good, err)
+		}
+	}
+	for _, bad := range []string{"whenever i feel like it", "every blue moon", "garbage"} {
+		if err := validateSettingValue(sp, bad); err == nil {
+			t.Errorf("invalid schedule %q should be rejected", bad)
+		}
+	}
+}
+
 func TestUpdateSettings_PersistsAppliesAndMasksSecrets(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
