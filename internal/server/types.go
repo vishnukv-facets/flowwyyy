@@ -73,6 +73,9 @@ type Server struct {
 	// shelling out to `flow owner tick-due`. Nil when disabled or when there's
 	// no flow binary to invoke.
 	ownerSched *ownerScheduler
+	// backupSched runs scheduled ~/.flow backups (checkpoint + db snapshot +
+	// offsite push) on a configurable cadence, with persisted catch-up.
+	backupSched *backupScheduler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
 
@@ -299,6 +302,7 @@ type TaskView struct {
 	BriefPath           string        `json:"brief_path"`
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
+	Artifacts           []FileRef     `json:"artifacts"`
 	TranscriptAvailable bool          `json:"transcript_available"`
 }
 

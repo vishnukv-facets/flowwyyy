@@ -91,6 +91,8 @@ func Run(args []string) int {
 		return cmdWait(rest)
 	case "attention":
 		return cmdAttention(rest)
+	case "backup":
+		return cmdBackup(rest)
 	case "__auto-exec":
 		return cmdAutoExec(rest)
 	case "__owner-tick":

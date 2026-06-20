@@ -1360,8 +1360,24 @@ sequence at the moment the fact is heard.
 **Auxiliary files in entity directories** (any `.md` files in
 `tasks/<slug>/`, `projects/<slug>/`, or `playbooks/<slug>/` other than
 `brief.md` and the contents of `updates/`) are surfaced by `flow show`
-under an `other:` section. Apply the same lazy-load discipline as KB
+under an `other:` section. These are sidecar references and copied context
+files, not task deliverables. Apply the same lazy-load discipline as KB
 files: load them on demand when relevant to the work, not preemptively.
+
+**Task artifacts directory.** When you create a deliverable for the current
+task — research report, design note, generated data, screenshot, PDF, script
+output, or any other file the user should inspect later — write it under:
+
+```
+$FLOW_ROOT/tasks/<task-slug>/artifacts/
+```
+
+If `$FLOW_ROOT` is unset, use the default `~/.flow`. Create the `artifacts/`
+directory if needed. Mission Control's task **Artifacts** tab is driven by
+files in this directory. Do not write new deliverables as top-level files next
+to `brief.md`; top-level `.md` files are `other:` context, not UI artifacts.
+Use top-level sidecars only for on-demand references that future sessions may
+load as context rather than user-facing outputs.
 
 **Past tasks and projects can be referenced too.** `flow list tasks` and
 `flow list projects` default to non-archived, non-deleted active rows;
@@ -1661,7 +1677,7 @@ that as your signal.
        header: "Capture?",
        options: [
          { label: "Add to playbook brief",  description: "Append/edit the relevant section of playbooks/<slug>/brief.md — future runs see it inline" },
-         { label: "Save as sidecar file",   description: "Write to playbooks/<slug>/<topic>.md (e.g., decision-tree.md, sample-script.md). Surfaced under other: for on-demand load" },
+         { label: "Save as playbook reference",   description: "Write to playbooks/<slug>/<topic>.md (e.g., decision-tree.md, sample-script.md). Surfaced under other: for on-demand load" },
          { label: "Just this run",          description: "Apply locally; don't change the playbook (rare for first run)" }
        ],
        multiSelect: false
@@ -1684,15 +1700,17 @@ that as your signal.
    one via AskUserQuestion individually so the user can opt in
    per-item.
 
-**Sidecar files vs brief edits:**
+**Playbook references vs brief edits:**
 
 - **Brief edits** are for *procedural* changes — additions to "Each run
   does", new "Signals to watch for", clarified scope. Inline content
   that every future run benefits from seeing during bootstrap.
-- **Sidecar files** (`playbooks/<slug>/<topic>.md`) are for *artifacts*
-  — scripts, decision trees, sample outputs, reference tables. Things
-  that future runs may or may not need; they're surfaced under `other:`
-  in `flow show playbook` and loaded on-demand by the run session.
+- **Playbook reference files** (`playbooks/<slug>/<topic>.md`) are for
+  reusable context — scripts, decision trees, sample outputs, reference
+  tables. Things that future runs may or may not need; they're surfaced
+  under `other:` in `flow show playbook` and loaded on-demand by the run
+  session. Concrete deliverables produced by a run still belong under the
+  run task's `artifacts/` directory, not beside the playbook brief.
 
 **Capture-back is a primary deliverable of the first run.** Not an
 afterthought. After the first run, the playbook should be
@@ -2058,6 +2076,64 @@ haven't acted on yet. After reading, you don't need to do anything
 special; the column `tasks.inbox_seen_at` is already bumped to the
 inbox mtime by the hook, so the same messages won't re-fire on the
 next session start.
+
+### 4.18 Recover a KB or brief file from backup
+
+**Triggers:** "restore <file>", "roll back org.md", "the KB got wiped",
+"undo that edit to the brief", "an earlier version of <kb/brief>",
+"what changed in <file>", "recover the knowledge base".
+
+flow keeps a durable, versioned backup of all curated markdown — the
+knowledge base (`kb/*.md`) and every project/task/playbook/owner
+`brief.md` + `updates/*.md` — in a self-managed git repo under the flow
+root, plus rotated database snapshots. A checkpoint is taken before every
+destructive write (KB hygiene pass, UI/CLI edits, the `flow done` sweep),
+on server boot, and on a schedule, so prior versions are recoverable
+without scraping transcripts. **Use this whenever a curated file was lost,
+truncated, or wrongly edited.**
+
+**Recipe:**
+
+1. Identify the file's path relative to the flow root, e.g. `kb/org.md`
+   or `tasks/<slug>/brief.md`.
+2. Show its history: `flow backup list <relpath>` — each line is a
+   version (short sha · timestamp · reason).
+3. Inspect a version if needed: `flow backup show <rev> <relpath>` or
+   `flow backup diff <rev> <relpath>`.
+4. Confirm with the user (via `AskUserQuestion`) before restoring — it's a
+   content mutation. Then: `flow backup restore <relpath> [--at <rev>]`.
+   With no `--at`, it restores the most recent version that differs from
+   the current file (the right default after a wipe). The restore is itself
+   checkpointed first, so it is reversible.
+
+`flow backup status` summarizes the schedule, checkpoint/snapshot counts,
+and offsite remote. The same history/restore is available on Mission
+Control's Knowledge page. The database (task metadata) is backed up as
+rotated snapshots under `backups/db/` (not in the markdown repo). For a new
+machine, `flow init --restore-from <private-git-url>` rebuilds full state
+(markdown + db) from a configured offsite remote.
+
+**Offsite (GitHub).** By default (`FLOW_BACKUP_OFFSITE=auto`), when a **personal**
+GitHub token is available, flow automatically provisions a **private** `flow-backup`
+repo in the operator's personal GitHub account (via the go-github SDK) and syncs to
+it on the schedule + on boot; with no token it stays local-only. The token must be a
+PERSONAL one (classic PAT with `repo`, or fine-grained with Administration+Contents)
+— the **GitHub App connector cannot host backups**: it mints only installation
+tokens, which GitHub does not allow to create a repo in a personal account, and the
+App is webhook/issue/PR-scoped anyway. The token is set in Mission Control on the
+**Knowledge → Backups** panel (stored in the OS keyring, hydrated into
+`FLOW_BACKUP_TOKEN`), or supplied via env `GITHUB_TOKEN`/`GH_TOKEN`/`FLOW_BACKUP_TOKEN`
+or the `gh` CLI. Set `FLOW_BACKUP_OFFSITE=local` to keep backups on this machine only.
+The repo is always private (KB carries personal/org facts) and always under the
+personal account, never an org — even if the App is installed on one. To provision/use
+it on demand, the agent can run `flow backup remote github`.
+
+**Anti-patterns:**
+
+- Don't hand-edit or `git`-poke the backup repo under the flow root — use
+  `flow backup ...`. The repo uses a separated git directory on purpose.
+- Don't enable an offsite remote on a public repo — the KB carries
+  personal/org facts; the remote must be private.
 
 ## 6. The `work_dir` question — rules
 

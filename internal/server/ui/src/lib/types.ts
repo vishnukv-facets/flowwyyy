@@ -126,6 +126,7 @@ export interface TaskView {
   brief_path: string
   updates: FileRef[]
   aux_files: FileRef[]
+  artifacts: FileRef[]
   transcript_available: boolean
 }
 
@@ -1438,4 +1439,39 @@ export interface AnalyticsPayload {
   breakdowns?: AnalyticsBreakdown[]
   funnel?: AnalyticsFunnel | null
   conversions?: AnalyticsSourceConversion[]
+}
+
+/** One checkpoint in the ~/.flow backup history. */
+export interface BackupCommit {
+  rev: string
+  short: string
+  when: string
+  subject: string
+}
+
+/** One completed scheduled backup run. */
+export interface BackupRunRecord {
+  at: string
+  status: string
+  committed: boolean
+  db_snapshot?: string
+  pushed: boolean
+  detail?: string
+}
+
+/** Observable state of the ~/.flow backup safety net. */
+export interface BackupStatus {
+  enabled: boolean
+  running: boolean
+  schedule: string
+  last_run_at?: string
+  next_run_at?: string
+  last_push_at?: string
+  commits: number
+  db_snapshots: number
+  remote_configured: boolean
+  remote_url?: string
+  offsite_mode: string // "auto" (private repo in your personal GitHub) | "local"
+  token_set: boolean // an explicit personal backup token is configured
+  history: BackupRunRecord[]
 }

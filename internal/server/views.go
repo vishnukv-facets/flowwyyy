@@ -107,6 +107,10 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	if view.AuxFiles == nil {
 		view.AuxFiles = []FileRef{}
 	}
+	view.Artifacts = artifactFiles(filepath.Join(root, "tasks", t.Slug, "artifacts"))
+	if view.Artifacts == nil {
+		view.Artifacts = []FileRef{}
+	}
 
 	// Inbox: stat the file, count unread relative to inbox_seen_at.
 	// Cheap: one stat + one file scan only when inbox exists.
@@ -756,7 +760,7 @@ func auxFiles(dir string) []FileRef {
 	}
 	var out []FileRef
 	for _, entry := range entries {
-		// brief.md and inbox.md are flow-managed files, not user artifacts:
+		// brief.md and inbox.md are flow-managed files, not sidecar references:
 		// brief.md has its own tab; inbox.md is flow's coordination mirror surfaced
 		// via the Inbox screen (linked from the task drawer). Exclude both.
 		if entry.IsDir() || entry.Name() == "brief.md" || entry.Name() == "inbox.md" || filepath.Ext(entry.Name()) != ".md" {
@@ -775,6 +779,34 @@ func auxFiles(dir string) []FileRef {
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Filename < out[j].Filename })
+	return out
+}
+
+func artifactFiles(dir string) []FileRef {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []FileRef
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		out = append(out, FileRef{
+			Filename: entry.Name(),
+			Path:     path,
+			MTime:    info.ModTime().Format(time.RFC3339),
+			Size:     info.Size(),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Filename < out[j].Filename
+	})
 	return out
 }
 
@@ -1096,6 +1128,11 @@ func fileForEntity(root, kind, slug, section, filename string) (string, error) {
 			return "", errors.New("invalid filename")
 		}
 		return filepath.Join(base, filename), nil
+	case "artifacts":
+		if !validFilename(filename) {
+			return "", errors.New("invalid filename")
+		}
+		return filepath.Join(base, "artifacts", filename), nil
 	default:
 		return "", errors.New("invalid section")
 	}

@@ -6002,6 +6002,27 @@ a.orch-pr:hover {
   flex: 0 0 auto;
   margin-top: 1px;
 }
+.gh-backup-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--info) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.gh-backup-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--info);
+}
+.gh-backup-note strong {
+  color: var(--text);
+}
 .att-action-preview {
   display: flex;
   flex-direction: column;
@@ -7858,6 +7879,133 @@ a.owner-task-item:hover {
   font-size: 12.5px;
   line-height: 1.55;
   color: var(--text-3);
+}
+
+/* --- KB system-health strip: two slim status cards, side by side --------- */
+.kb-sys {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .kb-sys {
+    grid-template-columns: 1fr;
+  }
+}
+/* Compact override of .kb-dream so a panel is a slim status line, not a slab.
+   The cadence/meta moves to its own muted footer row beneath the action row. */
+.kb-sys-card .kb-dream-row {
+  padding: 11px 13px;
+  gap: 11px;
+}
+.kb-sys-card .kb-dream-icon {
+  width: 30px;
+  height: 30px;
+}
+.kb-sys-card .kb-dream-title {
+  font-size: 13px;
+}
+.kb-sys-meta {
+  padding: 0 13px 11px 54px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.kb-sys-meta a {
+  color: var(--text-2);
+}
+.kb-sys-meta a:hover {
+  color: var(--text);
+}
+/* Offsite backup token entry — sits under the backup meta line, aligned with it. */
+.kb-backup-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px 12px 54px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.kb-backup-token > svg {
+  flex: 0 0 auto;
+  color: var(--info);
+}
+.kb-backup-token > span {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.kb-backup-token strong {
+  color: var(--text-2);
+}
+.kb-backup-token .ok {
+  color: var(--ok);
+}
+.kb-backup-token.editing .input {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 11.5px;
+}
+.kb-backup-token-help {
+  color: var(--info);
+}
+.kb-backup-token-help:hover {
+  text-decoration: underline;
+}
+
+/* --- Pillar glyph: a tinted mono initial marking each KB file's pillar ---- */
+.kb-glyph {
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: var(--r);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1;
+  background: var(--glyph-soft);
+  border: 1px solid var(--glyph-line);
+  color: var(--glyph);
+}
+
+/* Mono count pill — entry counts in the list, detail head, and list header. */
+.kb-count {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  background: var(--bg-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.kb-list-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Detail-pane header: pillar glyph + name + filename + count. */
+.kb-doc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.kb-doc-headtext {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-doc-headtext .eyebrow {
+  margin: 0;
 }
 
 /* ------------------------------- Chats ---------------------------------- */

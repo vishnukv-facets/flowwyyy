@@ -123,6 +123,9 @@ func (s *Server) saveKBFile(w http.ResponseWriter, r *http.Request, path, name s
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
+	// Snapshot the prior content before overwriting, so a manual KB edit is
+	// reversible.
+	s.backupCheckpoint("before kb edit " + name)
 	if err := os.WriteFile(path, body, 0o644); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

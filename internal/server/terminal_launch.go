@@ -582,8 +582,9 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 				"2. Run: flow show task. Read the file at the brief: path AND every file listed under updates:. Files listed under other: are sidecar references; load on demand when relevant, not eagerly.\n"+
 				"3. If a project is listed on the task, run: flow show project <that-project-slug>. Read its brief AND every file under updates:. Files under other: are on-demand references.\n"+
 				"4. Read AGENTS.md and/or CLAUDE.md in your work_dir and any nested convention files under subdirectories you will modify. These override any assumption from the brief.\n"+
-				"5. Only then begin work. If any brief section is blank or unclear, ASK; do not infer.",
-			task.Slug,
+				"5. When creating reports, generated data, screenshots, or other deliverables for this task, write them under $FLOW_ROOT/tasks/%s/artifacts/ (default ~/.flow/tasks/%s/artifacts/). Mission Control's Artifacts tab reads that directory.\n"+
+				"6. Only then begin work. If any brief section is blank or unclear, ASK; do not infer.",
+			task.Slug, task.Slug, task.Slug,
 		)
 		// Brief the session on upstream dependency work that may be unmerged.
 		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
