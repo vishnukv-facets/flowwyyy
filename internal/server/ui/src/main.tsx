@@ -16,11 +16,17 @@ import './styles/app.css'
 import { queryClient } from './lib/query'
 import { App } from './app'
 import { BootGate } from './components/BootSplash'
+import { maybePairFromUrl } from './lib/devicetoken'
 
-createRoot(document.getElementById('root')!).render(
-  <QueryClientProvider client={queryClient}>
-    <BootGate>
-      <App />
-    </BootGate>
-  </QueryClientProvider>,
-)
+// Redeem any ?pair=<code> QR param and store the device token BEFORE the first
+// socket connects (RpcClient is a module-level singleton that connects on
+// import). Using .finally so we always render even if pairing fails.
+maybePairFromUrl().finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <QueryClientProvider client={queryClient}>
+      <BootGate>
+        <App />
+      </BootGate>
+    </QueryClientProvider>,
+  )
+})
