@@ -262,6 +262,12 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/github/setup/disconnect", s.handleGitHubSetupDisconnect)
 	mux.HandleFunc("/api/github/setup/orgs", s.handleGitHubSetupOrgs)
 	mux.HandleFunc("/api/github/setup/installations", s.handleGitHubSetupInstallations)
+	mux.HandleFunc("/api/remote/pair-code", s.handleRemotePairCode)
+	mux.HandleFunc("/api/remote/devices", s.handleRemoteDevices)
+	mux.HandleFunc("/api/remote/devices/revoke", s.handleRemoteDeviceRevoke)
+	mux.HandleFunc("/api/remote/status", s.handleRemoteStatus)
+	mux.HandleFunc("/api/remote/enable", s.handleRemoteEnable)
+	mux.HandleFunc("/api/remote/disable", s.handleRemoteDisable)
 }
 
 // apiHandler lazily builds and caches the data-plane mux used by the

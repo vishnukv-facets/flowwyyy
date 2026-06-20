@@ -149,6 +149,14 @@ func zrokAutoStart() bool {
 	}
 }
 
+// remoteAccessEnabled reports whether the operator turned on the remote-access
+// (phone PWA) surface. Persisted in config.json as FLOW_REMOTE_ACCESS and
+// repopulated into the env on boot, mirroring zrokAutoStart/githubWebhookSecret.
+func remoteAccessEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("FLOW_REMOTE_ACCESS")))
+	return v == "1" || v == "true" || v == "on"
+}
+
 // zrokRetryDelays is the backoff schedule retryTransientZrok waits between
 // attempts after a transient zrok.io failure: len(delays)+1 total attempts.
 // A package var so tests can shrink it to zero. The cumulative wait (~7s)

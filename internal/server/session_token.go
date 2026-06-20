@@ -166,6 +166,14 @@ func apiRouteNeedsToken(method, path string) bool {
 	if tokenExemptAPIPath(path) {
 		return false
 	}
+	// All remote-access management endpoints are localhost-only operator
+	// actions (pairing, enable/disable, device list/revoke) — require the
+	// session token regardless of method so a stray same-origin GET can't read
+	// the device list over direct HTTP. The remote-mux pairing-REDEMPTION
+	// endpoint lives on a different mux and never reaches this gate.
+	if strings.HasPrefix(path, "/api/remote/") {
+		return true
+	}
 	if path == "/api/fs/entries" || path == "/api/fs/mkdir" {
 		return true
 	}
