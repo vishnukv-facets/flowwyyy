@@ -1,10 +1,15 @@
 package app
 
 import (
+	"bytes"
+	"compress/gzip"
+	"flow/internal/flowbackup"
 	"flow/internal/flowdb"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // flowRoot returns the root directory for flow state. Honors $FLOW_ROOT if
@@ -40,6 +45,8 @@ func flowDBPath() (string, error) {
 // the skill. Idempotent — re-running is safe.
 func cmdInit(args []string) int {
 	fs := flagSet("init")
+	restoreFrom := fs.String("restore-from", "", "restore an existing backup from a git remote into the flow root (new-laptop setup)")
+	force := fs.Bool("force", false, "with --restore-from: proceed even if the flow root is non-empty")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -52,6 +59,15 @@ func cmdInit(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+
+	// New-laptop restore: clone the curated markdown + restore the db snapshot
+	// before the normal init steps (which then run idempotently over the
+	// restored tree).
+	if strings.TrimSpace(*restoreFrom) != "" {
+		if rc := restoreFromRemote(root, *restoreFrom, *force); rc != 0 {
+			return rc
+		}
 	}
 
 	// Create the top-level tree. `projects/` and `tasks/` are parents for
@@ -125,9 +141,92 @@ func cmdInit(args []string) int {
 		fmt.Printf("installed SessionStart hook in %s\n", settings)
 	}
 
+	// Initialize the backup safety net: a self-managed git repo over the flow
+	// root that versions curated markdown (kb + briefs/updates), plus a baseline
+	// db snapshot. Best-effort — never fail init over a backup hiccup.
+	if _, err := flowbackup.Checkpoint(root, "flow init"); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: backup init: %v\n", err)
+	}
+	if _, err := flowbackup.SnapshotDB(root); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: db snapshot: %v\n", err)
+	}
+
 	fmt.Printf("flow initialized at %s\n", root)
 	fmt.Println(`Next: flow add project "My first project" --work-dir <path>`)
 	return 0
+}
+
+// restoreFromRemote performs a new-laptop restore: clone the curated markdown
+// from a backup remote into the (empty) flow root, then restore the database
+// from the remote's bounded db-snapshot branch and rebuild the search index.
+// Returns a non-zero exit code on failure.
+func restoreFromRemote(root, url string, force bool) int {
+	// Guard against clobbering an existing install. A bare .backupgit/.gitignore
+	// from a prior aborted attempt doesn't count as "non-empty".
+	if entries, err := os.ReadDir(root); err == nil {
+		meaningful := 0
+		for _, e := range entries {
+			if e.Name() == gitDirNameForRoot || e.Name() == ".gitignore" {
+				continue
+			}
+			meaningful++
+		}
+		if meaningful > 0 && !force {
+			fmt.Fprintf(os.Stderr, "error: %s is not empty; refusing to restore over it. Re-run with --force to overwrite, or restore into a fresh $FLOW_ROOT.\n", root)
+			return 1
+		}
+	}
+
+	fmt.Printf("Restoring backup from %s ...\n", url)
+	if err := flowbackup.Clone(root, url); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Println("  ✓ curated markdown (KB + briefs/updates) restored")
+
+	// Restore the database from the bounded db-snapshot branch, if present.
+	gz, err := flowbackup.FetchDBSnapshotBytes(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not fetch db snapshot: %v\n", err)
+	} else if len(gz) > 0 {
+		if err := writeGunzipped(gz, filepath.Join(root, "flow.db")); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not restore db: %v\n", err)
+		} else {
+			fmt.Println("  ✓ database restored from snapshot")
+			// Rebuild the regenerable search index (excluded from the snapshot).
+			if db, err := flowdb.OpenDB(filepath.Join(root, "flow.db")); err == nil {
+				if err := flowdb.SyncSearchDocs(db, root, true); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: search reindex failed (search will repopulate later): %v\n", err)
+				} else {
+					fmt.Println("  ✓ search index rebuilt")
+				}
+				db.Close()
+			}
+		}
+	} else {
+		fmt.Println("  • no db snapshot on the remote — starting with an empty task list (knowledge files are restored)")
+	}
+	return 0
+}
+
+// gitDirNameForRoot mirrors flowbackup's separated gitdir name for the
+// non-empty-root guard. Kept in sync with flowbackup.gitDirName.
+const gitDirNameForRoot = ".backupgit"
+
+// writeGunzipped decompresses gzip data to dst.
+func writeGunzipped(gz []byte, dst string) error {
+	zr, err := gzip.NewReader(bytes.NewReader(gz))
+	if err != nil {
+		return err
+	}
+	defer zr.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, zr)
+	return err
 }
 
 // kbSeed describes one knowledge-base file to create on `flow init`.

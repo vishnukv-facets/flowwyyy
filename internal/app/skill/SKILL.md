@@ -2077,6 +2077,64 @@ special; the column `tasks.inbox_seen_at` is already bumped to the
 inbox mtime by the hook, so the same messages won't re-fire on the
 next session start.
 
+### 4.18 Recover a KB or brief file from backup
+
+**Triggers:** "restore <file>", "roll back org.md", "the KB got wiped",
+"undo that edit to the brief", "an earlier version of <kb/brief>",
+"what changed in <file>", "recover the knowledge base".
+
+flow keeps a durable, versioned backup of all curated markdown — the
+knowledge base (`kb/*.md`) and every project/task/playbook/owner
+`brief.md` + `updates/*.md` — in a self-managed git repo under the flow
+root, plus rotated database snapshots. A checkpoint is taken before every
+destructive write (KB hygiene pass, UI/CLI edits, the `flow done` sweep),
+on server boot, and on a schedule, so prior versions are recoverable
+without scraping transcripts. **Use this whenever a curated file was lost,
+truncated, or wrongly edited.**
+
+**Recipe:**
+
+1. Identify the file's path relative to the flow root, e.g. `kb/org.md`
+   or `tasks/<slug>/brief.md`.
+2. Show its history: `flow backup list <relpath>` — each line is a
+   version (short sha · timestamp · reason).
+3. Inspect a version if needed: `flow backup show <rev> <relpath>` or
+   `flow backup diff <rev> <relpath>`.
+4. Confirm with the user (via `AskUserQuestion`) before restoring — it's a
+   content mutation. Then: `flow backup restore <relpath> [--at <rev>]`.
+   With no `--at`, it restores the most recent version that differs from
+   the current file (the right default after a wipe). The restore is itself
+   checkpointed first, so it is reversible.
+
+`flow backup status` summarizes the schedule, checkpoint/snapshot counts,
+and offsite remote. The same history/restore is available on Mission
+Control's Knowledge page. The database (task metadata) is backed up as
+rotated snapshots under `backups/db/` (not in the markdown repo). For a new
+machine, `flow init --restore-from <private-git-url>` rebuilds full state
+(markdown + db) from a configured offsite remote.
+
+**Offsite (GitHub).** By default (`FLOW_BACKUP_OFFSITE=auto`), when a **personal**
+GitHub token is available, flow automatically provisions a **private** `flow-backup`
+repo in the operator's personal GitHub account (via the go-github SDK) and syncs to
+it on the schedule + on boot; with no token it stays local-only. The token must be a
+PERSONAL one (classic PAT with `repo`, or fine-grained with Administration+Contents)
+— the **GitHub App connector cannot host backups**: it mints only installation
+tokens, which GitHub does not allow to create a repo in a personal account, and the
+App is webhook/issue/PR-scoped anyway. The token is set in Mission Control on the
+**Knowledge → Backups** panel (stored in the OS keyring, hydrated into
+`FLOW_BACKUP_TOKEN`), or supplied via env `GITHUB_TOKEN`/`GH_TOKEN`/`FLOW_BACKUP_TOKEN`
+or the `gh` CLI. Set `FLOW_BACKUP_OFFSITE=local` to keep backups on this machine only.
+The repo is always private (KB carries personal/org facts) and always under the
+personal account, never an org — even if the App is installed on one. To provision/use
+it on demand, the agent can run `flow backup remote github`.
+
+**Anti-patterns:**
+
+- Don't hand-edit or `git`-poke the backup repo under the flow root — use
+  `flow backup ...`. The repo uses a separated git directory on purpose.
+- Don't enable an offsite remote on a public repo — the KB carries
+  personal/org facts; the remote must be private.
+
 ## 6. The `work_dir` question — rules
 
 When you're about to ask the user "where does this task live?", run

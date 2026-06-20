@@ -166,6 +166,9 @@ func secretKeyringRouteForEnv(envKey string) (service, account string, ok bool) 
 			return githubKeyringService, acct, true
 		}
 	}
+	if envKey == backupSecretAccounts[keyringAcctBackupToken] {
+		return backupKeyringService, keyringAcctBackupToken, true
+	}
 	return "", "", false
 }
 
@@ -173,4 +176,31 @@ func secretKeyringRouteForEnv(envKey string) (service, account string, ok bool) 
 // service at boot.
 func loadSlackSecretsFromKeyring() {
 	loadKeyringSecrets(slackKeyringService, slackSecretAccounts)
+}
+
+// The offsite backup token (a personal GitHub PAT used to provision + push the
+// private flow-backup repo) is stored at rest in the OS keyring, matching the
+// GitHub App / Slack secret handling. It is the user's own credential — distinct
+// from the App connector, which can't create a personal repo — so it gets its
+// own namespace and is never written to config.json.
+const backupKeyringService = "flow.backup"
+
+const keyringAcctBackupToken = "token"
+
+// backupSecretAccounts maps the backup keyring account to the env var it
+// hydrates. flowbackup reads FLOW_BACKUP_TOKEN at call time.
+var backupSecretAccounts = map[string]string{
+	keyringAcctBackupToken: "FLOW_BACKUP_TOKEN",
+}
+
+// storeBackupSecret persists the offsite backup token to the keyring AND exports
+// it to the process env so it takes effect live. An empty value clears both.
+func storeBackupSecret(value string) error {
+	return storeKeyringSecret(backupKeyringService, keyringAcctBackupToken, backupSecretAccounts[keyringAcctBackupToken], value)
+}
+
+// loadBackupSecretsFromKeyring hydrates FLOW_BACKUP_TOKEN from the backup keyring
+// service at boot.
+func loadBackupSecretsFromKeyring() {
+	loadKeyringSecrets(backupKeyringService, backupSecretAccounts)
 }

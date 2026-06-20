@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertTriangle, Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, Unplug, User } from 'lucide-react'
+import { AlertTriangle, Building2, Check, ExternalLink, Github, Globe2, Loader2, RefreshCw, ShieldCheck, Unplug, User } from 'lucide-react'
 import { ApiError, apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
 import { useGitHubInstallations, useGitHubSetupStatus } from '../lib/query'
@@ -314,6 +314,17 @@ function FinishedSummary({ st, onChange }: { st: GitHubSetupStatus; onChange: ()
             </div>
           ) : null}
         </div>
+      </div>
+      <div className="gh-backup-note">
+        <ShieldCheck size={14} />
+        <span>
+          This App watches repos — it can't host your backups. Offsite <strong>backups</strong>{' '}
+          go to a private <code>flow-backup</code> repo in your <strong>personal</strong> GitHub
+          account (a GitHub App can't create one). For them to work, keep the <code>gh</code> CLI
+          authenticated (<code>gh auth login</code>), or paste a personal token on the{' '}
+          <strong>Knowledge → Backups</strong> panel. Installing this App on an org never moves
+          your backups there.
+        </span>
       </div>
       <div className="slack-wizard-done-actions">
         <button

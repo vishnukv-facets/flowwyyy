@@ -208,6 +208,10 @@ func (d *kbDreamer) tick(ctx context.Context) {
 
 	start := time.Now()
 	rec := KBDreamRecord{Status: "ok"}
+	// Snapshot the KB before the destructive hygiene pass. This is the exact op
+	// that wiped org.md+processes.md on 2026-06-19; a checkpoint here guarantees
+	// a recoverable pre-state regardless of any flagging/prune bug.
+	d.srv.backupCheckpoint("before kb dream pass")
 	// 1) Flagging pass (agent judgment): move newly-stale entries into each
 	//    file's Pending removal section. Sequential before the prune so the prune
 	//    sees the agent's output.
@@ -226,6 +230,9 @@ func (d *kbDreamer) tick(ctx context.Context) {
 	rec.Pruned = d.pruneStaleKBFiles(time.Now(), kbDreamMaxAge())
 	rec.At = start.UTC().Format(time.RFC3339)
 	rec.DurationMs = time.Since(start).Milliseconds()
+	// Capture the post-pass result (agent moves + prune) so the change is itself
+	// versioned, not just the pre-state.
+	d.srv.backupCheckpoint("after kb dream pass")
 
 	d.stateMu.Lock()
 	d.running = false
