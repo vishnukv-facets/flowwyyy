@@ -103,12 +103,16 @@ func (s *Server) handleRPCWebSocket(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeWSHandshake(w, r) {
 		return
 	}
-	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	conn, err := s.wsUpgrader(r).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
 	conn.SetReadLimit(rpcMaxFrameBytes)
+
+	// A remote (device-token) handshake can drive sessions but is denied the
+	// localhost-only operator actions under /api/remote/ (see dispatchRPC).
+	remote := r.Header.Get(remoteFlagHeader) == "1"
 
 	var writeMu sync.Mutex
 	writeFrame := func(v any) error {
@@ -166,13 +170,22 @@ func (s *Server) handleRPCWebSocket(w http.ResponseWriter, r *http.Request) {
 		// never head-of-line-blocks other in-flight requests on the same
 		// socket. Writes stay serialized by writeMu.
 		go func(req rpcRequest) {
-			resp := s.dispatchRPC(req)
+			resp := s.dispatchRPC(req, remote)
 			_ = writeFrame(resp)
 		}(req)
 	}
 }
 
-func (s *Server) dispatchRPC(req rpcRequest) rpcResponse {
+func (s *Server) dispatchRPC(req rpcRequest, remote bool) rpcResponse {
+	// A remote device may never reach the localhost-only operator actions
+	// (pair codes, device list/revoke, remote-access toggle). Block them before
+	// any handler runs — the device-gated transport is not a trust boundary for
+	// these paths.
+	if remote && remoteForbiddenRPCPath(req.Path) {
+		return rpcResponse{Type: "rpc", ID: req.ID, Status: http.StatusForbidden,
+			Error: "not permitted from a remote device"}
+	}
+
 	resp := rpcResponse{Type: "rpc", ID: req.ID}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))

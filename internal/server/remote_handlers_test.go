@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -39,5 +40,51 @@ func TestHandleRemotePairBadCode(t *testing.T) {
 	s.handleRemotePair(rec, req)
 	if rec.Code != 403 {
 		t.Fatalf("bad code: got %d want 403", rec.Code)
+	}
+}
+
+func TestRemoteForbiddenRPCPath(t *testing.T) {
+	for _, p := range []string{"/api/remote/pair-code", "/api/remote/devices", "/api/remote/enable", "/api/remote/status"} {
+		if !remoteForbiddenRPCPath(p) {
+			t.Fatalf("%s must be forbidden for remote RPC", p)
+		}
+	}
+	for _, p := range []string{"/api/tasks", "/api/overview", "/api/kb"} {
+		if remoteForbiddenRPCPath(p) {
+			t.Fatalf("%s must be allowed for remote RPC", p)
+		}
+	}
+}
+
+func TestRemoteStaticDoesNotLeakSessionToken(t *testing.T) {
+	s := newTestServer(t)
+	rec := httptest.NewRecorder()
+	s.handleRemoteStatic(rec, httptest.NewRequest("GET", "/", nil))
+	if strings.Contains(rec.Body.String(), s.sessionToken) && s.sessionToken != "" {
+		t.Fatal("remote static must NOT embed the shared session token")
+	}
+	if !strings.Contains(rec.Body.String(), "__FLOW_REMOTE__") {
+		t.Fatal("remote static must mark the page as remote")
+	}
+}
+
+func TestCheckRemoteWSOrigin(t *testing.T) {
+	s := newTestServer(t)
+	mk := func(origin, host string) *http.Request {
+		r := httptest.NewRequest("GET", "/ws/rpc", nil)
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+	if !s.checkRemoteWSOrigin(mk("https://h.example", "h.example")) {
+		t.Fatal("same-host origin should be allowed")
+	}
+	if s.checkRemoteWSOrigin(mk("", "h.example")) {
+		t.Fatal("empty origin must be rejected")
+	}
+	if s.checkRemoteWSOrigin(mk("https://evil.example", "h.example")) {
+		t.Fatal("cross-origin handshake must be rejected")
 	}
 }

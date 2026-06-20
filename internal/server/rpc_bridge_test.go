@@ -13,7 +13,7 @@ func TestDispatchRPCRoutesThroughAPIHandler(t *testing.T) {
 	srv := New(Config{DB: db, FlowRoot: root, Version: "test", CommandPath: "/bin/false"})
 
 	t.Run("GET json endpoint returns embedded JSON", func(t *testing.T) {
-		resp := srv.dispatchRPC(rpcRequest{ID: "1", Method: "GET", Path: "/api/health"})
+		resp := srv.dispatchRPC(rpcRequest{ID: "1", Method: "GET", Path: "/api/health"}, false)
 		if resp.ID != "1" || resp.Status != 200 {
 			t.Fatalf("unexpected resp: %+v", resp)
 		}
@@ -36,7 +36,7 @@ func TestDispatchRPCRoutesThroughAPIHandler(t *testing.T) {
 	})
 
 	t.Run("non-api path is refused", func(t *testing.T) {
-		resp := srv.dispatchRPC(rpcRequest{ID: "2", Method: "GET", Path: "/etc/passwd"})
+		resp := srv.dispatchRPC(rpcRequest{ID: "2", Method: "GET", Path: "/etc/passwd"}, false)
 		if resp.Status != 404 || resp.Error == "" {
 			t.Fatalf("expected 404 refusal, got %+v", resp)
 		}
@@ -48,7 +48,7 @@ func TestDispatchRPCRoutesThroughAPIHandler(t *testing.T) {
 			Method: "POST",
 			Path:   "/api/actions",
 			Body:   json.RawMessage(`{"kind":"definitely-not-a-real-action"}`),
-		})
+		}, false)
 		// Body reached runAction, which rejects unknown kinds with a JSON error.
 		if resp.Status != 400 {
 			t.Fatalf("status = %d, want 400 (resp %+v)", resp.Status, resp)

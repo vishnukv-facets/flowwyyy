@@ -618,3 +618,90 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	}
 	_, _ = w.Write(data)
 }
+
+// remoteForbiddenRPCPath reports whether an /api path is a localhost-only
+// operator action that a remote (device-token) client must NOT reach over the
+// /ws/rpc bridge. The remote surface can drive sessions but can never pair new
+// devices, toggle remote access, or read/revoke the device list.
+func remoteForbiddenRPCPath(path string) bool {
+	return strings.HasPrefix(path, "/api/remote/")
+}
+
+// handleRemoteStatic serves the embedded PWA shell for the REMOTE surface. It is
+// identical to handleStatic EXCEPT it never injects the shared session token —
+// the phone authenticates with its own device token from localStorage. It marks
+// the page remote so the client uses the device-token transport.
+func (s *Server) handleRemoteStatic(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	path := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
+	if path == "." || path == "" {
+		path = "index.html"
+	}
+	data, err := staticFS.ReadFile("static/" + path)
+	if err != nil {
+		data, err = staticFS.ReadFile("static/index.html")
+		if err != nil {
+			http.Error(w, "static assets unavailable", http.StatusInternalServerError)
+			return
+		}
+		path = "index.html"
+	}
+	if ctype := mime.TypeByExtension(filepath.Ext(path)); ctype != "" {
+		w.Header().Set("Content-Type", ctype)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	if path == "index.html" {
+		data = injectRemoteFlag(data)
+	}
+	if r.Method == http.MethodHead {
+		return
+	}
+	_, _ = w.Write(data)
+}
+
+// injectRemoteFlag inserts window.__FLOW_REMOTE__ = true before </head> so the
+// PWA knows to authenticate with its stored device token, not __FLOW_TOKEN__.
+func injectRemoteFlag(html []byte) []byte {
+	tag := []byte("<script>window.__FLOW_REMOTE__=true;</script></head>")
+	return []byte(strings.Replace(string(html), "</head>", string(tag), 1))
+}
+
+// remoteAppMux is the device-token-gated app surface served over zrok when
+// remote access is enabled. Only /api/remote/pair is reachable without a device
+// token (rate-limited; how a device gets its first token). All data flows over
+// the device-gated /ws/rpc — no general /api/* is exposed on this mux.
+func (s *Server) remoteAppMux() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/remote/pair", s.handleRemotePair)
+	mux.Handle("/ws/terminal", s.remoteAuth(http.HandlerFunc(s.handleTerminalWebSocket)))
+	mux.Handle("/ws/floating-terminal", s.remoteAuth(http.HandlerFunc(s.handleFloatingTerminalWebSocket)))
+	mux.Handle("/ws/rpc", s.remoteAuth(http.HandlerFunc(s.handleRPCWebSocket)))
+	mux.Handle("/ws/events", s.remoteAuth(http.HandlerFunc(s.handleEventWebSocket)))
+	mux.HandleFunc("/", s.handleRemoteStatic)
+	return mux
+}
+
+// publicIngressHandler is what the zrok share serves. The GitHub webhook + OAuth
+// mux is always served unchanged; the remote app is served only when remote
+// access is enabled, otherwise app paths 404.
+func (s *Server) publicIngressHandler() http.Handler {
+	ingress := s.ingressMux()
+	app := s.remoteAppMux()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/github/webhook", githubSetupCallbackPath, slackOAuthCallbackPath:
+			ingress.ServeHTTP(w, r)
+			return
+		}
+		if !remoteAccessEnabled() {
+			http.NotFound(w, r)
+			return
+		}
+		app.ServeHTTP(w, r)
+	})
+}
