@@ -32,6 +32,9 @@ type Server struct {
 	// pairing holds short-lived, single-use remote-access pairing codes.
 	// Always non-nil after New().
 	pairing *pairingStore
+	// remoteLimiter throttles pairing redemption + failed device-token auth.
+	// Always non-nil after New().
+	remoteLimiter *rateLimiter
 	terminals      *terminalHub
 	events         *eventHub
 	reconcile      *livenessReconciler

@@ -137,3 +137,37 @@ func (s *Server) remoteAuth(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// rateLimiter is a fixed-window per-key limiter used on the pairing-redemption
+// endpoint and on failed device-token validations to resist brute force over
+// the public URL. now is injected for testability.
+type rateLimiter struct {
+	mu       sync.Mutex
+	max      int
+	window   time.Duration
+	counters map[string]*rlWindow
+}
+
+type rlWindow struct {
+	start time.Time
+	count int
+}
+
+func newRateLimiter(max int, window time.Duration) *rateLimiter {
+	return &rateLimiter{max: max, window: window, counters: make(map[string]*rlWindow)}
+}
+
+func (rl *rateLimiter) allowAt(key string, now time.Time) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	w := rl.counters[key]
+	if w == nil || now.Sub(w.start) >= rl.window {
+		rl.counters[key] = &rlWindow{start: now, count: 1}
+		return true
+	}
+	if w.count >= rl.max {
+		return false
+	}
+	w.count++
+	return true
+}

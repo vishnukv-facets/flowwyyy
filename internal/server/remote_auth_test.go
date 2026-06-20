@@ -140,3 +140,22 @@ func TestRemoteAuthInjectsSessionToken(t *testing.T) {
 		t.Fatalf("bad token: got %d want 403", rec.Code)
 	}
 }
+
+func TestRateLimiter(t *testing.T) {
+	rl := newRateLimiter(3, time.Minute)
+	now := time.Unix(1_700_000_000, 0)
+	for i := 0; i < 3; i++ {
+		if !rl.allowAt("1.2.3.4", now) {
+			t.Fatalf("attempt %d should be allowed", i)
+		}
+	}
+	if rl.allowAt("1.2.3.4", now) {
+		t.Fatal("4th attempt in window must be blocked")
+	}
+	if !rl.allowAt("1.2.3.4", now.Add(time.Minute+time.Second)) {
+		t.Fatal("attempt after window must be allowed")
+	}
+	if !rl.allowAt("5.6.7.8", now) {
+		t.Fatal("different key must have its own budget")
+	}
+}
