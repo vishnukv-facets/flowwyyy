@@ -126,6 +126,7 @@ export interface TaskView {
   brief_path: string
   updates: FileRef[]
   aux_files: FileRef[]
+  artifacts: FileRef[]
   transcript_available: boolean
 }
 

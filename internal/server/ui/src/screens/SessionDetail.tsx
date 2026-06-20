@@ -119,10 +119,10 @@ export function SessionDetail({ slug }: { slug: string }) {
     (task.parent_slug || (task.parents?.length ?? 0) > 0 || (task.children?.length ?? 0) > 0)
   )
   const hasAutoRuns = !!(agent?.auto_run_status)
-  // Artifacts = standalone *.md files an agent wrote into the task dir (reports,
-  // notes), surfaced from task.aux_files. Hide the tab when there are none so a
-  // task with just a brief stays clean.
-  const hasArtifacts = (task?.aux_files?.length ?? 0) > 0
+  // Artifacts are deliberate task deliverables under tasks/<slug>/artifacts/.
+  // Top-level sidecars such as source-brief.md remain aux/other context and do
+  // not drive this tab.
+  const hasArtifacts = (task?.artifacts?.length ?? 0) > 0
   // If the tree/auto/artifacts tab was active and we land on a task without that
   // surface, fall back to the brief so the body doesn't render against a vanished
   // tab. Gate on `task` being loaded: while the next task is still fetching,
@@ -690,7 +690,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                   {t === 'diff' && agent?.diff?.files
                     ? `diff (${agent.diff.files})`
                     : t === 'artifacts'
-                      ? `artifacts (${task.aux_files?.length ?? 0})`
+                      ? `artifacts (${task.artifacts?.length ?? 0})`
                       : t}
                 </button>
               ))}
@@ -712,7 +712,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 <UpdatesTab slug={slug} updates={task.updates} onExpand={() => setUpdatesModal(true)} initialFile={updateParam} />
               )}
               {visibleTab === 'artifacts' && hasArtifacts && (
-                <ArtifactsTab slug={slug} files={task.aux_files ?? []} onExpand={() => setArtifactsModal(true)} />
+                <ArtifactsTab slug={slug} files={task.artifacts ?? []} onExpand={() => setArtifactsModal(true)} />
               )}
               {visibleTab === 'tree' && hasFamily && <TreeTab slug={slug} onExpand={() => setTreeModal(true)} />}
               {visibleTab === 'auto' && hasAutoRuns && <AutoRunsTab slug={slug} active={visibleTab === 'auto'} agent={agent} />}
@@ -738,7 +738,7 @@ export function SessionDetail({ slug }: { slug: string }) {
       </Modal>
 
       <Modal open={artifactsModal} onClose={() => setArtifactsModal(false)} title="Artifacts" width={900}>
-        <ArtifactsTab slug={slug} files={task.aux_files ?? []} startOpen />
+        <ArtifactsTab slug={slug} files={task.artifacts ?? []} startOpen />
       </Modal>
 
       <Modal open={treeModal} onClose={() => setTreeModal(false)} title="Orchestration tree" width={760}>
@@ -1213,7 +1213,7 @@ function TranscriptTab({
             {entries.length} entries{entries.length > shown.length ? ` · showing last ${shown.length}` : ''}
           </span>
           <div className="spacer" />
-          <button className="btn ghost sm" onClick={onExpand}>
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
         </div>
@@ -1300,7 +1300,7 @@ function UpdatesTab({
         <div className="row" style={{ marginBottom: 2 }}>
           <span className="faint mono" style={{ fontSize: 11 }}>{updates.length} update{updates.length === 1 ? '' : 's'}</span>
           <div className="spacer" />
-          <button className="btn ghost sm" onClick={onExpand}>
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
         </div>
@@ -1335,11 +1335,9 @@ function UpdateBody({ slug, filename }: { slug: string; filename: string }) {
   return <TaskMarkdown source={data || ''} />
 }
 
-// ArtifactsTab renders the standalone *.md files an agent wrote into the task
-// directory (reports, design notes, decision trees) — task.aux_files, the same
-// set `flow show task` lists under `other:`, excluding brief.md. It mirrors
-// UpdatesTab: a collapsible list whose bodies lazy-load from the per-file aux
-// content route and render as markdown.
+// ArtifactsTab renders files an agent writes into the task's artifacts/
+// directory. Markdown artifacts render inline; other files are listed with
+// their on-disk path.
 function ArtifactsTab({
   slug,
   files,
@@ -1353,7 +1351,7 @@ function ArtifactsTab({
 }) {
   const [openFile, setOpenFile] = useState<string | null>(startOpen ? null : files[0]?.filename ?? null)
   if (!files || files.length === 0) {
-    return <div className="faint">No artifact files for this task. Markdown files an agent writes into the task directory show up here.</div>
+    return <div className="faint">No artifact files for this task. Files written under the task artifacts directory show up here.</div>
   }
   return (
     <div className="col" style={{ gap: 8 }}>
@@ -1361,13 +1359,13 @@ function ArtifactsTab({
         <div className="row" style={{ marginBottom: 2 }}>
           <span className="faint mono" style={{ fontSize: 11 }}>{files.length} file{files.length === 1 ? '' : 's'}</span>
           <div className="spacer" />
-          <button className="btn ghost sm" onClick={onExpand}>
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
         </div>
       )}
       {files.map((f) => (
-        <div key={f.filename} className="card" style={{ overflow: 'hidden' }}>
+        <div key={f.path || f.filename} className="card" style={{ overflow: 'hidden' }}>
           <button
             type="button"
             className="row gap"
@@ -1380,7 +1378,7 @@ function ArtifactsTab({
           </button>
           {(startOpen || openFile === f.filename) && (
             <div style={{ padding: '4px 12px 12px', borderTop: '1px solid var(--border-faint)' }}>
-              <ArtifactBody slug={slug} filename={f.filename} />
+              <ArtifactBody slug={slug} file={f} />
             </div>
           )}
         </div>
@@ -1389,10 +1387,19 @@ function ArtifactsTab({
   )
 }
 
-function ArtifactBody({ slug, filename }: { slug: string; filename: string }) {
+function ArtifactBody({ slug, file }: { slug: string; file: FileRef }) {
+  const markdown = file.filename.toLowerCase().endsWith('.md')
   const { data, isLoading } = useMarkdown(
-    `/api/tasks/${encodeURIComponent(slug)}/aux/${encodeURIComponent(filename)}`,
+    markdown ? `/api/tasks/${encodeURIComponent(slug)}/artifacts/${encodeURIComponent(file.filename)}` : undefined,
   )
+  if (!markdown) {
+    return (
+      <div className="col faint" style={{ gap: 6, fontSize: 12 }}>
+        <div>Preview is available for Markdown artifacts only.</div>
+        <div className="mono clip" title={file.path}>{file.path}</div>
+      </div>
+    )
+  }
   if (isLoading) return <Loading label="artifact" />
   return <TaskMarkdown source={data || ''} />
 }
@@ -1440,7 +1447,7 @@ function TreeTab({ slug, onExpand }: { slug: string; onExpand?: () => void }) {
             {total} task{total === 1 ? '' : 's'} in family
           </span>
           <div className="spacer" />
-          <button className="btn ghost sm" onClick={onExpand}>
+          <button type="button" className="btn ghost sm" onClick={onExpand}>
             <Maximize2 size={13} /> Full view
           </button>
         </div>

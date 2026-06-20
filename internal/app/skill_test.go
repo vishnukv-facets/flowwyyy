@@ -520,6 +520,21 @@ func TestSkillHasPlaybookSections(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsTaskArtifactsDirectory(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"Task artifacts directory",
+		"$FLOW_ROOT/tasks/<task-slug>/artifacts/",
+		"Mission Control's task **Artifacts** tab is driven by",
+		"Do not write new deliverables as top-level files next",
+		"top-level `.md` files are `other:` context, not UI artifacts",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing task artifacts guidance %q", want)
+		}
+	}
+}
+
 func TestSkillSection414(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, want := range []string{
@@ -759,7 +774,7 @@ func TestSkillHasFirstRunCapturePattern(t *testing.T) {
 		"First-run capture",
 		"FIRST RUN OF THIS PLAYBOOK",
 		"crystallizes",
-		"Save as sidecar file",
+		"Save as playbook reference",
 		"Capture anything from this run back to the playbook",
 		"Capture-back is a primary deliverable of the first run",
 	} {

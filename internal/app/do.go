@@ -953,7 +953,7 @@ func resolveLaunchModel(provider string, task *flowdb.Task, needsBootstrap bool)
 // run awareness for playbook runs. When isFirstRun=true on a playbook
 // run, a richer "capture-aggressive" prompt is emitted that nudges the
 // session to harvest scripts, edge cases, and decision rules back into
-// the live playbook brief / sidecar files.
+// the live playbook brief / playbook reference files.
 func buildBootstrapPromptForKindV2(slug, kind, playbookSlug string, isFirstRun bool) string {
 	if kind == "playbook_run" {
 		return buildPlaybookRunBootstrapPrompt(slug, playbookSlug, isFirstRun)
@@ -969,8 +969,9 @@ func buildTaskBootstrapPrompt(slug string) string {
 			"2. Run: flow show task. Read the file at the brief: path AND every file listed under updates:. Files listed under other: are sidecar references — load on demand when relevant, not eagerly.\n"+
 			"3. If a project is listed on the task, run: flow show project <that-project-slug>. Read its brief AND every file under updates:. Files under other: are on-demand references.\n"+
 			"4. Read AGENTS.md and/or CLAUDE.md in your work_dir and any nested convention files under subdirectories you will modify. These override any assumption from the brief.\n"+
-			"5. Only then begin work. If any brief section is blank or unclear, ASK — do not infer.",
-		slug,
+			"5. When creating reports, generated data, screenshots, or other deliverables for this task, write them under $FLOW_ROOT/tasks/%s/artifacts/ (default ~/.flow/tasks/%s/artifacts/). Mission Control's Artifacts tab reads that directory.\n"+
+			"6. Only then begin work. If any brief section is blank or unclear, ASK — do not infer.",
+		slug, slug, slug,
 	)
 }
 
@@ -987,10 +988,11 @@ func buildPlaybookRunBootstrapPrompt(runSlug, playbookSlug string, isFirstRun bo
 			"3. Run: flow show task. Read the file at the brief: path AND every file listed under updates:. Files under other: are references for THIS run; load on demand when relevant. The brief is your authoritative instructions for this run — it was snapshotted from the playbook at the moment this run started. Execute against this, not the live playbook brief.\n"+
 			"4. If a project is listed on the task, run: flow show project <that-project-slug>. Read its brief and every file under updates:. Files under other: are on-demand references.\n"+
 			"5. Read AGENTS.md and/or CLAUDE.md in your work_dir.\n"+
-			"6. Only then begin executing your brief.\n"+
+			"6. When creating reports, generated data, screenshots, or other deliverables for this run, write them under $FLOW_ROOT/tasks/%s/artifacts/ (default ~/.flow/tasks/%s/artifacts/). Mission Control's Artifacts tab reads that directory.\n"+
+			"7. Only then begin executing your brief.\n"+
 			"\n"+
 			"While executing: if the user adjusts the playbook's procedure during this run (e.g. 'let's always do X', 'change the approach for...', 'this step should also...'), pause and ask via AskUserQuestion whether to persist the change to the playbook's live brief.md so future runs benefit. Options: 'Persist to playbook' (Edit playbooks/%s/brief.md), 'Just this run' (no change to live playbook), 'Both — persist + log a note in playbooks/%s/updates/'. The run's own brief.md is a frozen snapshot — never edit it to change future behavior; that's what the live playbook brief is for. See flow skill §4.13 for the full pattern.",
-		playbookSlug, runSlug, playbookSlug, playbookSlug, playbookSlug,
+		playbookSlug, runSlug, playbookSlug, runSlug, runSlug, playbookSlug, playbookSlug,
 	)
 
 	if !isFirstRun {
@@ -1006,7 +1008,7 @@ func buildPlaybookRunBootstrapPrompt(runSlug, playbookSlug string, isFirstRun bo
 			"\n"+
 			"- When you write a script, command, or settle on a concrete decision rule that wasn't in the brief: don't wait for the user to ask. Pause and AskUserQuestion whether to capture it. Three capture targets:\n"+
 			"    • 'Add to playbook brief' — append/edit the relevant section of playbooks/%s/brief.md so future runs see it inline\n"+
-			"    • 'Save as sidecar file' — write to playbooks/%s/<topic>.md (e.g. decision-tree.md, sample-script.md, edge-cases.md). These get surfaced under `other:` in flow show playbook for future runs to load on demand\n"+
+			"    • 'Save as playbook reference' — write to playbooks/%s/<topic>.md (e.g. decision-tree.md, sample-script.md, edge-cases.md). These get surfaced under `other:` in flow show playbook for future runs to load on demand\n"+
 			"    • 'Just this run' — apply locally, don't change the playbook (rare; usually means it's run-specific)\n"+
 			"- When you discover an edge case or signal worth watching: AskUserQuestion whether to add it to the 'Signals to watch for' section of the live brief.\n"+
 			"- Before flow done at the end of the run, AskUserQuestion: 'Capture anything from this run back to the playbook before closing?' Options: 'Yes — walk me through what to capture' / 'No, close out as-is'. The 'walk me through' path: list candidate captures (scripts produced, decisions made, edge cases hit, commands you ended up using) and offer per-item via AskUserQuestion.\n"+

@@ -1360,8 +1360,24 @@ sequence at the moment the fact is heard.
 **Auxiliary files in entity directories** (any `.md` files in
 `tasks/<slug>/`, `projects/<slug>/`, or `playbooks/<slug>/` other than
 `brief.md` and the contents of `updates/`) are surfaced by `flow show`
-under an `other:` section. Apply the same lazy-load discipline as KB
+under an `other:` section. These are sidecar references and copied context
+files, not task deliverables. Apply the same lazy-load discipline as KB
 files: load them on demand when relevant to the work, not preemptively.
+
+**Task artifacts directory.** When you create a deliverable for the current
+task — research report, design note, generated data, screenshot, PDF, script
+output, or any other file the user should inspect later — write it under:
+
+```
+$FLOW_ROOT/tasks/<task-slug>/artifacts/
+```
+
+If `$FLOW_ROOT` is unset, use the default `~/.flow`. Create the `artifacts/`
+directory if needed. Mission Control's task **Artifacts** tab is driven by
+files in this directory. Do not write new deliverables as top-level files next
+to `brief.md`; top-level `.md` files are `other:` context, not UI artifacts.
+Use top-level sidecars only for on-demand references that future sessions may
+load as context rather than user-facing outputs.
 
 **Past tasks and projects can be referenced too.** `flow list tasks` and
 `flow list projects` default to non-archived, non-deleted active rows;
@@ -1661,7 +1677,7 @@ that as your signal.
        header: "Capture?",
        options: [
          { label: "Add to playbook brief",  description: "Append/edit the relevant section of playbooks/<slug>/brief.md — future runs see it inline" },
-         { label: "Save as sidecar file",   description: "Write to playbooks/<slug>/<topic>.md (e.g., decision-tree.md, sample-script.md). Surfaced under other: for on-demand load" },
+         { label: "Save as playbook reference",   description: "Write to playbooks/<slug>/<topic>.md (e.g., decision-tree.md, sample-script.md). Surfaced under other: for on-demand load" },
          { label: "Just this run",          description: "Apply locally; don't change the playbook (rare for first run)" }
        ],
        multiSelect: false
@@ -1684,15 +1700,17 @@ that as your signal.
    one via AskUserQuestion individually so the user can opt in
    per-item.
 
-**Sidecar files vs brief edits:**
+**Playbook references vs brief edits:**
 
 - **Brief edits** are for *procedural* changes — additions to "Each run
   does", new "Signals to watch for", clarified scope. Inline content
   that every future run benefits from seeing during bootstrap.
-- **Sidecar files** (`playbooks/<slug>/<topic>.md`) are for *artifacts*
-  — scripts, decision trees, sample outputs, reference tables. Things
-  that future runs may or may not need; they're surfaced under `other:`
-  in `flow show playbook` and loaded on-demand by the run session.
+- **Playbook reference files** (`playbooks/<slug>/<topic>.md`) are for
+  reusable context — scripts, decision trees, sample outputs, reference
+  tables. Things that future runs may or may not need; they're surfaced
+  under `other:` in `flow show playbook` and loaded on-demand by the run
+  session. Concrete deliverables produced by a run still belong under the
+  run task's `artifacts/` directory, not beside the playbook brief.
 
 **Capture-back is a primary deliverable of the first run.** Not an
 afterthought. After the first run, the playbook should be

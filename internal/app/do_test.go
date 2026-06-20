@@ -940,6 +940,9 @@ func TestBuildBootstrapPromptMentionsOther(t *testing.T) {
 	if !strings.Contains(got, "load on demand") {
 		t.Errorf("expected prompt to clarify lazy loading, got:\n%s", got)
 	}
+	if !strings.Contains(got, "$FLOW_ROOT/tasks/foo/artifacts/") {
+		t.Errorf("expected prompt to mention task artifacts directory, got:\n%s", got)
+	}
 }
 
 func TestBuildBootstrapPromptForPlaybookRun(t *testing.T) {
@@ -955,6 +958,9 @@ func TestBuildBootstrapPromptForPlaybookRun(t *testing.T) {
 	}
 	if !strings.Contains(got, "other:") {
 		t.Errorf("expected mention of other:, got:\n%s", got)
+	}
+	if !strings.Contains(got, "$FLOW_ROOT/tasks/p--2026-04-30-10-30/artifacts/") {
+		t.Errorf("expected playbook run prompt to mention run artifacts directory, got:\n%s", got)
 	}
 }
 
@@ -983,7 +989,7 @@ func TestBuildPlaybookRunBootstrapPromptFirstRun(t *testing.T) {
 		"FIRST RUN OF THIS PLAYBOOK",
 		"crystallizes",
 		"Add to playbook brief",
-		"Save as sidecar file",
+		"Save as playbook reference",
 		"Capture anything from this run back to the playbook before closing",
 	} {
 		if !strings.Contains(got, want) {

@@ -28,10 +28,10 @@ func enumerateAuxFiles(dir string) ([]string, error) {
 			continue
 		}
 		name := e.Name()
-		// brief.md and inbox.md are flow-managed files, not user artifacts:
+		// brief.md and inbox.md are flow-managed files, not user references:
 		// brief.md has its own surface; inbox.md is flow's coordination mirror
 		// (the structured inbox is surfaced via the Inbox screen). Neither belongs
-		// in the other:/artifacts set.
+		// in the other: set.
 		if name == "brief.md" || name == "inbox.md" {
 			continue
 		}
