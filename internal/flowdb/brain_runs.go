@@ -285,6 +285,37 @@ func ListBrainRunsForFamily(db *sql.DB, familySlug string, limit int) ([]*BrainR
 	return runs, nil
 }
 
+// ListBrainRunsSince returns ledger rows whose start time (started_at, falling
+// back to created_at) is at or after `since` (an RFC3339 string), most-recent
+// first. Unlike ListBrainRunsForFamily it does NOT synthesize legacy
+// task-backed rows — it reads the live brain_runs ledger directly, which is
+// what the analytics time-series needs (a row per real run, including those
+// still in flight). An empty `since` returns every row.
+func ListBrainRunsSince(db *sql.DB, since string) ([]*BrainRun, error) {
+	since = strings.TrimSpace(since)
+	q := `SELECT ` + BrainRunCols + ` FROM brain_runs`
+	var args []any
+	if since != "" {
+		q += ` WHERE COALESCE(NULLIF(started_at, ''), created_at) >= ?`
+		args = append(args, since)
+	}
+	q += ` ORDER BY COALESCE(NULLIF(started_at, ''), created_at) DESC, created_at DESC, run_id DESC`
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list brain runs since: %w", err)
+	}
+	defer rows.Close()
+	var runs []*BrainRun
+	for rows.Next() {
+		run, err := ScanBrainRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
+	}
+	return runs, rows.Err()
+}
+
 func brainRunSortTime(run *BrainRun) time.Time {
 	if run == nil {
 		return time.Time{}

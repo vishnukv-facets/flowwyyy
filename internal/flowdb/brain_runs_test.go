@@ -158,3 +158,63 @@ func TestGetBrainRunLegacyMissingRowsReturnNoRows(t *testing.T) {
 		t.Fatalf("GetBrainRun legacy missing row error = %v, want sql.ErrNoRows", err)
 	}
 }
+
+func TestListBrainRunsSince(t *testing.T) {
+	db := openTempDB(t)
+	insertTask(t, db, "since-task", "Since Task", "backlog", "medium", t.TempDir(), nil)
+
+	// Three runs across two days plus one older than the cutoff.
+	mk := func(id, started, finished, status string) *BrainRun {
+		r := &BrainRun{
+			RunID: id, FamilySlug: "since-task", TaskSlug: "since-task",
+			Role: "worker", Provider: "claude", PermissionMode: "auto", Status: status,
+			CreatedAt: started, UpdatedAt: started,
+			StartedAt: sql.NullString{String: started, Valid: true},
+		}
+		if finished != "" {
+			r.FinishedAt = sql.NullString{String: finished, Valid: true}
+		}
+		return r
+	}
+	for _, r := range []*BrainRun{
+		mk("old", "2026-05-01T09:00:00Z", "2026-05-01T09:10:00Z", "completed"),
+		mk("a", "2026-05-12T10:00:00Z", "2026-05-12T10:05:00Z", "completed"),
+		mk("b", "2026-05-13T11:00:00Z", "", "running"), // in-flight
+		mk("c", "2026-05-13T12:00:00Z", "2026-05-13T12:30:00Z", "dead"),
+	} {
+		if err := UpsertBrainRun(db, r); err != nil {
+			t.Fatalf("seed %s: %v", r.RunID, err)
+		}
+	}
+
+	runs, err := ListBrainRunsSince(db, "2026-05-10T00:00:00Z")
+	if err != nil {
+		t.Fatalf("ListBrainRunsSince: %v", err)
+	}
+	if len(runs) != 3 {
+		t.Fatalf("run count = %d, want 3 (old is before the cutoff)", len(runs))
+	}
+	// Most-recent first by start time.
+	if runs[0].RunID != "c" || runs[2].RunID != "a" {
+		t.Errorf("order = %s..%s, want c..a", runs[0].RunID, runs[2].RunID)
+	}
+	// In-flight run preserved (no finished_at), not synthesized away.
+	var inflight int
+	for _, r := range runs {
+		if !r.FinishedAt.Valid {
+			inflight++
+		}
+	}
+	if inflight != 1 {
+		t.Errorf("in-flight runs = %d, want 1", inflight)
+	}
+
+	// Empty cutoff returns every row.
+	all, err := ListBrainRunsSince(db, "")
+	if err != nil {
+		t.Fatalf("ListBrainRunsSince(all): %v", err)
+	}
+	if len(all) != 4 {
+		t.Errorf("all runs = %d, want 4", len(all))
+	}
+}

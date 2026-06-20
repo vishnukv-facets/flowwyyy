@@ -774,12 +774,22 @@
 }
 .connector-tiles {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  /* min(100%, 232px) lets a column collapse to the container width on narrow
+     viewports instead of the 232px floor forcing the grid past the edge. */
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 232px), 1fr));
+  /* Equalize row heights so a tile alone in a sparser row (e.g. Rocket.Chat)
+     matches the taller row above instead of sitting short. */
+  grid-auto-rows: 1fr;
   gap: 12px;
   max-width: 760px;
 }
 .connector-tile {
-  display: grid;
+  /* flex column (not grid) so a tile stretched to the row height keeps its
+     content top-packed with even 9px gaps, instead of grid stretch inflating
+     the space between head and description. */
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 9px;
   text-align: left;
   padding: 14px 15px;
@@ -788,6 +798,7 @@
   border-radius: var(--r);
   color: var(--text);
   cursor: pointer;
+  min-width: 0; /* shrink with its grid track; wrap content instead of overflowing */
   transition: border-color var(--dur-1, 0.15s) var(--ease, ease),
     transform var(--dur-1, 0.15s) var(--ease, ease),
     box-shadow var(--dur-1, 0.15s) var(--ease, ease);
@@ -796,6 +807,41 @@
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   transform: translateY(-1px);
   box-shadow: var(--shadow-1, 0 2px 10px rgba(0, 0, 0, 0.12));
+}
+/* coming-soon placeholder: same footprint, muted, no hover affordance */
+.connector-tile.soon {
+  cursor: default;
+  opacity: 0.55;
+  border-style: dashed;
+}
+.connector-tile.soon:hover {
+  border-color: var(--border);
+  transform: none;
+  box-shadow: none;
+}
+.soon-pill {
+  flex: none; /* keep the pill at its natural size and inside the tile */
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+  padding: 2px 9px;
+  white-space: nowrap;
+}
+/* Monochrome brand SVG (simple-icons) recoloured to the current text colour via
+   mask, so it's visible on the dark UI and inherits the tile's muted tone. */
+.brand-icon {
+  display: inline-block;
+  flex: none;
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  mask-size: contain;
 }
 .connector-tile:focus-visible {
   outline: 2px solid var(--accent);
@@ -812,6 +858,11 @@
 .connector-tile-label {
   font-size: 13.5px;
   font-weight: 650;
+  min-width: 0; /* allow a long label (e.g. "Microsoft Teams") to wrap instead of pushing the pill out */
+}
+/* A wrapping label shouldn't vertically re-centre the pill — pin both to the top. */
+.connector-tile.soon .connector-tile-head {
+  align-items: flex-start;
 }
 .connector-tile-powers {
   font-size: 11.5px;
@@ -838,6 +889,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: auto; /* pin the CTA to the bottom when the tile is stretched taller */
 }
 .connector-tile-foot .spacer {
   flex: 1;
@@ -7917,4 +7969,816 @@ a.owner-task-item:hover {
   font-size: 11px;
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
+}
+
+/* ============================================================================
+   Analytics page (/analytics) — KPI row, hand-built SVG chart grid, range
+   pills, custom-range popover, steering funnel bar. Reuses .card / .eyebrow /
+   .num / .mixbar from elsewhere; everything below is analytics-specific.
+   ========================================================================== */
+.analytics-controls {
+  margin: 4px 0 18px;
+}
+
+/* range pills ------------------------------------------------------------- */
+.range-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-pill);
+}
+.range-pills .pill {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 13px;
+  border-radius: var(--r-pill);
+  cursor: pointer;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.range-pills .pill:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+.range-pills .pill.active {
+  color: var(--text-inv);
+  background: var(--accent);
+}
+
+.custom-range {
+  position: relative;
+  display: inline-flex;
+}
+.range-pop {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  width: 220px;
+  box-shadow: var(--shadow-pop);
+}
+.range-pop input[type='date'] {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--text);
+  font: inherit;
+  color-scheme: dark light;
+}
+
+/* live stamp -------------------------------------------------------------- */
+.live-stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+}
+.live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.live-dot.pulsing {
+  background: var(--ok);
+  animation: live-pulse 1.4s var(--ease) infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--ok-soft); }
+  50% { opacity: 0.6; box-shadow: 0 0 0 5px transparent; }
+}
+
+/* KPI row ----------------------------------------------------------------- */
+.kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(162px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.kpi {
+  padding: 14px 16px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  min-width: 0; /* let the grid track shrink rather than a long value overflowing */
+}
+.kpi-label {
+  margin-bottom: 8px;
+}
+.kpi-value {
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  /* Show the full value; wrap inside the card if it's ever too long rather than
+     truncating with an ellipsis. */
+  overflow-wrap: anywhere;
+}
+.kpi-delta {
+  margin-top: 7px;
+  font-size: 12px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-delta .delta-arrow {
+  font-size: 10px;
+}
+.kpi-delta.good {
+  color: var(--ok);
+}
+.kpi-delta.bad {
+  color: var(--danger);
+}
+
+/* chart grid -------------------------------------------------------------- */
+.chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.chart-card {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.chart-card.span-2 {
+  grid-column: span 2;
+}
+.chart-card .card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+@media (max-width: 900px) {
+  .chart-grid {
+    grid-template-columns: 1fr;
+  }
+  .chart-card.span-2 {
+    grid-column: auto;
+  }
+}
+
+/* svg chart internals ----------------------------------------------------- */
+.chart {
+  width: 100%;
+  min-width: 0;
+}
+.chart svg {
+  display: block;
+  overflow: visible;
+}
+.chart .grid-line {
+  stroke: var(--border-faint);
+  stroke-width: 1;
+}
+.chart .ax-label {
+  fill: var(--text-3);
+  font-size: 10px;
+  font-family: var(--font-mono);
+}
+.chart .hover-guide {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+.chart .line-path {
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.chart .hover-dot {
+  stroke: var(--bg-1);
+  stroke-width: 2;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.chart-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+
+/* crosshair tooltip (portaled via FloatTip) ------------------------------- */
+.chart-tip {
+  min-width: 120px;
+}
+.chart-tip-head {
+  font-size: 11px;
+  color: var(--text-3);
+  margin-bottom: 5px;
+  font-family: var(--font-mono);
+}
+.chart-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  padding: 1px 0;
+}
+.chart-tip-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+}
+.chart-tip-key {
+  color: var(--text-2);
+}
+.chart-tip-val {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+/* pie / donut composition ------------------------------------------------- */
+.pie {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding-top: 6px;
+  flex-wrap: wrap;
+}
+.pie-figure {
+  position: relative;
+  flex: none;
+  width: 132px;
+  height: 132px;
+}
+.pie-slice {
+  transition: opacity var(--dur-1) var(--ease);
+  cursor: default;
+}
+.pie-figure:hover .pie-slice {
+  opacity: 0.55;
+}
+.pie-figure .pie-slice:hover {
+  opacity: 1;
+}
+.pie-center {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  gap: 1px;
+}
+.pie-center .num {
+  font-size: 21px;
+  font-weight: 650;
+  line-height: 1;
+}
+.pie-center span {
+  font-size: 10px;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pie-legend {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.pie-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.pie-legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+}
+.pie-legend-label {
+  flex: 1 1 0;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pie-legend-item b {
+  color: var(--text);
+}
+.pie-legend-pct {
+  flex: none;
+  min-width: 34px;
+  text-align: right;
+}
+
+/* Analytics — expanded: sections, activity heatmap, bar list, connector funnels */
+.analytics-section {
+  margin-bottom: 22px;
+}
+.section-title {
+  margin: 2px 0 11px;
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+/* activity calendar reuses the Overview .cal* styles (GitHub-style grid). */
+
+/* ranked bar list -------------------------------------------------------- */
+.barlist {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding-top: 6px;
+}
+.barlist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.barlist-label {
+  flex: 0 0 108px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.barlist-track {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 10px;
+  background: var(--bg-3);
+  border-radius: var(--r-pill);
+  overflow: hidden;
+}
+.barlist-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+  transition: width var(--dur-2) var(--ease);
+}
+.barlist-val {
+  flex: 0 0 auto;
+  min-width: 52px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+/* connector → task conversion: observed → surfaced → tasks stat flow ------ */
+.conversions {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding-top: 6px;
+}
+.conv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.conv-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.conv-source {
+  text-transform: capitalize;
+  color: var(--text);
+  font-weight: 600;
+}
+.conv-rate {
+  color: var(--ok);
+  font-size: 12px;
+}
+.conv-flow {
+  display: flex;
+  align-items: flex-start;
+}
+.conv-stat {
+  display: flex;
+  align-items: flex-start;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.conv-arrow {
+  color: var(--text-3);
+  font-size: 13px;
+  padding: 4px 10px 0;
+  flex: none;
+}
+.conv-stat-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+.conv-stat-cell .num {
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1;
+}
+.conv-stat-label {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.conv-track {
+  margin-top: 4px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.conv-track-fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--r-pill);
+}
+
+/* ============================================================================
+   Transcript chat view (.tx2-*) — the session/chat transcript renderer
+   (components/Transcript.tsx). A scrollable feed of assistant/user messages,
+   collapsible tool cards (diffs, terminal, results), and thinking disclosures.
+   ========================================================================== */
+.tx2 {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.tx2-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 2px;
+}
+.tx2-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+/* ---- messages ---------------------------------------------------------- */
+.tx2-msg {
+  display: flex;
+  gap: 11px;
+  min-width: 0;
+}
+.tx2-msg.assistant {
+  align-items: flex-start;
+}
+.tx2-msg.user {
+  justify-content: flex-end;
+}
+.tx2-avatar {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-top: 2px;
+}
+.tx2-msg-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tx2-msg-who {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+/* user turn: a distinct right-aligned bubble (chat-app convention) */
+.tx2-user-card {
+  max-width: 82%;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-lg);
+  border-top-right-radius: var(--r-xs);
+  padding: 9px 13px;
+}
+.tx2-user-card .tx2-msg-who {
+  color: var(--accent);
+}
+
+/* ---- thinking disclosure ----------------------------------------------- */
+.tx2-think {
+  border: 1px dashed var(--border);
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--bg-2) 60%, transparent);
+}
+.tx2-think-head,
+.tx2-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 11px;
+  background: none;
+  border: 0;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.tx2-think-label {
+  font-weight: 600;
+  color: var(--text-2);
+}
+.tx2-think-preview {
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+.tx2-think-body {
+  padding: 2px 12px 11px;
+  color: var(--text-2);
+}
+.tx2-tool-spacer {
+  flex: 1 1 auto;
+}
+.tx2-tool-chev {
+  flex: none;
+  color: var(--text-3);
+  transition: transform var(--dur-1) var(--ease);
+}
+.tx2-tool-chev.open {
+  transform: rotate(90deg);
+}
+
+/* ---- tool card --------------------------------------------------------- */
+.tx2-tool {
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  background: var(--bg-2);
+  overflow: hidden;
+}
+.tx2-tool.is-error {
+  border-color: var(--danger-soft);
+}
+.tx2-tool-head:hover {
+  background: var(--surface-hover);
+}
+.tx2-tool-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.tx2-tool-name {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text);
+  flex: none;
+}
+.tx2-tool-target {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tx2-tool-body {
+  border-top: 1px solid var(--border-faint);
+  padding: 10px 11px;
+}
+.tx2-linemeta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+.tx2-diffmeta {
+  display: inline-flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.tx2-diffmeta .add {
+  color: var(--ok);
+}
+.tx2-diffmeta .del {
+  color: var(--danger);
+}
+
+/* ---- diff -------------------------------------------------------------- */
+.tx2-diff {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  overflow-x: auto;
+}
+.tx2-diff-row {
+  display: flex;
+  white-space: pre;
+}
+.tx2-diff-row.add {
+  background: var(--ok-soft);
+}
+.tx2-diff-row.del {
+  background: var(--danger-soft);
+}
+.tx2-diff-gutter {
+  flex: none;
+  width: 22px;
+  text-align: center;
+  color: var(--text-3);
+  user-select: none;
+}
+.tx2-diff-row.add .tx2-diff-gutter {
+  color: var(--ok);
+}
+.tx2-diff-row.del .tx2-diff-gutter {
+  color: var(--danger);
+}
+.tx2-diff-text {
+  flex: 1 1 auto;
+  padding-right: 10px;
+}
+.tx2-diff-gap {
+  padding: 3px 10px;
+  color: var(--text-3);
+  font-size: 11px;
+  background: var(--bg-1);
+}
+
+/* ---- terminal (bash) --------------------------------------------------- */
+.tx2-term {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--bg);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+}
+.tx2-term-cmd {
+  padding: 7px 10px;
+  color: var(--accent-hi);
+  border-bottom: 1px solid var(--border-faint);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tx2-term-out {
+  margin: 0;
+  padding: 8px 10px;
+  color: var(--text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+.tx2-term-out.error {
+  color: var(--danger);
+}
+
+/* ---- todos ------------------------------------------------------------- */
+.tx2-todos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.tx2-todos li {
+  display: flex;
+  gap: 8px;
+  color: var(--text-2);
+}
+.tx2-todos li.st-completed {
+  color: var(--text-3);
+  text-decoration: line-through;
+}
+.tx2-todos li.st-in_progress {
+  color: var(--text);
+}
+.tx2-todo-box {
+  flex: none;
+  color: var(--text-3);
+}
+.tx2-todos li.st-completed .tx2-todo-box {
+  color: var(--ok);
+}
+.tx2-todos li.st-in_progress .tx2-todo-box {
+  color: var(--accent);
+}
+
+/* ---- result blocks ----------------------------------------------------- */
+.tx2-resultwrap {
+  min-width: 0;
+}
+.tx2-result {
+  margin: 0;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border-faint);
+  border-radius: var(--r-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+}
+.tx2-result.error {
+  color: var(--danger);
+  border-color: var(--danger-soft);
+}
+.tx2-more {
+  margin-top: 6px;
+  background: none;
+  border: 0;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+}
+.tx2-more:hover {
+  text-decoration: underline;
+}
+.tx2-empty {
+  color: var(--text-3);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ---- working + jump ---------------------------------------------------- */
+.tx2-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  padding: 2px 4px;
+}
+.tx2-spin {
+  animation: spin 0.8s linear infinite;
+}
+.tx2-jump {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  font-size: 12px;
+  background: var(--accent);
+  color: var(--text-inv);
+  border: 0;
+  border-radius: var(--r-pill);
+  box-shadow: var(--shadow-pop);
+  cursor: pointer;
 }

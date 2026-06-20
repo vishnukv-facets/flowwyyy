@@ -47,8 +47,23 @@ function StatusPill({ badge }: { badge: Badge }) {
   )
 }
 
+// Connector ids with a monochrome brand SVG in /public — rendered via CSS mask
+// so they recolor to the tile's (muted) text colour and stay visible on dark.
+const BRAND_LOGOS = new Set(['teams', 'mattermost', 'rocketchat', 'gitlab', 'bitbucket', 'jira', 'linear', 'asana', 'clickup'])
+
 function Glyph({ def, size = 16 }: { def: ConnectorDef; size?: number }) {
-  return <span className="connector-glyph">{def.source ? <SourceIcon source={def.source} size={size} /> : <Plug size={size} />}</span>
+  let inner
+  if (def.source) inner = <SourceIcon source={def.source} size={size} />
+  else if (BRAND_LOGOS.has(def.id))
+    inner = (
+      <span
+        className="brand-icon"
+        aria-hidden
+        style={{ width: size, height: size, maskImage: `url(/${def.id}.svg)`, WebkitMaskImage: `url(/${def.id}.svg)` }}
+      />
+    )
+  else inner = <Plug size={size} />
+  return <span className="connector-glyph">{inner}</span>
 }
 
 export function Connectors() {
@@ -87,7 +102,7 @@ export function Connectors() {
         </div>
         <div className="spacer" />
         <div className="mc-env-pills">
-          {CONNECTORS.map((def) => {
+          {CONNECTORS.filter((def) => !def.soon).map((def) => {
             const b = badgeFor(def)
             return (
               <span key={def.id} className={`env-pill${b.dot === 'running' ? '' : ' off'}`} title={`${def.label}: ${b.label}`}>
@@ -106,9 +121,13 @@ export function Connectors() {
         return (
           <SettingsSection key={cat.id} title={cat.label} hint={cat.blurb}>
             <div className="connector-tiles">
-              {defs.map((def) => (
-                <ConnectorTile key={def.id} def={def} badge={badgeFor(def)} detail={detailFor(def)} onOpen={() => setOpenId(def.id)} />
-              ))}
+              {defs.map((def) =>
+                def.soon ? (
+                  <ComingSoonTile key={def.id} def={def} />
+                ) : (
+                  <ConnectorTile key={def.id} def={def} badge={badgeFor(def)} detail={detailFor(def)} onOpen={() => setOpenId(def.id)} />
+                ),
+              )}
             </div>
             {cat.planned && <div className="connector-planned">{cat.planned}</div>}
           </SettingsSection>
@@ -150,6 +169,22 @@ function ConnectorTile({ def, badge, detail, onOpen }: { def: ConnectorDef; badg
         </span>
       </div>
     </button>
+  )
+}
+
+// Non-interactive placeholder for a connector that isn't wired up yet — same
+// footprint as a live tile, muted, with a "coming soon" tag instead of a CTA.
+function ComingSoonTile({ def }: { def: ConnectorDef }) {
+  return (
+    <div className="connector-tile soon" aria-disabled>
+      <div className="connector-tile-head">
+        <Glyph def={def} />
+        <span className="connector-tile-label">{def.label}</span>
+        <span className="spacer" />
+        <span className="soon-pill">Coming soon</span>
+      </div>
+      <div className="connector-tile-powers">{def.powers}</div>
+    </div>
   )
 }
 

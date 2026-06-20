@@ -6,6 +6,7 @@ import { ClaudeRunner } from './ClaudeMascot'
 import { useMascotPrefs } from '../lib/mascot'
 import {
   AlertTriangle,
+  BarChart3,
   Bell,
   BookText,
   Bot,
@@ -191,6 +192,7 @@ export function Shell({ children }: { children: ReactNode }) {
           badge: attentionCount || undefined,
           tone: 'var(--warn)',
         },
+        { to: '/analytics', label: 'Analytics', icon: <BarChart3 size={16} />, match: (p) => p === '/analytics' },
       ],
     },
     {
