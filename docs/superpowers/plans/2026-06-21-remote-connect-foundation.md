@@ -1112,16 +1112,88 @@ func (s *Server) dispatchRPC(req rpcRequest, remote bool) rpcResponse {
 }
 ```
 
-- [ ] **Step 5: Run test to verify it passes.**
+- [ ] **Step 4b: Remote WebSocket origin gate (carry-forward from Task 3).** The shared WS upgrader's `checkLocalWSOrigin` rejects any handshake whose `Origin` host ≠ `r.Host`. A remote phone's PWA is served from the zrok public URL, and through the zrok proxy the `Host` the backend sees may NOT equal the public origin — which would 403 a *valid* device token at the origin gate. Give the remote path a dedicated, origin-aware upgrader. (The device token validated by `remoteAuth` is the real auth; this is defense-in-depth against cross-origin handshakes.)
 
-Run: `go test -run 'TestRemoteForbiddenRPCPath|TestRemoteStaticDoesNotLeak' ./internal/server/ && go build ./...`
+In `internal/server/session_token.go` (next to `checkLocalWSOrigin`):
+
+```go
+// checkRemoteWSOrigin is the origin gate for the remote (device-token) WS
+// surface. The PWA is served from the zrok public URL, so a remote handshake's
+// Origin is that public host. Accept when the Origin host matches r.Host (zrok
+// preserved Host) OR the configured public base URL host (zrok rewrote Host).
+// Empty/unparseable Origin is rejected, same as the local gate.
+func (s *Server) checkRemoteWSOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if base := s.publicBaseURL(); base != "" {
+		if bu, err := url.Parse(base); err == nil && strings.EqualFold(u.Host, bu.Host) {
+			return true
+		}
+	}
+	return false
+}
+```
+
+Add a per-request upgrader selector in `internal/server/terminal_bridge.go` (near the `terminalUpgrader` var):
+
+```go
+// wsUpgrader returns the WebSocket upgrader for a request: the strict local
+// origin gate by default, or the remote-aware gate when remoteAuth marked the
+// request remote (X-Flow-Remote). Both share every other upgrader setting.
+func (s *Server) wsUpgrader(r *http.Request) websocket.Upgrader {
+	if r.Header.Get(remoteFlagHeader) == "1" {
+		return websocket.Upgrader{CheckOrigin: s.checkRemoteWSOrigin}
+	}
+	return terminalUpgrader
+}
+```
+
+Then in each of the four WS handlers — `handleTerminalWebSocket`, `handleFloatingTerminalWebSocket` (terminal_bridge.go), `handleRPCWebSocket` (rpc_bridge.go), `handleEventWebSocket` (events_hub.go) — replace the `terminalUpgrader.Upgrade(w, r, nil)` call with `s.wsUpgrader(r).Upgrade(w, r, nil)`. No other handler logic changes. Confirm `session_token.go` imports `net/url` (`checkLocalWSOrigin` already uses it).
+
+Add a test to `internal/server/remote_handlers_test.go`:
+
+```go
+func TestCheckRemoteWSOrigin(t *testing.T) {
+	s := newTestServer(t)
+	mk := func(origin, host string) *http.Request {
+		r := httptest.NewRequest("GET", "/ws/rpc", nil)
+		r.Host = host
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+	if !s.checkRemoteWSOrigin(mk("https://h.example", "h.example")) {
+		t.Fatal("same-host origin should be allowed")
+	}
+	if s.checkRemoteWSOrigin(mk("", "h.example")) {
+		t.Fatal("empty origin must be rejected")
+	}
+	if s.checkRemoteWSOrigin(mk("https://evil.example", "h.example")) {
+		t.Fatal("cross-origin handshake must be rejected")
+	}
+}
+```
+
+- [ ] **Step 5: Run tests to verify they pass.**
+
+Run: `go test -run 'TestRemoteForbiddenRPCPath|TestRemoteStaticDoesNotLeak|TestCheckRemoteWSOrigin' ./internal/server/ && go build ./...`
 Expected: PASS + clean build.
 
 - [ ] **Step 6: Commit.**
 
 ```bash
-git add internal/server/server.go internal/server/rpc_bridge.go internal/server/remote_handlers_test.go
-git commit -m "feat(server): composite public ingress, leak-free remote static, RPC denylist"
+git add internal/server/server.go internal/server/rpc_bridge.go internal/server/terminal_bridge.go internal/server/events_hub.go internal/server/session_token.go internal/server/remote_handlers_test.go
+git commit -m "feat(server): composite public ingress, leak-free remote static, RPC denylist, remote WS origin gate"
 ```
 
 ---
