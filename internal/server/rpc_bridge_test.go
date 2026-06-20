@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 )
@@ -86,6 +87,41 @@ func TestDispatchRPCRoutesThroughAPIHandler(t *testing.T) {
 		}
 		if !strings.HasPrefix(ct, "multipart/form-data") {
 			t.Fatalf("content type = %q, want multipart/form-data", ct)
+		}
+	})
+}
+
+// TestDispatchRPCWhitespaceDenylistBypass guards the remote device-management
+// boundary: leading whitespace must not let a paired phone reach an
+// /api/remote/* operator action. The denylist gate and the router must judge
+// the same normalized path (regression for the raw-req.Path gate).
+func TestDispatchRPCWhitespaceDenylistBypass(t *testing.T) {
+	s := newTestServer(t)
+
+	cases := []struct {
+		name string
+		req  rpcRequest
+	}{
+		{"leading space", rpcRequest{Path: " /api/remote/devices"}},
+		{"leading tab", rpcRequest{Path: "\t/api/remote/devices"}},
+		{"leading space POST revoke", rpcRequest{Path: " /api/remote/devices/revoke", Method: "POST"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resp := s.dispatchRPC(c.req, true)
+			if resp.Status != http.StatusForbidden {
+				t.Fatalf("remote %q: status = %d, want %d (resp %+v)",
+					c.req.Path, resp.Status, http.StatusForbidden, resp)
+			}
+		})
+	}
+
+	// Control: a non-denylisted path must still work for a remote device —
+	// the fix must not blanket-block remote calls.
+	t.Run("control non-denylisted path not forbidden", func(t *testing.T) {
+		resp := s.dispatchRPC(rpcRequest{Path: "/api/health"}, true)
+		if resp.Status == http.StatusForbidden {
+			t.Fatalf("/api/health was forbidden for remote: %+v", resp)
 		}
 	})
 }
