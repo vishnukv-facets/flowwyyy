@@ -233,7 +233,7 @@ func (m *zrokManager) start() {
 	if activeIngressProvider() != ingressProviderZrok || !zrokAutoStart() {
 		return
 	}
-	if githubWebhookSecret() == "" {
+	if githubWebhookSecret() == "" && !remoteAccessEnabled() {
 		m.setErr(errors.New("GitHub webhook secret required before public ingress can start"))
 		return
 	}

@@ -68,6 +68,47 @@ func TestRemoteStaticDoesNotLeakSessionToken(t *testing.T) {
 	}
 }
 
+// TestHandleRemoteDisableSetsFalse verifies that POST /api/remote/disable
+// returns 200 and leaves remoteAccessEnabled() returning false.
+func TestHandleRemoteDisableSetsFalse(t *testing.T) {
+	// Seed env so we start with remote access on, then disable it.
+	t.Setenv("FLOW_REMOTE_ACCESS", "1")
+	s := newTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/remote/disable", nil)
+	rec := httptest.NewRecorder()
+	s.handleRemoteDisable(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if remoteAccessEnabled() {
+		t.Fatal("remoteAccessEnabled() must be false after disable")
+	}
+	// Config file must also reflect the change.
+	cfg := loadConfigFile(s.configPath())
+	if v := cfg["FLOW_REMOTE_ACCESS"]; v != "0" {
+		t.Fatalf("config FLOW_REMOTE_ACCESS: got %q want \"0\"", v)
+	}
+}
+
+// TestHandleRemoteEnableConflictWhenNotZrok verifies that POST /api/remote/enable
+// returns 409 when FLOW_INGRESS_PROVIDER is not zrok (or auto-start is off).
+func TestHandleRemoteEnableConflictWhenNotZrok(t *testing.T) {
+	// Ensure provider is not zrok.
+	t.Setenv("FLOW_INGRESS_PROVIDER", "none")
+	t.Setenv("FLOW_REMOTE_ACCESS", "0")
+	s := newTestServer(t)
+
+	req := httptest.NewRequest("POST", "/api/remote/enable", nil)
+	rec := httptest.NewRecorder()
+	s.handleRemoteEnable(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("enable without zrok: got %d want 409, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCheckRemoteWSOrigin(t *testing.T) {
 	s := newTestServer(t)
 	mk := func(origin, host string) *http.Request {

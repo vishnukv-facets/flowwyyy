@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -140,13 +141,48 @@ func (s *Server) handleRemoteStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleRemoteEnable (LOCAL) enables the remote-access surface.
-// Implemented in Task 7; stub returns 501 until then.
 func (s *Server) handleRemoteEnable(w http.ResponseWriter, r *http.Request) {
-	writeError(w, errors.New("not implemented"), http.StatusNotImplemented)
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if activeIngressProvider() != ingressProviderZrok || !zrokAutoStart() {
+		writeError(w, errors.New("set up public ingress (zrok) first — see Connectors"), http.StatusConflict)
+		return
+	}
+	s.setRemoteAccessConfig(true)
+	s.ensureZrokIngressCredentials()
+	if s.zrok != nil {
+		s.zrok.start() // idempotent — no-op if already serving
+	}
+	writeJSON(w, map[string]any{"enabled": true, "public_url": s.publicBaseURL()})
 }
 
 // handleRemoteDisable (LOCAL) disables the remote-access surface.
-// Implemented in Task 7; stub returns 501 until then.
 func (s *Server) handleRemoteDisable(w http.ResponseWriter, r *http.Request) {
-	writeError(w, errors.New("not implemented"), http.StatusNotImplemented)
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	s.setRemoteAccessConfig(false)
+	// The zrok share stays up to keep serving the GitHub webhook; the composite
+	// handler now 404s all app paths because remoteAccessEnabled() is false.
+	writeJSON(w, map[string]any{"enabled": false})
+}
+
+// setRemoteAccessConfig persists FLOW_REMOTE_ACCESS to config.json and the env,
+// mirroring ensureZrokIngressCredentials' load/save pattern.
+func (s *Server) setRemoteAccessConfig(on bool) {
+	val := "0"
+	if on {
+		val = "1"
+	}
+	os.Setenv("FLOW_REMOTE_ACCESS", val)
+	path := s.configPath()
+	if path == "" {
+		return
+	}
+	cfg := loadConfigFile(path)
+	cfg["FLOW_REMOTE_ACCESS"] = val
+	_ = saveConfigFile(path, cfg)
 }
