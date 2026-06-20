@@ -74,6 +74,7 @@ func New(cfg Config) *Server {
 	s.dbWatcher = newDBWatcher(s)
 	s.respawn = newRespawnGate(respawnDebounceWindow)
 	s.zrok = &zrokManager{}
+	s.pairing = newPairingStore()
 	s.inboxMonitors = newInboxMonitorManager(inboxWakeTarget{server: s})
 	s.monitorReconcile = newMonitorReconciler(s)
 	s.playbookSched = newPlaybookScheduler(s)

@@ -28,7 +28,10 @@ type Server struct {
 	cfg Config
 	// sessionToken gates the local data plane (WS handshakes + state-changing
 	// /api/* routes). Minted with crypto/rand in New(); see session_token.go.
-	sessionToken   string
+	sessionToken string
+	// pairing holds short-lived, single-use remote-access pairing codes.
+	// Always non-nil after New().
+	pairing *pairingStore
 	terminals      *terminalHub
 	events         *eventHub
 	reconcile      *livenessReconciler

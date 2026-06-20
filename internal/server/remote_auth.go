@@ -4,8 +4,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"flow/internal/flowdb"
 )
 
 const (
@@ -76,4 +81,59 @@ func (p *pairingStore) redeemAt(code string, now time.Time) bool {
 	}
 	delete(p.codes, code)
 	return !now.After(exp)
+}
+
+// remoteFlagHeader marks an upgraded/forwarded request as having arrived over
+// the remote (device-token) surface. handleRPCWebSocket reads it to deny
+// device-management RPC paths to remote clients (see rpc_bridge.go).
+const remoteFlagHeader = "X-Flow-Remote"
+
+// validRemoteDeviceToken extracts a device token (X-Flow-Session-Token header or
+// ?token= query — the same transport the browser uses for the session token),
+// hashes it, looks up the device, and accepts it only when the row exists, is
+// not revoked, and has not expired. Best-effort last-seen touch. Fails closed.
+func (s *Server) validRemoteDeviceToken(r *http.Request) (*flowdb.RemoteDevice, bool) {
+	if s == nil || s.cfg.DB == nil {
+		return nil, false
+	}
+	got := strings.TrimSpace(r.Header.Get(sessionTokenHeader))
+	if got == "" {
+		got = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
+	if got == "" {
+		return nil, false
+	}
+	dev, err := flowdb.GetRemoteDeviceByTokenHash(s.cfg.DB, hashRemoteToken(got))
+	if err != nil || dev == nil {
+		return nil, false
+	}
+	if dev.RevokedAt.Valid {
+		return nil, false
+	}
+	exp, err := time.Parse(time.RFC3339, dev.ExpiresAt)
+	if err != nil || time.Now().After(exp) {
+		return nil, false
+	}
+	_ = flowdb.TouchRemoteDeviceLastSeen(s.cfg.DB, dev.ID, flowdb.NowISO())
+	return dev, true
+}
+
+// remoteAuth gates the remote-app surface. On a valid device token it marks the
+// request remote and INJECTS the shared session token (header + ?token=) so the
+// existing WS/RPC handlers — which check the session token via
+// authorizeWSHandshake — work unchanged. The session token is injected only
+// into the server-side request; it is never sent back to the client.
+func (s *Server) remoteAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.validRemoteDeviceToken(r); !ok {
+			writeError(w, errors.New("missing or invalid device token"), http.StatusForbidden)
+			return
+		}
+		r.Header.Set(remoteFlagHeader, "1")
+		r.Header.Set(sessionTokenHeader, s.sessionToken)
+		q := r.URL.Query()
+		q.Set("token", s.sessionToken)
+		r.URL.RawQuery = q.Encode()
+		next.ServeHTTP(w, r)
+	})
 }
