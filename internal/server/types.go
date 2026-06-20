@@ -299,6 +299,7 @@ type TaskView struct {
 	BriefPath           string        `json:"brief_path"`
 	Updates             []FileRef     `json:"updates"`
 	AuxFiles            []FileRef     `json:"aux_files"`
+	Artifacts           []FileRef     `json:"artifacts"`
 	TranscriptAvailable bool          `json:"transcript_available"`
 }
 
