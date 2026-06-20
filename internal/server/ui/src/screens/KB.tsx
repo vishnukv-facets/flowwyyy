@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { AlertTriangle, BookText, Check, Loader2, Moon, Plus, RotateCcw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
+import { AlertTriangle, BookText, Check, KeyRound, Loader2, Moon, Plus, RotateCcw, ShieldCheck, Sparkles, Trash2 } from 'lucide-react'
 import { useKB, useKBDream, useBackupStatus, useBackupLog } from '../lib/query'
 import { queryClient } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -342,19 +342,28 @@ function BackupPanel() {
         </div>
       </div>
       <div className="kb-sys-meta dim">
-        {b.schedule ? `${b.schedule} · ` : ''}{b.commits} checkpoints · {b.db_snapshots} db snapshots · {b.remote_configured ? 'offsite on' : 'local only'}
+        {b.schedule ? `${b.schedule} · ` : ''}{b.commits} checkpoints · {b.db_snapshots} db snapshots
         {b.remote_url ? (
           <>
             {' · '}
-            <a href={b.remote_url.replace(/\.git$/, '')} target="_blank" rel="noreferrer">
+            <a
+              href={b.remote_url.replace(/\.git$/, '')}
+              target="_blank"
+              rel="noreferrer"
+              title="Private backup repo in your personal GitHub account"
+            >
               {b.remote_url.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')}
-            </a>
+            </a>{' '}
+            <span className="dim">(personal GitHub)</span>
             {b.last_push_at ? <> · pushed {ago(b.last_push_at)}</> : <> · not pushed yet</>}
           </>
-        ) : b.remote_configured ? (
-          <> · offsite syncs on next backup</>
-        ) : null}
+        ) : b.offsite_mode === 'local' ? (
+          <> · local only</>
+        ) : (
+          <> · offsite: a private repo in your <strong>personal</strong> GitHub (auto)</>
+        )}
       </div>
+      <BackupTokenControl status={b} />
       {showHistory && history.length > 0 && (
         <div className="kb-dream-history">
           <ul className="kb-dream-list">
@@ -371,6 +380,108 @@ function BackupPanel() {
             ))}
           </ul>
         </div>
+      )}
+    </div>
+  )
+}
+
+// BackupTokenControl lets the operator supply the PERSONAL GitHub token the
+// offsite backup needs — pasted in the UI, stored in the OS keyring, no terminal
+// and no `gh auth login`. It's required because the GitHub App connector mints
+// only installation tokens, which GitHub does not allow to create a repo in a
+// personal account. Hidden entirely when offsite is set to local-only.
+function BackupTokenControl({ status }: { status: BackupStatus }) {
+  const [editing, setEditing] = useState(false)
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState(false)
+  if (status.offsite_mode === 'local') return null
+
+  const save = async () => {
+    const t = token.trim()
+    if (!t) return
+    setBusy(true)
+    try {
+      const res = await apiPost<{ login?: string }>('/api/backup/token', { token: t })
+      pushToast('ok', res.login ? `backup token saved · ${res.login}` : 'backup token saved')
+      setToken('')
+      setEditing(false)
+      await queryClient.invalidateQueries({ queryKey: ['backup-status'] })
+    } catch (e) {
+      pushToast('error', e instanceof Error ? e.message : 'token rejected')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const clear = async () => {
+    if (!window.confirm('Remove the offsite backup token? Backups stay on this machine until you set one again.')) return
+    setBusy(true)
+    try {
+      await apiPost('/api/backup/token', { token: '' })
+      pushToast('ok', 'backup token cleared')
+      setEditing(false)
+      await queryClient.invalidateQueries({ queryKey: ['backup-status'] })
+    } catch {
+      pushToast('error', 'could not clear token')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (editing) {
+    return (
+      <div className="kb-backup-token editing">
+        <KeyRound size={13} />
+        <input
+          className="input"
+          type="password"
+          placeholder="ghp_… or github_pat_…"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          autoFocus
+          onKeyDown={(e) => { if (e.key === 'Enter') void save() }}
+        />
+        <button type="button" className="btn ok sm" onClick={() => void save()} disabled={busy || !token.trim()}>
+          {busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />} Save
+        </button>
+        <button type="button" className="btn ghost sm" onClick={() => { setEditing(false); setToken('') }}>Cancel</button>
+        <a
+          className="kb-backup-token-help"
+          href="https://github.com/settings/tokens/new?scopes=repo&description=flow-backup"
+          target="_blank"
+          rel="noreferrer"
+        >
+          create one
+        </a>
+      </div>
+    )
+  }
+
+  return (
+    <div className="kb-backup-token">
+      <KeyRound size={13} />
+      {status.token_set ? (
+        <>
+          <span>Offsite backup is using a personal token you set.</span>
+          <Check size={12} className="ok" />
+          <button type="button" className="btn ghost sm" onClick={() => setEditing(true)}>Change</button>
+          <button type="button" className="btn ghost sm" onClick={() => void clear()} disabled={busy}>Clear</button>
+        </>
+      ) : status.remote_url ? (
+        <>
+          <span>Offsite backup is using your <strong>gh</strong> CLI sign-in.</span>
+          <Check size={12} className="ok" />
+          <button type="button" className="btn ghost sm" onClick={() => setEditing(true)}>Use a token instead</button>
+        </>
+      ) : (
+        <>
+          <span>
+            Offsite backup needs GitHub access — make sure the <strong>gh</strong> CLI is
+            signed in (<code>gh auth login</code>), or paste a personal token. The GitHub App
+            connector can't create your personal repo.
+          </span>
+          <button type="button" className="btn ok sm" onClick={() => setEditing(true)}>Add token</button>
+        </>
       )}
     </div>
   )

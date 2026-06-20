@@ -1385,5 +1385,7 @@ export interface BackupStatus {
   db_snapshots: number
   remote_configured: boolean
   remote_url?: string
+  offsite_mode: string // "auto" (private repo in your personal GitHub) | "local"
+  token_set: boolean // an explicit personal backup token is configured
   history: BackupRunRecord[]
 }

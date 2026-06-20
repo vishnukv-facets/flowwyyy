@@ -53,6 +53,8 @@ func New(cfg Config) *Server {
 	loadGitHubSecretsFromKeyring()
 	// Same for the Slack bot token, operator user token, and OAuth client secret.
 	loadSlackSecretsFromKeyring()
+	// And the offsite backup token (personal GitHub PAT for the flow-backup repo).
+	loadBackupSecretsFromKeyring()
 	s.terminals = newTerminalHub(s)
 	// Restore adhoc floating sessions whose tmux PTYs outlived a prior server
 	// process, so the Ask Flow tray survives a flow-server restart.
@@ -213,6 +215,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/backup/show", s.handleBackupShow)
 	mux.HandleFunc("/api/backup/restore", s.handleBackupRestore)
 	mux.HandleFunc("/api/backup/now", s.handleBackupNow)
+	mux.HandleFunc("/api/backup/token", s.handleBackupToken)
 	mux.HandleFunc("/api/memory/sources", s.handleMemorySources)
 	mux.HandleFunc("/api/memory", s.handleMemoryWrite)
 	mux.HandleFunc("/api/search", s.handleSearch)

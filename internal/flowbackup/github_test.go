@@ -17,7 +17,9 @@ func stubGitHub(t *testing.T, repoExists bool, createCalled *bool) {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"login": "octocat"})
+		// Mirror the real GET /user: a personal account has type "User". The
+		// provisioning guard rejects an explicit non-User identity (org/bot).
+		_ = json.NewEncoder(w).Encode(map[string]any{"login": "octocat", "type": "User"})
 	})
 	mux.HandleFunc("/repos/octocat/flow-backup", func(w http.ResponseWriter, r *http.Request) {
 		if repoExists {
@@ -90,6 +92,43 @@ func TestEnsureGitHubRemoteReusesExisting(t *testing.T) {
 	}
 	if RemoteURL(root) != "https://github.com/octocat/flow-backup.git" {
 		t.Fatalf("remote should still be set to the existing repo")
+	}
+}
+
+// TestEnsureGitHubRemoteRejectsOrgIdentity locks the personal-account invariant:
+// a token whose GET /user resolves to a non-"User" identity (an org/bot) must be
+// refused, and no repo may be created.
+func TestEnsureGitHubRemoteRejectsOrgIdentity(t *testing.T) {
+	root := t.TempDir()
+	createHit := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{"login": "acme-inc", "type": "Organization"})
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+		createHit = true
+		w.WriteHeader(http.StatusCreated)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	base, _ := url.Parse(srv.URL + "/")
+	orig := githubClient
+	githubClient = func() (*github.Client, bool) {
+		c := github.NewClient(srv.Client())
+		c.BaseURL = base
+		return c, true
+	}
+	t.Cleanup(func() { githubClient = orig })
+
+	gotURL, created, err := EnsureGitHubRemote(root)
+	if err == nil {
+		t.Fatal("expected EnsureGitHubRemote to reject a non-User (org/bot) identity")
+	}
+	if created || gotURL != "" {
+		t.Fatalf("must not provision on rejection; got url=%q created=%v", gotURL, created)
+	}
+	if createHit {
+		t.Fatal("POST /user/repos must NOT be hit when the identity is rejected")
 	}
 }
 

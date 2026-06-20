@@ -229,6 +229,12 @@ func backupToken() string {
 	return ""
 }
 
+// TokenConfigured reports whether an explicit backup token is set in the env
+// (FLOW_BACKUP_TOKEN / GITHUB_TOKEN / GH_TOKEN). Cheap — no `gh` shell-out, no
+// network — so it is safe on the status poll. A false result does not preclude
+// offsite backup: the `gh` CLI fallback may still resolve a token at use time.
+func TokenConfigured() bool { return backupToken() != "" }
+
 // Clone restores a backup repo from a remote into root, using a separated gitdir
 // so no `.git` link is left at the flow root. The markdown working tree
 // (kb + briefs/updates) is checked out. Intended for new-laptop restore.

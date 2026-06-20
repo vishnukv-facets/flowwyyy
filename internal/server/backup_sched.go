@@ -238,7 +238,14 @@ type BackupStatus struct {
 	DBSnapshots      int               `json:"db_snapshots"`
 	RemoteConfigured bool              `json:"remote_configured"`
 	RemoteURL        string            `json:"remote_url,omitempty"`
-	History          []BackupRunRecord `json:"history"`
+	// OffsiteMode is the configured policy: "auto" (provision a PRIVATE repo in
+	// the operator's personal GitHub account when a token is available) or
+	// "local" (this machine only). Cheap env read — safe on the status poll.
+	OffsiteMode string `json:"offsite_mode"`
+	// TokenSet reports whether an explicit personal backup token is configured
+	// (env/keyring). Cheap env read — no network, safe on the status poll.
+	TokenSet bool              `json:"token_set"`
+	History  []BackupRunRecord `json:"history"`
 }
 
 // status returns the observable backup state.
@@ -253,6 +260,8 @@ func (b *backupScheduler) status() BackupStatus {
 		DBSnapshots:      flowbackup.DBSnapshotCount(root),
 		RemoteConfigured: flowbackup.RemoteConfigured(root),
 		RemoteURL:        flowbackup.RemoteURL(root),
+		OffsiteMode:      backupOffsiteMode(),
+		TokenSet:         flowbackup.TokenConfigured(),
 		History:          append([]BackupRunRecord(nil), b.history...),
 	}
 	if !b.lastRun.IsZero() {

@@ -148,14 +148,21 @@ flow/
   workers; cadence via `FLOW_BACKUP_SCHEDULE` (default daily), persists last-run
   to `backups/.backup-sched.json` for restart catch-up.
 - **Offsite + new-laptop restore.** Controlled by `FLOW_BACKUP_OFFSITE`
-  (default `auto`): when a GitHub token is available, flow auto-provisions a
-  **private `flow-backup` repo** in the operator's personal GitHub account and
-  uses it; with no token it stays local-only. `local` keeps everything on this
-  machine. Repo provisioning (whoami / exists / create-private) uses the
-  **go-github SDK** (`google/go-github/v84`), authenticated with a token from
-  the env (`FLOW_BACKUP_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`) or, as a fallback,
-  `gh auth token` — the App connector is webhook-only and can't create repos.
-  Pushes go over https with the same token. The markdown branch is pushed and
+  (default `auto`): when a **personal** GitHub token is available, flow
+  auto-provisions a **private `flow-backup` repo** in the operator's personal
+  GitHub account and uses it; with no token it stays local-only. `local` keeps
+  everything on this machine. Repo provisioning (whoami / exists /
+  create-private) uses the **go-github SDK** (`google/go-github/v84`),
+  authenticated with a **personal** token — NOT the GitHub App connector, which
+  mints only installation tokens (rejected by `POST /user/repos`) and is
+  webhook/issue/PR-scoped, so it structurally cannot create a personal repo.
+  `EnsureGitHubRemote` enforces this: it refuses any identity whose `GET /user`
+  type isn't `User`, and always passes an empty `org` to `Repositories.Create`
+  (→ `POST /user/repos`, personal namespace, never an org). The token is set in
+  the UI (Knowledge → Backups → "Add token"), stored in the OS keyring
+  (`flow.backup`/`token`) and hydrated into `FLOW_BACKUP_TOKEN`; env
+  (`FLOW_BACKUP_TOKEN`/`GITHUB_TOKEN`/`GH_TOKEN`) or `gh auth token` are
+  fallbacks. Pushes go over https with the same token. The markdown branch is pushed and
   the latest db snapshot is force-pushed to a single-commit `flow-db` branch
   (bounded). `flow init --restore-from <url>` clones markdown + restores the db
   + reindexes on a fresh machine. A custom remote can still be set with `flow

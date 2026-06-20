@@ -2095,14 +2095,20 @@ rotated snapshots under `backups/db/` (not in the markdown repo). For a new
 machine, `flow init --restore-from <private-git-url>` rebuilds full state
 (markdown + db) from a configured offsite remote.
 
-**Offsite (GitHub).** By default (`FLOW_BACKUP_OFFSITE=auto`), when a GitHub
-token is available (env `GITHUB_TOKEN`/`GH_TOKEN`/`FLOW_BACKUP_TOKEN`, or the
-`gh` CLI's token), flow automatically provisions a **private** `flow-backup`
-repo in the operator's personal GitHub account (via the go-github SDK) and
-syncs to it on the schedule + on boot; with no token it stays local-only. Set
-`FLOW_BACKUP_OFFSITE=local` to keep backups on this machine only. The repo is
-always private (KB carries personal/org facts). To provision/use it on demand,
-the agent can run `flow backup remote github`.
+**Offsite (GitHub).** By default (`FLOW_BACKUP_OFFSITE=auto`), when a **personal**
+GitHub token is available, flow automatically provisions a **private** `flow-backup`
+repo in the operator's personal GitHub account (via the go-github SDK) and syncs to
+it on the schedule + on boot; with no token it stays local-only. The token must be a
+PERSONAL one (classic PAT with `repo`, or fine-grained with Administration+Contents)
+— the **GitHub App connector cannot host backups**: it mints only installation
+tokens, which GitHub does not allow to create a repo in a personal account, and the
+App is webhook/issue/PR-scoped anyway. The token is set in Mission Control on the
+**Knowledge → Backups** panel (stored in the OS keyring, hydrated into
+`FLOW_BACKUP_TOKEN`), or supplied via env `GITHUB_TOKEN`/`GH_TOKEN`/`FLOW_BACKUP_TOKEN`
+or the `gh` CLI. Set `FLOW_BACKUP_OFFSITE=local` to keep backups on this machine only.
+The repo is always private (KB carries personal/org facts) and always under the
+personal account, never an org — even if the App is installed on one. To provision/use
+it on demand, the agent can run `flow backup remote github`.
 
 **Anti-patterns:**
 

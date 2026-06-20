@@ -5950,6 +5950,27 @@ a.orch-pr:hover {
   flex: 0 0 auto;
   margin-top: 1px;
 }
+.gh-backup-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--info) 40%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.gh-backup-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--info);
+}
+.gh-backup-note strong {
+  color: var(--text);
+}
 .att-action-preview {
   display: flex;
   flex-direction: column;
@@ -7844,6 +7865,43 @@ a.owner-task-item:hover {
 }
 .kb-sys-meta a:hover {
   color: var(--text);
+}
+/* Offsite backup token entry — sits under the backup meta line, aligned with it. */
+.kb-backup-token {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 13px 12px 54px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.kb-backup-token > svg {
+  flex: 0 0 auto;
+  color: var(--info);
+}
+.kb-backup-token > span {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.kb-backup-token strong {
+  color: var(--text-2);
+}
+.kb-backup-token .ok {
+  color: var(--ok);
+}
+.kb-backup-token.editing .input {
+  flex: 1 1 240px;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 11.5px;
+}
+.kb-backup-token-help {
+  color: var(--info);
+}
+.kb-backup-token-help:hover {
+  text-decoration: underline;
 }
 
 /* --- Pillar glyph: a tinted mono initial marking each KB file's pillar ---- */

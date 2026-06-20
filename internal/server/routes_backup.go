@@ -27,6 +27,8 @@ func (s *Server) backupStatus() BackupStatus {
 		DBSnapshots:      flowbackup.DBSnapshotCount(root),
 		RemoteConfigured: flowbackup.RemoteConfigured(root),
 		RemoteURL:        flowbackup.RemoteURL(root),
+		OffsiteMode:      backupOffsiteMode(),
+		TokenSet:         flowbackup.TokenConfigured(),
 		History:          []BackupRunRecord{},
 	}
 }
@@ -131,6 +133,47 @@ func (s *Server) handleBackupNow(w http.ResponseWriter, r *http.Request) {
 	}
 	snap, _ := flowbackup.SnapshotDB(s.cfg.FlowRoot)
 	writeJSON(w, map[string]any{"ok": true, "committed": committed, "db_snapshot": snap != ""})
+}
+
+// handleBackupToken: POST {token} stores (or, when empty, clears) the personal
+// GitHub token used to provision + push the offsite backup repo. The token lives
+// in the OS keyring (never config.json) and is hydrated into FLOW_BACKUP_TOKEN.
+// A non-empty token is validated against GitHub before it's accepted, so a typo
+// is rejected immediately instead of silently failing on the next backup.
+func (s *Server) handleBackupToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, err, http.StatusBadRequest)
+		return
+	}
+	token := strings.TrimSpace(req.Token)
+	if token == "" {
+		if err := storeBackupSecret(""); err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"ok": true, "token_set": false})
+		return
+	}
+	// Store first (sets the env live), then validate by resolving the account.
+	if err := storeBackupSecret(token); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	login := flowbackup.GitHubLogin()
+	if login == "" {
+		// Roll back the bad token so a failed attempt doesn't leave a dud behind.
+		_ = storeBackupSecret("")
+		writeError(w, errStr("that token didn't authenticate with GitHub — check it has the 'repo' scope (classic) or Administration+Contents (fine-grained) and try again"), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true, "token_set": true, "login": login})
 }
 
 // errStr is a tiny error helper for request validation.
