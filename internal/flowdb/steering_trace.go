@@ -237,6 +237,54 @@ type SteeringFunnel struct {
 	Errors        int
 }
 
+// SteeringTraceLite is the minimal projection the analytics funnel needs: the
+// columns required to bucket events over time, trend triage latency, and split
+// the connector→task conversion by source.
+type SteeringTraceLite struct {
+	CreatedAt    string
+	Disposition  string // dropped|surfaced|error
+	StageReached string
+	LatencyMS    int64
+	Source       string // slack|github (connector)
+	FinalAction  string // make_task|forward|reply|... (the routed decision)
+}
+
+// ListSteeringTraceLite returns the lite projection for rows with
+// created_at >= since (since == "" → all rows), oldest constraints aside.
+// Unlike SteeringFunnelSince (which aggregates window totals in SQL), this
+// returns one row per event so the server can bucket them into the analytics
+// grid AND compute a true per-bucket p50 latency — a median that cannot be
+// reconstructed from per-day SQL aggregates.
+func ListSteeringTraceLite(db *sql.DB, since string) ([]SteeringTraceLite, error) {
+	q := `SELECT created_at, disposition, stage_reached, latency_ms, source, final_action FROM steering_trace`
+	args := []any{}
+	if since != "" {
+		q += " WHERE created_at >= ?"
+		args = append(args, since)
+	}
+	q += " ORDER BY created_at ASC, id ASC"
+
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("flowdb: list steering trace lite: %w", err)
+	}
+	defer rows.Close()
+
+	var out []SteeringTraceLite
+	for rows.Next() {
+		var r SteeringTraceLite
+		var stage, source, finalAction sql.NullString
+		if err := rows.Scan(&r.CreatedAt, &r.Disposition, &stage, &r.LatencyMS, &source, &finalAction); err != nil {
+			return nil, fmt.Errorf("flowdb: scan steering trace lite: %w", err)
+		}
+		r.StageReached = stage.String
+		r.Source = source.String
+		r.FinalAction = finalAction.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // SteeringFunnelSince returns funnel counts for rows with created_at >= since
 // (since == "" → all rows).
 func SteeringFunnelSince(db *sql.DB, since string) (SteeringFunnel, error) {

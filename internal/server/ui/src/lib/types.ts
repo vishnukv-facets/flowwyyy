@@ -939,6 +939,10 @@ export interface TranscriptEntry {
   type: string
   text?: string
   tool_name?: string
+  /** Pairs a tool_use with its tool_result entry (the result arrives later). */
+  tool_use_id?: string
+  /** Raw JSON args string for a tool_use, parsed by the chat renderer. */
+  tool_input?: string
   tool_input_summary?: string
   tool_result_text?: string
   is_error?: boolean
@@ -1354,6 +1358,87 @@ export interface SlackChannel {
   is_member: boolean
   /** "channel" | "im" (DM) | "mpim" (group DM). Absent → treat as "channel". */
   kind?: string
+}
+
+// ---- analytics page (GET /api/analytics) --------------------------------
+// Mirrors the Go wire contract in internal/server/analytics.go. The page is a
+// flat list of KPIs + time-bucketed Series + non-time Breakdowns + an optional
+// steering Funnel; adding a metric is a new entry here, never a new endpoint.
+
+/** One (bucket-start, value). `t` is a date for day/week buckets, RFC3339 for hourly. */
+export interface AnalyticsPoint {
+  t: string
+  v: number
+}
+
+/** One named line in a series; points align 1:1 with the bucket grid. */
+export interface AnalyticsLine {
+  key: string
+  label?: string
+  points: AnalyticsPoint[]
+}
+
+/** One time-bucketed chart: one or more lines over the same grid. */
+export interface AnalyticsSeries {
+  key: string
+  label: string
+  unit: string
+  stacked?: boolean
+  lines: AnalyticsLine[]
+}
+
+/** A headline number with a period-over-period delta (null when prior window empty). */
+export interface AnalyticsKpi {
+  key: string
+  label: string
+  value: number
+  unit: string
+  delta_pct: number | null
+}
+
+/** One slice of a Breakdown or Funnel drop-stage composition. */
+export interface AnalyticsSegment {
+  key: string
+  label?: string
+  value: number
+}
+
+/** A non-time composition over the window (e.g. model mix). */
+export interface AnalyticsBreakdown {
+  key: string
+  label: string
+  segments: AnalyticsSegment[]
+}
+
+/** Attention-router funnel: observed → surfaced, with errored + dropped-by-stage. */
+export interface AnalyticsFunnel {
+  observed: number
+  surfaced: number
+  errors: number
+  dropped?: AnalyticsSegment[]
+}
+
+/** One connector's observed → surfaced → made-a-task funnel over the window. */
+export interface AnalyticsSourceConversion {
+  source: string // slack | github
+  observed: number
+  surfaced: number
+  tasks: number
+}
+
+export interface AnalyticsPayload {
+  range?: string
+  bucket: string // hour | day | week
+  from: string
+  to: string
+  tz: string
+  generated_at: string
+  partial_bucket: boolean
+  kpis: AnalyticsKpi[]
+  series: AnalyticsSeries[]
+  breakdowns?: AnalyticsBreakdown[]
+  funnel?: AnalyticsFunnel | null
+  conversions?: AnalyticsSourceConversion[]
 }
 
 /** One checkpoint in the ~/.flow backup history. */

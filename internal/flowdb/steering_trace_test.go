@@ -410,3 +410,49 @@ func TestSteeringFunnelSince(t *testing.T) {
 		t.Errorf("windowed Surfaced: want 2, got %d", windowed.Surfaced)
 	}
 }
+
+func TestListSteeringTraceLite(t *testing.T) {
+	db := openTempDB(t)
+
+	rows := []SteeringTrace{
+		{ID: "a", CreatedAt: "2026-06-04T12:00:00Z", Origin: "live", Source: "slack", Disposition: "surfaced", StageReached: "stage3", FinalAction: "make_task", LatencyMS: 120},
+		{ID: "b", CreatedAt: "2026-06-05T08:00:00Z", Origin: "live", Source: "github", Disposition: "dropped", StageReached: "stage1", LatencyMS: 30},
+		{ID: "c", CreatedAt: "2026-06-05T09:00:00Z", Origin: "live", Source: "slack", Disposition: "surfaced", StageReached: "stage3", FinalAction: "make_task", LatencyMS: 500},
+	}
+	for _, r := range rows {
+		if err := InsertSteeringTrace(db, r); err != nil {
+			t.Fatalf("insert %s: %v", r.ID, err)
+		}
+	}
+
+	// Since cutoff drops the 6/04 row; lite projection keeps the funnel-relevant
+	// columns (created_at, disposition, stage_reached, latency_ms, source, final_action).
+	lite, err := ListSteeringTraceLite(db, "2026-06-05T00:00:00Z")
+	if err != nil {
+		t.Fatalf("ListSteeringTraceLite: %v", err)
+	}
+	if len(lite) != 2 {
+		t.Fatalf("lite rows = %d, want 2 (6/04 excluded)", len(lite))
+	}
+	byDisp := map[string]SteeringTraceLite{}
+	for _, r := range lite {
+		byDisp[r.Disposition] = r
+	}
+	if byDisp["dropped"].StageReached != "stage1" || byDisp["dropped"].LatencyMS != 30 {
+		t.Errorf("dropped row not projected: %+v", byDisp["dropped"])
+	}
+	if byDisp["dropped"].Source != "github" {
+		t.Errorf("dropped source = %q want github", byDisp["dropped"].Source)
+	}
+	if byDisp["surfaced"].Source != "slack" || byDisp["surfaced"].FinalAction != "make_task" {
+		t.Errorf("surfaced row missing source/final_action: %+v", byDisp["surfaced"])
+	}
+
+	all, err := ListSteeringTraceLite(db, "")
+	if err != nil {
+		t.Fatalf("ListSteeringTraceLite(all): %v", err)
+	}
+	if len(all) != 3 {
+		t.Errorf("all lite rows = %d, want 3", len(all))
+	}
+}

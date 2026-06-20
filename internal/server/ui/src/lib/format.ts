@@ -12,7 +12,7 @@ export function fromSeconds(sec: number): string {
 export function fromMinutes(min: number): string {
   if (min < 0) min = 0
   if (min < 1) return 'just now'
-  if (min < 60) return `${min}m`
+  if (min < 60) return `${Math.round(min)}m`
   if (min < 1440) return `${Math.floor(min / 60)}h`
   return `${Math.floor(min / 1440)}d`
 }

@@ -166,7 +166,11 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		return
 	}
 	stats.LastTimestamp = laterTimestamp(stats.LastTimestamp, rec.Timestamp)
-	if m := strings.TrimSpace(rec.Message.Model); m != "" {
+	// Keep the last REAL model. Claude Code emits trailing "<synthetic>" records
+	// (session-limit / interrupt notices) carrying a placeholder model and zero
+	// usage; letting those win collapses contextWindowForModel to the 200k default
+	// and a 1M-context Opus session reads as a bogus 100% context occupancy.
+	if m := strings.TrimSpace(rec.Message.Model); m != "" && !strings.HasPrefix(m, "<") {
 		stats.Model = m
 	}
 	if used := rec.Message.Usage.total(); used > 0 {

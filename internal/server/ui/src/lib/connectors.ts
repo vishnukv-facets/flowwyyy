@@ -28,6 +28,8 @@ export interface ConnectorDef {
   capabilityId?: string
   /** One line: what this connector powers in Flow. */
   powers: string
+  /** Not yet implemented — renders as a muted, non-interactive "coming soon" tile. */
+  soon?: boolean
 }
 
 // Display order is array order.
@@ -36,13 +38,16 @@ export const CONNECTOR_CATEGORIES: ConnectorCategory[] = [
     id: 'messaging',
     label: 'Messaging',
     blurb: 'Human conversation — reactions become sessions; threads route to the inbox and attention router.',
-    planned: 'Discord and Microsoft Teams are planned.',
   },
   {
     id: 'git',
     label: 'Git',
     blurb: 'Repositories, issues, PRs, and reviews — assigned and mentioned items route to task inboxes.',
-    planned: 'GitLab and Bitbucket are planned.',
+  },
+  {
+    id: 'ticketing',
+    label: 'Ticketing',
+    blurb: 'Issue trackers and project tools — assigned tickets and mentions route to task inboxes.',
   },
   {
     id: 'network',
@@ -67,6 +72,70 @@ export const CONNECTORS: ConnectorDef[] = [
     source: 'github',
     capabilityId: 'gh',
     powers: 'A GitHub App delivers assigned/mentioned issues & PRs and review requests over signed webhooks into task inboxes.',
+  },
+  // ---- coming soon (display-only placeholders; no backend wiring yet) ----
+  {
+    id: 'teams',
+    category: 'messaging',
+    label: 'Microsoft Teams',
+    powers: 'Channel and chat messages route to the inbox and attention router.',
+    soon: true,
+  },
+  {
+    id: 'mattermost',
+    category: 'messaging',
+    label: 'Mattermost',
+    powers: 'Self-hosted team chat — messages route to the inbox and attention router.',
+    soon: true,
+  },
+  {
+    id: 'rocketchat',
+    category: 'messaging',
+    label: 'Rocket.Chat',
+    powers: 'Open-source team chat — messages route to the inbox and attention router.',
+    soon: true,
+  },
+  {
+    id: 'gitlab',
+    category: 'git',
+    label: 'GitLab',
+    powers: 'Merge requests, issues, and reviews route to task inboxes.',
+    soon: true,
+  },
+  {
+    id: 'bitbucket',
+    category: 'git',
+    label: 'Bitbucket',
+    powers: 'Pull requests and issues route to task inboxes.',
+    soon: true,
+  },
+  {
+    id: 'jira',
+    category: 'ticketing',
+    label: 'Jira',
+    powers: 'Assigned issues and mentions route to task inboxes.',
+    soon: true,
+  },
+  {
+    id: 'linear',
+    category: 'ticketing',
+    label: 'Linear',
+    powers: 'Assigned issues and mentions route to task inboxes.',
+    soon: true,
+  },
+  {
+    id: 'asana',
+    category: 'ticketing',
+    label: 'Asana',
+    powers: 'Assigned tasks and mentions route to task inboxes.',
+    soon: true,
+  },
+  {
+    id: 'clickup',
+    category: 'ticketing',
+    label: 'ClickUp',
+    powers: 'Assigned tasks and mentions route to task inboxes.',
+    soon: true,
   },
   {
     id: 'ingress',

@@ -1,6 +1,7 @@
 import { Route, Switch } from 'wouter'
 import { Shell } from './components/Shell'
 import { Overview } from './screens/Overview'
+import { Analytics } from './screens/Analytics'
 import { Sessions } from './screens/Sessions'
 import { SessionDetail } from './screens/SessionDetail'
 import { Tasks } from './screens/Tasks'
@@ -29,6 +30,7 @@ export function App() {
       <Shell>
         <Switch>
         <Route path="/" component={Overview} />
+        <Route path="/analytics" component={Analytics} />
         <Route path="/sessions" component={Sessions} />
         <Route path="/session/:slug">{(p) => <SessionDetail slug={p.slug} />}</Route>
         <Route path="/tasks" component={Tasks} />

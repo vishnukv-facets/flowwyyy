@@ -6,6 +6,7 @@ import { focusedLiveInvalidationKeys } from './liveInvalidation'
 import { pushToast } from './toast'
 import type {
   ActionRequest,
+  AnalyticsPayload,
   AskFlowResponse,
   AttentionItem,
   Chat,
@@ -208,6 +209,27 @@ export function useIngressStatus() {
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })
+}
+
+export interface AnalyticsParams {
+  range?: string // 1d | 7d | 15d | 30d | 6m
+  from?: string // RFC3339 (custom window)
+  to?: string
+  provider?: string
+}
+
+// The analytics page. Keyed by the resolved window so each range caches
+// separately; keepPreviousData holds the prior payload while a new range loads
+// so re-bucketing doesn't flash an empty grid. 'analytics' isn't in the live-
+// invalidation exclusions, so a broad refetch (any work event, debounced 500ms)
+// re-pulls it — that's the "no reload" realtime path.
+export function useAnalytics(params: AnalyticsParams) {
+  const query = qs({ range: params.range, from: params.from, to: params.to, provider: params.provider })
+  return useQuery({
+    queryKey: ['analytics', params.range ?? '', params.from ?? '', params.to ?? '', params.provider ?? ''],
+    queryFn: () => apiGet<AnalyticsPayload>(`/api/analytics${query}`),
+    placeholderData: keepPreviousData,
+  })
 }
 
 // Recent + in-flight steering cascade runs (the live CI-style stage view).

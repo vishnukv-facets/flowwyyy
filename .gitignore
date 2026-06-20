@@ -21,6 +21,11 @@
 # Superpowers brainstorming companion (local mockups)
 .superpowers/
 
+# Local visual-plan scratch (agent-native Plans). plan.mdx/canvas.mdx are
+# localOnly review artifacts and .plan-url is a localhost bridge token —
+# none of it belongs in the repo.
+/plans/
+
 # UI build toolchain deps.
 /internal/server/ui/node_modules/
 

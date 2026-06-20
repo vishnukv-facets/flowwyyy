@@ -26,6 +26,15 @@ export function useFloatTip() {
     setTip({ x, y: below ? r.bottom : r.top, caret, below, content })
   }, [])
 
+  // Anchor at an explicit viewport point (px, py) rather than an element's
+  // centre — used by the line/area charts to track the hovered data point.
+  const showAt = useCallback((px: number, py: number, content: ReactNode) => {
+    const below = py < 150
+    const x = Math.max(HALF + MARGIN, Math.min(px, window.innerWidth - HALF - MARGIN))
+    const caret = Math.max(-(HALF - 16), Math.min(px - x, HALF - 16))
+    setTip({ x, y: py, caret, below, content })
+  }, [])
+
   const hide = useCallback(() => setTip(null), [])
 
   const portal = tip
@@ -41,5 +50,5 @@ export function useFloatTip() {
       )
     : null
 
-  return { show, hide, portal }
+  return { show, showAt, hide, portal }
 }
