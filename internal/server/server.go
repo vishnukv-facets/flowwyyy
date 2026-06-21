@@ -311,8 +311,10 @@ func (s *Server) ListenAndServe(addr string) int {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	// Start the optional zrok public share when auto-start is enabled. The
-	// share serves only the restricted ingress mux (connector callbacks), never
-	// the full Mission Control handler.
+	// share serves the composite publicIngressHandler: GitHub webhook + OAuth
+	// callbacks always, plus the device-token-gated remote app mux when remote
+	// access is enabled. It never serves the full localhost Mission Control
+	// handler (no shared session token, no unauthenticated operator routes).
 	if s.zrok != nil {
 		s.zrok.handler = s.publicIngressHandler()
 		// Provision + persist the webhook secret and reserved share name on
@@ -623,6 +625,12 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 // operator action that a remote (device-token) client must NOT reach over the
 // /ws/rpc bridge. The remote surface can drive sessions but can never pair new
 // devices, toggle remote access, or read/revoke the device list.
+//
+// The denylist is intentionally NARROW — only /api/remote/ device-management
+// paths are blocked. Everything else over the remote /ws/rpc channel is
+// operator-equivalent by design: this is a single-operator tool and the device
+// token is the trust boundary. Widening the denylist should be a deliberate
+// decision with a threat-model rationale, not a defensive reflex.
 func remoteForbiddenRPCPath(path string) bool {
 	return strings.HasPrefix(path, "/api/remote/")
 }

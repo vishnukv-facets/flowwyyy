@@ -141,6 +141,51 @@ func TestRemoteAuthInjectsSessionToken(t *testing.T) {
 	}
 }
 
+// TestRemoteAuthRateLimitsFailedAuth verifies that repeated invalid device-token
+// attempts from the same IP eventually hit 429, and that a valid token never
+// consumes limiter budget (it still succeeds after the limiter is exhausted).
+func TestRemoteAuthRateLimitsFailedAuth(t *testing.T) {
+	s := newTestServer(t)
+	// The limiter is created with max=10 in New (server.go). Exhaust it with
+	// bogus tokens and confirm the Nth+1 call yields 429 not 403.
+	limiterMax := 10
+
+	good := mintRemoteToken()
+	insertTestDevice(t, s, good, time.Now().Add(time.Hour), false)
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
+	h := s.remoteAuth(next)
+
+	// Exhaust the budget: each bad-token attempt should return 403.
+	for i := 0; i < limiterMax; i++ {
+		req := httptest.NewRequest("GET", "/ws/rpc?token=bogus", nil)
+		req.RemoteAddr = "9.9.9.9:1234"
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("attempt %d: got %d want 403", i, rec.Code)
+		}
+	}
+
+	// One more bad token from the same IP: must now be 429.
+	req := httptest.NewRequest("GET", "/ws/rpc?token=bogus", nil)
+	req.RemoteAddr = "9.9.9.9:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("after budget exhausted: got %d want 429", rec.Code)
+	}
+
+	// A VALID token must still succeed — valid tokens never touch the limiter.
+	req = httptest.NewRequest("GET", "/ws/rpc?token="+good, nil)
+	req.RemoteAddr = "9.9.9.9:1234"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("valid token after limiter exhausted: got %d want 200", rec.Code)
+	}
+}
+
 func TestRateLimiter(t *testing.T) {
 	rl := newRateLimiter(3, time.Minute)
 	now := time.Unix(1_700_000_000, 0)

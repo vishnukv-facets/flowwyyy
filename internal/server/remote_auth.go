@@ -123,9 +123,22 @@ func (s *Server) validRemoteDeviceToken(r *http.Request) (*flowdb.RemoteDevice, 
 // existing WS/RPC handlers — which check the session token via
 // authorizeWSHandshake — work unchanged. The session token is injected only
 // into the server-side request; it is never sent back to the client.
+//
+// Token/revocation check: validation runs at handshake time only. Revoking a
+// device or disabling remote access blocks NEW connections immediately, but a
+// phone that already holds an open /ws/terminal WebSocket keeps it until the
+// connection drops (bounded by the 12h token expiry). Per-connection teardown
+// on revoke is a documented v1 follow-on (see known limitations in the spec).
 func (s *Server) remoteAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, ok := s.validRemoteDeviceToken(r); !ok {
+			// Rate-limit the failure path to resist brute-force against the
+			// public URL (spec security gate #8). A VALID token never consumes
+			// limiter budget — only the failure branch does so.
+			if !s.remoteLimiter.allowAt(clientIP(r), time.Now()) {
+				writeError(w, errors.New("too many attempts"), http.StatusTooManyRequests)
+				return
+			}
 			writeError(w, errors.New("missing or invalid device token"), http.StatusForbidden)
 			return
 		}

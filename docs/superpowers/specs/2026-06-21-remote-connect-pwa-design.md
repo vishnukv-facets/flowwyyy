@@ -233,6 +233,17 @@ laptop.
     as obfuscation only — never as an access-control gate. The device token is the
     real gate.
 
+## Known limitations (v1)
+
+- **Revoke / disable does not terminate live sockets.** Token and revocation
+  status are checked at WebSocket handshake time only. Revoking a device (or
+  disabling remote access entirely) immediately blocks *new* connections, but a
+  phone that already holds an open `/ws/terminal` keeps it until the connection
+  drops. Exposure is bounded by the 12h token expiry. Per-connection teardown on
+  revoke is a deliberate follow-on — the added complexity (broadcasting a
+  close signal to all in-flight sockets for a given device) was out of scope for
+  the v1 single-operator implementation.
+
 ## Open questions
 
 1. **tmux resize conflict.** tmux sizes a shared session to its *smallest*

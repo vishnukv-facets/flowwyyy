@@ -47,19 +47,24 @@ export function deviceLabel(): string {
 
 // maybePairFromUrl redeems a ?pair=<code> query param (the QR target) into a
 // device token, stores it, and strips the param from the URL. No-op otherwise.
+// The ?pair= param is ALWAYS stripped — even on a network error — so the code
+// never appears in browser history or gets accidentally retried on reload.
 export async function maybePairFromUrl(): Promise<void> {
   const url = new URL(window.location.href)
   const code = url.searchParams.get('pair')
   if (!code) return
-  const res = await fetch('/api/remote/pair', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, label: deviceLabel() }),
-  })
-  if (res.ok) {
-    const data = await res.json()
-    if (data.token) setDeviceToken(data.token)
+  try {
+    const res = await fetch('/api/remote/pair', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, label: deviceLabel() }),
+    })
+    if (res.ok) {
+      const data = await res.json()
+      if (data.token) setDeviceToken(data.token)
+    }
+  } finally {
+    url.searchParams.delete('pair')
+    window.history.replaceState({}, '', url.toString())
   }
-  url.searchParams.delete('pair')
-  window.history.replaceState({}, '', url.toString())
 }
