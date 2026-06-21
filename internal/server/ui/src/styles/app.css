@@ -9614,3 +9614,232 @@ a.owner-task-item:hover {
     padding: 10px 10px !important;
   }
 }
+
+/* ======================== PHONE (≤640px): List screens → stacked cards ====
+   Task R5: Convert dense list/table screens to stacked cards at phone width.
+   Sessions uses AgentCard grid (covered by grid fix below).
+   Tasks uses a <table class="tbl fixed"> → reflow to flex cards.
+   Inbox uses .twopane → stack list above detail pane.
+   Desktop (≥641px) is byte-for-byte unchanged — ALL rules inside this block.
+   ========================================================================== */
+
+/* ---- Card grid: drop minmax(330px,1fr) to 1fr on narrow phones ---------- */
+@media (max-width: 400px) {
+  .grid.cards {
+    grid-template-columns: 1fr;
+  }
+  .grid.wide {
+    grid-template-columns: 1fr;
+  }
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---- Tasks table → stacked card rows at ≤640px -------------------------- */
+@media (max-width: 640px) {
+  /* Outer card wrapper: remove horizontal padding so rows go edge-to-edge */
+  .page > .card:has(.tbl.fixed) {
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  /* Reflow the table itself to block so it doesn't scroll horizontally */
+  .tbl.fixed,
+  .tbl.fixed colgroup,
+  .tbl.fixed thead,
+  .tbl.fixed tbody {
+    display: block;
+    width: 100%;
+  }
+
+  /* Hide the header row entirely — labels appear as pseudo-element prefixes */
+  .tbl.fixed thead {
+    display: none;
+  }
+
+  /* Each body row becomes a card */
+  .tbl.fixed tbody tr {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+    margin: 0;
+    border-bottom: 1px solid var(--border-faint);
+    min-height: 44px;
+    cursor: pointer;
+  }
+  .tbl.fixed tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  /* Every td becomes block by default — we'll show/hide/rearrange specific ones */
+  .tbl.fixed tbody td {
+    display: block;
+    padding: 0;
+    border-bottom: none;
+    overflow: visible;
+  }
+
+  /* Checkbox column: inline-flex in a row at top of the card alongside the name */
+  .tbl.fixed tbody td:first-child {
+    /* The checkbox: small, inline at top-left */
+    display: inline-flex;
+    align-items: center;
+    position: absolute;
+    top: 14px;
+    left: 16px;
+  }
+
+  /* StatusDot column (2nd) — hide; status is shown in the runtime-chip */
+  .tbl.fixed tbody td:nth-child(2) {
+    display: none;
+  }
+
+  /* Name cell (3rd): primary content — large + bold */
+  .tbl.fixed tbody td:nth-child(3) {
+    padding-left: 22px; /* indent past the checkbox */
+  }
+
+  /* cell-name: let items wrap on phone */
+  .tbl.fixed .cell-name {
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+
+  /* runtime-chip: keep it next to the name */
+  .tbl.fixed .runtime-chip {
+    flex-shrink: 0;
+  }
+
+  /* Secondary metadata row: project, priority, due — stack or wrap horizontally */
+  /* Dependencies (4th): show only if non-empty; clamp to 2 lines */
+  .tbl.fixed tbody td:nth-child(4) .cell-deps {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Project (5th): show as a small badge */
+  .tbl.fixed tbody td:nth-child(5) {
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+
+  /* Priority (6th) + Due (7th): float them in a row */
+  .tbl.fixed tbody td:nth-child(6),
+  .tbl.fixed tbody td:nth-child(7) {
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* Agent icon (8th): hide on phone to save space */
+  .tbl.fixed tbody td:nth-child(8) {
+    display: none;
+  }
+
+  /* Tags (9th): wrap */
+  .tbl.fixed .cell-tags {
+    flex-wrap: wrap;
+    gap: 4px;
+    overflow: visible;
+  }
+  .tbl.fixed .cell-tags .tag {
+    max-width: none;
+  }
+
+  /* Updated (10th): small, muted, right-align floated to top-right */
+  .tbl.fixed tbody td:nth-child(10) {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  /* Actions (11th): row of icon buttons */
+  .tbl.fixed tbody td:nth-child(11) {
+    display: flex;
+    justify-content: flex-start;
+    gap: 4px;
+  }
+
+  /* Make row-action buttons always visible on phone (no hover) */
+  .tbl.fixed .row-action {
+    opacity: 0.65;
+  }
+
+  /* Rename button: always slightly visible on phone */
+  .tbl.fixed .rename-btn {
+    opacity: 0.45;
+  }
+
+  /* Position the card relatively so checkbox can be absolute */
+  .tbl.fixed tbody tr {
+    position: relative;
+  }
+
+  /* tree-name-cell: reset absolute positioning of tree guides on phone */
+  .tbl.fixed .tree-name-cell {
+    position: static;
+  }
+  .tbl.fixed .tree-guides {
+    display: none;
+  }
+  .tbl.fixed .tree-content {
+    padding-left: 0 !important;
+  }
+  .tbl.fixed .tree-caret {
+    display: none;
+  }
+}
+
+/* ---- Inbox: stack pane-list above pane-detail at ≤640px ----------------- */
+@media (max-width: 640px) {
+  /* The twopane grid becomes a single column */
+  .twopane {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+    /* Don't enforce a fixed height — let it scroll naturally with the page */
+    overflow: visible;
+  }
+
+  /* Left pane (thread list): full width, fixed reasonable height, scrollable */
+  .pane-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    /* Show 3–4 threads before scrolling so the user knows there's a detail below */
+    max-height: 45dvh;
+    overflow-y: auto;
+  }
+
+  /* Right pane (detail): full width below the list */
+  .pane-detail {
+    overflow-y: visible;
+    min-width: 0;
+  }
+
+  /* Inbox flush page: let the content scroll normally */
+  .page.flush {
+    overflow-y: auto;
+    height: auto;
+  }
+
+  /* Conversation detail: tighten padding on phone */
+  .pane-detail > div[style] {
+    padding: 16px 14px !important;
+    max-width: 100% !important;
+  }
+
+  /* pli items: slightly more compact on phone — still ≥44px touch target */
+  .pli {
+    padding: 10px 14px;
+    min-height: 44px;
+  }
+
+  /* Ensure the inbox page itself doesn't cause horizontal scroll */
+  .page.flush .twopane {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+}
