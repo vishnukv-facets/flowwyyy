@@ -5,6 +5,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { getTheme, onThemeChange, toggleTheme, type Theme } from '../lib/theme'
 import { ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from '../components/SettingsPanels'
+import { RemoteAccessSettings } from './RemoteAccessSettings'
 import type { SettingField, ToolCapability } from '../lib/types'
 import { useMascotPrefs, setMascotPrefs, NAP_OPTIONS } from '../lib/mascot'
 import { pushToast } from '../lib/toast'
@@ -179,6 +180,8 @@ export function Settings() {
           <CapabilityPanel title="Integrations" icon={<CheckCircle2 size={17} />} items={caps?.integrations ?? []} />
         </div>
       </SettingsSection>
+
+      <RemoteAccessSettings />
     </div>
   )
 }
