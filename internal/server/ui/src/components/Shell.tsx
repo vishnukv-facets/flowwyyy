@@ -6,31 +6,15 @@ import { ClaudeRunner } from './ClaudeMascot'
 import { useMascotPrefs } from '../lib/mascot'
 import {
   AlertTriangle,
-  BarChart3,
   Bell,
-  BookText,
-  Bot,
-  Brain,
   CheckCircle2,
   Database,
-  FolderGit2,
-  HardDrive,
-  Inbox,
-  LayoutDashboard,
-  ListTodo,
-  MessagesSquare,
   Moon,
-  Network,
-  Plug,
   Plus,
   Radar,
   RefreshCw,
-  Repeat,
   Search,
-  Settings,
   Sun,
-  TerminalSquare,
-  Trash2,
 } from 'lucide-react'
 import { rpc, type ConnStatus } from '../lib/rpc'
 import { getTheme, toggleTheme, type Theme } from '../lib/theme'
@@ -47,15 +31,11 @@ import { Toaster } from './Toaster'
 import { ConfirmHost } from './ConfirmHost'
 import { FloatingTerminalLayer } from './FloatingTerminalTray'
 import type { FlowDBDocStat, FlowDBInfo } from '../lib/types'
+import { buildNavGroups } from './navDefs'
+import { MobileNav } from './MobileNav'
 
-interface NavDef {
-  to: string
-  label: string
-  icon: ReactNode
-  match: (p: string) => boolean
-  badge?: number
-  tone?: string
-}
+// NavDef is now defined in navDefs.tsx — import the type if needed locally
+type NavDef = import('./navDefs').NavDef
 
 type NotificationItem = { key: string; title: string; sub: string }
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
@@ -159,61 +139,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const unread = inbox?.unread_count ?? 0
   const mascotPrefs = useMascotPrefs()
 
-  const groups: { label: string; items: NavDef[] }[] = [
-    {
-      label: 'Workspace',
-      items: [
-        { to: '/', label: 'Mission Control', icon: <LayoutDashboard size={16} />, match: (p) => p === '/' },
-        {
-          to: '/sessions',
-          label: 'Sessions',
-          icon: <TerminalSquare size={16} />,
-          match: (p) => p === '/sessions' || p.startsWith('/session/'),
-          badge: running || undefined,
-          tone: 'var(--ok)',
-        },
-        { to: '/tasks', label: 'Tasks', icon: <ListTodo size={16} />, match: (p) => p === '/tasks', badge: backlog || undefined },
-        { to: '/owners', label: 'Owners', icon: <Bot size={16} />, match: (p) => p === '/owners' },
-        { to: '/graph', label: 'Graph', icon: <Network size={16} />, match: (p) => p === '/graph' || p === '/brain' },
-        {
-          to: '/inbox',
-          label: 'Inbox',
-          icon: <Inbox size={16} />,
-          match: (p) => p === '/inbox',
-          badge: unread || undefined,
-          tone: 'var(--accent-hi)',
-        },
-        { to: '/chats', label: 'Chats', icon: <MessagesSquare size={16} />, match: (p) => p === '/chats' },
-        {
-          to: '/attention',
-          label: 'Attention',
-          icon: <Bell size={16} />,
-          match: (p) => p === '/attention',
-          badge: attentionCount || undefined,
-          tone: 'var(--warn)',
-        },
-        { to: '/analytics', label: 'Analytics', icon: <BarChart3 size={16} />, match: (p) => p === '/analytics' },
-      ],
-    },
-    {
-      label: 'Library',
-      items: [
-        { to: '/projects', label: 'Projects', icon: <FolderGit2 size={16} />, match: (p) => p === '/projects' || p.startsWith('/project/') },
-        { to: '/playbooks', label: 'Playbooks', icon: <Repeat size={16} />, match: (p) => p === '/playbooks' || p.startsWith('/playbook/') },
-        { to: '/kb', label: 'Knowledge', icon: <BookText size={16} />, match: (p) => p === '/kb' },
-        { to: '/memories', label: 'Memories', icon: <Brain size={16} />, match: (p) => p === '/memories' },
-      ],
-    },
-    {
-      label: 'System',
-      items: [
-        { to: '/workdirs', label: 'Workdirs', icon: <HardDrive size={16} />, match: (p) => p === '/workdirs' },
-        { to: '/connectors', label: 'Connectors', icon: <Plug size={16} />, match: (p) => p === '/connectors' },
-        { to: '/settings', label: 'Settings', icon: <Settings size={16} />, match: (p) => p === '/settings' },
-        { to: '/trash', label: 'Trash', icon: <Trash2 size={16} />, match: (p) => p === '/trash' },
-      ],
-    },
-  ]
+  const groups = buildNavGroups({ iconSize: 16, running, backlog, unread, attentionCount })
   const allNav = groups.flatMap((g) => g.items)
   const title = allNav.find((n) => n.match(loc))?.label ?? 'flowwyyy'
   const connLabel = conn === 'open' ? 'live' : conn === 'connecting' ? 'connecting' : 'offline'
@@ -314,6 +240,8 @@ export function Shell({ children }: { children: ReactNode }) {
       <FloatingTerminalLayer />
       <Toaster />
       <ConfirmHost />
+      {/* Mobile bottom nav — CSS hides this at ≥641px so desktop is unchanged */}
+      <MobileNav />
     </div>
   )
 }

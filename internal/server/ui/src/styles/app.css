@@ -2286,6 +2286,108 @@ select.input {
   }
 }
 
+/* ======================== PHONE (≤640px) ================================
+   Hide the rail entirely, go single-column, show the mobile bottom nav.
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* --- Shell grid: single column, no rail -------------------------------- */
+  .shell {
+    grid-template-columns: 1fr;
+    /* height stays 100dvh; overflow:hidden stays */
+  }
+  .rail {
+    display: none;
+  }
+  /* The main column is now the only column — full width */
+  .main {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden; /* prevent horizontal page scroll */
+  }
+
+  /* Reserve bottom space for the fixed mobile nav + safe area */
+  .content {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* --- Topbar: safe area + tighter horizontal padding ------------------- */
+  .topbar {
+    /* Push the bar down by the notch/status-bar height */
+    padding-top: env(safe-area-inset-top);
+    /* Increase height to absorb the safe area above the content */
+    height: calc(var(--topbar-h) + env(safe-area-inset-top));
+    padding-left: 14px;
+    padding-right: 14px;
+    /* Allow topbar items to wrap so nothing clips at 390px */
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .topbar-title {
+    /* Shrink the title so action buttons have room */
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  .topbar-h {
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Hide search button text + kbd hint at phone width */
+  .searchbtn .dim,
+  .searchbtn .kbd {
+    display: none;
+  }
+  .searchbtn {
+    min-width: auto;
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+  /* Hide conn label text, keep dot */
+  .conn-label {
+    display: none;
+  }
+  /* Reduce gap between topbar actions */
+  .topbar > * {
+    flex-shrink: 0;
+  }
+
+  /* MobileNav: shown only on phone */
+  .mobile-nav {
+    display: flex;
+  }
+}
+
+/* ======================== TABLET (≤900px) ===============================
+   Collapse the rail to icon-only a bit earlier than the existing 1080px
+   rule, giving content more width on medium screens.
+   ======================================================================== */
+@media (max-width: 900px) and (min-width: 641px) {
+  .shell {
+    grid-template-columns: var(--rail-w-collapsed) 1fr;
+  }
+  .rail-brand-text,
+  .rail-item-label,
+  .rail-badge,
+  .rail-foot,
+  .rail-runner {
+    display: none;
+  }
+  .rail-item {
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+/* MobileNav is hidden on desktop / tablet (≥641px) */
+@media (min-width: 641px) {
+  .mobile-nav {
+    display: none !important;
+  }
+}
+
 /* ----------------------------- segmented / chips ------------------------ */
 .segmented {
   display: inline-flex;
@@ -9034,4 +9136,211 @@ a.owner-task-item:hover {
   border-radius: var(--r-pill);
   box-shadow: var(--shadow-pop);
   cursor: pointer;
+}
+
+/* ============================================================================
+   Mobile bottom nav + drawer
+   All .mobile-nav* rules are only ever visible at ≤640px (controlled by the
+   @media block above — display:none !important at ≥641px).
+   Z-index: 90 — below floating terminal/modal band (95–100), above content.
+   ============================================================================ */
+
+/* The bottom tab bar */
+.mobile-nav {
+  /* Hidden by default; shown only at ≤640px via the media query above */
+  display: none;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  /* Accounts for iPhone home-bar safe area */
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--rail-bg) 95%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  /* Items laid out in a row */
+  flex-direction: row;
+  align-items: stretch;
+}
+
+/* Each tab button */
+.mobile-nav-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 56px;
+  gap: 3px;
+  padding: 8px 4px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  /* 44px minimum touch target via min-height on the parent */
+  transition: color var(--dur-1) var(--ease);
+  position: relative;
+  text-decoration: none;
+}
+.mobile-nav-tab:hover {
+  color: var(--text-2);
+}
+.mobile-nav-tab.active {
+  color: var(--accent-hi);
+}
+/* Active pip above the icon */
+.mobile-nav-tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent);
+}
+.mobile-nav-tab-icon {
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+/* Badge on the tab icon */
+.mobile-nav-tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--text-inv);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.mobile-nav-tab-label {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* --- Drawer (slide-up sheet for "More" destinations) -------------------- */
+
+/* Backdrop scrim */
+.mobile-nav-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 91;
+  background: var(--scrim);
+  animation: mobile-nav-fade-in var(--dur-2) var(--ease) both;
+}
+@keyframes mobile-nav-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-nav-backdrop {
+    animation: none;
+  }
+}
+
+/* The sheet itself */
+.mobile-nav-drawer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 92;
+  /* Sit above the bottom nav so the "More" sheet covers it */
+  background: var(--bg-1);
+  border-top: 1px solid var(--border-strong);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  padding: 12px 16px calc(80px + env(safe-area-inset-bottom));
+  max-height: 80dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: mobile-nav-slide-up var(--dur-2) var(--ease) both;
+}
+@keyframes mobile-nav-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-nav-drawer {
+    animation: none;
+  }
+}
+
+/* Drag handle hint */
+.mobile-nav-drawer-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  margin: 0 auto 16px;
+}
+
+/* Drawer section headings */
+.mobile-nav-drawer-section {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 0 4px 6px;
+  margin-top: 12px;
+}
+.mobile-nav-drawer-section:first-of-type {
+  margin-top: 0;
+}
+
+/* Drawer destination rows */
+.mobile-nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-weight: 500;
+  font-size: 14px;
+  text-decoration: none;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.mobile-nav-drawer-item:hover,
+.mobile-nav-drawer-item:active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.mobile-nav-drawer-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-hi);
+}
+.mobile-nav-drawer-item-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: inherit;
+}
+.mobile-nav-drawer-item-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  border: 1px solid currentColor;
+  opacity: 0.8;
 }
