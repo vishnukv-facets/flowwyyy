@@ -9506,3 +9506,111 @@ a.owner-task-item:hover {
     }
   }
 }
+
+/* ======================== PHONE: SessionDetail ===========================
+   At ≤640px the two-pane layout is already collapsed to a single column by
+   the ≤1000px rule above. These rules add phone-specific refinements:
+   - Compact the session header (less vertical dead space before the terminal)
+   - Make the tab strip horizontally scrollable (all tabs reachable by swiping)
+   - Ensure the terminal pane + side panel each get full width with no double-
+     scroll (page scrolls, terminal scrolls internally)
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* ---- Session grid: reduce outer padding on phone -------------------- */
+  .session {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  /* ---- Session header: tighter so terminal is visible sooner ---------- */
+  .detail-head {
+    gap: 8px;
+    margin-bottom: 10px;
+    /* Allow long titles + badges to wrap compactly */
+    align-items: flex-start;
+  }
+  .detail-title {
+    font-size: 17px;
+    letter-spacing: -0.01em;
+  }
+  .detail-ref {
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  /* Toolbar: let items wrap to two rows if needed but keep gaps tight */
+  .toolbar {
+    gap: 6px;
+    margin-bottom: 2px !important;
+  }
+
+  /* Token/cost pill: smaller on phone */
+  .tok-pill {
+    font-size: 11px;
+    padding: 2px 7px;
+  }
+
+  /* ---- Tab strip: horizontally scrollable ----------------------------- */
+  /* Wrap .tabs in a scroll container without changing markup.
+     The .tabs div itself becomes the scrollable row. */
+  .session-side .tabs {
+    /* Make the tab strip scroll horizontally */
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum scroll on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* Hide the scrollbar but keep scroll functionality */
+    scrollbar-width: none;
+    /* Don't wrap — keep all tabs in one row */
+    flex-wrap: nowrap;
+    /* Tighter padding so more tabs are visible */
+    padding: 0 8px;
+    /* Prevent shrinking so the container can scroll */
+    flex-shrink: 0;
+    /* Gap between tabs */
+    gap: 0;
+  }
+  .session-side .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  /* Each tab: enforce ≥44px touch target height and min-width */
+  .session-side .tab {
+    flex-shrink: 0;
+    min-width: 44px;
+    /* Ensure comfortable touch target height */
+    padding: 10px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  /* ---- Session side panel: full width, not clipped -------------------- */
+  .session-side {
+    /* On phone the side panel sits below the terminal (stacked by ≤1000px
+       rule). Give it room to expand naturally. */
+    overflow: visible;
+    /* Don't cap height — let the panel scroll with the page */
+    max-height: none;
+  }
+  /* session-info: no max-height cap on phone (page scroll handles it) */
+  .session-info {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* ---- Terminal pane: full width, no double-scroll -------------------- */
+  /* .term-shell already flex-fills session-main; ensure it doesn't
+     get a fixed height that clips content */
+  .session-main {
+    gap: 8px;
+  }
+  /* The term-bar: shrink mono clip to avoid overflow */
+  .term-bar .mono {
+    max-width: 55vw;
+  }
+
+  /* tab-body: tighter padding on phone */
+  .tab-body {
+    padding: 10px 10px !important;
+  }
+}
