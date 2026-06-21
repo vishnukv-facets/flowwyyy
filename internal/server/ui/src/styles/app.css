@@ -1795,6 +1795,10 @@ select.input {
   display: flex;
   background: #0a0b0e;
 }
+.floating-terminal-body .flow-term-wrapper {
+  flex: 1;
+  height: 100%;
+}
 .floating-terminal-body .flow-term {
   flex: 1;
   height: 100%;
@@ -9347,4 +9351,158 @@ a.owner-task-item:hover {
   border-radius: var(--r-pill);
   border: 1px solid currentColor;
   opacity: 0.8;
+}
+
+/* ============================================================================
+   Mobile terminal — soft-keyboard viewport fit, touch scroll, accessory row
+   All rules gated behind @media (max-width: 640px) or class guards.
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ========================================================================== */
+
+/* ---- flow-term-wrapper: the outer container that scopes the mobile layout - */
+/* On desktop it is a transparent pass-through — flex:1 so it fills the same
+   space .flow-term used to occupy. The wrapper lets us stack .flow-term above
+   the accessory row on phone without breaking the flex chain. */
+.flow-term-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Carry the overflow:hidden that was on .flow-term's parent context; the
+     wrapper itself must not clip xterm, so keep overflow visible here and let
+     .flow-term keep its own overflow:hidden. */
+  overflow: hidden;
+}
+
+/* On desktop the wrapper is invisible; .flow-term keeps its flex:1 inside. */
+.flow-term-wrapper .flow-term {
+  flex: 1;
+  min-height: 0;
+}
+
+/* floating-terminal-body already stretches .flow-term to 100% height; extend
+   that to the wrapper so the floating terminal is unaffected. */
+.floating-terminal-body .flow-term-wrapper {
+  flex: 1;
+  height: 100%;
+}
+.floating-terminal-body .flow-term-wrapper .flow-term {
+  height: 100%;
+  border-radius: 0;
+  padding: 10px 12px;
+  flex: 1;
+}
+
+/* ---- Accessory key row -------------------------------------------------- */
+/* Hidden on desktop — only shown at ≤640px. */
+.term-accessory-row {
+  display: none;
+}
+
+/* ---- Mobile overrides --------------------------------------------------- */
+@media (max-width: 640px) {
+  /* Soft-keyboard: the JS caps .flow-term-wrapper's max-height to
+     visualViewport.height; nothing extra needed in CSS — the flex column
+     inside naturally shrinks the terminal and pushes the accessory row up. */
+
+  /* Ensure no ancestor blocks touch scrolling in the xterm viewport.
+     .flow-term already has overflow:hidden (for the chrome), but xterm's own
+     .xterm-viewport handles scroll internally — touch-action must not be none
+     on any ancestor that xterm places scroll events on. */
+  .flow-term,
+  .flow-term .xterm-host,
+  .flow-term .xterm {
+    touch-action: pan-y;
+  }
+
+  /* Reduce padding on narrow screens to gain precious vertical pixels. */
+  .flow-term {
+    padding: 6px 8px;
+  }
+
+  /* Scroll-to-bottom button: on phone it lives above the accessory row +
+     soft keyboard. We shift it up by the accessory row height (56px) so it's
+     not covered. The accessory row is position:static so bottom:0 of the
+     .flow-term positions relative to .flow-term's bottom edge.
+     We shift it up by (accessory-row-height + original-bottom-offset):
+     accessory row is 56px tall; original bottom was 22px → total 22+56=78px. */
+  .terminal-bottom-jump {
+    bottom: 78px;
+    right: 12px;
+  }
+
+  /* ---- Accessory key row ---------------------------------------------- */
+  .term-accessory-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum scroll on iOS */
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    /* Hide the scrollbar but keep scroll functionality */
+    scrollbar-width: none;
+    padding: 6px 8px;
+    background: #111318;
+    border-top: 1px solid rgba(215, 212, 205, 0.12);
+    /* Fixed height gives the terminal a stable amount to subtract via flexbox */
+    min-height: 56px;
+    max-height: 56px;
+    flex-shrink: 0;
+  }
+  .term-accessory-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .term-acc-key {
+    /* ≥44px touch target per guidelines */
+    min-width: 44px;
+    height: 44px;
+    padding: 0 10px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(215, 212, 205, 0.18);
+    border-radius: 6px;
+    color: #d7d4cd;
+    font-family: var(--font-mono, monospace);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    /* Prevent text selection on double-tap */
+    user-select: none;
+    -webkit-user-select: none;
+    /* Prevent the 300ms tap delay on mobile */
+    touch-action: manipulation;
+    transition:
+      background 80ms ease,
+      border-color 80ms ease,
+      color 80ms ease;
+    scroll-snap-align: start;
+  }
+
+  .term-acc-key:active {
+    background: rgba(94, 234, 212, 0.15);
+    border-color: rgba(94, 234, 212, 0.5);
+    color: #5eead4;
+  }
+
+  /* Ctrl key: sticky modifier — highlighted when active */
+  .term-acc-ctrl--active {
+    background: rgba(94, 234, 212, 0.2);
+    border-color: rgba(94, 234, 212, 0.65);
+    color: #5eead4;
+    box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.25);
+  }
+
+  /* prefers-reduced-motion: disable transitions in the accessory row */
+  @media (prefers-reduced-motion: reduce) {
+    .term-acc-key {
+      transition: none;
+    }
+  }
 }
