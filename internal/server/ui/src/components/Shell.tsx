@@ -34,9 +34,6 @@ import type { FlowDBDocStat, FlowDBInfo } from '../lib/types'
 import { buildNavGroups } from './navDefs'
 import { MobileNav } from './MobileNav'
 
-// NavDef is now defined in navDefs.tsx — import the type if needed locally
-type NavDef = import('./navDefs').NavDef
-
 type NotificationItem = { key: string; title: string; sub: string }
 type BrowserNotificationPermission = NotificationPermission | 'unsupported'
 

@@ -9147,8 +9147,12 @@ a.owner-task-item:hover {
 
 /* The bottom tab bar */
 .mobile-nav {
-  /* Hidden by default; shown only at ≤640px via the media query above */
-  display: none;
+  /* Mobile default is shown (flex row); hidden on desktop/tablet by the
+     `@media (min-width: 641px) { display: none !important }` rule above.
+     Base must NOT be display:none — it would win over the max-width:640
+     show-rule (equal specificity, later in source), hiding the nav at all
+     widths. */
+  display: flex;
   position: fixed;
   bottom: 0;
   left: 0;
