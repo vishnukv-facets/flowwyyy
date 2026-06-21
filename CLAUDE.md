@@ -90,7 +90,14 @@ flow/
   in #34 — don't resurrect those tables.
 - **`internal/server`** — the largest package; Mission Control web UI and its
   JSON/websocket API, the terminal bridge, and the Slack/GitHub connector
-  setup wizards. New web features go here, not in `app`.
+  setup wizards. New web features go here, not in `app`. Also hosts the
+  **remote-access surface** (PWA over the zrok ingress): a composite
+  `publicIngressHandler` that serves the GitHub-webhook mux unchanged plus an
+  opt-in, device-token-gated remote app mux (`remoteAppMux`); per-device tokens
+  (12h TTL, hashed at rest in `remote_devices`) minted via QR pairing from the
+  laptop, validated by the `remoteAuth` middleware which swaps in the session
+  token so existing WS/RPC handlers work unchanged. See `remote_auth.go`,
+  `remote_handlers.go`.
 - **`internal/monitor` + `internal/steering`** — connector ingestion (Slack
   Socket Mode + GitHub App webhooks) and the attention router that triages
   events into the feed / tasks. `steering.ApplyAction` + `DefaultAutonomy()`
