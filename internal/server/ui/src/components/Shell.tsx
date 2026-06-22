@@ -221,7 +221,8 @@ export function Shell({ children }: { children: ReactNode }) {
           <NotificationsBell />
           <AskFlow />
           <button type="button" className="btn primary" onClick={() => setCreateOpen(true)}>
-            <Plus size={16} /> New task
+            <Plus size={16} />
+            <span className="btn-label">New task</span>
           </button>
         </header>
         <main className="content">{children}</main>
