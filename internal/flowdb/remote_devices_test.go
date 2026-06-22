@@ -1,20 +1,11 @@
 package flowdb
 
 import (
-	"database/sql"
 	"testing"
 	"time"
 )
 
-func openTestDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := OpenDB(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db
-}
+// openTestDB is shared across flowdb tests (defined in pending_wakes_test.go).
 
 func TestRemoteDeviceCRUD(t *testing.T) {
 	db := openTestDB(t)
