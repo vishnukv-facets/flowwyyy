@@ -4469,6 +4469,13 @@ select.input {
 .tbl.fixed {
   table-layout: fixed;
 }
+/* Scroll-safety: if the fixed table is ever wider than its card (dense columns
+   at sub-desktop widths above the card-reflow breakpoint), scroll it inside the
+   card instead of truncating the viewport. At ≤1024px the reflow turns it into
+   stacked cards and overrides this with overflow:hidden. */
+.page > .card:has(.tbl.fixed) {
+  overflow-x: auto;
+}
 .tbl.fixed td,
 .tbl.fixed th {
   overflow: hidden;
@@ -9680,8 +9687,14 @@ a.owner-task-item:hover {
   }
 }
 
-/* ---- Tasks table → stacked card rows at ≤640px -------------------------- */
-@media (max-width: 640px) {
+/* ---- Tasks table → stacked card rows at ≤1024px ------------------------- */
+/* The fixed-layout table's columns sum wider than the content area once the
+   rail is present, so on tablet (incl. iPad landscape, 1024) it truncates on
+   the right. Reflow it to one stacked card per row across tablet + phone; the
+   real table returns at desktop width (>1024). The .tbl.fixed card also carries
+   overflow-x:auto (base rule) so if the table is ever still too wide above this
+   breakpoint it scrolls inside its card rather than truncating the viewport. */
+@media (max-width: 1024px) {
   /* Outer card wrapper: remove horizontal padding so rows go edge-to-edge */
   .page > .card:has(.tbl.fixed) {
     padding: 0 !important;
@@ -9787,10 +9800,12 @@ a.owner-task-item:hover {
   .tbl.fixed .cell-tags {
     flex-wrap: wrap;
     gap: 4px;
-    overflow: visible;
+    overflow: hidden;
   }
+  /* Cap tags to the card width and ellipsize — a long unbreakable tag (e.g.
+     slack-thread:<id>) must not blow the card past the viewport. */
   .tbl.fixed .cell-tags .tag {
-    max-width: none;
+    max-width: 100%;
   }
 
   /* Updated (10th): small, muted, right-align floated to top-right */
