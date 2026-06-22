@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useSearch } from 'wouter'
 import { Activity, AlertTriangle, ArrowRight, AtSign, BellOff, BookMarked, Check, ChevronDown, ExternalLink, Filter, Github, Handshake, Hash, Inbox, Info, ListPlus, Lock, MessageSquare, Pencil, Play, Send, Share2 } from 'lucide-react'
-import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useChats, useSteeringRuns, useWorkEvents } from '../lib/query'
+import { useAction, useAttention, useAttentionDecision, useAttentionTrace, useChats, usePendingSlackSends, useSlackPendingDecide, useSteeringRuns, useWorkEvents } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
 import { EmptyState, ErrorNote, Loading, SourceIcon } from '../components/ui'
@@ -287,6 +287,69 @@ function SteeringRunRow({ run, open, setOpen }: { run: SteeringRun; open: string
 const cardSig = (it: AttentionItem) =>
   `${it.suggested_action}|${it.matched_task ?? ''}|${it.confidence}|${it.reason ?? ''}|${it.summary ?? ''}`
 
+// PendingSendsPanel surfaces outbound Slack sends parked by the external-channel
+// send gate: a message bound for a channel outside the operator's org waits here
+// for an explicit Approve & send (or Discard). It sits atop the Attention feed
+// because it's the highest-stakes operator decision in the queue — nothing
+// leaves for an outside org without this click.
+function PendingSendsPanel() {
+  const { data } = usePendingSlackSends('pending')
+  const decide = useSlackPendingDecide()
+  const [edited, setEdited] = useState<Record<string, string>>({})
+  const items = data?.pending ?? []
+  if (items.length === 0) return null
+  return (
+    <div className="psend-panel">
+      <div className="psend-head row gap">
+        <AlertTriangle size={13} />
+        <span className="psend-title">Outbound holds — outside your org</span>
+        <span className="psend-count">{items.length}</span>
+      </div>
+      <div className="att-list">
+        {items.map((ps) => {
+          const value = edited[ps.id] ?? ps.text
+          return (
+            <div key={ps.id} className="att-card card psend-card">
+              <div className="row gap psend-card-head">
+                <span className="psend-badge">EXTERNAL</span>
+                <strong className="psend-channel">{ps.channel_label || ps.channel}</strong>
+                {ps.reason ? <span className="psend-reason">{ps.reason}</span> : null}
+                <span className="spacer" />
+                <span className="psend-when">{ago(ps.created_at)}</span>
+              </div>
+              <textarea
+                className="att-correct-input psend-text"
+                rows={Math.min(8, Math.max(2, value.split('\n').length))}
+                value={value}
+                disabled={decide.isPending}
+                onChange={(e) => setEdited((p) => ({ ...p, [ps.id]: e.target.value }))}
+              />
+              <div className="att-actions row gap">
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={decide.isPending || value.trim() === ''}
+                  onClick={() => decide.mutate({ id: ps.id, action: 'send', text: value })}
+                >
+                  <Send size={12} /> Approve &amp; send
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={decide.isPending}
+                  onClick={() => decide.mutate({ id: ps.id, action: 'discard' })}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function FeedView({
   selectedItemId,
   onClearDeepLink,
@@ -393,6 +456,7 @@ function FeedView({
 
   return (
     <>
+      <PendingSendsPanel />
       <div className="row gap" style={{ marginBottom: 16 }}>
         {STATUSES.map((s) => (
           <button

@@ -36,6 +36,20 @@ type SlackConversation struct {
 	IsMpIM    bool
 	IsChannel bool
 	IsGroup   bool
+	// Slack Connect / shared-channel metadata, used to decide whether a
+	// conversation includes people outside the operator's org (the outbound
+	// send gate — see slack_external.go). IsExtShared/IsOrgShared mean the
+	// conversation is shared with another organization; the *TeamIDs identify
+	// which workspaces participate, so a team that isn't the operator's flags
+	// a cross-workspace conversation even absent the Connect flags.
+	IsShared           bool
+	IsExtShared        bool
+	IsOrgShared        bool
+	IsPendingExtShared bool
+	ContextTeamID      string
+	SharedTeamIDs      []string
+	ConnectedTeamIDs   []string
+	InternalTeamIDs    []string
 }
 
 // SlackMessage is the small, testable subset of conversations.replies data
@@ -605,14 +619,22 @@ func (c slackTitleAPIClient) ConversationInfo(ctx context.Context, channelID str
 		return SlackConversation{}, errors.New("slack conversation info missing")
 	}
 	return SlackConversation{
-		ID:        firstNonEmpty(ch.ID, normalizeSlackChannelID(channelID)),
-		Name:      firstNonEmpty(ch.Name, ch.NameNormalized),
-		User:      ch.User,
-		Members:   ch.Members,
-		IsIM:      ch.IsIM,
-		IsMpIM:    ch.IsMpIM,
-		IsChannel: ch.IsChannel,
-		IsGroup:   ch.IsGroup,
+		ID:                 firstNonEmpty(ch.ID, normalizeSlackChannelID(channelID)),
+		Name:               firstNonEmpty(ch.Name, ch.NameNormalized),
+		User:               ch.User,
+		Members:            ch.Members,
+		IsIM:               ch.IsIM,
+		IsMpIM:             ch.IsMpIM,
+		IsChannel:          ch.IsChannel,
+		IsGroup:            ch.IsGroup,
+		IsShared:           ch.IsShared,
+		IsExtShared:        ch.IsExtShared,
+		IsOrgShared:        ch.IsOrgShared,
+		IsPendingExtShared: ch.IsPendingExtShared,
+		ContextTeamID:      ch.ContextTeamID,
+		SharedTeamIDs:      ch.SharedTeamIDs,
+		ConnectedTeamIDs:   ch.ConnectedTeamIDs,
+		InternalTeamIDs:    ch.InternalTeamIDs,
 	}, nil
 }
 

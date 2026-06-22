@@ -90,7 +90,7 @@ func sendReplyPrompt(item flowdb.FeedItem, text, instructions string) string {
 	}
 	return `MODE: send-reply
 
-You are the send step of an operator's attention router. ` + draftClause + `
+You are the send step of an operator's attention router. ` + draftClause + operatorVoiceDirective() + `
 
 1. Post the reply to the source thread. ` + sendHintFor(item.Source) + `
 2. Refer to people and channels by name; never paste raw platform IDs.

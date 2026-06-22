@@ -73,6 +73,10 @@ type terminalHub struct {
 	// within a 2.5s window; we explicitly invalidate on create/kill so the
 	// UI never lies after a state change the user just triggered.
 	sharedRunningCache *ttlCache[string, bool]
+	// wakes buffers wake prompts that arrived while a session was blocked on
+	// the operator's input, so they re-deliver once it's free instead of
+	// auto-submitting the open prompt. See terminal_wake.go.
+	wakes *wakeQueue
 }
 
 type terminalLaunch struct {
@@ -144,6 +148,7 @@ func newTerminalHub(s *Server) *terminalHub {
 		floatingMeta:       map[string]floatingSessionMeta{},
 		launchLocks:        map[string]*sync.Mutex{},
 		sharedRunningCache: newTTLCache[string, bool](2500 * time.Millisecond),
+		wakes:              newWakeQueue(s.cfg.DB),
 	}
 }
 

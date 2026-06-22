@@ -6099,6 +6099,89 @@ a.orch-pr:hover {
   outline: none;
   border-color: var(--accent);
 }
+
+/* External-channel send gate: outbound holds awaiting the operator's approval,
+   pinned above the attention feed. Warm warn accent marks them as the
+   highest-stakes review in the queue. */
+.psend-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+.psend-head {
+  align-items: center;
+  gap: 8px;
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+}
+.psend-title {
+  color: var(--text);
+}
+.psend-count {
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+}
+.psend-card {
+  gap: 8px;
+  border-left: 2px solid var(--warn);
+}
+.psend-card-head {
+  align-items: baseline;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.psend-badge {
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.psend-channel {
+  font-size: 13px;
+}
+.psend-reason {
+  color: var(--text-2);
+}
+.psend-when {
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+/* Operator voice editor (Attention → config → Voice). */
+.voice-note {
+  margin: 0 0 10px;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.voice-editor {
+  width: 100%;
+  min-height: 96px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  resize: vertical;
+}
+.voice-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .att-forward-target {
   display: inline-block;
   max-width: 220px;

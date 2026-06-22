@@ -1,5 +1,5 @@
 import { QueryClient, keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ApiError, apiAction, apiGet, apiGetText, apiPost } from './api'
+import { ApiError, apiAction, apiGet, apiGetText, apiPost, apiPutText } from './api'
 import { rpc } from './rpc'
 import { events } from './events'
 import { focusedLiveInvalidationKeys } from './liveInvalidation'
@@ -24,6 +24,7 @@ import type {
   HealthView,
   IngressStatus,
   InboxConversation,
+  PendingSendsResponse,
   InboxFeed,
   KBFileView,
   KBDreamStatus,
@@ -64,7 +65,7 @@ export const queryClient = new QueryClient({
 // Live events should refresh live work data, not slow/static metadata. Quote,
 // settings, and Slack channel listing have their own refresh cadence; invalidating
 // Slack channels on every message can hammer conversations.list into rate limits.
-const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'ingress-status', 'github-auth', 'memory-sources'])
+const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'ingress-status', 'github-auth', 'memory-sources', 'persona'])
 const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
 let pendingBroadInvalidate = false
@@ -635,6 +636,56 @@ export function useSearch(query: string, scope = 'all') {
 export function useAskFlow() {
   return useMutation({
     mutationFn: (query: string) => apiPost<AskFlowResponse>('/api/ask-flow', { query }),
+  })
+}
+
+// ----- external-channel send gate -----------------------------------------
+// Outbound Slack sends to channels outside the operator's org are parked for
+// approval; this lists them and decides (approve → post, discard → drop).
+export function usePendingSlackSends(status = 'pending') {
+  return useQuery({
+    queryKey: ['slack-pending', status],
+    queryFn: () =>
+      apiGet<PendingSendsResponse>(`/api/slack/pending?status=${encodeURIComponent(status)}`),
+  })
+}
+
+// ----- operator voice / persona -------------------------------------------
+// The markdown that flow injects into drafting + send prompts so replies read
+// like the operator, not a bot. Edited on the Attention → config tab.
+export function usePersona() {
+  return useQuery({
+    queryKey: ['persona'],
+    queryFn: () => apiGetText('/api/persona'),
+  })
+}
+
+export function useSavePersona() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (text: string) => apiPutText('/api/persona', text),
+    onSuccess: () => {
+      pushToast('ok', 'Voice saved')
+      qc.invalidateQueries({ queryKey: ['persona'] })
+    },
+    onError: (err: Error) => {
+      pushToast('error', err.message || 'save failed')
+    },
+  })
+}
+
+export function useSlackPendingDecide() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { id: string; action: 'send' | 'discard'; text?: string }) =>
+      apiPost<{ ok: boolean; status: string }>('/api/slack/pending/decide', req),
+    onSuccess: (data) => {
+      pushToast('ok', data.status === 'sent' ? 'Sent' : 'Discarded')
+      qc.invalidateQueries({ queryKey: ['slack-pending'] })
+    },
+    onError: (err: Error) => {
+      pushToast('error', err.message || 'send gate action failed')
+    },
   })
 }
 

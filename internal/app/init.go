@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"flow/internal/flowbackup"
 	"flow/internal/flowdb"
+	"flow/internal/steering"
 	"fmt"
 	"io"
 	"os"
@@ -96,6 +97,18 @@ func cmdInit(args []string) int {
 				fmt.Fprintf(os.Stderr, "error: write %s: %v\n", path, err)
 				return 1
 			}
+		}
+	}
+
+	// Seed the operator voice/persona (persona.md at the flow root) so outbound
+	// Slack/GitHub replies sound human from day one — globally applied and
+	// editable. The steerer injects it into drafting + send prompts. Idempotent:
+	// only create if missing; never overwrite an edited voice.
+	personaPath := filepath.Join(root, "persona.md")
+	if _, err := os.Stat(personaPath); os.IsNotExist(err) {
+		if err := os.WriteFile(personaPath, []byte(steering.DefaultPersonaMarkdown), 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "error: write %s: %v\n", personaPath, err)
+			return 1
 		}
 	}
 
@@ -234,6 +247,7 @@ type kbSeed struct {
 	filename string
 	stub     string
 }
+
 
 // kbSeeds returns the five canonical KB files. Kept as a function (not a
 // package-level var) so tests can call it directly without sharing state.

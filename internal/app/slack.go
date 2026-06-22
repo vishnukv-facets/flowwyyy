@@ -148,6 +148,14 @@ func cmdSlackSend(args []string) int {
 	thread := strings.TrimSpace(*threadTS)
 	status, respBody, err := postSlackSendFn(*channel, thread, body, identity, filePath, postAt)
 	if err == nil {
+		if status == 202 {
+			// External-channel send gate: the server parked this for the
+			// operator's approval in the inbox rather than sending it. Make it
+			// unambiguous that nothing was sent — an agent must NOT treat this
+			// as delivered (e.g. do not mark an attention card sent).
+			printSlackQueuedConfirmation(respBody)
+			return 0
+		}
 		if status >= 200 && status < 300 {
 			if postAt != 0 {
 				printSlackScheduleConfirmation(slackScheduledMessageID(respBody), postAt)
@@ -253,6 +261,31 @@ func printSlackScheduleConfirmation(id string, postAt int64) {
 		fmt.Fprintf(os.Stdout, "scheduled_message_id: %s\n", id)
 	}
 	fmt.Fprintf(os.Stdout, "scheduled_for: %s\n", time.Unix(postAt, 0).In(slackSendNow().Location()).Format(time.RFC3339))
+}
+
+// printSlackQueuedConfirmation reports that the server held an external-channel
+// send for the operator's approval (HTTP 202 from the send gate). It prints to
+// stdout but is explicit that the message was NOT sent, so a human or agent
+// reading the output does not assume delivery.
+func printSlackQueuedConfirmation(body string) {
+	var resp struct {
+		Reason       string `json:"reason"`
+		ChannelLabel string `json:"channel_label"`
+		Channel      string `json:"channel"`
+	}
+	_ = json.Unmarshal([]byte(body), &resp)
+	target := "the channel"
+	for _, c := range []string{resp.ChannelLabel, resp.Channel} {
+		if c = strings.TrimSpace(c); c != "" {
+			target = c
+			break
+		}
+	}
+	reason := strings.TrimSpace(resp.Reason)
+	if reason == "" {
+		reason = "outside your org"
+	}
+	fmt.Fprintf(os.Stdout, "QUEUED (not sent): %s is %s — held for your approval in the flow inbox; it will send only when you approve it there.\n", target, reason)
 }
 
 // serverSlackError pulls a human message out of the server's error body

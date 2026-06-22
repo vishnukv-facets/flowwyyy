@@ -126,6 +126,14 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 		}); err != nil {
 			return agentHookIngestResponse{}, err
 		}
+		// Left a human-input wait (operator answered / permission resolved)?
+		// Deliver any wakes buffered while this session was blocked. flushWakes
+		// is a no-op when the queue is empty or the session is still awaiting
+		// input, so this is safe to call on every recorded transition.
+		if s.terminals != nil && resp.Task != "" &&
+			!(&flowdb.AgentRuntimeState{Status: runtimeStatus, EventKind: kind}).AwaitingHumanInput() {
+			s.terminals.flushWakes(resp.Task)
+		}
 	}
 
 	s.publishHookEvent(resp, payload)

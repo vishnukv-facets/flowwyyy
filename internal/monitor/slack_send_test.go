@@ -58,6 +58,7 @@ func TestSendAsBotEmptyTextError(t *testing.T) {
 
 func TestSendAsBotForwardsToFn(t *testing.T) {
 	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_SEND_FOOTER", "") // isolate forwarding from the attribution footer
 
 	var gotChannel, gotText string
 	orig := sendAsBotFn
@@ -118,6 +119,7 @@ func TestScheduleAsThreadWritesDisabled(t *testing.T) {
 
 func TestScheduleAsThreadForwardsPostAtAndThreadTS(t *testing.T) {
 	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	t.Setenv("FLOW_SLACK_SEND_FOOTER", "") // isolate forwarding from the attribution footer
 	var gotChannel, gotThreadTS, gotText, gotIdentity string
 	var gotPostAt int64
 	orig := scheduleAsBotFn
