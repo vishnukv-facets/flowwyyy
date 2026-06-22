@@ -1647,6 +1647,18 @@ select.input {
   position: relative;
   overflow: hidden;
 }
+/* Touch-drag scrollback: xterm's scrollable .xterm-viewport is a sibling behind
+   the touch-receiving .xterm-screen, so native touch scroll can't reach it. The
+   JS bridge in Terminal.tsx drives viewport.scrollTop from a one-finger drag;
+   touch-action:none keeps touchmove cancelable so it can claim the gesture (no
+   page scroll / text-selection underneath). Touch-only — mouse/trackpad wheel
+   is unaffected, so desktop behavior is unchanged. */
+.flow-term .xterm-host,
+.flow-term .xterm,
+.flow-term .xterm-viewport,
+.flow-term .xterm-screen {
+  touch-action: none;
+}
 .terminal-bottom-jump {
   position: absolute;
   right: 24px;
@@ -2279,7 +2291,10 @@ select.input {
   }
 }
 @media (max-width: 720px) {
-  .searchbtn .dim {
+  /* Hide the "Search…" label (a span) but KEEP the magnifier icon — the icon
+     also carries .dim (for its muted color), so a bare `.dim` here would blank
+     the button into an empty box. Scope the hide to the text span. */
+  .searchbtn span.dim {
     display: none;
   }
   .searchbtn {
@@ -2338,8 +2353,10 @@ select.input {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* Hide search button text + kbd hint at phone width */
-  .searchbtn .dim,
+  /* Collapse to an icon-only button at phone width: hide the text label (span)
+     and the ⌘K hint, but keep the magnifier icon visible (it carries .dim for
+     color — don't blank it). */
+  .searchbtn span.dim,
   .searchbtn .kbd {
     display: none;
   }
@@ -9405,15 +9422,10 @@ a.owner-task-item:hover {
      visualViewport.height; nothing extra needed in CSS — the flex column
      inside naturally shrinks the terminal and pushes the accessory row up. */
 
-  /* Ensure no ancestor blocks touch scrolling in the xterm viewport.
-     .flow-term already has overflow:hidden (for the chrome), but xterm's own
-     .xterm-viewport handles scroll internally — touch-action must not be none
-     on any ancestor that xterm places scroll events on. */
-  .flow-term,
-  .flow-term .xterm-host,
-  .flow-term .xterm {
-    touch-action: pan-y;
-  }
+  /* Touch scrollback is driven by the JS bridge in Terminal.tsx with
+     touch-action:none set globally (see the .xterm-host rule above) — xterm's
+     scrollable .xterm-viewport is a sibling behind the touch surface, so native
+     touch scroll never reached it. No per-breakpoint touch-action override here. */
 
   /* Reduce padding on narrow screens to gain precious vertical pixels. */
   .flow-term {
@@ -9640,16 +9652,18 @@ a.owner-task-item:hover {
    Desktop (≥641px) is byte-for-byte unchanged — ALL rules inside this block.
    ========================================================================== */
 
-/* ---- Card grid: drop minmax(330px,1fr) to 1fr on narrow phones ---------- */
+/* ---- Card grid: single 0-min track on narrow phones --------------------- */
+/* minmax(0, 1fr), not bare 1fr — see the ≤640px note: a 1fr track's `auto`
+   minimum inflates to the subtree min-content and overflows the viewport. */
 @media (max-width: 400px) {
   .grid.cards {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .grid.wide {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .grid.two {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -9892,14 +9906,20 @@ pre:not(.tx2-result):not(.tx2-term-out) {
 
 @media (max-width: 640px) {
   /* ---- Overview: collapse mc-cols to 1 column on phone (it stacks at 1080px
-     but the fixed 350px rail still forces minimum width at phone) ----------- */
+     but the fixed 350px rail still forces minimum width at phone) -----------
+     NOTE: minmax(0, 1fr), NOT bare 1fr. A bare `1fr` is `minmax(auto, 1fr)`,
+     whose `auto` minimum pulls in the subtree's MIN-CONTENT — and grid/flex
+     items default to `min-width: auto`, so a long unbreakable line inflates the
+     track far past the viewport (the card content then hard-clips at the screen
+     edge). Pinning the track minimum to 0 lets `.clip`/wrap do their job inside
+     the column. This applies to EVERY phone grid-collapse below. */
   .mc-cols {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  /* briefing-rows: minmax(280px, 1fr) overflows at 390px; drop to 1fr */
+  /* briefing-rows: minmax(280px, 1fr) overflows at 390px; drop to a 0-min track */
   .briefing-rows {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* ---- Projects / Playbooks / Owners / general card grids ---------------- */
@@ -9909,17 +9929,17 @@ pre:not(.tx2-result):not(.tx2-term-out) {
   .grid.two,
   .grid.wide,
   .grid.cards {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  /* ---- Settings: settings-grid (minmax 320px) → 1fr on phone ------------ */
+  /* ---- Settings: settings-grid (minmax 320px) → single 0-min track ------- */
   .settings-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   /* settings-summary: stack vertically so each field gets full width       */
   .settings-summary {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .settings-summary .sum-item {
     border-right: none;
@@ -10071,5 +10091,33 @@ pre:not(.tx2-result):not(.tx2-term-out) {
   }
   .trace-row {
     min-width: 700px;
+  }
+}
+
+/* ======================== PHONE (≤640px): overflow polish =================
+   After the grid-collapse fix (minmax(0,1fr)) the page bodies no longer
+   overflow. These mop up the remaining narrow-screen spills found in the
+   responsive audit: absolutely-positioned popovers that ran off the right
+   edge, and inline action-button rows that refused to wrap.
+   Desktop (≥641px) is unaffected — all rules are inside this query.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* Popovers (filter selects, mute menu, generic dropdowns) are anchored to a
+     trigger with an intrinsic min-width; near the right edge they spilled
+     off-screen. Cap them to the viewport and let long content scroll inside. */
+  .menu-pop,
+  .mute-pop {
+    max-width: calc(100vw - 16px);
+    overflow-x: hidden;
+  }
+
+  /* Inline action-button rows: wrap to a new line instead of overflowing.
+     .att-actions packs up to 5 buttons (Attention card) — at 390px they total
+     ~448px in a 324px row and the last controls (incl. the mute ⋯) were shoved
+     off-screen and unreachable. Wrapping keeps every control on-screen. */
+  .att-actions,
+  .kb-dream-actions,
+  .cap-row {
+    flex-wrap: wrap;
   }
 }

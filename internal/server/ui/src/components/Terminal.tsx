@@ -458,6 +458,47 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     host.addEventListener('dragover', onHostDragOver)
     host.addEventListener('drop', onHostDrop)
 
+    // ---- touch-drag → scrollback (phones / tablets) --------------------
+    // xterm's DOM renderer only wires WHEEL events to its viewport. The
+    // scrollable .xterm-viewport is a SIBLING *behind* the touch-receiving
+    // .xterm-screen, so the touch target's ancestor chain has no scroller and
+    // native touch-drag can't reach it — scrollback is unreachable on a phone
+    // (the `touch-action` CSS alone does nothing). Bridge it: translate a
+    // one-finger vertical drag into viewport.scrollTop, mirroring wheel. xterm's
+    // Viewport listens to the element's native 'scroll' event, so this re-syncs
+    // the buffer and fires term.onScroll (follow/bottom-jump stay honest).
+    const viewportEl = host.querySelector<HTMLElement>('.xterm-viewport')
+    let touchScrollY = 0
+    let touchScrollTop = 0
+    let touchTracking = false
+    let touchDragging = false
+    const onTouchStart = (e: TouchEvent) => {
+      if (!viewportEl || e.touches.length !== 1) return
+      touchTracking = true
+      touchDragging = false
+      touchScrollY = e.touches[0].clientY
+      touchScrollTop = viewportEl.scrollTop
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touchTracking || !viewportEl || e.touches.length !== 1) return
+      const dy = e.touches[0].clientY - touchScrollY
+      // Ignore sub-threshold jitter so a tap still focuses + raises the keyboard.
+      if (!touchDragging && Math.abs(dy) < 6) return
+      touchDragging = true
+      // Drag down (dy>0) pulls older lines into view → scrollTop decreases.
+      viewportEl.scrollTop = touchScrollTop - dy
+      // Claim the gesture: no page scroll, no text-selection / synthetic mouse drag.
+      if (e.cancelable) e.preventDefault()
+    }
+    const endTouchScroll = () => {
+      touchTracking = false
+      touchDragging = false
+    }
+    host.addEventListener('touchstart', onTouchStart, { passive: true })
+    host.addEventListener('touchmove', onTouchMove, { passive: false })
+    host.addEventListener('touchend', endTouchScroll, { passive: true })
+    host.addEventListener('touchcancel', endTouchScroll, { passive: true })
+
     // ---- input → PTY ---------------------------------------------------
     const dataDisposable = term.onData((data) => {
       const input = stripTerminalGeneratedInput(data)
@@ -729,6 +770,10 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       host.removeEventListener('paste', onHostPaste, true)
       host.removeEventListener('dragover', onHostDragOver)
       host.removeEventListener('drop', onHostDrop)
+      host.removeEventListener('touchstart', onTouchStart)
+      host.removeEventListener('touchmove', onTouchMove)
+      host.removeEventListener('touchend', endTouchScroll)
+      host.removeEventListener('touchcancel', endTouchScroll)
       dataDisposable.dispose()
       resizeDisposable.dispose()
       scrollDisposable.dispose()
