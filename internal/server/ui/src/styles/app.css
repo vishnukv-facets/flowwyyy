@@ -9598,11 +9598,28 @@ a.owner-task-item:hover {
     overflow-y: visible;
   }
 
-  /* ---- Terminal pane: full width, no double-scroll -------------------- */
-  /* .term-shell already flex-fills session-main; ensure it doesn't
-     get a fixed height that clips content */
+  /* ---- Terminal pane: pin a real height on phone --------------------- */
+  /* The .page → .session → .session-main chain is display:block/auto-height
+     on mobile and does NOT stretch to fill main.content, so .term-shell's
+     flex:1 has nothing to fill: on a session with little/no scrollback the
+     terminal collapses to a thin strip with a black void below it (xterm fits
+     to ~0 rows). Pin a generous dynamic-viewport height so the terminal is
+     always tall + usable and there is no void; the page scrolls to reveal the
+     side panel below. The soft-keyboard ceiling is still applied by the
+     visualViewport JS that caps .flow-term-wrapper's max-height (Task R3). */
+  /* Make the session column fill the viewport so .term-shell's flex:1 fills
+     the space between the (variable-height) header and the bottom nav instead
+     of collapsing to content height. Anchoring session-main to a dynamic-
+     viewport min-height is robust regardless of how tall the header wraps;
+     term-shell then flex-fills the remainder. (100dvh minus topbar + bottom
+     nav + safe areas ≈ 170px.) */
   .session-main {
     gap: 8px;
+    min-height: calc(100dvh - 170px);
+  }
+  .term-shell {
+    flex: 1 1 auto;
+    min-height: 240px; /* floor for very short viewports */
   }
   /* The term-bar: shrink mono clip to avoid overflow */
   .term-bar .mono {
