@@ -174,6 +174,42 @@ CREATE TABLE IF NOT EXISTS agent_runtime_states (
     PRIMARY KEY (provider, session_id)
 );
 
+-- Buffered wake prompts: a wake (inbox nudge, operator-approved reply, steerer
+-- turn) that arrived while a session was blocked on the operator's input is
+-- parked here instead of being injected into — and auto-submitting — the open
+-- prompt. Persisted (not in-memory) so a "flow ui serve" restart never loses a
+-- buffered wake. Drained FIFO by id once the session leaves the human-input
+-- wait. See internal/server/terminal_wake.go (flushWakes).
+CREATE TABLE IF NOT EXISTS pending_wakes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug       TEXT NOT NULL,
+    prompt     TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+-- Outbound Slack sends to channels OUTSIDE the operator's org (Slack Connect /
+-- cross-workspace) are parked here for the operator's explicit approval instead
+-- of going out directly — the external-channel send gate. Every path (manual
+-- CLI, agent session, auto-permit, steerer) routes through the server send
+-- handler, which enqueues an external send as 'pending'; only the operator's
+-- inbox approval actually posts it. See internal/server/slack_send.go.
+CREATE TABLE IF NOT EXISTS pending_sends (
+    id            TEXT PRIMARY KEY,
+    channel       TEXT NOT NULL,
+    channel_label TEXT,
+    thread_ts     TEXT,
+    text          TEXT NOT NULL,
+    identity      TEXT,
+    file_path     TEXT,
+    post_at       INTEGER NOT NULL DEFAULT 0,
+    reason        TEXT,
+    origin        TEXT,
+    status        TEXT NOT NULL DEFAULT 'pending',
+    created_at    TEXT NOT NULL,
+    decided_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_pending_sends_status ON pending_sends(status, created_at);
+
 -- Many-to-many task dependencies. A child can depend on N parents;
 -- the start-blocker logic requires all non-deleted parents to be done.
 -- tasks.parent_slug is kept as a denormalized first-parent mirror for

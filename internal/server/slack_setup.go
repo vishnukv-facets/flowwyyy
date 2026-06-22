@@ -872,12 +872,19 @@ func (s *Server) handleSlackSetupCreateApp(w http.ResponseWriter, r *http.Reques
 		writeJSONStatus(w, map[string]any{"ok": false, "error": "slack created the app but returned incomplete credentials — check it at api.slack.com/apps"}, http.StatusBadGateway)
 		return
 	}
-	if err := s.persistSlackSettings(map[string]string{
+	settings := map[string]string{
 		"FLOW_SLACK_APP_ID":        result.AppID,
 		"FLOW_SLACK_CLIENT_ID":     result.ClientID,
 		"FLOW_SLACK_CLIENT_SECRET": result.ClientSecret,
 		"FLOW_SLACK_MANIFEST_REV":  slackManifestRev,
-	}); err != nil {
+	}
+	// Persist the operator's chosen app name so the outbound attribution footer
+	// ("Sent using @<app>") uses the real installed name, not a guess. Empty ⇒
+	// the footer resolves the bot's handle via auth.test at send time instead.
+	if name := strings.TrimSpace(req.AppName); name != "" {
+		settings["FLOW_SLACK_APP_NAME"] = name
+	}
+	if err := s.persistSlackSettings(settings); err != nil {
 		writeJSONStatus(w, map[string]any{"ok": false, "error": "save app credentials: " + err.Error()}, http.StatusInternalServerError)
 		return
 	}

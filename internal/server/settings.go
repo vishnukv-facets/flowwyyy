@@ -82,6 +82,9 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_SLACK_SEND_AS", Label: "Post replies as", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"bot", "user"}, Default: "bot", Help: "Identity for messages flow posts into channels/threads: the flow bot (recommended — clearly flow), or you (your user token, needs the User token set above). Your DM with the flow bot always replies as the bot regardless of this."},
 	{Key: "FLOW_SLACK_COMMAND_ENABLED", Label: "DM command channel", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingBool, Default: "false", Help: "Off by default. Lets you DM the flow bot to run work on this machine while you're away (remote control). Only your own Slack user IDs are accepted; everyone else gets a polite decline. Needs 'Allow posting to Slack' for replies, and your IDs set above."},
 	{Key: "FLOW_SLACK_COMMAND_PROVIDER", Label: "DM chat agent", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingEnum, Options: []string{"claude", "codex"}, Default: "claude", Help: "Which agent powers a chat started from a Slack DM."},
+	{Key: "FLOW_SLACK_TEAM_IDS", Label: "Your workspace IDs", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Help: "Comma-separated Slack workspace (team) IDs that ARE your org. Replies to channels/DMs outside these — or any Slack Connect channel — are held for your approval. Slack Connect is detected automatically; this adds cross-workspace detection."},
+	{Key: "FLOW_SLACK_SEND_FOOTER", Label: "Outbound footer", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Help: "Footer appended to messages flow sends, so recipients know it came via flow. Leave empty for the default \"Sent using @<your app>\"; enter text to customize. Your DM with the flow bot never gets a footer."},
+	{Key: "FLOW_SLACK_APP_NAME", Label: "App name (footer @handle)", Group: "Slack", Category: categoryMessaging, Connector: connectorSlack, Type: settingString, Help: "The @name used in the outbound footer. Set automatically when you connect Slack; override only if the footer shows the wrong name."},
 	// Wizard-managed Slack app identity (Connect Slack flow). Hidden from the
 	// Settings form: the setup wizard writes these after apps.manifest.create
 	// and the OAuth callback reads them; hand-editing only breaks the pairing.
@@ -356,6 +359,24 @@ func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
 				f.Value = raw
 			} else {
 				f.Value = sp.Default
+			}
+		}
+		// Pre-fill the new Slack identity fields with the REAL resolved values
+		// (auth.test) when unset, so the operator sees their actual workspace +
+		// app handle instead of a blank — these are also the runtime fallback, so
+		// the displayed value is what's already in effect.
+		if raw == "" && f.Value == "" {
+			switch sp.Key {
+			case "FLOW_SLACK_TEAM_IDS":
+				if v := monitor.ResolvedTeamID(); v != "" {
+					f.Value = v
+					f.Source = "resolved"
+				}
+			case "FLOW_SLACK_APP_NAME":
+				if v := monitor.ResolvedBotHandle(); v != "" {
+					f.Value = v
+					f.Source = "resolved"
+				}
 			}
 		}
 		fields = append(fields, f)

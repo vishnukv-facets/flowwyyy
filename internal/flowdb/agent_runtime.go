@@ -69,6 +69,25 @@ func UpsertAgentRuntimeState(db *sql.DB, input AgentRuntimeStateInput) error {
 	return err
 }
 
+// AwaitingHumanInput reports whether the session is blocked specifically on the
+// operator's input: a question it asked (ask_user_question / exit_plan_mode /
+// request_user_input all normalize to "elicitation") or a tool-permission
+// prompt. It is deliberately NARROWER than Status=="waiting" — idle_prompt and
+// Codex's turn-boundary stop also surface as "waiting" but are not blocked on a
+// human answer, so they stay wakeable. The wake path consults this before
+// injecting so an inbox event never auto-submits an open prompt.
+func (s *AgentRuntimeState) AwaitingHumanInput() bool {
+	if s == nil || s.Status != "waiting" {
+		return false
+	}
+	switch s.EventKind {
+	case "permission_request", "permission_prompt", "elicitation", "elicitation_dialog":
+		return true
+	default:
+		return false
+	}
+}
+
 // AgentRuntimeStateBySessionID returns the most recent runtime state row for
 // (provider, sessionID), or sql.ErrNoRows when none. Empty inputs short-circuit
 // to ErrNoRows rather than scanning.

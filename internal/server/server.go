@@ -60,6 +60,9 @@ func New(cfg Config) *Server {
 	// process, so the Ask Flow tray survives a flow-server restart.
 	s.terminals.loadFloatingFromDisk()
 	s.events = newEventHub()
+	// Memoize external-channel verdicts for the outbound send gate; external-ness
+	// rarely changes, so a 10-minute TTL keeps conversations.info off the send path.
+	s.slackExtCache = newTTLCache[string, slackExtVerdict](10 * time.Minute)
 	s.steeringRuns = newSteeringRunStore()
 	s.reconcile = newLivenessReconciler(s)
 	s.kbDistiller = newKBDistiller(s)
@@ -207,6 +210,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/owners/", s.handleOwnerRoute)
 	mux.HandleFunc("/api/workdirs", s.handleWorkdirs)
 	mux.HandleFunc("/api/tags", s.handleTags)
+	mux.HandleFunc("/api/persona", s.handlePersona)
 	mux.HandleFunc("/api/kb", s.handleKB)
 	mux.HandleFunc("/api/kb/dream", s.handleKBDream) // must precede the /api/kb/ subtree
 	mux.HandleFunc("/api/kb/prune", s.handleKBPrune) // exact match; precedes the /api/kb/ subtree
@@ -234,6 +238,8 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
 	mux.HandleFunc("/api/steering/runs", s.handleSteeringRuns)
 	mux.HandleFunc("/api/slack/send", s.handleSlackSend)
+	mux.HandleFunc("/api/slack/pending", s.handleSlackPendingList)
+	mux.HandleFunc("/api/slack/pending/decide", s.handleSlackPendingDecide)
 	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)
 	mux.HandleFunc("/api/slack/setup/status", s.handleSlackSetupStatus)
 	mux.HandleFunc("/api/slack/setup/create-app", s.handleSlackSetupCreateApp)
@@ -522,6 +528,13 @@ func (s *Server) ListenAndServe(addr string) int {
 	// background (the rebuild walks the whole flow root) and routes the timer
 	// through syncSearchThrottled so it shares the in-flight guard.
 	go s.warmSearchIndex()
+	// Resume delivery of wakes that were buffered (in the pending_wakes table)
+	// when a session was blocked on the operator's input, in case the server
+	// restarted while they were withheld. flushWakes withholds anything still
+	// awaiting input and routes the rest to whatever session is live.
+	if s.terminals != nil {
+		go s.terminals.resumeBufferedWakes()
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()

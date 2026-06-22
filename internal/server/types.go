@@ -61,6 +61,11 @@ type Server struct {
 	// real "Open in Slack" link works even for items captured before the
 	// channel/ts/team_id columns existed. Nil when no token; methods nil-safe.
 	slackPermalinker *monitor.SlackPermalinker
+	// slackExtCache memoizes whether a Slack channel is external to the
+	// operator's org (the outbound send gate's verdict), since the lookup costs
+	// a conversations.info call and runs on every send. TTL'd; external-ness
+	// rarely changes. Nil-safe via classifySlackChannel.
+	slackExtCache *ttlCache[string, slackExtVerdict]
 	// monitorReconcile keeps persistent background monitors converged with the
 	// set of tasks that need one (origin/branch-linked + active), restoring
 	// them on boot and recreating any that die.

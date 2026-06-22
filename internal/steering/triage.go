@@ -106,9 +106,10 @@ func deepTriagePromptIncremental(in ClassifyInput, taskIndex string, pack Thread
 		retrievedPayload, _ := json.Marshal(inc.Retrieved)
 		retrievedBlock = "\n\nRetrieved related context (JSON) — KB facts and past task notes the system pulled to help resolve references to things decided earlier or in other conversations. Treat as supporting evidence, not the thread itself:\n" + string(retrievedPayload)
 	}
+	voiceDirective := operatorVoiceDirective()
 
 	return `MODE: stage3-deep
-` + incrementalDirective + correctionsDirective + `
+` + incrementalDirective + correctionsDirective + voiceDirective + `
 You are the deep-triage step of an operator's attention router. A cheap gate has already decided this message is worth a closer look. Go has already fetched the surrounding source context into the context pack below. Treat that context pack as the primary source of truth; do not rely on fetching Slack/GitHub context yourself. If fetch_status is "error" or "unavailable", proceed from the fallback event context and lower confidence when the missing context matters.
 
 Do the following, then emit a single verdict:

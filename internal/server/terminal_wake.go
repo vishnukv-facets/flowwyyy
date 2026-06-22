@@ -2,6 +2,7 @@ package server
 
 import (
 	"flow/internal/agents"
+	"flow/internal/flowdb"
 	"fmt"
 	"os"
 	"os/exec"
@@ -45,7 +46,28 @@ func (h *terminalHub) waitForSessionReady(slug string, stable, timeout time.Dura
 	}
 }
 
+// wakeTask delivers a wake prompt into a live browser-PTY session — UNLESS the
+// session is currently blocked on the operator's input (an open AskUserQuestion
+// selector or a permission prompt), in which case injecting would auto-submit
+// that prompt (the bug that once fired an unreviewed Slack reply). When blocked,
+// the prompt is buffered (persisted) and re-delivered once the session leaves
+// the human-input wait — see flushWakes. Returns nil on a successful inject OR a
+// successful buffer.
 func (h *terminalHub) wakeTask(slug, prompt string) error {
+	if h.awaitingHumanInput(slug) {
+		if err := h.wakes.push(slug, prompt); err != nil {
+			return fmt.Errorf("buffer wake for %s: %w", slug, err)
+		}
+		fmt.Fprintf(os.Stderr, "[term-wake %s] session awaiting operator input; buffered wake (delivers when free)\n", slug)
+		return nil
+	}
+	return h.injectWake(slug, prompt)
+}
+
+// injectWake performs the actual paste+Enter into the live PTY. The caller must
+// have already decided the session is safe to inject into (wakeTask gates on
+// awaitingHumanInput; flushWakes re-checks before each buffered delivery).
+func (h *terminalHub) injectWake(slug, prompt string) error {
 	// Paste the prompt WITHOUT a trailing newline, then submit with a separate
 	// Enter. A \r in the same write as the bracketed-paste terminator gets
 	// absorbed into the (usually multi-line) input buffer instead of submitting —
@@ -126,6 +148,21 @@ func (h *terminalHub) submitAfterPaste(slug string, baseline time.Time) {
 // fixed-delay Enter, which gets swallowed if the agent is still streaming a
 // previous answer or the editor hasn't left paste mode.
 func (h *terminalHub) wakeSharedTask(slug, prompt string) bool {
+	if h.awaitingHumanInput(slug) {
+		if err := h.wakes.push(slug, prompt); err != nil {
+			fmt.Fprintf(os.Stderr, "[term-wake %s] buffer shared wake failed: %v\n", slug, err)
+			return false
+		}
+		fmt.Fprintf(os.Stderr, "[term-wake %s] shared session awaiting operator input; buffered wake\n", slug)
+		return true // owned: buffered, will deliver on flush — caller must not fall through
+	}
+	return h.injectSharedWake(slug, prompt)
+}
+
+// injectSharedWake performs the actual tmux paste+Enter into a detached session.
+// The caller must have already decided it is safe to inject (wakeSharedTask
+// gates on awaitingHumanInput; flushWakes re-checks).
+func (h *terminalHub) injectSharedWake(slug, prompt string) bool {
 	if !sharedTerminalAvailable() {
 		return false
 	}
@@ -195,6 +232,123 @@ func (h *terminalHub) submitAfterSharedPaste(name string) {
 	}
 	time.Sleep(secondEnter)
 	_, _ = sharedTerminalCommand("send-keys", "-t", name, "Enter") // insurance; no-op if already submitted
+}
+
+// wakeFlushGap spaces out buffered wakes during a flush so each paste+Enter
+// settles before the next (submitAfterPaste's own grace + second-Enter is ~2s).
+const wakeFlushGap = 2500 * time.Millisecond
+
+// awaitingHumanInput reports whether slug's agent session is currently blocked
+// on the operator's input — a question it asked (elicitation) or a permission
+// prompt — per the recorded agent runtime state. Fail-open: an unknown/missing
+// state returns false so un-instrumented sessions wake exactly as before. The
+// gate engages only when there is positive evidence of a pending operator
+// prompt, which is precisely the case that must not be auto-submitted.
+func (h *terminalHub) awaitingHumanInput(slug string) bool {
+	if h.server == nil || h.server.cfg.DB == nil {
+		return false
+	}
+	provider, sid := h.sessionIdentity(slug)
+	if provider == "" || sid == "" {
+		return false
+	}
+	st, err := flowdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, provider, sid)
+	if err != nil {
+		return false
+	}
+	return st.AwaitingHumanInput()
+}
+
+// sessionIdentity resolves (provider, session_id) for a slug: from the live hub
+// session when attached, else from the task row (covers post-restart tmux-only
+// sessions absent from the in-memory hub, and the window before Codex captures
+// its thread id).
+func (h *terminalHub) sessionIdentity(slug string) (string, string) {
+	h.mu.Lock()
+	var provider, sid string
+	if sess := h.sessions[slug]; sess != nil {
+		provider = sess.provider
+		sid = strings.TrimSpace(sess.sessionID)
+	}
+	h.mu.Unlock()
+	if sid != "" {
+		return provider, sid
+	}
+	if h.server != nil && h.server.cfg.DB != nil {
+		if task, err := flowdb.GetTask(h.server.cfg.DB, slug); err == nil && task != nil && task.SessionID.Valid {
+			return task.SessionProvider, strings.TrimSpace(task.SessionID.String)
+		}
+	}
+	return "", ""
+}
+
+// flushWakes delivers any buffered wakes for slug once it is no longer blocked
+// on the operator's input. Serialized per slug (beginFlush) so buffered pastes
+// never interleave on the PTY. Before each delivery it re-checks
+// awaitingHumanInput and stops (leaving the rest buffered) if the session
+// re-entered a human-input wait — e.g. a delivered wake made the agent ask
+// another question. peek is non-destructive; a row is acked only after a
+// confirmed inject, and an undeliverable wake (no live session) is left queued
+// for the next attach rather than dropped.
+func (h *terminalHub) flushWakes(slug string) {
+	if !h.wakes.has(slug) {
+		return
+	}
+	if !h.wakes.beginFlush(slug) {
+		return
+	}
+	go func() {
+		defer h.wakes.endFlush(slug)
+		for {
+			if h.awaitingHumanInput(slug) {
+				return
+			}
+			pw, ok := h.wakes.peek(slug)
+			if !ok {
+				return
+			}
+			if h.awaitingHumanInput(slug) {
+				return // re-blocked between peek and inject; leave it queued
+			}
+			if !h.injectWakeRouted(slug, pw.Prompt) {
+				return // no live session right now; keep buffered for next attach
+			}
+			h.wakes.ack(pw.ID)
+			time.Sleep(wakeFlushGap)
+		}
+	}()
+}
+
+// injectWakeRouted delivers a buffered wake by the same routing a fresh wake
+// uses: the live PTY when attached, else the detached tmux session. Returns
+// false when neither is live (the wake stays buffered for the next attach).
+func (h *terminalHub) injectWakeRouted(slug, prompt string) bool {
+	if h.running(slug) {
+		if err := h.injectWake(slug, prompt); err != nil {
+			fmt.Fprintf(os.Stderr, "[term-wake %s] flush inject failed: %v\n", slug, err)
+			return false
+		}
+		return true
+	}
+	return h.injectSharedWake(slug, prompt)
+}
+
+// resumeBufferedWakes re-attempts delivery of every slug that still has buffered
+// wakes after a restart. Best-effort: flushWakes withholds anything still
+// blocked on the operator (the runtime state is persisted too) and routes the
+// rest to whatever session is live (tmux after a `flow ui serve` restart).
+func (h *terminalHub) resumeBufferedWakes() {
+	if h.server == nil || h.server.cfg.DB == nil {
+		return
+	}
+	slugs, err := flowdb.PendingWakeSlugs(h.server.cfg.DB)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[term-wake] resume buffered wakes: %v\n", err)
+		return
+	}
+	for _, slug := range slugs {
+		h.flushWakes(slug)
+	}
 }
 
 func (h *terminalHub) lastOutputAt(slug string) (time.Time, bool) {

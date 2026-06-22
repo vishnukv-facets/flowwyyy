@@ -100,7 +100,7 @@ func SendAsThread(channel, threadTS, text, identity string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("text is required")
 	}
-	return sendAsBotFn(channel, threadTS, text, identity)
+	return sendAsBotFn(channel, threadTS, withSlackFooterForChannel(channel, text), identity)
 }
 
 func ScheduleAsThread(channel, threadTS, text, identity string, postAt int64) (string, error) {
@@ -116,7 +116,7 @@ func ScheduleAsThread(channel, threadTS, text, identity string, postAt int64) (s
 	if postAt <= 0 {
 		return "", fmt.Errorf("post_at is required")
 	}
-	return scheduleAsBotFn(channel, threadTS, text, identity, postAt)
+	return scheduleAsBotFn(channel, threadTS, withSlackFooterForChannel(channel, text), identity, postAt)
 }
 
 // SendAsBot posts under flow's configured send identity (FLOW_SLACK_SEND_AS —

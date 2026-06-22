@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
 
@@ -55,6 +56,31 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 	if hasFile && req.PostAt != 0 {
 		http.Error(w, "cannot schedule file uploads", http.StatusBadRequest)
 		return
+	}
+	// External-channel send gate: a send to a channel OUTSIDE the operator's org
+	// (Slack Connect / cross-workspace) is parked for the operator's explicit
+	// approval in the inbox instead of going out. Every send path — manual CLI,
+	// agent session, auto-permit, steerer — routes through here, so this is the
+	// single chokepoint. The ONLY bypass is the operator approving it via
+	// /api/slack/pending/decide, which posts through the send fns directly.
+	if s.cfg.DB != nil {
+		if v := s.classifySlackChannel(r.Context(), req.Channel); v.external {
+			id := newPendingSendID()
+			if err := flowdb.CreatePendingSend(s.cfg.DB, flowdb.PendingSend{
+				ID: id, Channel: req.Channel, ChannelLabel: v.label, ThreadTS: req.ThreadTS,
+				Text: req.Text, Identity: req.As, FilePath: req.File, PostAt: req.PostAt,
+				Reason: v.reason, Status: "pending",
+			}); err != nil {
+				writeError(w, err, http.StatusInternalServerError)
+				return
+			}
+			s.publishUIChange("slack-pending")
+			writeJSONStatus(w, map[string]any{
+				"queued": true, "pending_id": id, "reason": v.reason,
+				"channel": req.Channel, "channel_label": v.label,
+			}, http.StatusAccepted)
+			return
+		}
 	}
 	var sendErr error
 	if req.PostAt != 0 {

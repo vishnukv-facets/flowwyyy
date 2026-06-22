@@ -1,6 +1,6 @@
-import { useMemo, type ReactNode } from 'react'
-import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, Save, ShieldCheck } from 'lucide-react'
-import { useSettings } from '../lib/query'
+import { useMemo, useState, type ReactNode } from 'react'
+import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, PenLine, Save, ShieldCheck } from 'lucide-react'
+import { usePersona, useSavePersona, useSettings } from '../lib/query'
 import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from './SettingsPanels'
 import { ChannelPicker } from './ChannelPicker'
 import { AutonomyPanel } from './AutonomyPanel'
@@ -60,9 +60,57 @@ function ConfigGroupPanel({ title, icon, fieldKeys }: { title: string; icon: Rea
   )
 }
 
+// VoicePanel edits the operator's persona/voice (persona.md), injected into the
+// steerer's drafting + send prompts so replies read like the operator, not a
+// bot. Plain markdown over /api/persona — staged locally, saved on click.
+function VoicePanel() {
+  const { data, isLoading } = usePersona()
+  const save = useSavePersona()
+  const [draft, setDraft] = useState<string | null>(null)
+  const value = draft ?? data ?? ''
+  const dirty = draft !== null && draft !== (data ?? '')
+  return (
+    <SettingsPanel title="Voice" icon={<PenLine size={17} />}>
+      <div className="config-form">
+        <p className="voice-note">
+          flow writes Slack/GitHub replies in this voice — injected into the draft and
+          send prompts so they read like you, not a bot. Edit it below: tone, phrasing,
+          greetings, sign-offs, and do/don'ts.
+        </p>
+        <textarea
+          className="voice-editor"
+          value={value}
+          disabled={isLoading || save.isPending}
+          placeholder="Describe your voice — tone, phrasing, greetings, sign-offs, and do/don'ts. Lines inside <!-- --> are notes and aren't sent to the model."
+          onChange={(e) => setDraft(e.target.value)}
+          rows={5}
+          spellCheck
+        />
+        <div className="config-actions">
+          <button
+            type="button"
+            className="btn primary"
+            disabled={!dirty || save.isPending}
+            onClick={() => save.mutate(value, { onSuccess: () => setDraft(null) })}
+          >
+            {save.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+            Save voice
+          </button>
+        </div>
+      </div>
+    </SettingsPanel>
+  )
+}
+
 export function SteeringConfig() {
   return (
     <>
+      <SettingsSection title="Voice" hint="How flow writes Slack/GitHub replies on your behalf — injected into the steerer's draft and send prompts so replies read like you, not a bot. Applies globally; seeded with a sensible default on flow init.">
+        <div className="settings-grid">
+          <VoicePanel />
+        </div>
+      </SettingsSection>
+
       <SettingsSection title="Session model" hint="The per-channel live-session steerer. On = one persistent session per channel/DM/PR holds conversation memory; off = stateless per-event triage.">
         <div className="settings-grid">
           <ConfigGroupPanel title="Per-channel sessions" icon={<MessagesSquare size={17} />} fieldKeys={SESSION_KEYS} />

@@ -1256,6 +1256,25 @@ export interface AttentionTaskMatch {
   session_provider?: string
 }
 
+// A Slack send held for the operator's approval because its channel is outside
+// the operator's org (the external-channel send gate). Surfaced in the Attention
+// feed; approving posts it, discarding drops it.
+export interface PendingSend {
+  id: string
+  channel: string
+  channel_label?: string
+  thread_ts?: string
+  text: string
+  identity?: string
+  reason?: string
+  status: string
+  created_at: string
+}
+
+export interface PendingSendsResponse {
+  pending: PendingSend[]
+}
+
 export interface AttentionWhy {
   source: string
   context_summary?: string
