@@ -398,6 +398,15 @@ func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
 		}
 		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
 	}
+	// No browser PTY is attached in this server process, but the agent may still
+	// be alive in its detached tmux session — the common case after a `flow ui
+	// serve` restart, since the tmux session outlives the server. Inject straight
+	// through tmux, mirroring the inbox monitor's deliverInboxEvents path. Without
+	// this a still-live flow session is misread as a native (user-owned) one below
+	// and the nudge is wrongly refused.
+	if s.terminals != nil && s.terminals.wakeSharedTask(slug, text) {
+		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
+	}
 	task, err := flowdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound

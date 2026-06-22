@@ -205,3 +205,58 @@ func TestMonitorReconcilerConverges(t *testing.T) {
 		t.Error("ghpr-task monitor should still be running")
 	}
 }
+
+// TestNudgeSessionUsesSharedTmux is the manual-nudge twin of the inbox-monitor
+// restart-gap fix: a session whose agent is alive but has no browser PTY attached
+// in THIS server process (the post-`flow ui serve`-restart state) is still
+// reachable through its detached tmux session. nudgeSession must inject there —
+// mirroring deliverInboxEvents — instead of misreading it as a native/external
+// terminal and refusing with "open it there to send".
+func TestNudgeSessionUsesSharedTmux(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_ROOT", root)
+
+	const sid = "11111111-1111-4111-8111-111111111111"
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, session_id, created_at, updated_at, session_provider)
+		 VALUES ('ext-tmux','Ext tmux','in-progress','regular','medium','/tmp',?, '2026-05-28T10:00:00Z','2026-05-28T10:00:00Z','claude')`,
+		sid,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// The agent appears alive in the OS process table — without the tmux step
+	// below, nudgeSession would classify this as an external terminal and refuse.
+	oldPS := psRunner
+	psRunner = func() ([]byte, error) { return []byte("12345 claude --session-id " + sid + "\n"), nil }
+	t.Cleanup(func() { psRunner = oldPS })
+
+	// A detached tmux session exists for the slug, so the wake can be injected.
+	oldLook, oldCmd := sharedTerminalLookPath, sharedTerminalCommand
+	resetSharedTerminalAvailable()
+	t.Cleanup(func() {
+		sharedTerminalLookPath = oldLook
+		sharedTerminalCommand = oldCmd
+		resetSharedTerminalAvailable()
+	})
+	sharedTerminalLookPath = func(string) (string, error) { return "/usr/bin/tmux", nil }
+	live := sharedTerminalSessionName("ext-tmux")
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "has-session" {
+			if args[len(args)-1] == live {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("missing session")
+		}
+		return nil, nil
+	}
+
+	// caches nil → cachedLiveAgentSessions calls psRunner directly; empty hub →
+	// no browser PTY attached (terminals.running is false).
+	s := &Server{cfg: Config{DB: db}, terminals: &terminalHub{}}
+
+	resp, code := s.nudgeSession("ext-tmux", "ping manan and ask if they replied?")
+	if !resp.OK {
+		t.Fatalf("nudge refused (code %d): %q — should inject via the detached tmux session", code, resp.Message)
+	}
+}

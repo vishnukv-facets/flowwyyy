@@ -49,7 +49,7 @@ function StatusPill({ badge }: { badge: Badge }) {
 
 // Connector ids with a monochrome brand SVG in /public — rendered via CSS mask
 // so they recolor to the tile's (muted) text colour and stay visible on dark.
-const BRAND_LOGOS = new Set(['teams', 'mattermost', 'rocketchat', 'gitlab', 'bitbucket', 'jira', 'linear', 'asana', 'clickup'])
+const BRAND_LOGOS = new Set(['teams', 'mattermost', 'rocketchat', 'googlechat', 'gitlab', 'bitbucket', 'jira', 'linear', 'asana', 'clickup'])
 
 function Glyph({ def, size = 16 }: { def: ConnectorDef; size?: number }) {
   let inner

@@ -572,7 +572,9 @@ func steererTitleFor(p steering.SteererDelivery, channelName, peerTitle string) 
 	switch {
 	case p.Source == "github" || p.ChannelType == "github":
 		return githubChatTitle(p.Channel, p.ThreadTS)
-	case p.ChannelType == "channel":
+	case p.ChannelType == "channel" || p.ChannelType == "group":
+		// "group" is Slack's wire channel_type for a PRIVATE channel; it names
+		// itself "#name" exactly like a public channel.
 		return channelName // "" when unresolved → placeholder fallback
 	case p.ChannelType == "im":
 		if peerTitle != "" {
@@ -608,7 +610,8 @@ func (s *Server) resolveSteererChatTitle(ctx context.Context, p steering.Steerer
 	var channelName, peerTitle string
 	if s.nameResolver != nil {
 		switch p.ChannelType {
-		case "channel":
+		case "channel", "group":
+			// "group" = private Slack channel; resolved as a "#name" like public.
 			channelName = s.nameResolver.ChannelName(ctx, p.Channel)
 		case "im", "mpim":
 			// Name the DM/group from the CHANNEL's participants, not the message

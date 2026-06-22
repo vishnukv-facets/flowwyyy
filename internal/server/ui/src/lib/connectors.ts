@@ -96,6 +96,13 @@ export const CONNECTORS: ConnectorDef[] = [
     soon: true,
   },
   {
+    id: 'googlechat',
+    category: 'messaging',
+    label: 'Google Chat',
+    powers: 'Spaces and direct messages route to the inbox and attention router.',
+    soon: true,
+  },
+  {
     id: 'gitlab',
     category: 'git',
     label: 'GitLab',

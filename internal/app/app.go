@@ -179,5 +179,6 @@ Playbooks:
   flow list playbooks [--project <slug>] [--include-archived] [--include-deleted|--deleted]
 
 Slack:
-  flow slack send --channel <id> --text <message> [--at <when>]   (post now or schedule; requires FLOW_SLACK_WRITES_ENABLED=1)`)
+  flow slack send  --channel <id> --text <message> [--at <when>]   (post now or schedule; requires FLOW_SLACK_WRITES_ENABLED=1)
+  flow slack react --channel <id> --ts <ts> [--emoji +1]           (ack a message with an emoji reaction)`)
 }

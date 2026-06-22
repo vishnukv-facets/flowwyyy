@@ -27,7 +27,53 @@ var (
 	slackTextSendFn     = monitor.SendAsThread
 	slackFileSendFn     = monitor.SendFileAsThread
 	slackScheduleSendFn = monitor.ScheduleAsThread
+	slackReactFn        = monitor.ReactAsThread
 )
+
+type slackReactRequest struct {
+	Channel string `json:"channel"`
+	TS      string `json:"ts"`
+	Emoji   string `json:"emoji"`
+	// As forces the react identity ("bot" | "user"); empty honors the server's
+	// FLOW_SLACK_SEND_AS. Agents react "as user" so the ack lands even when the
+	// bot is not a member of the channel.
+	As string `json:"as"`
+}
+
+// handleSlackReact adds an emoji reaction to a Slack message using the SERVER's
+// in-process token (same rationale as handleSlackSend). Used by `flow slack
+// react` for the agent's lightweight 👍-ack on threads. Reactions carry no
+// content, so they are NOT subject to the external-channel send gate — gating an
+// ack would defeat its purpose — only the FLOW_SLACK_WRITES_ENABLED switch.
+func (s *Server) handleSlackReact(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req slackReactRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err := dec.Decode(&req); err != nil {
+		http.Error(w, "invalid slack react payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Channel) == "" {
+		http.Error(w, "channel is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.TS) == "" {
+		http.Error(w, "ts is required", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Emoji) == "" {
+		http.Error(w, "emoji is required", http.StatusBadRequest)
+		return
+	}
+	if err := slackReactFn(req.Channel, req.TS, req.Emoji, req.As); err != nil {
+		writeError(w, err, http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
 
 // handleSlackSend posts a Slack message as the flow bot using the SERVER's
 // in-process token. The CLI (`flow slack send`) routes here so the message is

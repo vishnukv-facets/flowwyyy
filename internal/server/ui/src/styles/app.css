@@ -335,6 +335,28 @@
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: 14px;
 }
+
+/* Steering config: one dense grid so the small knob-boxes pack side by side
+   instead of each section stacking a lone full-width card down the page.
+   Section headers and the wide Voice editor span the full row; everything else
+   flows into ~340px columns. align-items:start keeps a short box from stretching
+   to a tall neighbour's height. */
+.steering-config {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 14px 16px;
+  align-items: start;
+}
+.steering-config > .steering-config-head {
+  grid-column: 1 / -1;
+  margin: 10px 2px 0;
+}
+.steering-config > .steering-config-head:first-child {
+  margin-top: 0;
+}
+.steering-config > .span-full {
+  grid-column: 1 / -1;
+}
 .settings-card {
   background: var(--bg-2);
   border: 1px solid var(--border);
