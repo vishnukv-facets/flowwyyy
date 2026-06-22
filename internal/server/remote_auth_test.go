@@ -10,14 +10,19 @@ import (
 )
 
 func TestHashRemoteTokenDeterministic(t *testing.T) {
-	if hashRemoteToken("abc") != hashRemoteToken("abc") {
+	// Hash the same input twice into distinct variables: a non-deterministic
+	// hash would make h1 != h2. (Comparing two identical call expressions
+	// directly trips staticcheck SA4000, so bind to vars first.)
+	h1 := hashRemoteToken("abc")
+	h2 := hashRemoteToken("abc")
+	if h1 != h2 {
 		t.Fatal("hash not deterministic")
 	}
-	if hashRemoteToken("abc") == hashRemoteToken("abd") {
+	if h1 == hashRemoteToken("abd") {
 		t.Fatal("distinct inputs collided")
 	}
-	if len(hashRemoteToken("abc")) != 64 {
-		t.Fatalf("expected 64 hex chars, got %d", len(hashRemoteToken("abc")))
+	if len(h1) != 64 {
+		t.Fatalf("expected 64 hex chars, got %d", len(h1))
 	}
 }
 

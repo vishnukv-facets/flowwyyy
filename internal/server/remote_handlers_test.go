@@ -56,15 +56,35 @@ func TestRemoteForbiddenRPCPath(t *testing.T) {
 	}
 }
 
+// TestInjectRemoteFlagAddsMarkerNoToken verifies the remote-shell HTML
+// transform directly (no dependency on the embedded bundle): it inserts the
+// window.__FLOW_REMOTE__ marker before </head> and never references the
+// session-token global. The marker assertion lives here — not in the
+// handler test below — because handleRemoteStatic only injects it when
+// static/index.html is present in the embed, which CI's `go test` does not
+// build (the bundle is gitignored / produced by `make ui`).
+func TestInjectRemoteFlagAddsMarkerNoToken(t *testing.T) {
+	in := []byte("<!doctype html><html><head><title>x</title></head><body></body></html>")
+	out := string(injectRemoteFlag(in))
+	if !strings.Contains(out, "__FLOW_REMOTE__") {
+		t.Fatal("injectRemoteFlag must add the window.__FLOW_REMOTE__ marker")
+	}
+	if strings.Contains(out, "__FLOW_TOKEN__") {
+		t.Fatal("remote shell must not reference the session-token global")
+	}
+}
+
+// TestRemoteStaticDoesNotLeakSessionToken asserts the security-critical
+// property: a remotely-served response NEVER contains the shared session
+// token. This holds whether handleRemoteStatic serves real HTML (local, with
+// a built bundle) or a 500 fallback (CI, no bundle) — neither must carry the
+// token. (The remote-flag marker is verified in the test above.)
 func TestRemoteStaticDoesNotLeakSessionToken(t *testing.T) {
 	s := newTestServer(t)
 	rec := httptest.NewRecorder()
 	s.handleRemoteStatic(rec, httptest.NewRequest("GET", "/", nil))
-	if strings.Contains(rec.Body.String(), s.sessionToken) && s.sessionToken != "" {
+	if s.sessionToken != "" && strings.Contains(rec.Body.String(), s.sessionToken) {
 		t.Fatal("remote static must NOT embed the shared session token")
-	}
-	if !strings.Contains(rec.Body.String(), "__FLOW_REMOTE__") {
-		t.Fatal("remote static must mark the page as remote")
 	}
 }
 
