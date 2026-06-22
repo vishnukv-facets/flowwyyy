@@ -265,6 +265,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/remote/pair-code", s.handleRemotePairCode)
 	mux.HandleFunc("/api/remote/devices", s.handleRemoteDevices)
 	mux.HandleFunc("/api/remote/devices/revoke", s.handleRemoteDeviceRevoke)
+	mux.HandleFunc("/api/remote/devices/delete", s.handleRemoteDeviceDelete)
 	mux.HandleFunc("/api/remote/status", s.handleRemoteStatus)
 	mux.HandleFunc("/api/remote/enable", s.handleRemoteEnable)
 	mux.HandleFunc("/api/remote/disable", s.handleRemoteDisable)

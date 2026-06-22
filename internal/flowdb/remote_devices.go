@@ -72,6 +72,19 @@ func RevokeRemoteDevice(db *sql.DB, id, now string) error {
 	return nil
 }
 
+// DeleteRemoteDevice permanently removes a paired-device row by id. Revoke
+// disables a device's token but leaves the row visible; delete clears it from
+// the list entirely. Deleting a still-active device also invalidates its token
+// (GetRemoteDeviceByTokenHash then returns sql.ErrNoRows), so delete is a strict
+// superset of revoke.
+func DeleteRemoteDevice(db *sql.DB, id string) error {
+	_, err := db.Exec("DELETE FROM remote_devices WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("delete remote device %s: %w", id, err)
+	}
+	return nil
+}
+
 func TouchRemoteDeviceLastSeen(db *sql.DB, id, now string) error {
 	_, err := db.Exec("UPDATE remote_devices SET last_seen_at = ? WHERE id = ?", now, id)
 	if err != nil {

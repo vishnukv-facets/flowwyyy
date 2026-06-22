@@ -132,6 +132,29 @@ func (s *Server) handleRemoteDeviceRevoke(w http.ResponseWriter, r *http.Request
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// handleRemoteDeviceDelete (LOCAL) permanently removes one device row by id —
+// the "clear it from the list" action for already-revoked devices (and a hard
+// remove for any device). Localhost-only, like revoke: the /api/remote/ prefix
+// keeps it off the remote phone's RPC surface (remoteForbiddenRPCPath).
+func (s *Server) handleRemoteDeviceDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
+		writeError(w, errors.New("device id required"), http.StatusBadRequest)
+		return
+	}
+	if err := flowdb.DeleteRemoteDevice(s.cfg.DB, body.ID); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // handleRemoteStatus (LOCAL) reports the toggle state + public URL.
 func (s *Server) handleRemoteStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{

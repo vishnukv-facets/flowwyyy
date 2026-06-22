@@ -76,6 +76,11 @@ export function RemoteAccessSettings() {
     await refresh()
   }
 
+  async function removeDevice(id: string) {
+    await rpc.request({ method: 'POST', path: '/api/remote/devices/delete', body: { id } })
+    await refresh()
+  }
+
   if (loading) {
     return (
       <SettingsSection title="Remote access">
@@ -164,13 +169,21 @@ export function RemoteAccessSettings() {
                 <>
                   <div className="setting-hint" style={{ marginTop: 8 }}>Revoked</div>
                   {revokedDevices.map((d) => (
-                    <div key={d.ID} className="cap-row" style={{ opacity: 0.5 }}>
+                    <div key={d.ID} className="cap-row" style={{ opacity: 0.6 }}>
                       <span className="cap-dot off" />
                       <div className="lrow-main">
                         <div className="cap-title">{d.Label || d.ID}</div>
                         <div className="cap-sub clip">revoked · expired {d.ExpiresAt}</div>
                       </div>
-                      <span className="tag">revoked</span>
+                      <button
+                        type="button"
+                        className="btn"
+                        title="Remove this device from the list permanently"
+                        onClick={() => removeDevice(d.ID)}
+                      >
+                        <Trash2 size={13} />
+                        Remove
+                      </button>
                     </div>
                   ))}
                 </>

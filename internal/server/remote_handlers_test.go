@@ -43,8 +43,38 @@ func TestHandleRemotePairBadCode(t *testing.T) {
 	}
 }
 
+// TestHandleRemoteDeviceDelete verifies the local delete handler removes a
+// device row entirely (the fix for revoked devices piling up with no way to
+// clear them) and validates input.
+func TestHandleRemoteDeviceDelete(t *testing.T) {
+	s := newTestServer(t)
+	now := flowdb.NowISO()
+	exp := time.Now().Add(time.Hour).Format(time.RFC3339)
+	if err := flowdb.InsertRemoteDevice(s.cfg.DB, "dev1", "iPhone", "hashAAA", now, exp); err != nil {
+		t.Fatalf("seed device: %v", err)
+	}
+
+	// Missing id → 400, nothing deleted.
+	rec := httptest.NewRecorder()
+	s.handleRemoteDeviceDelete(rec, httptest.NewRequest("POST", "/api/remote/devices/delete", strings.NewReader(`{}`)))
+	if rec.Code != 400 {
+		t.Fatalf("empty id: got %d want 400", rec.Code)
+	}
+
+	// Valid id → 200, row gone from the list.
+	rec = httptest.NewRecorder()
+	s.handleRemoteDeviceDelete(rec, httptest.NewRequest("POST", "/api/remote/devices/delete", strings.NewReader(`{"id":"dev1"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("delete: got %d body=%s", rec.Code, rec.Body.String())
+	}
+	list, _ := flowdb.ListRemoteDevices(s.cfg.DB)
+	if len(list) != 0 {
+		t.Fatalf("expected 0 devices after delete, got %d", len(list))
+	}
+}
+
 func TestRemoteForbiddenRPCPath(t *testing.T) {
-	for _, p := range []string{"/api/remote/pair-code", "/api/remote/devices", "/api/remote/enable", "/api/remote/status"} {
+	for _, p := range []string{"/api/remote/pair-code", "/api/remote/devices", "/api/remote/devices/revoke", "/api/remote/devices/delete", "/api/remote/enable", "/api/remote/status"} {
 		if !remoteForbiddenRPCPath(p) {
 			t.Fatalf("%s must be forbidden for remote RPC", p)
 		}
