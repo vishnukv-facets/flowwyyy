@@ -238,6 +238,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/attention/decision", s.handleAttentionDecision)
 	mux.HandleFunc("/api/steering/runs", s.handleSteeringRuns)
 	mux.HandleFunc("/api/slack/send", s.handleSlackSend)
+	mux.HandleFunc("/api/slack/react", s.handleSlackReact)
 	mux.HandleFunc("/api/slack/pending", s.handleSlackPendingList)
 	mux.HandleFunc("/api/slack/pending/decide", s.handleSlackPendingDecide)
 	mux.HandleFunc("/api/slack/channels", s.handleSlackChannels)

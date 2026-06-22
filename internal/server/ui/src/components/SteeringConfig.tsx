@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import { BellOff, Clock, Filter, Gauge, Hash, Loader2, MessagesSquare, PenLine, Save, ShieldCheck } from 'lucide-react'
 import { usePersona, useSavePersona, useSettings } from '../lib/query'
-import { ConfigField, SettingsPanel, SettingsSection, useConfigDraft } from './SettingsPanels'
+import { ConfigField, SettingsPanel, useConfigDraft } from './SettingsPanels'
 import { ChannelPicker } from './ChannelPicker'
 import { AutonomyPanel } from './AutonomyPanel'
 
@@ -102,68 +102,62 @@ function VoicePanel() {
   )
 }
 
+// ConfigHead is a full-width row label inside the single steering-config grid —
+// it replaces the per-section card wrapper so the small knob-boxes below it can
+// pack horizontally instead of each section stacking a lone full-width card.
+function ConfigHead({ title, hint }: { title: string; hint: string }) {
+  return (
+    <div className="steering-config-head settings-section-head">
+      <span className="eyebrow">{title}</span>
+      <span className="settings-section-hint">{hint}</span>
+    </div>
+  )
+}
+
 export function SteeringConfig() {
   return (
-    <>
-      <SettingsSection title="Voice" hint="How flow writes Slack/GitHub replies on your behalf — injected into the steerer's draft and send prompts so replies read like you, not a bot. Applies globally; seeded with a sensible default on flow init.">
-        <div className="settings-grid">
-          <VoicePanel />
-        </div>
-      </SettingsSection>
+    <div className="steering-config">
+      <VoicePanel />
+      <ConfigGroupPanel title="Per-channel sessions" icon={<MessagesSquare size={17} />} fieldKeys={SESSION_KEYS} />
 
-      <SettingsSection title="Session model" hint="The per-channel live-session steerer. On = one persistent session per channel/DM/PR holds conversation memory; off = stateless per-event triage.">
-        <div className="settings-grid">
-          <ConfigGroupPanel title="Per-channel sessions" icon={<MessagesSquare size={17} />} fieldKeys={SESSION_KEYS} />
-        </div>
-      </SettingsSection>
+      <ConfigHead title="Triage scope" hint="What the router watches, mutes, and drops before triage." />
+      <ChannelPicker
+        settingKey="FLOW_STEERING_WATCH_CHANNELS"
+        title="Watched channels"
+        icon={<Hash size={17} />}
+        help="DMs and @mentions are always triaged. Tick channels to also watch them."
+        pillNoun="watched"
+        saveLabel="Save watched channels"
+        savedActiveHint="Your saved watch list is still active."
+      />
+      <ChannelPicker
+        settingKey="FLOW_STEERING_MUTED_CHANNELS"
+        title="Muted channels"
+        icon={<BellOff size={17} />}
+        help="Channels you never want surfaced — messages from them are dropped before triage."
+        pillNoun="muted"
+        saveLabel="Save muted channels"
+        savedActiveHint="Your saved mute list is still active."
+      />
+      <ConfigGroupPanel title="Muted keywords" icon={<Filter size={17} />} fieldKeys={MUTED_KEYWORD_KEYS} />
+      <ChannelPicker
+        settingKey="FLOW_STEERING_TRUSTED_CHANNELS"
+        title="Trusted sources"
+        icon={<ShieldCheck size={17} />}
+        help="DMs, group DMs, and channels whose forwarded content may be auto-permitted into an unattended (bypass/auto) session. Your own messages are always trusted; tick others you trust. Pairs with Auto-permit below."
+        pillNoun="trusted"
+        saveLabel="Save trusted sources"
+        savedActiveHint="Your saved trusted list is still active."
+        kinds={['channel', 'im', 'mpim']}
+      />
 
-      <SettingsSection title="Triage scope" hint="What the router watches, mutes, and drops before triage.">
-        <div className="settings-grid">
-          <ChannelPicker
-            settingKey="FLOW_STEERING_WATCH_CHANNELS"
-            title="Watched channels"
-            icon={<Hash size={17} />}
-            help="DMs and @mentions are always triaged. Tick channels to also watch them."
-            pillNoun="watched"
-            saveLabel="Save watched channels"
-            savedActiveHint="Your saved watch list is still active."
-          />
-          <ChannelPicker
-            settingKey="FLOW_STEERING_MUTED_CHANNELS"
-            title="Muted channels"
-            icon={<BellOff size={17} />}
-            help="Channels you never want surfaced — messages from them are dropped before triage."
-            pillNoun="muted"
-            saveLabel="Save muted channels"
-            savedActiveHint="Your saved mute list is still active."
-          />
-          <ConfigGroupPanel title="Muted keywords" icon={<Filter size={17} />} fieldKeys={MUTED_KEYWORD_KEYS} />
-          <ChannelPicker
-            settingKey="FLOW_STEERING_TRUSTED_CHANNELS"
-            title="Trusted sources"
-            icon={<ShieldCheck size={17} />}
-            help="DMs, group DMs, and channels whose forwarded content may be auto-permitted into an unattended (bypass/auto) session. Your own messages are always trusted; tick others you trust. Pairs with Auto-permit below."
-            pillNoun="trusted"
-            saveLabel="Save trusted sources"
-            savedActiveHint="Your saved trusted list is still active."
-            kinds={['channel', 'im', 'mpim']}
-          />
-        </div>
-      </SettingsSection>
+      <ConfigHead title="Autonomy" hint="What the steerer may do without asking. Outward replies always stay manual." />
+      <AutonomyPanel />
+      <ConfigGroupPanel title="Waiting follow-up" icon={<Clock size={17} />} fieldKeys={WAITING_KEYS} />
+      <ConfigGroupPanel title="Auto-permit (unattended)" icon={<ShieldCheck size={17} />} fieldKeys={AUTO_PERMIT_KEYS} />
 
-      <SettingsSection title="Autonomy" hint="What the steerer may do without asking. Outward replies always stay manual.">
-        <div className="settings-grid">
-          <AutonomyPanel />
-          <ConfigGroupPanel title="Waiting follow-up" icon={<Clock size={17} />} fieldKeys={WAITING_KEYS} />
-          <ConfigGroupPanel title="Auto-permit (unattended)" icon={<ShieldCheck size={17} />} fieldKeys={AUTO_PERMIT_KEYS} />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection title="Performance" hint="Classifier subprocess budget.">
-        <div className="settings-grid">
-          <ConfigGroupPanel title="Classifier" icon={<Gauge size={17} />} fieldKeys={PERFORMANCE_KEYS} />
-        </div>
-      </SettingsSection>
-    </>
+      <ConfigHead title="Performance" hint="Classifier subprocess budget." />
+      <ConfigGroupPanel title="Classifier" icon={<Gauge size={17} />} fieldKeys={PERFORMANCE_KEYS} />
+    </div>
   )
 }

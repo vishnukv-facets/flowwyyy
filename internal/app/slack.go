@@ -23,6 +23,10 @@ var slackScheduleSendFn = monitor.ScheduleAsThread
 // comment, filePath, identity). Stubbable in tests.
 var slackFileSendFn = monitor.SendFileAsThread
 
+// slackReactFn is the in-process fallback for a reaction: (channel, ts, emoji,
+// identity). Stubbable in tests.
+var slackReactFn = monitor.ReactAsThread
+
 var slackSendNow = time.Now
 
 // postSlackSendFn POSTs to the running flow server, which holds
@@ -73,18 +77,102 @@ type slackSendPayload struct {
 	PostAt   int64  `json:"post_at,omitempty"`
 }
 
+type slackReactPayload struct {
+	Channel string `json:"channel"`
+	TS      string `json:"ts"`
+	Emoji   string `json:"emoji"`
+	As      string `json:"as"`
+}
+
+// postSlackReactFn POSTs a reaction to the running flow server (which holds the
+// fresh token), mirroring postSlackSendFn. Same return contract: (0,"",err) when
+// the server is UNREACHABLE so the caller falls back to the in-process path.
+// Stubbable in tests.
+var postSlackReactFn = func(channel, ts, emoji, identity string) (status int, body string, err error) {
+	payload, err := json.Marshal(slackReactPayload{Channel: channel, TS: ts, Emoji: emoji, As: identity})
+	if err != nil {
+		return 0, "", err
+	}
+	req, err := http.NewRequest(http.MethodPost, flowServerURL("/api/slack/react"), strings.NewReader(string(payload)))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := uiSessionToken(); tok != "" {
+		req.Header.Set("X-Flow-Session-Token", tok)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, strings.TrimSpace(string(b)), nil
+}
+
 func cmdSlack(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> (--text <message>|--text-file <path>|--file <path>) [--at <when>]")
+		fmt.Fprintln(os.Stderr, "       flow slack react --channel <id> --ts <ts> [--emoji +1]")
 		return 2
 	}
 	switch args[0] {
 	case "send":
 		return cmdSlackSend(args[1:])
+	case "react":
+		return cmdSlackReact(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown slack subcommand %q\n", args[0])
 		return 2
 	}
+}
+
+// cmdSlackReact adds an emoji reaction to a Slack message — the agent's
+// lightweight 👍-ack for thread messages that need acknowledgement, not a reply.
+// Routes through the running server (fresh token) and falls back to the
+// in-process path when the server is unreachable, mirroring `flow slack send`.
+func cmdSlackReact(args []string) int {
+	fs := flagSet("slack react")
+	channel := fs.String("channel", "", "Slack channel/DM id of the message")
+	ts := fs.String("ts", "", "timestamp of the message to react to")
+	emoji := fs.String("emoji", "+1", "emoji short name without colons (default +1 — thumbs up)")
+	as := fs.String("as", "user", "react identity: bot or user (default user, so it lands when the bot isn't in-channel)")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*channel) == "" {
+		fmt.Fprintln(os.Stderr, "error: --channel is required")
+		return 2
+	}
+	if strings.TrimSpace(*ts) == "" {
+		fmt.Fprintln(os.Stderr, "error: --ts is required")
+		return 2
+	}
+	identity := strings.ToLower(strings.TrimSpace(*as))
+	if identity != "" && identity != "bot" && identity != "user" {
+		fmt.Fprintln(os.Stderr, "error: --as must be 'bot' or 'user'")
+		return 2
+	}
+	emojiName := strings.Trim(strings.TrimSpace(*emoji), ":")
+	if emojiName == "" {
+		fmt.Fprintln(os.Stderr, "error: --emoji is required")
+		return 2
+	}
+
+	// Prefer the running server (fresh token); fall back in-process when unreachable.
+	status, respBody, err := postSlackReactFn(*channel, strings.TrimSpace(*ts), emojiName, identity)
+	if err == nil {
+		if status >= 200 && status < 300 {
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "error: %s\n", serverSlackError(respBody))
+		return 1
+	}
+	if ferr := slackReactFn(*channel, strings.TrimSpace(*ts), emojiName, identity); ferr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", ferr)
+		return 1
+	}
+	return 0
 }
 
 func cmdSlackSend(args []string) int {

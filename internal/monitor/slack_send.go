@@ -46,21 +46,50 @@ func resolveSendIdentity(channel, override string) (token string, asUser bool) {
 	return SlackBotToken(), false
 }
 
+// sectionTextLimit is Slack's hard cap on a section block's text (3000 chars).
+// Bodies longer than this can't ride in a section block, so they fall back to a
+// plain-text post with the footer appended (editable, but Slack rejects the
+// alternative outright). Headroom below 3000 for safety.
+const sectionTextLimit = 2900
+
+// slackPostOptions builds the chat.postMessage / scheduleMessage options. When a
+// footer is present (and the body fits a section block), the footer renders as a
+// non-editable Block Kit CONTEXT block BELOW the message — NOT appended to the
+// body — so neither the recipient nor the sender can edit or delete the
+// attribution from the message text (mirroring Slack's native "Sent using @app").
+// MsgOptionText still carries the raw body as the notification/fallback text.
+// A footer-less send (command DM, or footer disabled) posts plain text exactly as
+// before, and an over-limit body falls back to the legacy text-append.
+func slackPostOptions(text, footer string, asUser bool, threadTS string) []slack.MsgOption {
+	footer = strings.TrimSpace(footer)
+	var opts []slack.MsgOption
+	if footer != "" && len([]rune(text)) <= sectionTextLimit {
+		opts = append(opts,
+			slack.MsgOptionText(text, false), // notification + fallback body
+			slack.MsgOptionBlocks(
+				slack.NewSectionBlock(slack.NewTextBlockObject(slack.MarkdownType, text, false, false), nil, nil),
+				slack.NewContextBlock("", slack.NewTextBlockObject(slack.MarkdownType, footer, false, false)),
+			),
+		)
+	} else {
+		opts = append(opts, slack.MsgOptionText(appendFooter(text, footer), false))
+	}
+	opts = append(opts, slack.MsgOptionAsUser(asUser))
+	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
+		opts = append(opts, slack.MsgOptionTS(threadTS))
+	}
+	return opts
+}
+
 // sendAsBotFn performs the actual post; a package var so tests don't hit Slack.
+// text is the RAW body; the attribution footer is resolved here and rendered as a
+// non-editable context block (see slackPostOptions), never appended to the body.
 var sendAsBotFn = func(channel, threadTS, text, identity string) error {
 	token, asUser := resolveSendIdentity(channel, identity)
 	if strings.TrimSpace(token) == "" {
 		return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
 	}
-	api := slack.New(token)
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(text, false),
-		slack.MsgOptionAsUser(asUser),
-	}
-	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
-	_, _, err := api.PostMessage(channel, opts...)
+	_, _, err := slack.New(token).PostMessage(channel, slackPostOptions(text, footerForChannel(channel), asUser, threadTS)...)
 	return err
 }
 
@@ -69,15 +98,7 @@ var scheduleAsBotFn = func(channel, threadTS, text, identity string, postAt int6
 	if strings.TrimSpace(token) == "" {
 		return "", fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
 	}
-	api := slack.New(token)
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(text, false),
-		slack.MsgOptionAsUser(asUser),
-	}
-	if threadTS = strings.TrimSpace(threadTS); threadTS != "" {
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
-	_, scheduledMessageID, err := api.ScheduleMessage(channel, strconv.FormatInt(postAt, 10), opts...)
+	_, scheduledMessageID, err := slack.New(token).ScheduleMessage(channel, strconv.FormatInt(postAt, 10), slackPostOptions(text, footerForChannel(channel), asUser, threadTS)...)
 	return scheduledMessageID, err
 }
 
@@ -100,7 +121,7 @@ func SendAsThread(channel, threadTS, text, identity string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("text is required")
 	}
-	return sendAsBotFn(channel, threadTS, withSlackFooterForChannel(channel, text), identity)
+	return sendAsBotFn(channel, threadTS, text, identity)
 }
 
 func ScheduleAsThread(channel, threadTS, text, identity string, postAt int64) (string, error) {
@@ -116,7 +137,45 @@ func ScheduleAsThread(channel, threadTS, text, identity string, postAt int64) (s
 	if postAt <= 0 {
 		return "", fmt.Errorf("post_at is required")
 	}
-	return scheduleAsBotFn(channel, threadTS, withSlackFooterForChannel(channel, text), identity, postAt)
+	return scheduleAsBotFn(channel, threadTS, text, identity, postAt)
+}
+
+// reactAsBotFn performs the actual reactions.add; a package var so tests don't
+// hit Slack. Idempotent: Slack's "already_reacted" is treated as success.
+var reactAsBotFn = func(channel, ts, emoji, identity string) error {
+	token, _ := resolveSendIdentity(channel, identity)
+	if strings.TrimSpace(token) == "" {
+		return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
+	}
+	err := slack.New(token).AddReaction(emoji, slack.NewRefToMessage(channel, ts))
+	if err != nil && strings.Contains(err.Error(), "already_reacted") {
+		return nil
+	}
+	return err
+}
+
+// ReactAsThread adds an emoji reaction to a Slack message (channel + ts), using
+// the same identity model as SendAsThread ("bot"|"user"|"" → global). Reacting
+// as the operator's user token is what lets the ack land even when the bot is
+// not a member of the channel (the common Slack-Connect / colleague-thread case).
+// emoji is the Slack short name with or without surrounding colons (e.g. "+1" or
+// ":+1:"). Idempotent. Carries no footer — a reaction has no body. Gated by
+// FLOW_SLACK_WRITES_ENABLED.
+func ReactAsThread(channel, ts, emoji, identity string) error {
+	if !slackWritesEnabled() {
+		return fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
+	}
+	if strings.TrimSpace(channel) == "" {
+		return fmt.Errorf("channel is required")
+	}
+	if strings.TrimSpace(ts) == "" {
+		return fmt.Errorf("message timestamp (ts) is required")
+	}
+	emoji = strings.Trim(strings.TrimSpace(emoji), ":")
+	if emoji == "" {
+		return fmt.Errorf("emoji is required")
+	}
+	return reactAsBotFn(channel, ts, emoji, identity)
 }
 
 // SendAsBot posts under flow's configured send identity (FLOW_SLACK_SEND_AS —

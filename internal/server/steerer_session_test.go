@@ -37,6 +37,10 @@ func TestSteererTitleFor(t *testing.T) {
 	}{
 		{"slack channel resolved", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "#facets-coinswitch", "", "#facets-coinswitch"},
 		{"slack channel unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "channel", Channel: "C1"}, "", "", ""},
+		// Private channels arrive with channel_type "group" (Slack's wire value),
+		// not "channel" — but should render identically to a public #channel.
+		{"slack private channel (group) resolved", steering.SteererDelivery{Source: "slack", ChannelType: "group", Channel: "C2"}, "#ek-machli-chapak", "", "#ek-machli-chapak"},
+		{"slack private channel (group) unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "group", Channel: "C2"}, "", "", ""},
 		{"slack dm", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "U9"}, "", "Nayan Kalita", "DM · Nayan Kalita"},
 		{"slack dm operator's own first message names the PEER from the channel", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "UOP", ContextOnly: true}, "", "Anshul Sao", "DM · Anshul Sao"},
 		{"slack dm peer unresolved → empty (caller falls back)", steering.SteererDelivery{Source: "slack", ChannelType: "im", Channel: "D1", Author: "U9"}, "", "", ""},

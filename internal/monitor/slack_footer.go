@@ -56,6 +56,37 @@ var resolveSlackBotHandleFn = func() string {
 	return botHandleCache
 }
 
+var (
+	botUserIDMu       sync.Mutex
+	botUserIDCache    string
+	botUserIDResolved bool
+)
+
+// resolveSlackBotUserIDFn returns the installed bot's own USER id (e.g. "U0123…")
+// via auth.test on the bot token, memoized. The user id — not the handle — is
+// what a Slack mention (<@U…>) needs so the footer's "@flow" LINKS to the app
+// instead of rendering as dead "@flow" text. "" when no bot token is set or
+// auth.test fails (the caller then falls back to a plain "@handle" without
+// caching, so a later token still resolves). A var so tests can stub it.
+var resolveSlackBotUserIDFn = func() string {
+	botUserIDMu.Lock()
+	defer botUserIDMu.Unlock()
+	if botUserIDResolved {
+		return botUserIDCache
+	}
+	token := slackBotOnlyToken()
+	if strings.TrimSpace(token) == "" {
+		return ""
+	}
+	resp, err := slack.New(token).AuthTest()
+	if err != nil || resp == nil {
+		return ""
+	}
+	botUserIDCache = strings.TrimSpace(resp.UserID)
+	botUserIDResolved = true
+	return botUserIDCache
+}
+
 // slackifyHandle trims whitespace and a leading '@' so the footer renders one
 // clean "@name".
 func slackifyHandle(s string) string {
@@ -106,6 +137,14 @@ func SlackSendFooter() string {
 	if v, ok := os.LookupEnv("FLOW_SLACK_SEND_FOOTER"); ok {
 		return strings.TrimSpace(v)
 	}
+	// Prefer a real Slack mention (<@bot-user-id>) so the footer's "@flow" LINKS
+	// to the flow app — a bare "@flow" is never a mention in Slack mrkdwn and
+	// renders as dead text. The mention itself shows the bot's current display
+	// name, so no separate handle is needed. Fall back to plain "@<handle>" only
+	// when the bot user id can't be resolved (no bot token / auth.test failed).
+	if id := strings.TrimSpace(resolveSlackBotUserIDFn()); id != "" {
+		return "_Sent using_ <@" + id + ">"
+	}
 	return "_Sent using @" + SlackAppHandle() + "_"
 }
 
@@ -123,15 +162,16 @@ func appendFooter(text, footer string) string {
 	return body + "\n\n" + footer
 }
 
-// withSlackFooterForChannel appends the configured attribution footer to an
-// outbound message, EXCEPT on the operator↔bot command DM — those are flow's own
-// system messages (acks, hints, rejections), not replies sent to others, so
-// they carry no "Sent using @app" attribution. Applied at the send chokepoint
-// (SendAsThread / ScheduleAsThread) so every outward send gets exactly one
-// footer and the composing agent never writes it.
-func withSlackFooterForChannel(channel, text string) string {
+// footerForChannel returns the attribution footer to render below an outbound
+// message, or "" when it should carry none: the operator↔bot command DM (flow's
+// own system messages — acks, hints, rejections — aren't replies sent to others)
+// or a disabled/empty FLOW_SLACK_SEND_FOOTER. Resolved at the send chokepoint
+// (sendAsBotFn / scheduleAsBotFn) and rendered as a non-editable context block
+// (see slackPostOptions) — never appended to the body — so the composing agent
+// never writes it and the recipient can't edit it out.
+func footerForChannel(channel string) string {
 	if botIsMemberOfIM(channel) {
-		return text
+		return ""
 	}
-	return appendFooter(text, SlackSendFooter())
+	return SlackSendFooter()
 }

@@ -2820,7 +2820,25 @@ under the `tags:` line), follow this bootstrap:
 
    Save a progress note after each meaningful exchange so the thread's
    history is captured in flow even if the inbox file rotates.
-7. **Monitoring a DM reply (automatic).** You can reply to someone **privately
+7. **Acknowledge with a 👍 reaction when a reply isn't warranted.** When an
+   ingested message just needs acknowledgement — a closing, an FYI, or a short
+   "ok / thanks / got it / will let you know / sounds good" — react to THAT
+   message with a thumbs-up instead of posting a low-value "ok" reply. The
+   reaction gives the sender a "seen / acknowledged" signal and tells the
+   operator the agent ingested the context, without cluttering the thread. Run:
+   `flow slack react --channel <channel> --ts <message_ts> --emoji +1 --as user`
+   where `<message_ts>` is the specific message's `TS` from the inbox event (the
+   message you're acking — NOT the thread_ts). Rules:
+   - **Selective, never blanket.** React only when acknowledgement IS the right
+     response. A message that asks a question or needs a real answer gets a
+     reply (step 6), never just a reaction. Do not react to every message — one
+     emoji per message is exactly the noise to avoid.
+   - **External messages only.** Don't react to the operator's own coordination
+     messages (the step-3 operator-vs-external classification still applies).
+   - The reaction posts as the operator (user token) so it lands even when the
+     flow bot isn't a member of the channel. It's idempotent — re-reacting the
+     same emoji is a no-op.
+8. **Monitoring a DM reply (automatic).** You can reply to someone **privately
    by DM** rather than in this thread. flow monitors that DM for you
    **automatically** — when you send the DM (Claude or Codex), the `PostToolUse`
    hook registers the DM **thread** for this task. The recipient's replies in
@@ -2832,7 +2850,7 @@ under the `tags:` line), follow this bootstrap:
    don't leak into this task. (Requires the workspace Slack app to subscribe to
    `message.im` / `message.mpim` under "events on behalf of users", and a user
    token configured for backfill; if a DM reply never arrives, check those.)
-8. **Close out.** When the thread is resolved (`:white_check_mark:` from
+9. **Close out.** When the thread is resolved (`:white_check_mark:` from
    the user, "thanks", explicit "done"), run `flow done` — the close-out
    sweep distills the Slack conversation into KB facts and a project
    update.
