@@ -9843,3 +9843,216 @@ a.owner-task-item:hover {
     overflow-x: hidden;
   }
 }
+
+/* ============================================================================
+   R6: Long-tail screens + wide content scroll containers (≤640px)
+   Sweeps: Overview, Projects, ProjectDetail, Playbooks, PlaybookDetail,
+           KB, Memories, Workdirs, Owners, Connectors, Analytics, BrainGraph,
+           Settings (incl. Remote Access), Trash, Chats, Attention.
+   Wide content (trace table, brain toolbar, chart grids): scroll or reflow.
+   Desktop (≥641px) is byte-for-byte unchanged — ALL rules inside @media blocks.
+   ========================================================================== */
+
+/* ---- pair-qr: QR image + hint for Remote Access -------------------------
+   The <img width=240 height=240> would overflow a narrow settings card.
+   max-width + height:auto let it shrink gracefully.                        */
+.pair-qr {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pair-qr img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---- Generic wide-content guard ---------------------------------------- */
+/* Any <pre> or <code> block that is not already in an overflow-x container  */
+pre:not(.tx2-result):not(.tx2-term-out) {
+  overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+  /* ---- Overview: collapse mc-cols to 1 column on phone (it stacks at 1080px
+     but the fixed 350px rail still forces minimum width at phone) ----------- */
+  .mc-cols {
+    grid-template-columns: 1fr;
+  }
+
+  /* briefing-rows: minmax(280px, 1fr) overflows at 390px; drop to 1fr */
+  .briefing-rows {
+    grid-template-columns: 1fr;
+  }
+
+  /* ---- Projects / Playbooks / Owners / general card grids ---------------- */
+  /* .grid.two (minmax 380px) and .grid.wide (minmax 420px) already drop to 1fr
+     at max-width:400px (R5). Extend that to ≤640px so they single-column
+     across all phone widths, not just the narrowest ones.                   */
+  .grid.two,
+  .grid.wide,
+  .grid.cards {
+    grid-template-columns: 1fr;
+  }
+
+  /* ---- Settings: settings-grid (minmax 320px) → 1fr on phone ------------ */
+  .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* settings-summary: stack vertically so each field gets full width       */
+  .settings-summary {
+    grid-template-columns: 1fr;
+  }
+  .settings-summary .sum-item {
+    border-right: none;
+    border-bottom: 1px solid var(--border-faint);
+  }
+  .settings-summary .sum-item:last-child {
+    border-bottom: 0;
+  }
+
+  /* mc-head: wrap pills below the heading on phone                          */
+  .mc-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .mc-env-pills {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* page-head: let the heading + action button stack on phone               */
+  .page-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* ---- Analytics: chart-grid already → 1fr at 900px; kpi-row fine -------- */
+  /* analytics-controls: let range pills wrap on narrow phone                */
+  .analytics-controls .range-pills {
+    flex-wrap: wrap;
+  }
+
+  /* ---- Attention: trace table — horizontal-scroll container --------------- */
+  /* .trace-list wraps the table; .trace-row has 8 fixed-width columns that
+     add up to ~900px. Wrap in an overflow-x:auto so only the table scrolls. */
+  .trace-list {
+    overflow-x: auto;
+    /* Give the container a minimum height so it feels like a scrollable slab */
+    min-height: 0;
+  }
+  .trace-row {
+    /* Keep the fixed-column layout but let the outer .trace-list scroll.
+       min-width prevents shrinkage below the natural column sum.             */
+    min-width: 700px;
+  }
+
+  /* srun-head: let the flex row wrap so long channel names don't overflow   */
+  .srun-head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* ---- Brain Graph ------------------------------------------------------- */
+  /* brain-page: full height via 100svh (or 100vh fallback), minus topbar +
+     bottom nav (64px). The toolbar 3-column grid → single column.           */
+  .brain-page {
+    height: auto;
+    min-height: calc(100svh - var(--topbar-h) - 64px);
+    padding-bottom: 12px;
+  }
+
+  /* brain-toolbar: collapse 3-column grid to a single column so each row
+     can wrap without overflowing the 390px viewport.                        */
+  .brain-toolbar {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  /* brain-search: full width inside the single column                       */
+  .brain-search {
+    width: 100%;
+  }
+
+  /* brain-shell: bound the canvas height to a reasonable phone size so the
+     page doesn't feel like an infinite canvas on a small screen.            */
+  .brain-shell {
+    height: min(460px, 65dvh);
+  }
+
+  /* brain-canvas: ensure touch-action allows both pan and zoom (React Flow
+     handles its own pinch-to-zoom, but we must not block touch events).     */
+  .brain-canvas {
+    touch-action: pan-x pan-y;
+  }
+
+  /* ---- Workdirs / Owners: table card refinements for non-Tasks columns ---
+     R5 applied the base tbl.fixed → block/card reflow (display:block per
+     td). These tables have different column counts from Tasks, but the
+     base reflow still prevents horizontal overflow. No additional overrides
+     needed: each td stacks as a block with full width.                      */
+
+  /* ---- Connectors -------------------------------------------------------- */
+  /* connector-tiles already uses minmax(min(100%,232px),1fr) — fine.
+     The modal width min() is already capped by the existing 92vw limit.    */
+
+  /* ---- Chats: make action buttons always visible (no hover on touch) ----- */
+  .chat-actions-rollout {
+    grid-template-columns: 1fr;
+    opacity: 1;
+  }
+  .chat-actions-rollout > .chat-actions-secondary {
+    transform: translateX(0);
+  }
+  .chat-reopen {
+    margin-left: 8px;
+  }
+
+  /* chat-row: stack main content + actions vertically                       */
+  .chat-row.row.gap {
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+  }
+
+  /* ---- Trash: ensure action buttons wrap on narrow screen ---------------- */
+  .lrow {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* ---- KB / Memories: already use .twopane (handled by R5) -------------- */
+  /* pane-detail inner div may have a wide max-width inline style — reset it.
+     React renders maxWidth as max-width in the DOM attribute.               */
+  .pane-detail > div[style*="max-width"] {
+    max-width: 100% !important;
+    padding: 16px 14px !important;
+  }
+
+  /* ---- Code/diff blocks in SessionDetail transcript ---------------------- */
+  /* tx2-result and hljs code blocks: already have overflow:auto. No change. */
+
+  /* ---- General: any remaining wide table in .card gets a scroll wrapper  */
+  /* Tables NOT caught by tbl.fixed reflow: give them an h-scroll container */
+  .card > table:not(.tbl) {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  /* ---- Overflow catch-all: ensure page body never scrolls horizontally   */
+  .page {
+    overflow-x: hidden;
+  }
+}
+
+/* ---- Attention: trace-list scroll container also on tablet (≤820px) ----
+   The 8-column trace-row is still very dense at tablet width; let it scroll. */
+@media (max-width: 820px) {
+  .trace-list {
+    overflow-x: auto;
+  }
+  .trace-row {
+    min-width: 700px;
+  }
+}
