@@ -10,6 +10,14 @@ import "flag"
 // FlagSet returns a configured *flag.FlagSet (ContinueOnError) for a command.
 func FlagSet(name string) *flag.FlagSet { return flagSet(name) }
 
+// LeadingHelpArg reports whether args starts with -h/--help.
+func LeadingHelpArg(args []string) bool { return leadingHelpArg(args) }
+
+// ParseFlagSet parses args using the standard app flag handling contract.
+func ParseFlagSet(fs *flag.FlagSet, args []string) (handled bool, rc int) {
+	return parseFlagSet(fs, args)
+}
+
 // FlowRoot returns the resolved flow root directory ($FLOW_ROOT or ~/.flow).
 func FlowRoot() (string, error) { return flowRoot() }
 
@@ -21,6 +29,9 @@ func FlowServerURL(path string) string { return flowServerURL(path) }
 
 // UISessionToken returns the current Mission Control session token.
 func UISessionToken() string { return uiSessionToken() }
+
+// PreferredUIFlowBinary picks which binary UI-related child processes re-exec.
+func PreferredUIFlowBinary(current string) string { return preferredUIFlowBinary(current) }
 
 // initHooks are run by `flow init` after core seeding. The product layer
 // registers hooks (e.g. the steerer-persona seed) via RegisterInitHook so the

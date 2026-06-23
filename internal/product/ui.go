@@ -1,9 +1,10 @@
-package app
+package product
 
 import (
 	"errors"
 	"flag"
 	"flow/internal/agenthooks"
+	"flow/internal/app"
 	"flow/internal/flowdb"
 	"flow/internal/server"
 	"flow/internal/workdirreg"
@@ -46,7 +47,7 @@ Serve the local Mission Control UI backed by the current flow database.`)
 }
 
 func cmdUIServe(args []string) int {
-	fs := flagSet("ui serve")
+	fs := app.FlagSet("ui serve")
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	port := fs.Int("port", 8787, "TCP port to bind")
 	bg := fs.Bool("bg", false, "run the UI server in the background")
@@ -148,12 +149,12 @@ func waitPortFree(port int, timeout time.Duration) bool {
 }
 
 func serveUI(host string, port int, noQuote bool) int {
-	root, err := flowRoot()
+	root, err := app.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	dbPath, err := flowDBPath()
+	dbPath, err := app.FlowDBPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -173,7 +174,7 @@ func serveUI(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: find executable: %v\n", err)
 		return 1
 	}
-	commandPath := preferredUIFlowBinary(exe)
+	commandPath := app.PreferredUIFlowBinary(exe)
 	hookHost := host
 	if hookHost == "0.0.0.0" || hookHost == "::" {
 		hookHost = "127.0.0.1"
@@ -190,7 +191,7 @@ func serveUI(host string, port int, noQuote bool) int {
 	srv := server.New(server.Config{
 		DB:           db,
 		FlowRoot:     root,
-		Version:      Version,
+		Version:      app.Version,
 		CommandPath:  commandPath,
 		HookURL:      hookURL,
 		DisableQuote: noQuote,
@@ -207,7 +208,7 @@ func serveUI(host string, port int, noQuote bool) int {
 }
 
 func startUIBackground(host string, port int, noQuote bool) int {
-	root, err := flowRoot()
+	root, err := app.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -217,7 +218,7 @@ func startUIBackground(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: find executable: %v\n", err)
 		return 1
 	}
-	exe = preferredUIFlowBinary(exe)
+	exe = app.PreferredUIFlowBinary(exe)
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "error: create log dir: %v\n", err)
@@ -251,18 +252,4 @@ func startUIBackground(host string, port int, noQuote bool) int {
 	fmt.Printf("flow ui serving at http://%s\n", net.JoinHostPort(host, strconv.Itoa(port)))
 	fmt.Printf("pid %d · log %s\n", pid, logPath)
 	return 0
-}
-
-// preferredUIFlowBinary picks which binary the backgrounded `ui serve` re-execs.
-// It must be the binary currently running (os.Executable()), NOT a bare "flow"
-// PATH lookup: resolving "flow" via $PATH launches whatever is installed
-// (e.g. /usr/local/bin/flow), which may be a stale build with old embedded UI
-// assets — so `./flow ui serve --bg` would serve the old UI instead of the
-// freshly built one. Re-execing the current executable keeps --bg consistent
-// with the foreground server.
-func preferredUIFlowBinary(current string) string {
-	if strings.TrimSpace(current) != "" {
-		return current
-	}
-	return "flow"
 }
