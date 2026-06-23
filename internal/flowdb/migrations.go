@@ -12,29 +12,19 @@ import (
 )
 
 func runMigrations(db *sql.DB) error {
-	// Wipe legacy inbox/monitor/slack/github tables on boot. The feature
-	// was removed; any existing user install still has data sitting in
-	// these tables that the current code no longer touches. Foreign keys
-	// are toggled off for the duration so child-table drops don't trip
-	// parent-table constraints — several of these tables FK back to
-	// monitor_events / external_messages which are in the same drop set.
+	// Wipe Brain-orchestration remnants on boot (removed in #34). brain_runs
+	// is still the live autonomous-run ledger and is intentionally kept; these
+	// three are the dead orchestration tables. Foreign keys are toggled off
+	// for the duration in case the remnants FK back to one another.
+	//
+	// The connector legacy tables (monitor_*/external_messages/
+	// slack_oauth_tokens/task_pr_links/automation_rules) are product-owned and
+	// dropped by productdb.Ensure — not here — so the core schema stays free
+	// of any connector concept.
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		return fmt.Errorf("disable foreign_keys for legacy drop: %w", err)
 	}
 	for _, t := range []string{
-		"external_message_actions",
-		"external_messages",
-		"monitor_event_actions",
-		"monitor_notifications",
-		"monitor_notification_states",
-		"monitor_sync_state",
-		"monitor_fetch_state",
-		"monitor_events",
-		"automation_rules",
-		"task_pr_links",
-		"slack_oauth_tokens",
-		// Brain orchestration remnants (removed in #34); brain_runs is
-		// still the live autonomous-run ledger and is intentionally kept.
 		"brain_plans",
 		"brain_policy",
 		"brain_action_audit",
@@ -73,155 +63,6 @@ func runMigrations(db *sql.DB) error {
 	if !has {
 		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN status_changed_at TEXT`); err != nil {
 			return fmt.Errorf("add tasks.status_changed_at: %w", err)
-		}
-	}
-
-	has, err = columnExists(db, "steering_trace", "stage1_reason")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN stage1_reason TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.stage1_reason: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "ts")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN ts TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.ts: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "team_id")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN team_id TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.team_id: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "url")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN url TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.url: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "autonomy_action")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_action TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.autonomy_action: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "autonomy_decision")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_decision TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.autonomy_decision: %w", err)
-		}
-	}
-	has, err = columnExists(db, "steering_trace", "autonomy_reason")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE steering_trace ADD COLUMN autonomy_reason TEXT`); err != nil {
-			return fmt.Errorf("add steering_trace.autonomy_reason: %w", err)
-		}
-	}
-
-	has, err = columnExists(db, "attention_feed", "linked_task")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN linked_task TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.linked_task: %w", err)
-		}
-	}
-
-	has, err = columnExists(db, "chats", "muted_at")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE chats ADD COLUMN muted_at TEXT`); err != nil {
-			return fmt.Errorf("add chats.muted_at: %w", err)
-		}
-	}
-
-	has, err = columnExists(db, "attention_feed", "channel")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.channel: %w", err)
-		}
-	}
-	has, err = columnExists(db, "attention_feed", "channel_type")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN channel_type TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.channel_type: %w", err)
-		}
-	}
-	has, err = columnExists(db, "attention_feed", "author")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN author TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.author: %w", err)
-		}
-	}
-	has, err = columnExists(db, "attention_feed", "ts")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN ts TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.ts: %w", err)
-		}
-	}
-	has, err = columnExists(db, "attention_feed", "team_id")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN team_id TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.team_id: %w", err)
-		}
-	}
-	has, err = columnExists(db, "attention_feed", "url")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN url TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.url: %w", err)
-		}
-	}
-
-	has, err = columnExists(db, "attention_feed", "retriaging_at")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_feed ADD COLUMN retriaging_at TEXT`); err != nil {
-			return fmt.Errorf("add attention_feed.retriaging_at: %w", err)
 		}
 	}
 
@@ -483,18 +324,6 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
-	// Operator corrections on a thread's running understanding (the "correct the
-	// steerer" button): authoritative operator-supplied context, fed into deep
-	// triage as ground truth. JSON array, same shape as operator_actions/replies.
-	has, err = columnExists(db, "attention_thread_state", "operator_corrections")
-	if err != nil {
-		return err
-	}
-	if !has {
-		if _, err := db.Exec(`ALTER TABLE attention_thread_state ADD COLUMN operator_corrections TEXT NOT NULL DEFAULT '[]'`); err != nil {
-			return fmt.Errorf("add attention_thread_state.operator_corrections: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -1081,6 +910,13 @@ func migrateAgentRuntimeStatesAllowReleased(db *sql.DB) error {
 	}
 	committed = true
 	return nil
+}
+
+// ColumnExists reports whether table has the given column. Exported so a
+// registered product migration set (internal/productdb) can gate its own
+// ADD COLUMN migrations without re-implementing the PRAGMA probe.
+func ColumnExists(db *sql.DB, table, column string) (bool, error) {
+	return columnExists(db, table, column)
 }
 
 func columnExists(db *sql.DB, table, column string) (bool, error) {
