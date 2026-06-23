@@ -24,8 +24,7 @@ var productPkgs = map[string]bool{
 
 // knownViolations is the ratchet; each task removes entries; ends empty.
 var knownViolations = map[string]bool{
-	"flow/internal/app":        true, // serve/attention/slack/tell/init
-	"flow/internal/workevents": true, // builder.go → monitor
+	"flow/internal/app": true, // serve/attention/slack
 }
 
 var corePackages = []string{

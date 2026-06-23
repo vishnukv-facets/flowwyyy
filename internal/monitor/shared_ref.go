@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+
+	"flow/internal/inbox"
 )
 
 // SharedRef is a deterministic pointer from one Slack message to another that
@@ -18,28 +20,7 @@ import (
 // teammate answers by forwarding that thread message into a DM. The DM's shared
 // attachment points back at the original thread, so we can route the DM as
 // activity on the tracked thread.
-type SharedRef struct {
-	Channel  string // original conversation id (C…/D…/G…)
-	ThreadTS string // original thread parent ts (from from_url ?thread_ts=, else == TS)
-	TS       string // original message ts that was shared
-}
-
-// ThreadKeys returns the candidate thread keys this ref could match, most
-// specific first: the (channel, thread_ts) parent key, then the
-// (channel, ts) key for when the shared message is itself a thread root or the
-// permalink omitted thread_ts. Both are exact tag lookups downstream, so
-// returning both is safe — a match is a match, never a false positive.
-func (r SharedRef) ThreadKeys() []string {
-	var out []string
-	seen := map[string]bool{}
-	for _, ts := range []string{r.ThreadTS, r.TS} {
-		if k := ThreadKey(r.Channel, ts); k != "" && !seen[k] {
-			seen[k] = true
-			out = append(out, k)
-		}
-	}
-	return out
-}
+type SharedRef = inbox.SharedRef
 
 // parseSharedRef extracts the first shared-message reference from a raw Socket
 // Mode Events-API payload (the json.RawMessage in socketmode.Request.Payload).

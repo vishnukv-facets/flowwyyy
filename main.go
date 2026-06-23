@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"flow/internal/app"
+	_ "flow/internal/product"
 )
 
 // version is the binary version string. Overridden at build time via

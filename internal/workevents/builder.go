@@ -7,14 +7,14 @@ import (
 	"strings"
 
 	"flow/internal/flowdb"
-	"flow/internal/monitor"
+	"flow/internal/inbox"
 )
 
 // Build derives normalized assistant work events from existing Flow storage.
 // It is a read model: callers can render or answer from the result without
 // mutating inbox.jsonl, attention_feed, or task state.
 func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
-	_ = flowRoot // monitor.ReadInboxEntries already resolves FLOW_ROOT/HOME.
+	_ = flowRoot // inbox.ReadInboxEntries already resolves FLOW_ROOT/HOME.
 	if db == nil {
 		return Result{}, fmt.Errorf("workevents: db is required")
 	}
@@ -145,7 +145,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 		if task == nil {
 			continue
 		}
-		entries, err := monitor.ReadInboxEntries(task.Slug)
+		entries, err := inbox.ReadInboxEntries(task.Slug)
 		if err != nil {
 			continue
 		}
@@ -153,7 +153,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 		for i, entry := range entries {
 			source := strings.TrimSpace(entry.Meta.Source)
 			if source == "" || source == "unknown" {
-				source = monitor.ClassifyInboxEvent(entry.Event).Source
+				source = inbox.ClassifyInboxEvent(entry.Event).Source
 			}
 			if source == "unknown" {
 				source = ""
@@ -168,7 +168,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 				Source:         source,
 				Kind:           firstNonEmpty(ev.Kind, "inbox"),
 				EventKey:       inboxEventKey(task.Slug, entry),
-				ThreadKey:      monitor.ThreadKey(ev.Channel, ev.ThreadTS),
+				ThreadKey:      inbox.ThreadKey(ev.Channel, ev.ThreadTS),
 				URL:            ev.URL,
 				Title:          inboxTitle(ev),
 				Summary:        strings.TrimSpace(ev.Text),
@@ -190,7 +190,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 	return out
 }
 
-func terminalGitHubPRIndexes(entries []monitor.InboxEntry) map[string]int {
+func terminalGitHubPRIndexes(entries []inbox.InboxEntry) map[string]int {
 	out := map[string]int{}
 	for i, entry := range entries {
 		ev := entry.Event
@@ -208,7 +208,7 @@ func terminalGitHubPRIndexes(entries []monitor.InboxEntry) map[string]int {
 	return out
 }
 
-func githubActionSuperseded(ev monitor.InboundEvent, index int, terminalPR map[string]int) bool {
+func githubActionSuperseded(ev inbox.InboundEvent, index int, terminalPR map[string]int) bool {
 	if !githubActionKind(ev.Kind) {
 		return false
 	}
@@ -233,7 +233,7 @@ func githubActionKind(kind string) bool {
 	}
 }
 
-func githubPRKey(ev monitor.InboundEvent) string {
+func githubPRKey(ev inbox.InboundEvent) string {
 	if strings.HasPrefix(ev.ThreadTS, "gh-pr:") {
 		return ev.ThreadTS
 	}
@@ -243,7 +243,7 @@ func githubPRKey(ev monitor.InboundEvent) string {
 	return ""
 }
 
-func classifyInboxEvent(task *flowdb.Task, ev monitor.InboundEvent, source string) (Bucket, string, string) {
+func classifyInboxEvent(task *flowdb.Task, ev inbox.InboundEvent, source string) (Bucket, string, string) {
 	if source == "github" {
 		switch ev.Kind {
 		case "pr_head_updated":
@@ -320,7 +320,7 @@ func taskProject(task *flowdb.Task) string {
 	return ""
 }
 
-func inboxEntityKind(ev monitor.InboundEvent, source string) string {
+func inboxEntityKind(ev inbox.InboundEvent, source string) string {
 	if source == "github" {
 		if strings.HasPrefix(ev.ThreadTS, "gh-pr:") || strings.HasPrefix(ev.Kind, "pr_") {
 			return "pr"
@@ -332,7 +332,7 @@ func inboxEntityKind(ev monitor.InboundEvent, source string) string {
 	return "thread"
 }
 
-func inboxEventKey(taskSlug string, entry monitor.InboxEntry) string {
+func inboxEventKey(taskSlug string, entry inbox.InboxEntry) string {
 	ev := entry.Event
 	if strings.TrimSpace(ev.EventKey) != "" {
 		return strings.Join([]string{taskSlug, ev.EventKey}, ":")
@@ -340,7 +340,7 @@ func inboxEventKey(taskSlug string, entry monitor.InboxEntry) string {
 	return strings.Join([]string{taskSlug, ev.Kind, ev.Channel, ev.ThreadTS, ev.TS, entry.EnqueuedAt}, ":")
 }
 
-func inboxTitle(ev monitor.InboundEvent) string {
+func inboxTitle(ev inbox.InboundEvent) string {
 	switch ev.Kind {
 	case "pr_review_requested":
 		return "PR review requested"

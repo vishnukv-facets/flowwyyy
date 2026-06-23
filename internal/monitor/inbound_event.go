@@ -4,76 +4,14 @@ import (
 	"encoding/json"
 	"strings"
 
+	"flow/internal/inbox"
+
 	"github.com/slack-go/slack/slackevents"
 )
 
 const slackMessageSubTypeFileShare = "file_share"
 
-// InboundEvent is the parsed, normalized form of a Slack Events API event
-// flow's reaction-trigger pipeline acts on. It collapses Slack's many event
-// types (message.channels, message.im, message.mpim, app_mention,
-// reaction_added) into one shape so downstream handlers don't have to
-// switch on Slack-specific structs.
-//
-// Field semantics differ slightly between kinds:
-//
-//   - For "message" / "app_mention": Channel / TS / ThreadTS / UserID / Text
-//     describe the message itself. ItemTS / ItemAuthor / Reaction are "".
-//
-//   - For "reaction_added": Channel / TS reflect the reaction event itself
-//     (ts = the EventTimestamp on the reaction). The targeted message is
-//     in ItemChannel / ItemTS / ItemAuthor. UserID is the reactor. Reaction
-//     is the emoji shortname with colons stripped. Text is "".
-//
-// ThreadTS defaults to TS when the source event has no parent thread, so
-// downstream "partition by thread" code can hash on ThreadTS uniformly
-// without checking for empty.
-type InboundEvent struct {
-	Kind        string `json:"kind"` // "message" | "app_mention" | "reaction_added"
-	Channel     string `json:"channel,omitempty"`
-	ChannelType string `json:"channel_type,omitempty"` // "channel" | "im" | "mpim" | "group" | "github" | ""
-	TS          string `json:"ts,omitempty"`
-	ThreadTS    string `json:"thread_ts,omitempty"`
-	UserID      string `json:"user_id,omitempty"`
-	Text        string `json:"text,omitempty"`
-	URL         string `json:"url,omitempty"`
-	EventKey    string `json:"event_key,omitempty"`
-	Reaction    string `json:"reaction,omitempty"`
-	ItemChannel string `json:"item_channel,omitempty"`
-	ItemTS      string `json:"item_ts,omitempty"`
-	ItemAuthor  string `json:"item_author,omitempty"`
-	TeamID      string `json:"team_id,omitempty"`
-	APIAppID    string `json:"api_app_id,omitempty"`
-	RawJSON     string `json:"raw_json,omitempty"`
-
-	// Participants are the logins involved in a GitHub event's subject — the
-	// PR/issue author plus its assignees and requested reviewers. Steering's
-	// Stage 0 uses this (with @-mentions and task linkage) to scope GitHub
-	// attention to events that actually involve the operator, rather than the
-	// whole org's webhook firehose. Empty for Slack.
-	Participants []string `json:"participants,omitempty"`
-
-	// Shared-message reference: when this message forwards/shares or unfurls
-	// another Slack message, these point at the original conversation+thread so
-	// a reply that lands in a different conversation can still be correlated to
-	// the thread a task tracks. Populated from the raw payload at ingest (see
-	// parseSharedRef); empty for ordinary messages. RefThreadTS is the original
-	// thread *parent* (so it matches a task's slack-thread tag), RefTS the exact
-	// message that was shared.
-	RefChannel  string `json:"ref_channel,omitempty"`
-	RefThreadTS string `json:"ref_thread_ts,omitempty"`
-	RefTS       string `json:"ref_ts,omitempty"`
-}
-
-// SharedRef reconstructs the shared-message pointer carried by this event, or
-// ok=false when there is none. Mirrors the Ref* fields back into a SharedRef so
-// routing code can reuse SharedRef.ThreadKeys().
-func (e InboundEvent) SharedRef() (SharedRef, bool) {
-	if strings.TrimSpace(e.RefChannel) == "" || strings.TrimSpace(e.RefTS) == "" {
-		return SharedRef{}, false
-	}
-	return SharedRef{Channel: e.RefChannel, ThreadTS: e.RefThreadTS, TS: e.RefTS}, true
-}
+type InboundEvent = inbox.InboundEvent
 
 // ParseEventsAPIEvent normalizes a Slack EventsAPIEvent into zero or more
 // InboundEvents. Returns nil for inner events we don't care about (channel

@@ -1,9 +1,9 @@
 package app
 
 import (
+	"flow/internal/cli"
 	"flow/internal/flowdb"
-	"flow/internal/monitor"
-	"flow/internal/server"
+	"flow/internal/inbox"
 	"fmt"
 	"net/http"
 	"os"
@@ -122,7 +122,7 @@ func cmdTell(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: close inbox: %v\n", err)
 		return 1
 	}
-	if err := monitor.AppendInboxEvent(task.Slug, monitor.FlowTellEvent(sender, message, now)); err != nil {
+	if err := inbox.AppendInboxEvent(task.Slug, inbox.FlowTellEvent(sender, message, now)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: append inbox jsonl: %v\n", err)
 		return 1
 	}
@@ -185,7 +185,7 @@ func uiSessionToken() string {
 	if err != nil {
 		return ""
 	}
-	b, err := os.ReadFile(filepath.Join(root, server.SessionTokenFileName))
+	b, err := os.ReadFile(filepath.Join(root, cli.SessionTokenFileName))
 	if err != nil {
 		return ""
 	}
