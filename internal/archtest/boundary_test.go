@@ -23,9 +23,9 @@ var productPkgs = map[string]bool{
 }
 
 // knownViolations is the ratchet; each task removes entries; ends empty.
-var knownViolations = map[string]bool{
-	"flow/internal/app": true, // serve/attention/slack
-}
+// Empty: ui/attention/slack relocated to product (T6), tell+init+workevents
+// rewired to core inbox/init-hooks (T4/T5). Core no longer imports product.
+var knownViolations = map[string]bool{}
 
 var corePackages = []string{
 	"flow/internal/app", "flow/internal/flowdb", "flow/internal/workevents",

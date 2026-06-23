@@ -1,9 +1,12 @@
 package app
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"flow/internal/flowdb"
 )
 
 // withVersion temporarily overrides the package-level Version for the
@@ -122,5 +125,38 @@ func TestMaybeAutoUpgradeSkipsWhenSkillMissing(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(os.Getenv("HOME"), ".claude", "skills", "flow", "SKILL.md")); !os.IsNotExist(err) {
 		t.Errorf("auto-upgrade created a skill file when none existed; err=%v", err)
+	}
+}
+
+func TestVersionJSONMatchesPlainVersion(t *testing.T) {
+	withVersion(t, "v9.8.7")
+
+	plain := captureStdout(t, func() {
+		if rc := Run([]string{"version"}); rc != 0 {
+			t.Fatalf("plain version rc = %d", rc)
+		}
+	})
+	raw := captureStdout(t, func() {
+		if rc := Run([]string{"version", "--json"}); rc != 0 {
+			t.Fatalf("json version rc = %d", rc)
+		}
+	})
+
+	var got struct {
+		Version      string   `json:"version"`
+		Schema       int      `json:"schema"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("version --json emitted invalid JSON %q: %v", raw, err)
+	}
+	if got.Version+"\n" != plain {
+		t.Fatalf("json version = %q, plain output = %q", got.Version, plain)
+	}
+	if got.Schema != flowdb.SchemaVersion {
+		t.Fatalf("schema = %d, want %d", got.Schema, flowdb.SchemaVersion)
+	}
+	if len(got.Capabilities) == 0 {
+		t.Fatal("capabilities should not be empty")
 	}
 }

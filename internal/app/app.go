@@ -3,6 +3,8 @@
 package app
 
 import (
+	"encoding/json"
+	"flow/internal/flowdb"
 	"fmt"
 	"os"
 
@@ -36,8 +38,7 @@ func Run(args []string) int {
 	// Special cases handled directly (not in the command registry).
 	switch cmd {
 	case "--version", "-v", "version":
-		fmt.Println(Version)
-		return 0
+		return cmdVersion(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
@@ -51,6 +52,39 @@ func Run(args []string) int {
 	fmt.Fprintf(os.Stderr, "error: unknown subcommand %q\n", cmd)
 	printUsage()
 	return 2
+}
+
+func cmdVersion(args []string) int {
+	if len(args) == 1 && args[0] == "--json" {
+		payload := struct {
+			Version      string   `json:"version"`
+			Schema       int      `json:"schema"`
+			Capabilities []string `json:"capabilities"`
+		}{
+			Version: Version,
+			Schema:  flowdb.SchemaVersion,
+			Capabilities: []string{
+				"version-json",
+				"tasks",
+				"projects",
+				"playbooks",
+				"owners",
+				"auto-runs",
+				"backups",
+			},
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(payload); err != nil {
+			fmt.Fprintf(os.Stderr, "error: encode version: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: flow version [--json]")
+		return 2
+	}
+	fmt.Println(Version)
+	return 0
 }
 
 func printUsage() {

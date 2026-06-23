@@ -15,6 +15,9 @@ import (
 // DefaultPermissionMode is used when callers do not explicitly choose one.
 const DefaultPermissionMode = "auto"
 
+// SchemaVersion is the compatibility floor exposed by `flow version --json`.
+const SchemaVersion = 1
+
 // (idx_tasks_session_id is a partial UNIQUE index that requires a
 // dedupe pass against existing data — a flat CREATE UNIQUE INDEX
 // would fail on any DB that has two tasks sharing a session_id.
