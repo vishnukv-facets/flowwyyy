@@ -1647,6 +1647,18 @@ select.input {
   position: relative;
   overflow: hidden;
 }
+/* Touch-drag scrollback: xterm's scrollable .xterm-viewport is a sibling behind
+   the touch-receiving .xterm-screen, so native touch scroll can't reach it. The
+   JS bridge in Terminal.tsx drives viewport.scrollTop from a one-finger drag;
+   touch-action:none keeps touchmove cancelable so it can claim the gesture (no
+   page scroll / text-selection underneath). Touch-only — mouse/trackpad wheel
+   is unaffected, so desktop behavior is unchanged. */
+.flow-term .xterm-host,
+.flow-term .xterm,
+.flow-term .xterm-viewport,
+.flow-term .xterm-screen {
+  touch-action: none;
+}
 .terminal-bottom-jump {
   position: absolute;
   right: 24px;
@@ -1794,6 +1806,10 @@ select.input {
   min-height: 0;
   display: flex;
   background: #0a0b0e;
+}
+.floating-terminal-body .flow-term-wrapper {
+  flex: 1;
+  height: 100%;
 }
 .floating-terminal-body .flow-term {
   flex: 1;
@@ -2275,7 +2291,10 @@ select.input {
   }
 }
 @media (max-width: 720px) {
-  .searchbtn .dim {
+  /* Hide the "Search…" label (a span) but KEEP the magnifier icon — the icon
+     also carries .dim (for its muted color), so a bare `.dim` here would blank
+     the button into an empty box. Scope the hide to the text span. */
+  .searchbtn span.dim {
     display: none;
   }
   .searchbtn {
@@ -2283,6 +2302,123 @@ select.input {
   }
   .page {
     padding: 18px 16px 60px;
+  }
+}
+
+/* ======================== PHONE (≤640px) ================================
+   Hide the rail entirely, go single-column, show the mobile bottom nav.
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* --- Shell grid: single column, no rail -------------------------------- */
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    /* height stays 100dvh; overflow:hidden stays */
+  }
+  .rail {
+    display: none;
+  }
+  /* The main column is now the only column — full width */
+  .main {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden; /* prevent horizontal page scroll */
+  }
+
+  /* Reserve bottom space for the fixed mobile nav + safe area */
+  .content {
+    padding-bottom: calc(64px + env(safe-area-inset-bottom));
+  }
+
+  /* --- Topbar: safe area + tighter horizontal padding ------------------- */
+  .topbar {
+    /* Push the bar down by the notch/status-bar height */
+    padding-top: env(safe-area-inset-top);
+    /* Increase height to absorb the safe area above the content */
+    height: calc(var(--topbar-h) + env(safe-area-inset-top));
+    padding-left: 14px;
+    padding-right: 14px;
+    /* Stay a single row: the topbar has a FIXED height, so a wrapped item
+       (e.g. New task) would spill below the bar onto the page. Keep nowrap and
+       make the items compact instead — the title shrinks (min-width:0) and the
+       action buttons collapse to icons below. */
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+  .topbar-title {
+    /* Shrink the title so action buttons have room */
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+  /* New task → icon-only "+" at phone width (mirrors the search button), so the
+     title + action icons all fit one row and nothing wraps below the bar. */
+  .topbar .btn.primary .btn-label {
+    display: none;
+  }
+  .topbar .btn.primary {
+    flex: none;
+    width: 36px;
+    padding: 0;
+  }
+  .topbar-h {
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Collapse to an icon-only button at phone width: hide the text label (span)
+     and the ⌘K hint, but keep the magnifier icon visible (it carries .dim for
+     color — don't blank it). */
+  .searchbtn span.dim,
+  .searchbtn .kbd {
+    display: none;
+  }
+  .searchbtn {
+    min-width: auto;
+    width: 36px;
+    justify-content: center;
+    padding: 0;
+  }
+  /* Hide conn label text, keep dot */
+  .conn-label {
+    display: none;
+  }
+  /* Reduce gap between topbar actions */
+  .topbar > * {
+    flex-shrink: 0;
+  }
+
+  /* MobileNav: shown only on phone */
+  .mobile-nav {
+    display: flex;
+  }
+}
+
+/* ======================== TABLET (≤900px) ===============================
+   Collapse the rail to icon-only a bit earlier than the existing 1080px
+   rule, giving content more width on medium screens.
+   ======================================================================== */
+@media (max-width: 900px) and (min-width: 641px) {
+  .shell {
+    grid-template-columns: var(--rail-w-collapsed) 1fr;
+  }
+  .rail-brand-text,
+  .rail-item-label,
+  .rail-badge,
+  .rail-foot,
+  .rail-runner {
+    display: none;
+  }
+  .rail-item {
+    justify-content: center;
+    padding: 0;
+  }
+}
+
+/* MobileNav is hidden on desktop / tablet (≥641px) */
+@media (min-width: 641px) {
+  .mobile-nav {
+    display: none !important;
   }
 }
 
@@ -2988,10 +3124,10 @@ select.input {
 
 @media (max-width: 1000px) {
   .session {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .twopane {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .pane-list {
     max-height: 38vh;
@@ -3054,7 +3190,7 @@ select.input {
 
 /* ----------------------- session: collapse + fullscreen ----------------- */
 .session.no-side {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
 }
 .term-shell.fullscreen {
   position: fixed;
@@ -3381,7 +3517,7 @@ select.input {
 }
 @media (max-width: 760px) {
   .bento {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .bento > *,
   .bento > :nth-child(1) {
@@ -3739,7 +3875,7 @@ select.input {
   .bento-tile.span3 { grid-column: span 3; }
 }
 @media (max-width: 820px) {
-  .bento-board { grid-template-columns: 1fr; }
+  .bento-board { grid-template-columns: minmax(0, 1fr); }
   .bento-tile.span2,
   .bento-tile.span3,
   .bento-tile.span6 { grid-column: 1 / -1; }
@@ -3959,7 +4095,7 @@ select.input {
 }
 @media (max-width: 1080px) {
   .mc-cols {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
@@ -4332,6 +4468,13 @@ select.input {
 /* fixed-layout tables: columns truncate instead of forcing overflow */
 .tbl.fixed {
   table-layout: fixed;
+}
+/* Scroll-safety: if the fixed table is ever wider than its card (dense columns
+   at sub-desktop widths above the card-reflow breakpoint), scroll it inside the
+   card instead of truncating the viewport. At ≤1024px the reflow turns it into
+   stacked cards and overrides this with overflow:hidden. */
+.page > .card:has(.tbl.fixed) {
+  overflow-x: auto;
 }
 .tbl.fixed td,
 .tbl.fixed th {
@@ -7591,7 +7734,7 @@ a.srun-where:hover .srun-chan {
     height: auto;
   }
   .brain-toolbar {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
   }
   .brain-toolbar-actions {
@@ -7625,7 +7768,7 @@ a.srun-where:hover .srun-chan {
     width: 270px;
   }
   .brain-kv-row {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 2px;
   }
 }
@@ -7995,7 +8138,7 @@ a.owner-task-item:hover {
 }
 @media (max-width: 900px) {
   .kb-sys {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 /* Compact override of .kb-dream so a panel is a slim status line, not a slab.
@@ -8156,7 +8299,7 @@ a.owner-task-item:hover {
 }
 .chat-row:hover .chat-actions-rollout,
 .chat-row:focus-within .chat-actions-rollout {
-  grid-template-columns: 1fr;
+  grid-template-columns: minmax(0, 1fr);
   opacity: 1;
 }
 .chat-row:hover .chat-actions-rollout > .chat-actions-secondary,
@@ -8380,7 +8523,7 @@ a.owner-task-item:hover {
 }
 @media (max-width: 900px) {
   .chart-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .chart-card.span-2 {
     grid-column: auto;
@@ -9034,4 +9177,975 @@ a.owner-task-item:hover {
   border-radius: var(--r-pill);
   box-shadow: var(--shadow-pop);
   cursor: pointer;
+}
+
+/* ============================================================================
+   Mobile bottom nav + drawer
+   All .mobile-nav* rules are only ever visible at ≤640px (controlled by the
+   @media block above — display:none !important at ≥641px).
+   Z-index: 90 — below floating terminal/modal band (95–100), above content.
+   ============================================================================ */
+
+/* The bottom tab bar */
+.mobile-nav {
+  /* Mobile default is shown (flex row); hidden on desktop/tablet by the
+     `@media (min-width: 641px) { display: none !important }` rule above.
+     Base must NOT be display:none — it would win over the max-width:640
+     show-rule (equal specificity, later in source), hiding the nav at all
+     widths. */
+  display: flex;
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 90;
+  /* Accounts for iPhone home-bar safe area */
+  padding-bottom: env(safe-area-inset-bottom);
+  background: color-mix(in srgb, var(--rail-bg) 95%, transparent);
+  backdrop-filter: blur(12px);
+  border-top: 1px solid var(--border);
+  /* Items laid out in a row */
+  flex-direction: row;
+  align-items: stretch;
+}
+
+/* Each tab button */
+.mobile-nav-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 56px;
+  gap: 3px;
+  padding: 8px 4px;
+  color: var(--text-3);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  /* 44px minimum touch target via min-height on the parent */
+  transition: color var(--dur-1) var(--ease);
+  position: relative;
+  text-decoration: none;
+}
+.mobile-nav-tab:hover {
+  color: var(--text-2);
+}
+.mobile-nav-tab.active {
+  color: var(--accent-hi);
+}
+/* Active pip above the icon */
+.mobile-nav-tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 24px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: var(--accent);
+}
+.mobile-nav-tab-icon {
+  display: grid;
+  place-items: center;
+  position: relative;
+}
+/* Badge on the tab icon */
+.mobile-nav-tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -6px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  background: var(--accent);
+  color: var(--text-inv);
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+.mobile-nav-tab-label {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+/* --- Drawer (slide-up sheet for "More" destinations) -------------------- */
+
+/* Backdrop scrim */
+.mobile-nav-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 91;
+  background: var(--scrim);
+  animation: mobile-nav-fade-in var(--dur-2) var(--ease) both;
+}
+@keyframes mobile-nav-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-nav-backdrop {
+    animation: none;
+  }
+}
+
+/* The sheet itself */
+.mobile-nav-drawer {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 92;
+  /* Sit above the bottom nav so the "More" sheet covers it */
+  background: var(--bg-1);
+  border-top: 1px solid var(--border-strong);
+  border-radius: var(--r-lg) var(--r-lg) 0 0;
+  padding: 12px 16px calc(80px + env(safe-area-inset-bottom));
+  max-height: 80dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  animation: mobile-nav-slide-up var(--dur-2) var(--ease) both;
+}
+@keyframes mobile-nav-slide-up {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mobile-nav-drawer {
+    animation: none;
+  }
+}
+
+/* Drag handle hint */
+.mobile-nav-drawer-handle {
+  width: 36px;
+  height: 4px;
+  border-radius: var(--r-pill);
+  background: var(--border-strong);
+  margin: 0 auto 16px;
+}
+
+/* Drawer section headings */
+.mobile-nav-drawer-section {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 0 4px 6px;
+  margin-top: 12px;
+}
+.mobile-nav-drawer-section:first-of-type {
+  margin-top: 0;
+}
+
+/* Drawer destination rows */
+.mobile-nav-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 48px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-weight: 500;
+  font-size: 14px;
+  text-decoration: none;
+  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+}
+.mobile-nav-drawer-item:hover,
+.mobile-nav-drawer-item:active {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.mobile-nav-drawer-item.active {
+  background: var(--accent-soft);
+  color: var(--accent-hi);
+}
+.mobile-nav-drawer-item-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: inherit;
+}
+.mobile-nav-drawer-item-badge {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-pill);
+  border: 1px solid currentColor;
+  opacity: 0.8;
+}
+
+/* ============================================================================
+   Mobile terminal — soft-keyboard viewport fit, touch scroll, accessory row
+   All rules gated behind @media (max-width: 640px) or class guards.
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ========================================================================== */
+
+/* ---- flow-term-wrapper: the outer container that scopes the mobile layout - */
+/* On desktop it is a transparent pass-through — flex:1 so it fills the same
+   space .flow-term used to occupy. The wrapper lets us stack .flow-term above
+   the accessory row on phone without breaking the flex chain. */
+.flow-term-wrapper {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* Carry the overflow:hidden that was on .flow-term's parent context; the
+     wrapper itself must not clip xterm, so keep overflow visible here and let
+     .flow-term keep its own overflow:hidden. */
+  overflow: hidden;
+}
+
+/* On desktop the wrapper is invisible; .flow-term keeps its flex:1 inside. */
+.flow-term-wrapper .flow-term {
+  flex: 1;
+  min-height: 0;
+}
+
+/* floating-terminal-body already stretches .flow-term to 100% height; extend
+   that to the wrapper so the floating terminal is unaffected. */
+.floating-terminal-body .flow-term-wrapper {
+  flex: 1;
+  height: 100%;
+}
+.floating-terminal-body .flow-term-wrapper .flow-term {
+  height: 100%;
+  border-radius: 0;
+  padding: 10px 12px;
+  flex: 1;
+}
+
+/* ---- Accessory key row -------------------------------------------------- */
+/* Hidden on desktop — only shown at ≤640px. */
+.term-accessory-row {
+  display: none;
+}
+
+/* ---- Mobile overrides --------------------------------------------------- */
+@media (max-width: 640px) {
+  /* Soft-keyboard: the JS caps .flow-term-wrapper's max-height to
+     visualViewport.height; nothing extra needed in CSS — the flex column
+     inside naturally shrinks the terminal and pushes the accessory row up. */
+
+  /* Touch scrollback is driven by the JS bridge in Terminal.tsx with
+     touch-action:none set globally (see the .xterm-host rule above) — xterm's
+     scrollable .xterm-viewport is a sibling behind the touch surface, so native
+     touch scroll never reached it. No per-breakpoint touch-action override here. */
+
+  /* Reduce padding on narrow screens to gain precious vertical pixels. */
+  .flow-term {
+    padding: 6px 8px;
+  }
+
+  /* Scroll-to-bottom button: on phone it lives above the accessory row +
+     soft keyboard. We shift it up by the accessory row height (56px) so it's
+     not covered. The accessory row is position:static so bottom:0 of the
+     .flow-term positions relative to .flow-term's bottom edge.
+     We shift it up by (accessory-row-height + original-bottom-offset):
+     accessory row is 56px tall; original bottom was 22px → total 22+56=78px. */
+  .terminal-bottom-jump {
+    bottom: 78px;
+    right: 12px;
+  }
+
+  /* ---- Accessory key row ---------------------------------------------- */
+  .term-accessory-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum scroll on iOS */
+    -webkit-overflow-scrolling: touch;
+    scroll-snap-type: x proximity;
+    /* Hide the scrollbar but keep scroll functionality */
+    scrollbar-width: none;
+    padding: 6px 8px;
+    background: #111318;
+    border-top: 1px solid rgba(215, 212, 205, 0.12);
+    /* Fixed height gives the terminal a stable amount to subtract via flexbox */
+    min-height: 56px;
+    max-height: 56px;
+    flex-shrink: 0;
+  }
+  .term-accessory-row::-webkit-scrollbar {
+    display: none;
+  }
+
+  .term-acc-key {
+    /* ≥44px touch target per guidelines */
+    min-width: 44px;
+    height: 44px;
+    padding: 0 10px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(215, 212, 205, 0.18);
+    border-radius: 6px;
+    color: #d7d4cd;
+    font-family: var(--font-mono, monospace);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    /* Prevent text selection on double-tap */
+    user-select: none;
+    -webkit-user-select: none;
+    /* Prevent the 300ms tap delay on mobile */
+    touch-action: manipulation;
+    transition:
+      background 80ms ease,
+      border-color 80ms ease,
+      color 80ms ease;
+    scroll-snap-align: start;
+  }
+
+  .term-acc-key:active {
+    background: rgba(94, 234, 212, 0.15);
+    border-color: rgba(94, 234, 212, 0.5);
+    color: #5eead4;
+  }
+
+  /* Ctrl key: sticky modifier — highlighted when active */
+  .term-acc-ctrl--active {
+    background: rgba(94, 234, 212, 0.2);
+    border-color: rgba(94, 234, 212, 0.65);
+    color: #5eead4;
+    box-shadow: 0 0 0 1px rgba(94, 234, 212, 0.25);
+  }
+
+  /* prefers-reduced-motion: disable transitions in the accessory row */
+  @media (prefers-reduced-motion: reduce) {
+    .term-acc-key {
+      transition: none;
+    }
+  }
+}
+
+/* ======================== PHONE: SessionDetail ===========================
+   At ≤640px the two-pane layout is already collapsed to a single column by
+   the ≤1000px rule above. These rules add phone-specific refinements:
+   - Compact the session header (less vertical dead space before the terminal)
+   - Make the tab strip horizontally scrollable (all tabs reachable by swiping)
+   - Ensure the terminal pane + side panel each get full width with no double-
+     scroll (page scrolls, terminal scrolls internally)
+   Desktop (≥641px) is byte-for-byte unchanged.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* ---- Session grid: reduce outer padding on phone -------------------- */
+  .session {
+    padding: 8px 10px;
+    gap: 8px;
+  }
+
+  /* ---- Session header: tighter so terminal is visible sooner ---------- */
+  .detail-head {
+    gap: 8px;
+    margin-bottom: 10px;
+    /* Allow long titles + badges to wrap compactly */
+    align-items: flex-start;
+  }
+  .detail-title {
+    font-size: 17px;
+    letter-spacing: -0.01em;
+  }
+  .detail-ref {
+    font-size: 11px;
+    margin-top: 2px;
+  }
+
+  /* Toolbar: let items wrap to two rows if needed but keep gaps tight */
+  .toolbar {
+    gap: 6px;
+    margin-bottom: 2px !important;
+  }
+
+  /* Token/cost pill: smaller on phone */
+  .tok-pill {
+    font-size: 11px;
+    padding: 2px 7px;
+  }
+
+  /* ---- Tab strip: horizontally scrollable ----------------------------- */
+  /* Wrap .tabs in a scroll container without changing markup.
+     The .tabs div itself becomes the scrollable row. */
+  .session-side .tabs {
+    /* Make the tab strip scroll horizontally */
+    overflow-x: auto;
+    overflow-y: hidden;
+    /* Momentum scroll on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* Hide the scrollbar but keep scroll functionality */
+    scrollbar-width: none;
+    /* Don't wrap — keep all tabs in one row */
+    flex-wrap: nowrap;
+    /* Tighter padding so more tabs are visible */
+    padding: 0 8px;
+    /* Prevent shrinking so the container can scroll */
+    flex-shrink: 0;
+    /* Gap between tabs */
+    gap: 0;
+  }
+  .session-side .tabs::-webkit-scrollbar {
+    display: none;
+  }
+  /* Each tab: enforce ≥44px touch target height and min-width */
+  .session-side .tab {
+    flex-shrink: 0;
+    min-width: 44px;
+    /* Ensure comfortable touch target height */
+    padding: 10px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  /* ---- Session side panel: full width, not clipped -------------------- */
+  .session-side {
+    /* On phone the side panel sits below the terminal (stacked by ≤1000px
+       rule). Give it room to expand naturally. */
+    overflow: visible;
+    /* Don't cap height — let the panel scroll with the page */
+    max-height: none;
+  }
+  /* session-info: no max-height cap on phone (page scroll handles it) */
+  .session-info {
+    max-height: none;
+    overflow-y: visible;
+  }
+
+  /* ---- Terminal pane: pin a real height on phone --------------------- */
+  /* The .page → .session → .session-main chain is display:block/auto-height
+     on mobile and does NOT stretch to fill main.content, so .term-shell's
+     flex:1 has nothing to fill: on a session with little/no scrollback the
+     terminal collapses to a thin strip with a black void below it (xterm fits
+     to ~0 rows). Pin a generous dynamic-viewport height so the terminal is
+     always tall + usable and there is no void; the page scrolls to reveal the
+     side panel below. The soft-keyboard ceiling is still applied by the
+     visualViewport JS that caps .flow-term-wrapper's max-height (Task R3). */
+  /* Make the session column fill the viewport so .term-shell's flex:1 fills
+     the space between the (variable-height) header and the bottom nav instead
+     of collapsing to content height. Anchoring session-main to a dynamic-
+     viewport min-height is robust regardless of how tall the header wraps;
+     term-shell then flex-fills the remainder. (100dvh minus topbar + bottom
+     nav + safe areas ≈ 170px.) */
+  .session-main {
+    gap: 8px;
+    min-height: calc(100dvh - 170px);
+  }
+  .term-shell {
+    flex: 1 1 auto;
+    min-height: 240px; /* floor for very short viewports */
+  }
+  /* The term-bar: shrink mono clip to avoid overflow */
+  .term-bar .mono {
+    max-width: 55vw;
+  }
+
+  /* tab-body: tighter padding on phone */
+  .tab-body {
+    padding: 10px 10px !important;
+  }
+}
+
+/* ======================== PHONE (≤640px): List screens → stacked cards ====
+   Task R5: Convert dense list/table screens to stacked cards at phone width.
+   Sessions uses AgentCard grid (covered by grid fix below).
+   Tasks uses a <table class="tbl fixed"> → reflow to flex cards.
+   Inbox uses .twopane → stack list above detail pane.
+   Desktop (≥641px) is byte-for-byte unchanged — ALL rules inside this block.
+   ========================================================================== */
+
+/* ---- Card grid: single 0-min track on narrow phones --------------------- */
+/* minmax(0, 1fr), not bare 1fr — see the ≤640px note: a 1fr track's `auto`
+   minimum inflates to the subtree min-content and overflows the viewport. */
+@media (max-width: 400px) {
+  .grid.cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .grid.wide {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .grid.two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- Tasks table → stacked card rows at ≤1024px ------------------------- */
+/* The fixed-layout table's columns sum wider than the content area once the
+   rail is present, so on tablet (incl. iPad landscape, 1024) it truncates on
+   the right. Reflow it to one stacked card per row across tablet + phone; the
+   real table returns at desktop width (>1024). The .tbl.fixed card also carries
+   overflow-x:auto (base rule) so if the table is ever still too wide above this
+   breakpoint it scrolls inside its card rather than truncating the viewport. */
+@media (max-width: 1024px) {
+  /* Outer card wrapper: remove horizontal padding so rows go edge-to-edge */
+  .page > .card:has(.tbl.fixed) {
+    padding: 0 !important;
+    overflow: hidden;
+  }
+
+  /* Reflow the table itself to block so it doesn't scroll horizontally */
+  .tbl.fixed,
+  .tbl.fixed colgroup,
+  .tbl.fixed thead,
+  .tbl.fixed tbody {
+    display: block;
+    width: 100%;
+  }
+
+  /* Hide the header row entirely — labels appear as pseudo-element prefixes */
+  .tbl.fixed thead {
+    display: none;
+  }
+
+  /* Each body row becomes a card */
+  .tbl.fixed tbody tr {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 16px;
+    margin: 0;
+    border-bottom: 1px solid var(--border-faint);
+    min-height: 44px;
+    cursor: pointer;
+  }
+  .tbl.fixed tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  /* Every td becomes block by default — we'll show/hide/rearrange specific ones */
+  .tbl.fixed tbody td {
+    display: block;
+    padding: 0;
+    border-bottom: none;
+    overflow: visible;
+  }
+
+  /* Checkbox column: inline-flex in a row at top of the card alongside the name */
+  .tbl.fixed tbody td:first-child {
+    /* The checkbox: small, inline at top-left */
+    display: inline-flex;
+    align-items: center;
+    position: absolute;
+    top: 14px;
+    left: 16px;
+  }
+
+  /* StatusDot column (2nd) — hide; status is shown in the runtime-chip */
+  .tbl.fixed tbody td:nth-child(2) {
+    display: none;
+  }
+
+  /* Name cell (3rd): primary content — large + bold */
+  .tbl.fixed tbody td:nth-child(3) {
+    padding-left: 22px; /* indent past the checkbox */
+  }
+
+  /* cell-name: let items wrap on phone */
+  .tbl.fixed .cell-name {
+    flex-wrap: wrap;
+    gap: 4px 6px;
+  }
+
+  /* runtime-chip: keep it next to the name */
+  .tbl.fixed .runtime-chip {
+    flex-shrink: 0;
+  }
+
+  /* Secondary metadata row: project, priority, due — stack or wrap horizontally */
+  /* Dependencies (4th): show only if non-empty; clamp to 2 lines */
+  .tbl.fixed tbody td:nth-child(4) .cell-deps {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  /* Project (5th): show as a small badge */
+  .tbl.fixed tbody td:nth-child(5) {
+    font-size: 11.5px;
+    color: var(--text-3);
+  }
+
+  /* Priority (6th) + Due (7th): float them in a row */
+  .tbl.fixed tbody td:nth-child(6),
+  .tbl.fixed tbody td:nth-child(7) {
+    display: inline-block;
+    margin-right: 8px;
+    vertical-align: middle;
+  }
+
+  /* Agent icon (8th): hide on phone to save space */
+  .tbl.fixed tbody td:nth-child(8) {
+    display: none;
+  }
+
+  /* Tags (9th): wrap */
+  .tbl.fixed .cell-tags {
+    flex-wrap: wrap;
+    gap: 4px;
+    overflow: hidden;
+  }
+  /* Cap tags to the card width and ellipsize — a long unbreakable tag (e.g.
+     slack-thread:<id>) must not blow the card past the viewport. */
+  .tbl.fixed .cell-tags .tag {
+    max-width: 100%;
+  }
+
+  /* Updated (10th): small, muted, right-align floated to top-right */
+  .tbl.fixed tbody td:nth-child(10) {
+    font-size: 11px;
+    color: var(--text-3);
+  }
+
+  /* Actions (11th): row of icon buttons */
+  .tbl.fixed tbody td:nth-child(11) {
+    display: flex;
+    justify-content: flex-start;
+    gap: 4px;
+  }
+
+  /* Make row-action buttons always visible on phone (no hover) */
+  .tbl.fixed .row-action {
+    opacity: 0.65;
+  }
+
+  /* Rename button: always slightly visible on phone */
+  .tbl.fixed .rename-btn {
+    opacity: 0.45;
+  }
+
+  /* Position the card relatively so checkbox can be absolute */
+  .tbl.fixed tbody tr {
+    position: relative;
+  }
+
+  /* tree-name-cell: reset absolute positioning of tree guides on phone */
+  .tbl.fixed .tree-name-cell {
+    position: static;
+  }
+  .tbl.fixed .tree-guides {
+    display: none;
+  }
+  .tbl.fixed .tree-content {
+    padding-left: 0 !important;
+  }
+  .tbl.fixed .tree-caret {
+    display: none;
+  }
+}
+
+/* ---- Inbox: stack pane-list above pane-detail at ≤640px ----------------- */
+@media (max-width: 640px) {
+  /* The twopane grid becomes a single column */
+  .twopane {
+    display: flex;
+    flex-direction: column;
+    height: auto;
+    min-height: 0;
+    /* Don't enforce a fixed height — let it scroll naturally with the page */
+    overflow: visible;
+  }
+
+  /* Left pane (thread list): full width, fixed reasonable height, scrollable */
+  .pane-list {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    /* Show 3–4 threads before scrolling so the user knows there's a detail below */
+    max-height: 45dvh;
+    overflow-y: auto;
+  }
+
+  /* Right pane (detail): full width below the list */
+  .pane-detail {
+    overflow-y: visible;
+    min-width: 0;
+  }
+
+  /* Inbox flush page: let the content scroll normally */
+  .page.flush {
+    overflow-y: auto;
+    height: auto;
+  }
+
+  /* Conversation detail: tighten padding on phone */
+  .pane-detail > div[style] {
+    padding: 16px 14px !important;
+    max-width: 100% !important;
+  }
+
+  /* pli items: slightly more compact on phone — still ≥44px touch target */
+  .pli {
+    padding: 10px 14px;
+    min-height: 44px;
+  }
+
+  /* Ensure the inbox page itself doesn't cause horizontal scroll */
+  .page.flush .twopane {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+}
+
+/* ============================================================================
+   R6: Long-tail screens + wide content scroll containers (≤640px)
+   Sweeps: Overview, Projects, ProjectDetail, Playbooks, PlaybookDetail,
+           KB, Memories, Workdirs, Owners, Connectors, Analytics, BrainGraph,
+           Settings (incl. Remote Access), Trash, Chats, Attention.
+   Wide content (trace table, brain toolbar, chart grids): scroll or reflow.
+   Desktop (≥641px) is byte-for-byte unchanged — ALL rules inside @media blocks.
+   ========================================================================== */
+
+/* ---- pair-qr: QR image + hint for Remote Access -------------------------
+   The <img width=240 height=240> would overflow a narrow settings card.
+   max-width + height:auto let it shrink gracefully.                        */
+.pair-qr {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pair-qr img {
+  max-width: 100%;
+  height: auto;
+}
+
+/* ---- Generic wide-content guard ---------------------------------------- */
+/* Any <pre> or <code> block that is not already in an overflow-x container  */
+pre:not(.tx2-result):not(.tx2-term-out) {
+  overflow-x: auto;
+}
+
+@media (max-width: 640px) {
+  /* ---- Overview: collapse mc-cols to 1 column on phone (it stacks at 1080px
+     but the fixed 350px rail still forces minimum width at phone) -----------
+     NOTE: minmax(0, 1fr), NOT bare 1fr. A bare `1fr` is `minmax(auto, 1fr)`,
+     whose `auto` minimum pulls in the subtree's MIN-CONTENT — and grid/flex
+     items default to `min-width: auto`, so a long unbreakable line inflates the
+     track far past the viewport (the card content then hard-clips at the screen
+     edge). Pinning the track minimum to 0 lets `.clip`/wrap do their job inside
+     the column. This applies to EVERY phone grid-collapse below. */
+  .mc-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* briefing-rows: minmax(280px, 1fr) overflows at 390px; drop to a 0-min track */
+  .briefing-rows {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* ---- Projects / Playbooks / Owners / general card grids ---------------- */
+  /* .grid.two (minmax 380px) and .grid.wide (minmax 420px) already drop to 1fr
+     at max-width:400px (R5). Extend that to ≤640px so they single-column
+     across all phone widths, not just the narrowest ones.                   */
+  .grid.two,
+  .grid.wide,
+  .grid.cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* ---- Settings: settings-grid (minmax 320px) → single 0-min track ------- */
+  .settings-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* settings-summary: stack vertically so each field gets full width       */
+  .settings-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-summary .sum-item {
+    border-right: none;
+    border-bottom: 1px solid var(--border-faint);
+  }
+  .settings-summary .sum-item:last-child {
+    border-bottom: 0;
+  }
+
+  /* mc-head: wrap pills below the heading on phone                          */
+  .mc-head {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .mc-env-pills {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  /* page-head: let the heading + action button stack on phone               */
+  .page-head {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  /* ---- Analytics: chart-grid already → 1fr at 900px; kpi-row fine -------- */
+  /* analytics-controls: let range pills wrap on narrow phone                */
+  .analytics-controls .range-pills {
+    flex-wrap: wrap;
+  }
+
+  /* ---- Attention: trace table — horizontal-scroll container --------------- */
+  /* .trace-list wraps the table; .trace-row has 8 fixed-width columns that
+     add up to ~900px. Wrap in an overflow-x:auto so only the table scrolls. */
+  .trace-list {
+    overflow-x: auto;
+    /* Give the container a minimum height so it feels like a scrollable slab */
+    min-height: 0;
+  }
+  .trace-row {
+    /* Keep the fixed-column layout but let the outer .trace-list scroll.
+       min-width prevents shrinkage below the natural column sum.             */
+    min-width: 700px;
+  }
+
+  /* srun-head: let the flex row wrap so long channel names don't overflow   */
+  .srun-head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  /* ---- Brain Graph ------------------------------------------------------- */
+  /* brain-page: full height via 100svh (or 100vh fallback), minus topbar +
+     bottom nav (64px). The toolbar 3-column grid → single column.           */
+  .brain-page {
+    height: auto;
+    min-height: calc(100svh - var(--topbar-h) - 64px);
+    padding-bottom: 12px;
+  }
+
+  /* brain-toolbar: collapse 3-column grid to a single column so each row
+     can wrap without overflowing the 390px viewport.                        */
+  .brain-toolbar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  /* brain-search: full width inside the single column                       */
+  .brain-search {
+    width: 100%;
+  }
+
+  /* brain-shell: bound the canvas height to a reasonable phone size so the
+     page doesn't feel like an infinite canvas on a small screen.            */
+  .brain-shell {
+    height: min(460px, 65dvh);
+  }
+
+  /* brain-canvas: ensure touch-action allows both pan and zoom (React Flow
+     handles its own pinch-to-zoom, but we must not block touch events).     */
+  .brain-canvas {
+    touch-action: pan-x pan-y;
+  }
+
+  /* ---- Workdirs / Owners: table card refinements for non-Tasks columns ---
+     R5 applied the base tbl.fixed → block/card reflow (display:block per
+     td). These tables have different column counts from Tasks, but the
+     base reflow still prevents horizontal overflow. No additional overrides
+     needed: each td stacks as a block with full width.                      */
+
+  /* ---- Connectors -------------------------------------------------------- */
+  /* connector-tiles already uses minmax(min(100%,232px),1fr) — fine.
+     The modal width min() is already capped by the existing 92vw limit.    */
+
+  /* ---- Chats: make action buttons always visible (no hover on touch) ----- */
+  .chat-actions-rollout {
+    grid-template-columns: minmax(0, 1fr);
+    opacity: 1;
+  }
+  .chat-actions-rollout > .chat-actions-secondary {
+    transform: translateX(0);
+  }
+  .chat-reopen {
+    margin-left: 8px;
+  }
+
+  /* chat-row: stack main content + actions vertically                       */
+  .chat-row.row.gap {
+    flex-wrap: wrap;
+    align-items: flex-start !important;
+  }
+
+  /* ---- Trash: ensure action buttons wrap on narrow screen ---------------- */
+  .lrow {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  /* ---- KB / Memories: already use .twopane (handled by R5) -------------- */
+  /* pane-detail inner div may have a wide max-width inline style — reset it.
+     React renders maxWidth as max-width in the DOM attribute.               */
+  .pane-detail > div[style*="max-width"] {
+    max-width: 100% !important;
+    padding: 16px 14px !important;
+  }
+
+  /* ---- Code/diff blocks in SessionDetail transcript ---------------------- */
+  /* tx2-result and hljs code blocks: already have overflow:auto. No change. */
+
+  /* ---- General: any remaining wide table in .card gets a scroll wrapper  */
+  /* Tables NOT caught by tbl.fixed reflow: give them an h-scroll container */
+  .card > table:not(.tbl) {
+    display: block;
+    overflow-x: auto;
+    width: 100%;
+  }
+
+  /* ---- Overflow catch-all: ensure page body never scrolls horizontally   */
+  .page {
+    overflow-x: hidden;
+  }
+}
+
+/* ---- Attention: trace-list scroll container also on tablet (≤820px) ----
+   The 8-column trace-row is still very dense at tablet width; let it scroll. */
+@media (max-width: 820px) {
+  .trace-list {
+    overflow-x: auto;
+  }
+  .trace-row {
+    min-width: 700px;
+  }
+}
+
+/* ======================== PHONE (≤640px): overflow polish =================
+   After the grid-collapse fix (minmax(0,1fr)) the page bodies no longer
+   overflow. These mop up the remaining narrow-screen spills found in the
+   responsive audit: absolutely-positioned popovers that ran off the right
+   edge, and inline action-button rows that refused to wrap.
+   Desktop (≥641px) is unaffected — all rules are inside this query.
+   ======================================================================== */
+@media (max-width: 640px) {
+  /* Popovers (filter selects, mute menu, generic dropdowns) are anchored to a
+     trigger with an intrinsic min-width; near the right edge they spilled
+     off-screen. Cap them to the viewport and let long content scroll inside. */
+  .menu-pop,
+  .mute-pop {
+    max-width: calc(100vw - 16px);
+    overflow-x: hidden;
+  }
+
+  /* Inline action-button rows: wrap to a new line instead of overflowing.
+     .att-actions packs up to 5 buttons (Attention card) — at 390px they total
+     ~448px in a 324px row and the last controls (incl. the mute ⋯) were shoved
+     off-screen and unreachable. Wrapping keeps every control on-screen. */
+  .att-actions,
+  .kb-dream-actions,
+  .cap-row {
+    flex-wrap: wrap;
+  }
 }

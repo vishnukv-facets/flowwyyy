@@ -244,7 +244,7 @@ func (s *Server) handleEventWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	filter := eventFilterFromQuery(r)
-	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	conn, err := s.wsUpgrader(r).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

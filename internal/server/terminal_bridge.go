@@ -57,6 +57,17 @@ var terminalUpgrader = websocket.Upgrader{
 	CheckOrigin: checkLocalWSOrigin,
 }
 
+// wsUpgrader returns the WebSocket upgrader for a request: the strict local
+// origin gate by default, or the remote-aware gate when remoteAuth marked the
+// request remote (X-Flow-Remote). Both share every other upgrader setting.
+// Returns a pointer because websocket.Upgrader.Upgrade has a pointer receiver.
+func (s *Server) wsUpgrader(r *http.Request) *websocket.Upgrader {
+	if r.Header.Get(remoteFlagHeader) == "1" {
+		return &websocket.Upgrader{CheckOrigin: s.checkRemoteWSOrigin}
+	}
+	return &terminalUpgrader
+}
+
 type terminalHub struct {
 	server           *Server
 	mu               sync.Mutex
@@ -167,7 +178,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	}
 	cols := intQueryDefault(r, "cols", 120)
 	rows := intQueryDefault(r, "rows", 32)
-	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	conn, err := s.wsUpgrader(r).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -205,7 +216,7 @@ func (s *Server) handleFloatingTerminalWebSocket(w http.ResponseWriter, r *http.
 	}
 	cols := intQueryDefault(r, "cols", 120)
 	rows := intQueryDefault(r, "rows", 32)
-	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	conn, err := s.wsUpgrader(r).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

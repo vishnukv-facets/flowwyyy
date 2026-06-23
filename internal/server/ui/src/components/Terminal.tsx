@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Terminal as XTerm, type IDisposable, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -6,7 +6,7 @@ import { ArrowDownToLine } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
 import { uploadTerminalAttachments } from '../lib/api'
-import { sessionToken } from '../lib/wsurl'
+import { authToken } from '../lib/devicetoken'
 
 // Live PTY terminal powered by xterm.js, bound to flow's terminal JSON
 // protocol: server pushes {type:"output"|"status"|"error"}, client sends
@@ -100,13 +100,164 @@ function termWsURL(slug: string, cols: number, rows: number, kind: 'task' | 'flo
   const path = kind === 'floating' ? '/ws/floating-terminal' : '/ws/terminal'
   // The token gate on the WS handshake (audit P0-1) reads ?token=; browsers
   // can't set custom headers on a WebSocket. See lib/wsurl.ts.
-  const tok = sessionToken()
+  const tok = authToken()
   const tokenParam = tok ? `&token=${encodeURIComponent(tok)}` : ''
   return `${proto}//${location.host}${path}?${key}=${encodeURIComponent(slug)}&cols=${cols}&rows=${rows}${tokenParam}`
 }
 
+// ---- Accessory key row (mobile only) ------------------------------------
+// Shown at ≤640px. Sends control sequences through the same `send` function
+// the keyboard uses. Ctrl is sticky: tap it, then tap a printable key to
+// send the control char (e.g. Ctrl+C → \x03).
+
+interface AccessoryKeyRowProps {
+  sendData: (data: string) => void
+}
+
+function AccessoryKeyRow({ sendData }: AccessoryKeyRowProps) {
+  const [ctrlActive, setCtrlActive] = useState(false)
+
+  const tap = useCallback(
+    (seq: string) => {
+      sendData(seq)
+    },
+    [sendData],
+  )
+
+  // When Ctrl is sticky-active and a printable key is tapped, send the
+  // control character (charCode & 0x1f) and clear the modifier.
+  const tapWithCtrl = useCallback(
+    (char: string) => {
+      if (ctrlActive) {
+        const code = char.toUpperCase().charCodeAt(0) & 0x1f
+        sendData(String.fromCharCode(code))
+        setCtrlActive(false)
+      } else {
+        sendData(char)
+      }
+    },
+    [ctrlActive, sendData],
+  )
+
+  const handleCtrl = useCallback(() => {
+    setCtrlActive((v) => !v)
+  }, [])
+
+  return (
+    <div className="term-accessory-row" aria-label="Terminal accessory keys">
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Escape"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\x1b')
+          setCtrlActive(false)
+        }}
+      >
+        Esc
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Tab"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\t')
+          setCtrlActive(false)
+        }}
+      >
+        Tab
+      </button>
+      <button
+        type="button"
+        className={`term-acc-key term-acc-ctrl${ctrlActive ? ' term-acc-ctrl--active' : ''}`}
+        aria-label="Control modifier"
+        aria-pressed={ctrlActive}
+        onPointerDown={(e) => {
+          e.preventDefault()
+          handleCtrl()
+        }}
+      >
+        Ctrl
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Arrow up"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\x1b[A')
+          setCtrlActive(false)
+        }}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Arrow down"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\x1b[B')
+          setCtrlActive(false)
+        }}
+      >
+        ↓
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Arrow left"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\x1b[D')
+          setCtrlActive(false)
+        }}
+      >
+        ←
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Arrow right"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tap('\x1b[C')
+          setCtrlActive(false)
+        }}
+      >
+        →
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Slash"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tapWithCtrl('/')
+        }}
+      >
+        /
+      </button>
+      <button
+        type="button"
+        className="term-acc-key"
+        aria-label="Pipe"
+        onPointerDown={(e) => {
+          e.preventDefault()
+          tapWithCtrl('|')
+        }}
+      >
+        |
+      </button>
+    </div>
+  )
+}
+
 export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const jumpToBottomRef = useRef<(() => void) | null>(null)
   const onStatusRef = useRef<Props['onStatus']>(onStatus)
   onStatusRef.current = onStatus
@@ -116,6 +267,13 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     setBottomJumpState({ key: terminalInstanceKey, visible: false })
   }
   const showBottomJump = bottomJumpState.key === terminalInstanceKey && bottomJumpState.visible
+
+  // Ref to the PTY send function — populated inside the effect so AccessoryKeyRow
+  // can call it without needing to be inside the effect closure.
+  const sendRef = useRef<((data: string) => void) | null>(null)
+  const sendData = useCallback((data: string) => {
+    sendRef.current?.(data)
+  }, [])
 
   useEffect(() => {
     const host = hostRef.current
@@ -177,6 +335,8 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
     }
+    // Expose the PTY input path to AccessoryKeyRow (outside the effect closure).
+    sendRef.current = (data: string) => send({ type: 'input', data })
     const notifyStatus = (nextKind: 'status' | 'error' | 'closed' | 'open', message: string) => {
       onStatusRef.current?.(nextKind, message)
     }
@@ -297,6 +457,47 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     host.addEventListener('paste', onHostPaste, true) // capture: beat xterm's stopPropagation
     host.addEventListener('dragover', onHostDragOver)
     host.addEventListener('drop', onHostDrop)
+
+    // ---- touch-drag → scrollback (phones / tablets) --------------------
+    // xterm's DOM renderer only wires WHEEL events to its viewport. The
+    // scrollable .xterm-viewport is a SIBLING *behind* the touch-receiving
+    // .xterm-screen, so the touch target's ancestor chain has no scroller and
+    // native touch-drag can't reach it — scrollback is unreachable on a phone
+    // (the `touch-action` CSS alone does nothing). Bridge it: translate a
+    // one-finger vertical drag into viewport.scrollTop, mirroring wheel. xterm's
+    // Viewport listens to the element's native 'scroll' event, so this re-syncs
+    // the buffer and fires term.onScroll (follow/bottom-jump stay honest).
+    const viewportEl = host.querySelector<HTMLElement>('.xterm-viewport')
+    let touchScrollY = 0
+    let touchScrollTop = 0
+    let touchTracking = false
+    let touchDragging = false
+    const onTouchStart = (e: TouchEvent) => {
+      if (!viewportEl || e.touches.length !== 1) return
+      touchTracking = true
+      touchDragging = false
+      touchScrollY = e.touches[0].clientY
+      touchScrollTop = viewportEl.scrollTop
+    }
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touchTracking || !viewportEl || e.touches.length !== 1) return
+      const dy = e.touches[0].clientY - touchScrollY
+      // Ignore sub-threshold jitter so a tap still focuses + raises the keyboard.
+      if (!touchDragging && Math.abs(dy) < 6) return
+      touchDragging = true
+      // Drag down (dy>0) pulls older lines into view → scrollTop decreases.
+      viewportEl.scrollTop = touchScrollTop - dy
+      // Claim the gesture: no page scroll, no text-selection / synthetic mouse drag.
+      if (e.cancelable) e.preventDefault()
+    }
+    const endTouchScroll = () => {
+      touchTracking = false
+      touchDragging = false
+    }
+    host.addEventListener('touchstart', onTouchStart, { passive: true })
+    host.addEventListener('touchmove', onTouchMove, { passive: false })
+    host.addEventListener('touchend', endTouchScroll, { passive: true })
+    host.addEventListener('touchcancel', endTouchScroll, { passive: true })
 
     // ---- input → PTY ---------------------------------------------------
     const dataDisposable = term.onData((data) => {
@@ -462,6 +663,39 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     }
     document.addEventListener('visibilitychange', onVisible)
 
+    // ---- visualViewport: soft-keyboard handling (mobile) -----------------
+    // When the soft keyboard opens on phones it shrinks the visual viewport
+    // (the CSS viewport stays full-height). We cap the terminal container's
+    // height to the visible region so the prompt/input row is never hidden
+    // behind the keyboard, then call the existing refit path so xterm reflows.
+    // Guard: if visualViewport is absent (desktop / old browsers) we fall back
+    // to current behavior (no-op).
+    const container = containerRef.current
+    const applyViewportHeight = () => {
+      if (!container || !window.visualViewport) return
+      const vv = window.visualViewport
+      // vv.height is the visible region (keyboard already subtracted).
+      // vv.offsetTop accounts for any scroll of the layout viewport above the
+      // visual one (rare but can happen when scrolled). We use offsetHeight of
+      // the outermost shell to avoid going below the bottom of the document.
+      const visibleH = vv.height
+      // Only constrain on narrow (phone) viewports — ≤640px.
+      if (window.innerWidth <= 640) {
+        container.style.maxHeight = `${visibleH}px`
+      } else {
+        container.style.maxHeight = ''
+      }
+      resize()
+    }
+    const clearViewportHeight = () => {
+      if (container) container.style.maxHeight = ''
+      resize()
+    }
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', applyViewportHeight)
+      window.visualViewport.addEventListener('scroll', applyViewportHeight)
+    }
+
     // The fold bug: if we fit+connect BEFORE the real mono font loads, xterm
     // measures the fallback font's cell size, computes the wrong row count, and
     // ends up with a grid taller than the viewport — so the live prompt sits
@@ -528,14 +762,24 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
       observer.disconnect()
       window.removeEventListener('resize', resize)
       document.removeEventListener('visibilitychange', onVisible)
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', applyViewportHeight)
+        window.visualViewport.removeEventListener('scroll', applyViewportHeight)
+      }
+      clearViewportHeight()
       host.removeEventListener('paste', onHostPaste, true)
       host.removeEventListener('dragover', onHostDragOver)
       host.removeEventListener('drop', onHostDrop)
+      host.removeEventListener('touchstart', onTouchStart)
+      host.removeEventListener('touchmove', onTouchMove)
+      host.removeEventListener('touchend', endTouchScroll)
+      host.removeEventListener('touchcancel', endTouchScroll)
       dataDisposable.dispose()
       resizeDisposable.dispose()
       scrollDisposable.dispose()
       osc52?.dispose()
       jumpToBottomRef.current = null
+      sendRef.current = null
       try {
         ws?.close()
       } catch {
@@ -547,19 +791,22 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
   }, [slug, kind, restartKey, terminalInstanceKey])
 
   return (
-    <div className="flow-term">
-      <div className="xterm-host" ref={hostRef} />
-      {showBottomJump ? (
-        <button
-          type="button"
-          className="terminal-bottom-jump"
-          aria-label="Scroll terminal to bottom"
-          title="Scroll to bottom"
-          onClick={() => jumpToBottomRef.current?.()}
-        >
-          <ArrowDownToLine size={16} strokeWidth={2.2} />
-        </button>
-      ) : null}
+    <div className="flow-term-wrapper" ref={containerRef}>
+      <div className="flow-term">
+        <div className="xterm-host" ref={hostRef} />
+        {showBottomJump ? (
+          <button
+            type="button"
+            className="terminal-bottom-jump"
+            aria-label="Scroll terminal to bottom"
+            title="Scroll to bottom"
+            onClick={() => jumpToBottomRef.current?.()}
+          >
+            <ArrowDownToLine size={16} strokeWidth={2.2} />
+          </button>
+        ) : null}
+      </div>
+      <AccessoryKeyRow sendData={sendData} />
     </div>
   )
 }

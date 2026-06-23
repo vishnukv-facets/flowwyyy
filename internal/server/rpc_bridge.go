@@ -103,12 +103,16 @@ func (s *Server) handleRPCWebSocket(w http.ResponseWriter, r *http.Request) {
 	if !s.authorizeWSHandshake(w, r) {
 		return
 	}
-	conn, err := terminalUpgrader.Upgrade(w, r, nil)
+	conn, err := s.wsUpgrader(r).Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.Close()
 	conn.SetReadLimit(rpcMaxFrameBytes)
+
+	// A remote (device-token) handshake can drive sessions but is denied the
+	// localhost-only operator actions under /api/remote/ (see dispatchRPC).
+	remote := r.Header.Get(remoteFlagHeader) == "1"
 
 	var writeMu sync.Mutex
 	writeFrame := func(v any) error {
@@ -166,22 +170,37 @@ func (s *Server) handleRPCWebSocket(w http.ResponseWriter, r *http.Request) {
 		// never head-of-line-blocks other in-flight requests on the same
 		// socket. Writes stay serialized by writeMu.
 		go func(req rpcRequest) {
-			resp := s.dispatchRPC(req)
+			resp := s.dispatchRPC(req, remote)
 			_ = writeFrame(resp)
 		}(req)
 	}
 }
 
-func (s *Server) dispatchRPC(req rpcRequest) rpcResponse {
+func (s *Server) dispatchRPC(req rpcRequest, remote bool) rpcResponse {
+	// Normalize the path ONCE, up front, so the denylist gate below and the
+	// routing further down judge the exact same value. A leading space/tab
+	// (" /api/remote/devices") would otherwise slip past a raw-req.Path gate
+	// yet still route to the device-management handler — a remote-device
+	// privilege escalation.
+	path := strings.TrimSpace(req.Path)
+	if path == "" || !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+
+	// A remote device may never reach the localhost-only operator actions
+	// (pair codes, device list/revoke, remote-access toggle). Block them before
+	// any handler runs — the device-gated transport is not a trust boundary for
+	// these paths.
+	if remote && remoteForbiddenRPCPath(path) {
+		return rpcResponse{Type: "rpc", ID: req.ID, Status: http.StatusForbidden,
+			Error: "not permitted from a remote device"}
+	}
+
 	resp := rpcResponse{Type: "rpc", ID: req.ID}
 
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 	if method == "" {
 		method = http.MethodGet
-	}
-	path := strings.TrimSpace(req.Path)
-	if path == "" || !strings.HasPrefix(path, "/") {
-		path = "/" + path
 	}
 	// The RPC channel only fronts the data plane. Refuse anything that isn't
 	// an /api/* route so frames can't reach the websocket upgrade or static

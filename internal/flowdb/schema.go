@@ -493,6 +493,16 @@ CREATE TABLE IF NOT EXISTS kb_capture (
     cursor       INTEGER NOT NULL DEFAULT 0,
     captured_at  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS remote_devices (
+    id            TEXT PRIMARY KEY,
+    label         TEXT NOT NULL,
+    token_hash    TEXT NOT NULL UNIQUE,
+    created_at    TEXT NOT NULL,
+    expires_at    TEXT NOT NULL,
+    last_seen_at  TEXT,
+    revoked_at    TEXT
+);
 	`
 
 // indexesPostMigrate are indexes that depend on columns added by

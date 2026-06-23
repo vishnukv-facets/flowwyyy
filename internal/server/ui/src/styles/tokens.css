@@ -25,6 +25,17 @@
   --rail-w-collapsed: 66px;
   --topbar-h: 56px;
   --maxw: 1540px;
+
+  /* ---- Responsive breakpoints -------------------------------------------
+     Strategy: mobile-first additions layered on the desktop layout.
+     ≤640px (phone)  → hide the rail, show bottom nav, stack panes.
+     ≤900px (tablet) → collapsed icon-only rail, wider content.
+     NOTE: CSS media queries cannot use var() in the condition expression.
+     Use raw px values (640px / 900px) in @media; these vars are for
+     documentation and JS/TypeScript consumers (e.g. matchMedia calls).
+  -------------------------------------------------------------------------- */
+  --bp-phone: 640px;
+  --bp-tablet: 900px;
 }
 
 /* ----------------------------------- DARK -------------------------------- */

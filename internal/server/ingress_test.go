@@ -83,6 +83,32 @@ func TestIsTransientZrokErr(t *testing.T) {
 	}
 }
 
+func TestIsShareConflictErr(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		// The exact shape of the incident: reserved name orphaned after a
+		// WiFi→hotspot switch, so re-reserving returns 409 shareConflict.
+		{"409 shareConflict", errors.New("zrok create share: unable to create share: [POST /share][409] shareConflict"), true},
+		{"status 409", errors.New("unable to create share: (status 409): conflict"), true},
+		{"name already exists", errors.New("unable to create share: share name 'flowx' already exists"), true},
+		// Unrelated errors must NOT trigger the release-and-retry recovery.
+		{"502 transient", errors.New("unable to create share: [POST /share] (status 502)"), false},
+		{"401 unauthorized", errors.New("(status 401): unauthorized"), false},
+		{"not enabled", errors.New("environment is not enabled; enable with 'zrok enable' first!"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := isShareConflictErr(c.err); got != c.want {
+				t.Errorf("isShareConflictErr(%q) = %v, want %v", c.err, got, c.want)
+			}
+		})
+	}
+}
+
 func TestRetryTransientZrok(t *testing.T) {
 	// Shrink the backoff so the test never actually sleeps.
 	saved := zrokRetryDelays

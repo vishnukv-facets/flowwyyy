@@ -149,6 +149,14 @@ func zrokAutoStart() bool {
 	}
 }
 
+// remoteAccessEnabled reports whether the operator turned on the remote-access
+// (phone PWA) surface. Persisted in config.json as FLOW_REMOTE_ACCESS and
+// repopulated into the env on boot, mirroring zrokAutoStart/githubWebhookSecret.
+func remoteAccessEnabled() bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv("FLOW_REMOTE_ACCESS")))
+	return v == "1" || v == "true" || v == "on"
+}
+
 // zrokRetryDelays is the backoff schedule retryTransientZrok waits between
 // attempts after a transient zrok.io failure: len(delays)+1 total attempts.
 // A package var so tests can shrink it to zero. The cumulative wait (~7s)
@@ -174,6 +182,28 @@ func isTransientZrokErr(err error) bool {
 		"network is unreachable", "deadline exceeded", "i/o timeout",
 		"timeout exceeded", "tls handshake timeout",
 	} {
+		if strings.Contains(s, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// zrokReleaseSettle is how long to wait after releasing an orphaned reserved
+// share before re-creating it, so the zrok controller frees the unique-name.
+const zrokReleaseSettle = 1500 * time.Millisecond
+
+// isShareConflictErr reports whether a zrok CreateShare error is a reserved
+// unique-name conflict — the name is already held by another (typically
+// orphaned) share. Happens when a prior tunnel dropped uncleanly (e.g. a
+// WiFi→hotspot switch) and zrok never released the reservation, so the next
+// reserve of the same pinned name returns HTTP 409 shareConflict.
+func isShareConflictErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := strings.ToLower(err.Error())
+	for _, sig := range []string{"shareconflict", "(status 409)", "[409]", "already exists"} {
 		if strings.Contains(s, sig) {
 			return true
 		}
@@ -225,7 +255,7 @@ func (m *zrokManager) start() {
 	if activeIngressProvider() != ingressProviderZrok || !zrokAutoStart() {
 		return
 	}
-	if githubWebhookSecret() == "" {
+	if githubWebhookSecret() == "" && !remoteAccessEnabled() {
 		m.setErr(errors.New("GitHub webhook secret required before public ingress can start"))
 		return
 	}
@@ -466,12 +496,28 @@ func ensureZrokShare(root env_core.Root, name string) (*zroksdk.Share, string, b
 		Reserved:    name != "",
 		UniqueName:  name,
 	}
-	var shr *zroksdk.Share
-	if err := retryTransientZrok(func() error {
-		var e error
-		shr, e = zroksdk.CreateShare(root, req)
-		return e
-	}); err != nil {
+	createShare := func() (*zroksdk.Share, error) {
+		var s *zroksdk.Share
+		err := retryTransientZrok(func() error {
+			var e error
+			s, e = zroksdk.CreateShare(root, req)
+			return e
+		})
+		return s, err
+	}
+	shr, err := createShare()
+	if err != nil && name != "" && isShareConflictErr(err) {
+		// The pinned unique-name is held by an orphaned reserved share — e.g. the
+		// previous tunnel dropped uncleanly on a network change (WiFi→hotspot) and
+		// zrok never released the reservation. Release the stale reservation by its
+		// token (== the unique-name for reserved shares) and retry once. Re-reserving
+		// the same name restores the SAME stable public URL, so ingress self-heals
+		// instead of staying wedged on 409 shareConflict until a manual rotate.
+		_ = zroksdk.DeleteShare(root, &zroksdk.Share{Token: name})
+		time.Sleep(zrokReleaseSettle)
+		shr, err = createShare()
+	}
+	if err != nil {
 		return nil, "", false, fmt.Errorf("zrok create share: %w", err)
 	}
 	if len(shr.FrontendEndpoints) == 0 {

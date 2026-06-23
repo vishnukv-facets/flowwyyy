@@ -112,6 +112,31 @@ func checkLocalWSOrigin(r *http.Request) bool {
 	return strings.EqualFold(u.Host, r.Host)
 }
 
+// checkRemoteWSOrigin is the origin gate for the remote (device-token) WS
+// surface. The PWA is served from the zrok public URL, so a remote handshake's
+// Origin is that public host. Accept when the Origin host matches r.Host (zrok
+// preserved Host) OR the configured public base URL host (zrok rewrote Host).
+// Empty/unparseable Origin is rejected, same as the local gate.
+func (s *Server) checkRemoteWSOrigin(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if strings.EqualFold(u.Host, r.Host) {
+		return true
+	}
+	if base := s.publicBaseURL(); base != "" {
+		if bu, err := url.Parse(base); err == nil && strings.EqualFold(u.Host, bu.Host) {
+			return true
+		}
+	}
+	return false
+}
+
 // requestCrossOrigin reports whether a direct HTTP request carries an Origin (or
 // Referer) from a different host than r.Host. A truthful Origin that mismatches
 // means a page the operator visited is trying to drive the data plane — reject.
@@ -165,6 +190,14 @@ func tokenExemptAPIPath(path string) bool {
 func apiRouteNeedsToken(method, path string) bool {
 	if tokenExemptAPIPath(path) {
 		return false
+	}
+	// All remote-access management endpoints are localhost-only operator
+	// actions (pairing, enable/disable, device list/revoke) — require the
+	// session token regardless of method so a stray same-origin GET can't read
+	// the device list over direct HTTP. The remote-mux pairing-REDEMPTION
+	// endpoint lives on a different mux and never reaches this gate.
+	if strings.HasPrefix(path, "/api/remote/") {
+		return true
 	}
 	if path == "/api/fs/entries" || path == "/api/fs/mkdir" {
 		return true
