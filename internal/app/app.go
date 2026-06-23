@@ -95,6 +95,7 @@ Setup:
   flow skill install [--force]
   flow skill uninstall
   flow skill update
+  flow skill print
 
 Create:
   flow add project "<name>" --work-dir <path> [--slug <s>] [--priority h|m|l] [--mkdir]

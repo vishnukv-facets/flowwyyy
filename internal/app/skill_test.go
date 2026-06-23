@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,6 +76,66 @@ func withTempHome(t *testing.T) string {
 		}
 	})
 	return dir
+}
+
+func captureSkillStdout(t *testing.T, fn func() int) (string, int) {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []byte, 1)
+	go func() {
+		data, _ := io.ReadAll(r)
+		done <- data
+	}()
+	os.Stdout = w
+	rc := fn()
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = old
+	data := <-done
+	return string(data), rc
+}
+
+func TestSkillPrintEmitsCoreOnly(t *testing.T) {
+	got, rc := captureSkillStdout(t, func() int {
+		return cmdSkill([]string{"print"})
+	})
+	if rc != 0 {
+		t.Fatalf("skill print rc=%d", rc)
+	}
+	for _, want := range []string{
+		"## 1. What flow is",
+		"### 4.9a Search flow memory",
+		"## 11. When in doubt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("core skill print missing %q", want)
+		}
+	}
+	for _, product := range []string{
+		"### 4.9b Respond to Attention confirmed handoffs",
+		"## 10a. Same-session inbox monitor",
+		"## 10d. Attention Router feed",
+		"flow attention list [--status new|acted|dismissed|snoozed|all]",
+		"flow slack send",
+	} {
+		if strings.Contains(got, product) {
+			t.Errorf("core skill print still contains product content %q", product)
+		}
+	}
+}
+
+func productSkillForTest(t *testing.T) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("..", "product", "skill", "SKILL.flowwyyy.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func TestSkillInstallWritesFile(t *testing.T) {
@@ -399,7 +460,7 @@ func TestSkillDocumentsCodexAutoRuns(t *testing.T) {
 }
 
 func TestSkillMentionsDMMonitoring(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"Monitoring a DM reply (automatic)",
 		"PostToolUse",
@@ -417,7 +478,7 @@ func TestSkillMentionsDMMonitoring(t *testing.T) {
 }
 
 func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"Slack app command DM",
 		"`:eyes:` reaction",
@@ -431,7 +492,7 @@ func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
 }
 
 func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"Slack Connect",
 		"flow slack send",
@@ -446,7 +507,7 @@ func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
 }
 
 func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, bad := range []string{
 		"Sent using @codex",
 		"Always append this footer to every Codex-sent Slack reply",
@@ -785,7 +846,7 @@ func TestSkillHasFirstRunCapturePattern(t *testing.T) {
 }
 
 func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"GitHub PR and issue tasks",
 		// App-based webhook ingress (the legacy gh search-poller was removed).
@@ -806,7 +867,7 @@ func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
 }
 
 func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"inbox.jsonl",
 		"same Flow-owned terminal session",
@@ -824,7 +885,7 @@ func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
 }
 
 func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"Respond to Attention confirmed handoffs",
 		"Confirmed handoff request from the attention router",
@@ -840,7 +901,7 @@ func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
 }
 
 func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
-	got := string(embeddedSkill)
+	got := productSkillForTest(t)
 	for _, want := range []string{
 		"flow attention list [--status new|acted|dismissed|snoozed|all]",
 		"flow attention act <id> <make-task|forward|confirm-handoff|dismiss>",
