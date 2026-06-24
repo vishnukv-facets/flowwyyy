@@ -1,16 +1,19 @@
 package app
 
 import (
-	_ "embed"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"flow/internal/coreskill"
 )
 
-//go:embed skill/SKILL.core.md
-var embeddedCoreSkill []byte
+// embeddedCoreSkill is the core agent skill fragment. It lives in the neutral
+// internal/coreskill package (single copy, also read by the flowwyyy product
+// binary) rather than being embedded directly here (Phase-3 decoupling).
+var embeddedCoreSkill = coreskill.Bytes()
 
 var embeddedSkill = embeddedCoreSkill
 

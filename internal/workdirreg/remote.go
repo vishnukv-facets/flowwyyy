@@ -1,17 +1,16 @@
 package workdirreg
 
 import (
-	"bufio"
 	"database/sql"
 	"flow/internal/flowdb"
+	"flow/internal/gitremote"
 	"fmt"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strings"
 )
 
-var gitRemoteURLRE = regexp.MustCompile(`^\s*url\s*=\s*(.+?)\s*$`)
+// DetectGitRemote is re-exported from internal/gitremote so existing callers of
+// workdirreg.DetectGitRemote keep working. The detection itself is flowdb-free
+// and lives in gitremote (T13 split); the DB-backed registry below stays here.
+var DetectGitRemote = gitremote.DetectGitRemote
 
 // Register records a workdir and captures its current origin remote when one
 // exists. Existing names/descriptions are preserved unless non-empty values are
@@ -66,74 +65,4 @@ func SyncGitRemotes(db *sql.DB) (int, error) {
 		updated++
 	}
 	return updated, nil
-}
-
-// DetectGitRemote reads <path>/.git/config and extracts the origin remote URL.
-// It handles .git being either a directory or a git-worktree pointer file.
-func DetectGitRemote(path string) string {
-	configPath := resolveGitConfigPath(path)
-	if configPath == "" {
-		return ""
-	}
-	f, err := os.Open(configPath)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	inOrigin := false
-	for scanner.Scan() {
-		line := scanner.Text()
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
-			inOrigin = trimmed == `[remote "origin"]`
-			continue
-		}
-		if !inOrigin {
-			continue
-		}
-		if m := gitRemoteURLRE.FindStringSubmatch(line); m != nil {
-			return m[1]
-		}
-	}
-	return ""
-}
-
-func resolveGitConfigPath(path string) string {
-	gitPath := filepath.Join(path, ".git")
-	info, err := os.Stat(gitPath)
-	if err != nil {
-		return ""
-	}
-	if info.IsDir() {
-		return filepath.Join(gitPath, "config")
-	}
-	data, err := os.ReadFile(gitPath)
-	if err != nil {
-		return ""
-	}
-	line := strings.TrimSpace(string(data))
-	if !strings.HasPrefix(line, "gitdir:") {
-		return ""
-	}
-	target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
-	if !filepath.IsAbs(target) {
-		target = filepath.Join(path, target)
-	}
-	// A linked worktree's gitdir holds per-worktree state only (HEAD, index,
-	// commondir); the shared config — including remotes — lives in the common
-	// dir, located via the `commondir` pointer file. Follow it so origin
-	// detection works from a worktree checkout, not just the main working
-	// tree. A plain .git-file gitdir (e.g. a submodule) has no commondir and
-	// keeps its own config, so we fall through to <target>/config there.
-	if cd, err := os.ReadFile(filepath.Join(target, "commondir")); err == nil {
-		if common := strings.TrimSpace(string(cd)); common != "" {
-			if !filepath.IsAbs(common) {
-				common = filepath.Join(target, common)
-			}
-			return filepath.Join(common, "config")
-		}
-	}
-	return filepath.Join(target, "config")
 }

@@ -1,15 +1,14 @@
 package steering
 
 import (
+	"flow/internal/productdb"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestForwardSourceTrusted(t *testing.T) {
 	cases := []struct {
 		name            string
-		item            flowdb.FeedItem
+		item            productdb.FeedItem
 		slackSelf       string
 		ghSelf          string
 		trustedChannels string
@@ -17,31 +16,31 @@ func TestForwardSourceTrusted(t *testing.T) {
 	}{
 		{
 			name:      "slack self-authored is trusted",
-			item:      flowdb.FeedItem{Source: "slack", Author: "U_SELF"},
+			item:      productdb.FeedItem{Source: "slack", Author: "U_SELF"},
 			slackSelf: "U_SELF,U_OTHER",
 			want:      true,
 		},
 		{
 			name:   "github self-login is trusted",
-			item:   flowdb.FeedItem{Source: "github", Author: "octo-me"},
+			item:   productdb.FeedItem{Source: "github", Author: "octo-me"},
 			ghSelf: "octo-me",
 			want:   true,
 		},
 		{
 			name:            "allowlisted channel is trusted even from a stranger",
-			item:            flowdb.FeedItem{Source: "slack", Author: "U_STRANGER", Channel: "C_TEAM"},
+			item:            productdb.FeedItem{Source: "slack", Author: "U_STRANGER", Channel: "C_TEAM"},
 			trustedChannels: "C_TEAM C_OPS",
 			want:            true,
 		},
 		{
 			name:      "stranger on an unlisted channel is untrusted",
-			item:      flowdb.FeedItem{Source: "slack", Author: "U_STRANGER", Channel: "C_RANDOM"},
+			item:      productdb.FeedItem{Source: "slack", Author: "U_STRANGER", Channel: "C_RANDOM"},
 			slackSelf: "U_SELF",
 			want:      false,
 		},
 		{
 			name: "empty author and channel with no config is untrusted (fail closed)",
-			item: flowdb.FeedItem{Source: "slack"},
+			item: productdb.FeedItem{Source: "slack"},
 			want: false,
 		},
 	}

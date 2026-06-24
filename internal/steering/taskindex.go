@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // BuildTaskIndex renders a text index of the operator's ACTIVE tasks and
@@ -27,11 +27,11 @@ import (
 //	- kong-split [goniyo] (in-progress): Kong split
 //	    brief: /…/tasks/kong-split/brief.md  updates: /…/tasks/kong-split/updates/
 func BuildTaskIndex(db *sql.DB) (string, error) {
-	projects, err := flowdb.ListProjects(db, flowdb.ProjectFilter{IncludeArchived: false})
+	projects, err := productdb.ListProjects(db, productdb.ProjectFilter{IncludeArchived: false})
 	if err != nil {
 		return "", fmt.Errorf("steering: list projects: %w", err)
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: true})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{IncludeArchived: true})
 	if err != nil {
 		return "", fmt.Errorf("steering: list tasks: %w", err)
 	}

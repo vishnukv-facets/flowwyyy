@@ -1,9 +1,9 @@
 # Design — flow-core / flowwyyy decoupling: two binaries, subprocess boundary
 
-- **Date:** 2026-06-23 (rev 2 — supersedes the single-composed-binary framing of rev 1)
+- **Date:** 2026-06-24 (rev 3 — Phase-3 strategy pivot, see §11; supersedes the single-composed-binary framing of rev 1 and the "upstream our core into Facets-cloud/flow" framing of rev 2 / the upstream-delta Route A/B)
 - **Task:** flow-core-seam (follows the spike [[flow-decouple-divergence]])
-- **Status:** **Phase 2 complete (plan T1–T12) — behavior parity verified 2026-06-24** (see §10). Two binaries build; `flowwyyy` execs the local `flow` for writes + reads the shared DB; guard test empty; same experience confirmed across the automated surface. Phase 3 (official-flow dependency + Homebrew, plan T13–T16) gated/pending.
-- **Directive:** CTO Anshul Sao (Slack, 2026-06-17): *"decouple flowwy with flow, it can be a prerequisite, don't bundle and duplicate code there."*
+- **Status:** **Phase 2 complete (T1–T12)** + **Phase 3 T13 COMPLETE (2026-06-24)** — the flowwyyy product surface (`server`/`monitor`/`steering`/`product`/`cmd/flowwyyy`) imports neither `flow/internal/app` nor `flow/internal/flowdb`; it reads the shared DB through its own `internal/productdb` (incl. `productdb.Open` + the 6 core-gap tables) and execs `flow` for Bucket-O writes. The second arch-guard ratchet (`TestProductDoesNotImportCoreGo`) is EMPTY; both binaries build; the product test surface is green. **Remaining: T14–T16 only, GATED on operator sign-off of §11** (own the gap against official `Facets-cloud/flow` + Homebrew + final acceptance). We **cannot modify `Facets-cloud/flow`**, so flowwyyy owns the gap.
+- **Directive:** CTO Anshul Sao (Slack, 2026-06-17): *"decouple flowwy with flow, it can be a prerequisite, don't bundle and duplicate code there."* **Constraint (Vishnu, 2026-06-24):** we cannot update the `Facets-cloud/flow` repo to accommodate the decoupling — flowwyyy must handle everything official flow lacks on its own side (§11).
 
 ## 1. Goal & end-state
 
@@ -142,3 +142,54 @@ Full report: `~/.flow/tasks/twobin-parity-gate/artifacts/PARITY-REPORT.md`. Verd
 **Observation:** the `seedSteererPersona` init-hook is now unreachable (init passes through to core); `persona.md` isn't materialized at init, but behavior is preserved by the `DefaultPersonaMarkdown` fallback in `OperatorVoice()` + the UI. Cosmetic; cleanup candidate.
 
 **Carryover to Phase 3 (T13–T16):** product still imports `app`/`flowdb` (allowed in Phase 2; T13 removes it via `productdb` read layer + the second guard ratchet). The upstream-delta (T14) remains large — see `flow-core-upstream-delta.md`.
+
+## 11. Phase-3 strategy pivot — flowwyyy owns the gap (rev 3, 2026-06-24)
+
+**New constraint (Vishnu, 2026-06-24):** we **cannot update `Facets-cloud/flow`** to accommodate the decoupling. This supersedes the upstream-delta's Route A (our core *becomes* official flow) and Route B (reconcile onto upstream) — both required changing `Facets-cloud/flow`. The dependency must target official flow **as-is**, and flowwyyy must own everything official flow lacks.
+
+### 11.1 Governing principle — ownership-based write routing
+
+Every table on the shared `~/.flow/flow.db` has **exactly one writer**, decided by which binary owns it:
+
+| Bucket | Tables | flowwyyy reads | flowwyyy writes |
+|---|---|---|---|
+| **O — official flow owns + exposes a CLI verb** | `tasks, projects, playbooks, task_tags, owners, workdirs, schema_meta` | via `productdb` (own structs + SELECTs) | **only** by exec-ing `flow` (`flowclient`) using verbs/flags official flow already ships (`do/done/add/update/archive/unarchive/run/owner`) — no reimplementation of core mutation logic |
+| **F — official flow LACKS it → flowwyyy owns** | 6 core-gap: `brain_runs, task_dependencies, task_links, agent_runtime_states, pending_wakes, search_docs` · 13 product: `attention_*, steering_*, github_event_log, github_webhook_deliveries, chats, remote_devices, pending_sends, kb_capture` | via `productdb` | **directly** via `productdb` — flowwyyy creates/migrates them (`productdb.Ensure`) and writes them in-process. No exec, no `flowdb` import. Concurrency already safe (`busy_timeout` + `_txlock=immediate`). |
+
+The 8 commands official flow lacks (`search standup delete restore spawn wait backup tell`) follow the same rule: flowwyyy provides them itself (its own `cmd/flowwyyy` surface / passthrough), never expecting them from official flow.
+
+**Why this is correct & forward-compatible:** it assumes nothing of official flow beyond verbs it already ships. When the dependency flips from the local extracted core to the real released `flow` binary, **nothing in Bucket F can break** — flowwyyy never touched `Facets-cloud/flow`, and it owns every table/command official flow doesn't provide. Bucket O's exec calls are the only coupling to official flow's CLI contract (§4 seam 1) — the startup version-compat check (§6.2) guards that contract.
+
+### 11.2 Consequence for the code (`productdb` becomes self-contained)
+
+`internal/productdb` stops importing `flow/internal/flowdb`. It grows: its own `Open(path)`/`Ensure(db)` (same pragmas, `modernc` driver), its own row types mirroring the shared schema, read queries for **all** tables flowwyyy uses, and write functions for Bucket F. The migration registration via `flowdb.RegisterMigrations` is replaced by an explicit `productdb.Open` call wired from `cmd/flowwyyy` startup.
+
+Product packages must shed **both** fenced core packages: `flowdb` (→ `productdb`) **and** `app` (the helpers product uses — `FlagSet/FlowRoot/FlowDBPath/FlowServerURL/UISessionToken/Version`/skill compose — relocate to a neutral package both binaries import; `cli` is already product-safe). Only `flow/internal/app` and `flow/internal/flowdb` are fenced; `cli`, `inbox`, `flowclient` remain importable.
+
+### 11.3 T13 burndown (each step a reviewable commit; second ratchet shrinks per step; `make test` green throughout)
+
+1. ✅ **Guard test + second ratchet** — `archtest.TestProductDoesNotImportCoreGo` asserts `cmd/flowwyyy` + `server`/`monitor`/`steering`/`product` don't transitively import `app`/`flowdb`. Ratchet pre-populated to current reality (5 pkgs); RED→GREEN verified.
+2. ◐ **`productdb` flowdb-free + grown read/Bucket-F layer** — `productdb` no longer imports `flowdb` and no longer self-registers (`productdbreg` is the transitional registrar; `internal/product` blank-imports it at runtime, test binaries blank-import it in `_test.go`). It now mirrors, with flowdb parity tests: core reads (tasks/projects/playbooks/owners/workdirs/tags + `TaskBySessionID`, blocker, normalizers, `model`) and full Bucket-F CRUD (attention/steering/chats/brain_runs/pending_*/remote_devices/kb_capture/search). **Not yet done:** its own `Open`/full-schema `Ensure` of the 6 core-gap tables — deferred to step 4 (product still calls `flowdb.OpenDB` at runtime, so the live DB keeps full schema).
+3. ✅ **`monitor` CLEARED** — reads via productdb, connector tables via productdb, core writes via `flow` exec, git detection via the flowdb-free `gitremote` pkg.
+4. ✅ **`steering` CLEARED** — attention/steering tables via productdb; the thread-tag backfill writes task_tags via the `taskTagger` flow-exec helper.
+5. ✅ **`server` CLEARED** — `go list -deps ./internal/server` contains neither `flowdb` nor `app`. Two layers of decoupling: (a) server's OWN flowdb use → productdb reads + Bucket-O writes via `flow` exec (`runFlowCommand`; tag write behind the overridable `taskTagWriter`); (b) all transitively-flowdb-bound deps it consumed, each handled by the cheapest correct route — `agents` made flowdb-free (its sole flowdb use was 2 trivial helpers inside the Codex-capture raw write — inlined; a genuine carve-out since official flow has no capture verb); `workdirreg` dropped, its 3 writes routed through `flow workdir add|remove` exec; `workevents` (used only by server, reads product tables) reclassified core→product and cut onto productdb; `briefing` (shared with core `flow standup`, stays flowdb) replaced for server by **`internal/productbriefing`**, a productdb-backed port with a flowdb-parity test; `flowclient`'s compat floor inlined off `flowdb.SchemaVersion`. (exec-`flow standup` was rejected — it can't take server's live WaitingSessions and a `--json` flag can't be assumed of official flow.)
+6. ✅ **`product` CLEARED** — `app` shed in 4 tiers (Tier A flag/path helpers → `internal/cli`; Tier B `Version` → `product.Version`; Tier C skill machinery → `internal/coreskill` + `internal/skillinstall`; Tier D init-hook → lazy persona seed at `ui serve`). DB opened via `productdb.Open`; `ui.go`'s `workdirreg.SyncGitRemotes` replaced by a product-side sync (productdb.ListWorkdirs + gitremote.DetectGitRemote + `flow workdir add` exec); product.go's `productdbreg` blank-import dropped (Open creates the tables) with a test-only re-add. Imports neither `app` nor `flowdb`.
+7. ✅ **`cmd/flowwyyy` CLEARED** — sets `product.Version`; no `app`/`flowdb` import (direct or transitive).
+8. ✅ `make test` green across the product surface; both binaries build; arch guard `TestProductDoesNotImportCoreGo` passes with an EMPTY ratchet.
+
+**Ratchet state: EMPTY — T13 COMPLETE (2026-06-24).** Burndown 5 → 0: `monitor`, `steering`, `server`, `product`, `cmd/flowwyyy` all cleared. No flowwyyy product package imports `flow/internal/app` or `flow/internal/flowdb`, directly or transitively; all DB access is via `internal/productdb` (reads + Bucket-F writes + `productdb.Open`) and `flow` exec for Bucket-O writes. New product-side packages guarded flowdb-free: `productdb`, `productbriefing`, `flowclient`, `coreskill`, `skillinstall`, `workevents` (reclassified core→product). Keystone `productdb.Open` + `coreGapSchemaDDL` (6 core-gap tables) parity-tested against flowdb. **Measured surface (start):** 180 distinct `flowdb` symbols across 75 non-test files. **Remaining: T14–T16 only (GATED on operator sign-off of §11)** — upstream/Homebrew/final acceptance against official `Facets-cloud/flow`.
+
+### 11.3.1 App-shedding survey (clearing `product`'s 13 `app.*` deps)
+
+`product` stays ratcheted because it imports `app` (which transitively pulls `flowdb`) for 13 helpers, exported via `internal/app/exports.go`. The survey sorts them into 4 tiers by what they actually depend on:
+
+- **Tier A — pure utilities → relocate to `internal/cli`** (already flowdb/app-free; product imports it; `uiSessionToken` already uses `cli.SessionTokenFileName`). Impls touch only flag/os/env/filepath: `flagSet`, `leadingHelpArg`, `parseFlagSet` (helpers.go); `flowRoot`, `flowDBPath` (init.go); `flowServerURL`, `uiSessionToken` (tell.go); `preferredUIFlowBinary` (flow_binary.go). app keeps thin lowercase wrappers → its many call sites stay unchanged (low core risk). Removes 8 of 13 deps.
+- **Tier B — `Version` → product-local var.** `cmd/flowwyyy` sets `app.Version`; switch to a product-side var the UI reads. Trivial; removes 1 dep.
+- **Tier C — skill machinery → extract to a neutral pkg (~500 LOC, the bulk).** `cmdSkill` (skill.go: install/update/print/uninstall — writes `~/.claude/skills/flow/SKILL.md` + wires SessionStart/UserPromptSubmit hooks) plus the `//go:embed skill/SKILL.core.md`. Shared by `flow skill` (core) and `flowwyyy skill` (which composes core+product). Plan: move install logic + the core-skill embed to e.g. `internal/skillinstall`, parameterized by skill bytes; app & product each call it with their content. (exec-`flow skill install` can't carry product's composed content.)
+- **Tier D — init hook → architectural redesign, NOT relocation.** `product/seed.go` does `app.RegisterInitHook(seedSteererPersona)`, but in the split `flow init` runs in the CORE binary which never imports product → the persona seed silently never fires. Must move to a flowwyyy-side trigger (lazily on first `ui serve` / first steerer use, or a flowwyyy init step). **Open decision.**
+
+**Execution order:** A+B (one mechanical low-risk chunk) → C → D → then wire `product/ui.go`+`attention.go` to `productdb.Open`, drop product.go's `productdbreg` blank-import (+ test-only re-add), `cmd/flowwyyy` drop `app.Version` → ratchet EMPTY = T13 complete. **Open decisions:** (1) `internal/cli` vs a new `internal/flowpath` as Tier-A home; (2) Tier-D seed trigger.
+
+### 11.4 What this changes vs. `flow-core-upstream-delta.md`
+
+The upstream-delta doc's effort summary and Route A/B framing are **superseded** for execution purposes: we no longer plan to land flowwyyy's core (8 commands, 6 tables, 12 packages, rewritten shared files) *into* `Facets-cloud/flow`. The delta remains useful as the **measurement** of what official flow lacks — i.e. exactly the Bucket F surface flowwyyy must own. T14 is re-scoped from "upstream into official flow" to "flowwyyy self-sufficiently owns the gap against official flow as-is" (still gated on operator sign-off).

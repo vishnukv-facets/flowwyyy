@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"io/fs"
 	"os"
@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool) (TaskView, error) {
+func BuildTaskView(db *sql.DB, root string, t *productdb.Task, live map[string]bool) (TaskView, error) {
 	now := time.Now()
 	view := TaskView{
 		Slug:           t.Slug,
@@ -88,10 +88,10 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 			view.StaleDays = &days
 		}
 	}
-	if wd, err := flowdb.GetWorkdir(db, t.WorkDir); err == nil {
+	if wd, err := productdb.GetWorkdir(db, t.WorkDir); err == nil {
 		view.WorkdirKnown = workdirKnown(wd)
 	}
-	tags, err := flowdb.GetTaskTags(db, t.Slug)
+	tags, err := productdb.GetTaskTags(db, t.Slug)
 	if err != nil {
 		return view, err
 	}
@@ -151,7 +151,7 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	// Runtime status: latest agent_runtime_states row for this session.
 	// Surfaces in UI as the chip next to the task status.
 	if t.SessionID.Valid && t.SessionID.String != "" {
-		if state, err := flowdb.AgentRuntimeStateBySessionID(db, provider, t.SessionID.String); err == nil {
+		if state, err := productdb.AgentRuntimeStateBySessionID(db, provider, t.SessionID.String); err == nil {
 			rs := state.Status
 			view.RuntimeStatus = &rs
 		}
@@ -167,7 +167,7 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 	return view, nil
 }
 
-func BuildOwnerView(db *sql.DB, root string, o *flowdb.Owner, now time.Time) OwnerView {
+func BuildOwnerView(db *sql.DB, root string, o *productdb.Owner, now time.Time) OwnerView {
 	view := OwnerView{
 		Slug:           o.Slug,
 		Name:           o.Name,
@@ -193,7 +193,7 @@ func BuildOwnerView(db *sql.DB, root string, o *flowdb.Owner, now time.Time) Own
 			view.NextDue = !wake.After(now)
 		}
 	}
-	if wd, err := flowdb.GetWorkdir(db, o.WorkDir); err == nil {
+	if wd, err := productdb.GetWorkdir(db, o.WorkDir); err == nil {
 		view.WorkdirKnown = workdirKnown(wd)
 	}
 	return view
@@ -203,7 +203,7 @@ func BuildOwnerView(db *sql.DB, root string, o *flowdb.Owner, now time.Time) Own
 // observability surface a human needs to see what a tick actually did —
 // the owner's journal notes, the live status of every task it controls, and
 // the tail of the most recent tick log.
-func BuildOwnerDetail(db *sql.DB, root string, o *flowdb.Owner, now time.Time) OwnerDetailView {
+func BuildOwnerDetail(db *sql.DB, root string, o *productdb.Owner, now time.Time) OwnerDetailView {
 	detail := OwnerDetailView{OwnerView: BuildOwnerView(db, root, o, now)}
 	ownerDir := filepath.Join(root, "owners", o.Slug)
 	detail.Journal = ownerJournalNotes(filepath.Join(ownerDir, "updates"), 6)
@@ -303,7 +303,7 @@ func ownerJournalNotes(dir string, limit int) []OwnerJournalNote {
 
 // ownerOwnedTasks returns the live status of every task tagged owner:<slug>.
 func ownerOwnedTasks(db *sql.DB, slug string) []OwnerTaskRow {
-	owned, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag("owner:" + slug)})
+	owned, err := productdb.ListTasks(db, productdb.TaskFilter{Tag: productdb.NormalizeTag("owner:" + slug)})
 	if err != nil {
 		return nil
 	}
@@ -311,7 +311,7 @@ func ownerOwnedTasks(db *sql.DB, slug string) []OwnerTaskRow {
 	for _, t := range owned {
 		slugs = append(slugs, t.Slug)
 	}
-	tagsBySlug, _ := flowdb.GetTaskTagsBatch(db, slugs)
+	tagsBySlug, _ := productdb.GetTaskTagsBatch(db, slugs)
 	rows := make([]OwnerTaskRow, 0, len(owned))
 	for _, t := range owned {
 		row := OwnerTaskRow{
@@ -371,7 +371,7 @@ func ownerTickLogTail(dir string) string {
 	return strings.TrimSpace(string(body))
 }
 
-func BuildOwnerViews(db *sql.DB, root string, owners []*flowdb.Owner) []OwnerView {
+func BuildOwnerViews(db *sql.DB, root string, owners []*productdb.Owner) []OwnerView {
 	views := make([]OwnerView, 0, len(owners))
 	now := time.Now()
 	for _, o := range owners {
@@ -481,14 +481,14 @@ func scanTaskSummary(row interface{ Scan(dest ...any) error }) (TaskSummary, err
 	return s, nil
 }
 
-func BuildTaskViews(db *sql.DB, root string, tasks []*flowdb.Task) ([]TaskView, error) {
+func BuildTaskViews(db *sql.DB, root string, tasks []*productdb.Task) ([]TaskView, error) {
 	live, _ := liveAgentSessions()
 	return buildTaskViewsWithLive(db, root, tasks, live)
 }
 
 // buildTaskViewsWithLive lets callers that already hold a recent live snapshot
 // (e.g. buildUIData via cachedLiveAgentSessions) avoid re-forking `ps`.
-func buildTaskViewsWithLive(db *sql.DB, root string, tasks []*flowdb.Task, live map[string]bool) ([]TaskView, error) {
+func buildTaskViewsWithLive(db *sql.DB, root string, tasks []*productdb.Task, live map[string]bool) ([]TaskView, error) {
 	out := make([]TaskView, 0, len(tasks))
 	for _, t := range tasks {
 		v, err := BuildTaskView(db, root, t, live)
@@ -500,7 +500,7 @@ func buildTaskViewsWithLive(db *sql.DB, root string, tasks []*flowdb.Task, live 
 	return out, nil
 }
 
-func BuildProjectView(db *sql.DB, root string, p *flowdb.Project) (ProjectView, error) {
+func BuildProjectView(db *sql.DB, root string, p *productdb.Project) (ProjectView, error) {
 	view := ProjectView{
 		Slug:       p.Slug,
 		Name:       p.Name,
@@ -521,7 +521,7 @@ func BuildProjectView(db *sql.DB, root string, p *flowdb.Project) (ProjectView, 
 	if view.AuxFiles == nil {
 		view.AuxFiles = []FileRef{}
 	}
-	if wd, err := flowdb.GetWorkdir(db, p.WorkDir); err == nil {
+	if wd, err := productdb.GetWorkdir(db, p.WorkDir); err == nil {
 		view.WorkdirKnown = workdirKnown(wd)
 	}
 	counts, err := projectTaskCounts(db, p.Slug)
@@ -536,7 +536,7 @@ func BuildProjectView(db *sql.DB, root string, p *flowdb.Project) (ProjectView, 
 	return view, nil
 }
 
-func BuildProjectViews(db *sql.DB, root string, projects []*flowdb.Project) ([]ProjectView, error) {
+func BuildProjectViews(db *sql.DB, root string, projects []*productdb.Project) ([]ProjectView, error) {
 	out := make([]ProjectView, 0, len(projects))
 	for _, p := range projects {
 		v, err := BuildProjectView(db, root, p)
@@ -555,7 +555,7 @@ func BuildProjectViews(db *sql.DB, root string, projects []*flowdb.Project) ([]P
 	return out, nil
 }
 
-func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookView, error) {
+func BuildPlaybookView(db *sql.DB, root string, pb *productdb.Playbook) (PlaybookView, error) {
 	view := PlaybookView{
 		Slug:        pb.Slug,
 		Name:        pb.Name,
@@ -583,7 +583,7 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 	if view.AuxFiles == nil {
 		view.AuxFiles = []FileRef{}
 	}
-	runs, err := flowdb.ListTasks(db, flowdb.TaskFilter{
+	runs, err := productdb.ListTasks(db, productdb.TaskFilter{
 		Kind:            "playbook_run",
 		PlaybookSlug:    pb.Slug,
 		IncludeArchived: true,
@@ -629,7 +629,7 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 	return view, nil
 }
 
-func BuildPlaybookViews(db *sql.DB, root string, pbs []*flowdb.Playbook) ([]PlaybookView, error) {
+func BuildPlaybookViews(db *sql.DB, root string, pbs []*productdb.Playbook) ([]PlaybookView, error) {
 	out := make([]PlaybookView, 0, len(pbs))
 	for _, pb := range pbs {
 		v, err := BuildPlaybookView(db, root, pb)
@@ -641,7 +641,7 @@ func BuildPlaybookViews(db *sql.DB, root string, pbs []*flowdb.Playbook) ([]Play
 	return out, nil
 }
 
-func BuildWorkdirView(db *sql.DB, w *flowdb.Workdir) WorkdirView {
+func BuildWorkdirView(db *sql.DB, w *productdb.Workdir) WorkdirView {
 	view := WorkdirView{
 		Path:           w.Path,
 		Name:           nullStringPtr(w.Name),
@@ -659,7 +659,7 @@ func BuildWorkdirView(db *sql.DB, w *flowdb.Workdir) WorkdirView {
 	return view
 }
 
-func BuildWorkdirViews(db *sql.DB, workdirs []*flowdb.Workdir) []WorkdirView {
+func BuildWorkdirViews(db *sql.DB, workdirs []*productdb.Workdir) []WorkdirView {
 	out := make([]WorkdirView, 0, len(workdirs))
 	for _, w := range workdirs {
 		out = append(out, BuildWorkdirView(db, w))
@@ -810,7 +810,7 @@ func artifactFiles(dir string) []FileRef {
 	return out
 }
 
-func workdirKnown(w *flowdb.Workdir) *WorkdirKnown {
+func workdirKnown(w *productdb.Workdir) *WorkdirKnown {
 	known := &WorkdirKnown{}
 	if w.Name.Valid && w.Name.String != "" {
 		known.Name = &w.Name.String
@@ -866,7 +866,7 @@ func projectTaskCounts(db *sql.DB, projectSlug string) (TaskCounts, error) {
 
 func recentProjectTasks(db *sql.DB, projectSlug string, limit int) ([]TaskSummary, error) {
 	rows, err := db.Query(
-		`SELECT `+flowdb.TaskCols+` FROM tasks
+		`SELECT `+productdb.TaskCols+` FROM tasks
 		 WHERE project_slug = ? AND archived_at IS NULL AND deleted_at IS NULL
 		 ORDER BY updated_at DESC
 		 LIMIT ?`, projectSlug, limit)
@@ -876,7 +876,7 @@ func recentProjectTasks(db *sql.DB, projectSlug string, limit int) ([]TaskSummar
 	defer rows.Close()
 	var out []TaskSummary
 	for rows.Next() {
-		t, err := flowdb.ScanTask(rows)
+		t, err := productdb.ScanTask(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -885,7 +885,7 @@ func recentProjectTasks(db *sql.DB, projectSlug string, limit int) ([]TaskSummar
 	return out, rows.Err()
 }
 
-func taskSummary(t *flowdb.Task) TaskSummary {
+func taskSummary(t *productdb.Task) TaskSummary {
 	return TaskSummary{
 		Slug:        t.Slug,
 		Name:        t.Name,
@@ -924,7 +924,7 @@ func staleDaysThreshold() int {
 	return 3
 }
 
-func taskStaleness(t *flowdb.Task, root string) (int, bool) {
+func taskStaleness(t *productdb.Task, root string) (int, bool) {
 	last, err := time.Parse(time.RFC3339, t.UpdatedAt)
 	if err != nil {
 		return 0, false
@@ -950,7 +950,7 @@ func taskStaleness(t *flowdb.Task, root string) (int, bool) {
 	return days, age > time.Duration(threshold)*24*time.Hour
 }
 
-func daysInStatus(t *flowdb.Task, now time.Time) int {
+func daysInStatus(t *productdb.Task, now time.Time) int {
 	ref := t.CreatedAt
 	if t.StatusChangedAt.Valid && t.StatusChangedAt.String != "" {
 		ref = t.StatusChangedAt.String
@@ -962,7 +962,7 @@ func daysInStatus(t *flowdb.Task, now time.Time) int {
 	return int(now.Sub(parsed) / (24 * time.Hour))
 }
 
-func daysUntilDue(t *flowdb.Task, now time.Time) (int, bool) {
+func daysUntilDue(t *productdb.Task, now time.Time) (int, bool) {
 	if !t.DueDate.Valid || t.DueDate.String == "" {
 		return 0, false
 	}
@@ -999,7 +999,7 @@ func formatDueDateInfo(dateStr string, now time.Time) string {
 	}
 }
 
-func temporalSummary(t *flowdb.Task, now time.Time) string {
+func temporalSummary(t *productdb.Task, now time.Time) string {
 	var parts []string
 	if age := daysInStatus(t, now); age > 0 {
 		word := "days"

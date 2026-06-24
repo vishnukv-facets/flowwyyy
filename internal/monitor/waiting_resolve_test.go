@@ -32,6 +32,16 @@ func TestAutoResolveWaitingOn(t *testing.T) {
 	db := dispatcherTestDB(t)
 	self := []string{"U_ME"}
 
+	// waiting_on now clears via `flow update task --clear-waiting` exec (core
+	// table, flow-owned). Stub the exec to perform the real DB clear so the
+	// end-to-end intent (non-operator reply → wait resolved) is still verified.
+	origClear := clearFlowTaskWaiting
+	clearFlowTaskWaiting = func(slug string) error {
+		_, err := db.Exec(`UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE slug=?`, flowdb.NowISO(), slug)
+		return err
+	}
+	defer func() { clearFlowTaskWaiting = origClear }()
+
 	seedWaitingTask(t, db, "ext", "Anshul to reply")
 	if !autoResolveWaitingOn(db, "ext", "U_OTHER", self) {
 		t.Error("external reply should resolve waiting_on")

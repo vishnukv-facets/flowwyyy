@@ -1,7 +1,7 @@
 package server
 
 import (
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -20,7 +20,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, resp)
 		return
 	}
-	scopes, err := flowdb.ParseSearchScopes(r.URL.Query().Get("in"))
+	scopes, err := productdb.ParseSearchScopes(r.URL.Query().Get("in"))
 	if err != nil {
 		writeError(w, err, http.StatusBadRequest)
 		return
@@ -35,7 +35,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		limit = n
 	}
 	s.syncSearchThrottled(scopes)
-	results, err := flowdb.SearchDocs(s.cfg.DB, q, scopes, limit)
+	results, err := productdb.SearchDocs(s.cfg.DB, q, scopes, limit)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -43,11 +43,11 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	for _, result := range results {
 		mapped := ftsSearchResult(result)
 		switch result.Scope {
-		case string(flowdb.SearchScopeUpdate):
+		case string(productdb.SearchScopeUpdate):
 			resp.Updates = append(resp.Updates, mapped)
-		case string(flowdb.SearchScopeTranscript):
+		case string(productdb.SearchScopeTranscript):
 			resp.Transcripts = append(resp.Transcripts, mapped)
-		case string(flowdb.SearchScopeMemory):
+		case string(productdb.SearchScopeMemory):
 			resp.Memories = append(resp.Memories, mapped)
 		default:
 			switch result.EntityType {
@@ -133,10 +133,10 @@ const searchSyncThrottle = 30 * time.Second
 // typing can't stack goroutines or race a second SQLite writer — the original
 // source of intermittent 500s. A refresh failure is non-fatal: the scope's
 // timestamp is left unchanged so we retry next call.
-func (s *Server) syncSearchThrottled(scopes []flowdb.SearchScope) {
+func (s *Server) syncSearchThrottled(scopes []productdb.SearchScope) {
 	s.searchSyncMu.Lock()
 	now := time.Now()
-	var stale []flowdb.SearchScope
+	var stale []productdb.SearchScope
 	cold := false
 	for _, sc := range scopes {
 		last, ok := s.searchSyncAt[string(sc)]
@@ -155,7 +155,7 @@ func (s *Server) syncSearchThrottled(scopes []flowdb.SearchScope) {
 	s.searchSyncMu.Unlock()
 
 	doSync := func() {
-		err := flowdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, stale)
+		err := productdb.SyncSearchDocsForScopes(s.cfg.DB, s.cfg.FlowRoot, stale)
 		s.searchSyncMu.Lock()
 		if err == nil {
 			if s.searchSyncAt == nil {
@@ -188,10 +188,10 @@ func (s *Server) warmSearchIndex() {
 	if s.cfg.DB == nil || strings.TrimSpace(s.cfg.FlowRoot) == "" {
 		return
 	}
-	s.syncSearchThrottled(flowdb.DefaultSearchScopes())
+	s.syncSearchThrottled(productdb.DefaultSearchScopes())
 }
 
-func ftsSearchResult(result flowdb.SearchResult) SearchResult {
+func ftsSearchResult(result productdb.SearchResult) SearchResult {
 	return SearchResult{
 		Type:       result.Type,
 		Scope:      result.Scope,

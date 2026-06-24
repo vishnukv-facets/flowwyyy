@@ -3,11 +3,10 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestDeriveChatTitle(t *testing.T) {
@@ -43,15 +42,15 @@ func TestListChats_ExcludesArchivedAndOrders(t *testing.T) {
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 
 	// Insert out of order so ordering is exercised, not insertion order.
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-old", Title: "Older", Provider: "claude", Origin: "ui",
 		CreatedAt: "2026-06-13T09:00:00+05:30", LastActivityAt: "2026-06-13T09:00:00+05:30",
 	})
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-new", Title: "Newer", Provider: "codex", Origin: "ui",
 		CreatedAt: "2026-06-13T10:00:00+05:30", LastActivityAt: "2026-06-13T12:00:00+05:30",
 	})
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-arch", Title: "Archived", Provider: "claude", Origin: "ui",
 		CreatedAt:      "2026-06-13T11:00:00+05:30",
 		LastActivityAt: "2026-06-13T11:00:00+05:30",
@@ -122,7 +121,7 @@ func TestListChats_NilTerminalsAndEmpty(t *testing.T) {
 		t.Fatalf("expected no chats, got %d", len(empty))
 	}
 
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-x", Title: "X", Provider: "claude", Origin: "ui",
 		CreatedAt: "2026-06-13T09:00:00+05:30", LastActivityAt: "2026-06-13T09:00:00+05:30",
 	})
@@ -154,7 +153,7 @@ func TestOverviewChatRecordsChatRow(t *testing.T) {
 	}
 	slug := resp.FloatingTerminal.ID
 
-	chat, err := flowdb.GetChat(db, slug)
+	chat, err := productdb.GetChat(db, slug)
 	if err != nil {
 		t.Fatalf("expected chat row for %q: %v", slug, err)
 	}
@@ -191,15 +190,15 @@ func TestHandleChats(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"}))
 
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-old", Title: "Older", Provider: "claude", Origin: "ui",
 		CreatedAt: "2026-06-13T09:00:00+05:30", LastActivityAt: "2026-06-13T09:00:00+05:30",
 	})
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-new", Title: "Newer", Provider: "codex", Origin: "ui",
 		CreatedAt: "2026-06-13T10:00:00+05:30", LastActivityAt: "2026-06-13T12:00:00+05:30",
 	})
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-arch", Title: "Archived", Provider: "claude", Origin: "ui",
 		CreatedAt:      "2026-06-13T11:00:00+05:30",
 		LastActivityAt: "2026-06-13T11:00:00+05:30",
@@ -268,11 +267,11 @@ func TestChatActionArchiveAndDelete(t *testing.T) {
 	root, db := testRootDB(t)
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
 
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-a", Title: "A", Provider: "claude", Origin: "ui",
 		CreatedAt: "2026-06-13T09:00:00+05:30", LastActivityAt: "2026-06-13T09:00:00+05:30",
 	})
-	mustInsertChat(t, db, flowdb.Chat{
+	mustInsertChat(t, db, productdb.Chat{
 		Slug: "overview-b", Title: "B", Provider: "claude", Origin: "ui",
 		CreatedAt: "2026-06-13T10:00:00+05:30", LastActivityAt: "2026-06-13T10:00:00+05:30",
 	})
@@ -316,10 +315,10 @@ func TestChatActionArchiveAndDelete(t *testing.T) {
 	if len(all) != 1 || all[0].Slug != "overview-b" {
 		t.Fatalf("after delete listChats(true) = %+v, want only overview-b", all)
 	}
-	if _, err := flowdb.GetChat(db, "overview-a"); err == nil {
+	if _, err := productdb.GetChat(db, "overview-a"); err == nil {
 		// GetChat still returns the soft-deleted row (no deleted-at filter), so
 		// confirm the deleted_at marker was set rather than asserting ErrNoRows.
-		c, _ := flowdb.GetChat(db, "overview-a")
+		c, _ := productdb.GetChat(db, "overview-a")
 		if c != nil && !c.DeletedAt.Valid {
 			t.Fatalf("chat-delete did not set deleted_at on overview-a: %+v", c)
 		}
@@ -342,9 +341,9 @@ func TestChatReopenNotFound(t *testing.T) {
 	}
 }
 
-func mustInsertChat(t *testing.T, db *sql.DB, c flowdb.Chat) {
+func mustInsertChat(t *testing.T, db *sql.DB, c productdb.Chat) {
 	t.Helper()
-	if err := flowdb.InsertChat(db, c); err != nil {
+	if err := productdb.InsertChat(db, c); err != nil {
 		t.Fatalf("InsertChat(%q): %v", c.Slug, err)
 	}
 }

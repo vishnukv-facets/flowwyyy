@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"flow/internal/agents"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,7 +97,7 @@ func (s *Server) buildTokenSeries(tasks []TaskView, now time.Time) ([]uiTokenDay
 		if tv.SessionProvider != nil && *tv.SessionProvider != "" {
 			provider = *tv.SessionProvider
 		}
-		task := &flowdb.Task{
+		task := &productdb.Task{
 			Slug:            tv.Slug,
 			WorkDir:         tv.WorkDir,
 			WorktreePath:    nullStringFromPtr(tv.WorktreePath),

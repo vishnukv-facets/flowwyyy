@@ -2,7 +2,7 @@ package server
 
 import (
 	"database/sql"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,7 +28,7 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	}
 	permissionMode := tv.PermissionMode
 	if permissionMode == "" {
-		permissionMode = flowdb.DefaultPermissionMode
+		permissionMode = productdb.DefaultPermissionMode
 	}
 	sessionID := ""
 	if tv.SessionID != nil {
@@ -264,7 +264,7 @@ func (s *Server) codexTranscriptWaitingFor(tv TaskView, provider string) *uiWait
 	if provider != "codex" || tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
 		return nil
 	}
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		Slug:            tv.Slug,
 		WorkDir:         tv.WorkDir,
 		WorktreePath:    nullStringFromPtr(tv.WorktreePath),
@@ -304,7 +304,7 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	if tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
 		return insights
 	}
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		Slug:            tv.Slug,
 		WorkDir:         tv.WorkDir,
 		WorktreePath:    nullStringFromPtr(tv.WorktreePath),

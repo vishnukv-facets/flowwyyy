@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func newSteeringTestCascade(t *testing.T) *Cascade {
@@ -25,7 +26,7 @@ func newSteeringTestCascade(t *testing.T) *Cascade {
 
 func openCardCount(t *testing.T, c *Cascade) int {
 	t.Helper()
-	items, err := flowdb.ListFeedItems(c.DB, "new")
+	items, err := productdb.ListFeedItems(c.DB, "new")
 	if err != nil {
 		t.Fatalf("ListFeedItems: %v", err)
 	}

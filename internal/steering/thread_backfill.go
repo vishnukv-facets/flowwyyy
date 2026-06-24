@@ -1,10 +1,11 @@
 package steering
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // BackfillFeedTaskThreadTags re-links steerer-created tasks to their source
@@ -15,7 +16,7 @@ import (
 // item that spawned a task and ensures that task carries the linkage tag derived
 // from the feed item's thread key.
 //
-// Idempotent (AddTaskTag is INSERT OR IGNORE) and deterministic — it derives the
+// Idempotent (the `flow update task --tag` CLI is INSERT OR IGNORE) and deterministic — it derives the
 // tag purely from stored feed rows, no network. Safe to run on every boot.
 // Returns the number of tasks newly tagged. A per-item failure is logged via
 // logf (when non-nil) and skipped rather than aborting the whole sweep.
@@ -23,7 +24,7 @@ func BackfillFeedTaskThreadTags(db *sql.DB, logf func(string, ...any)) (int, err
 	if db == nil {
 		return 0, nil
 	}
-	items, err := flowdb.ListFeedItems(db, "acted")
+	items, err := productdb.ListFeedItems(db, "acted")
 	if err != nil {
 		return 0, fmt.Errorf("steering: backfill list acted feed: %w", err)
 	}
@@ -39,10 +40,10 @@ func BackfillFeedTaskThreadTags(db *sql.DB, logf func(string, ...any)) (int, err
 		}
 		// Skip tasks that no longer exist (deleted) so we don't leave orphan
 		// task_tags rows. GetTask wraps sql.ErrNoRows for a missing slug.
-		if _, gerr := flowdb.GetTask(db, slug); gerr != nil {
+		if _, gerr := productdb.GetTask(db, slug); gerr != nil {
 			continue
 		}
-		existing, gerr := flowdb.GetTaskTags(db, slug)
+		existing, gerr := productdb.GetTaskTags(db, slug)
 		if gerr != nil {
 			if logf != nil {
 				logf("backfill: read tags for %s: %v", slug, gerr)
@@ -52,7 +53,9 @@ func BackfillFeedTaskThreadTags(db *sql.DB, logf func(string, ...any)) (int, err
 		if containsTag(existing, tag) {
 			continue
 		}
-		if aerr := flowdb.AddTaskTag(db, slug, tag); aerr != nil {
+		// task_tags is Bucket O — tag via `flow update task --tag` (seam §11),
+		// not a direct write. taskTagger is the package's exec helper (mockable).
+		if aerr := taskTagger(context.Background(), slug, tag); aerr != nil {
 			if logf != nil {
 				logf("backfill: tag %s on %s: %v", tag, slug, aerr)
 			}
@@ -76,7 +79,7 @@ func ReconcileOpenFeedMatches(db *sql.DB, logf func(string, ...any)) (int, error
 	if db == nil {
 		return 0, nil
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		return 0, fmt.Errorf("steering: reconcile list new feed: %w", err)
 	}
@@ -93,7 +96,7 @@ func ReconcileOpenFeedMatches(db *sql.DB, logf func(string, ...any)) (int, error
 		if !ok {
 			continue
 		}
-		if err := flowdb.SetFeedItemAction(db, item.ID, string(ActionForward), slug); err != nil {
+		if err := productdb.SetFeedItemAction(db, item.ID, string(ActionForward), slug); err != nil {
 			if logf != nil {
 				logf("reconcile: flip %s → forward(%s): %v", item.ID, slug, err)
 			}
@@ -116,7 +119,7 @@ func DismissSurfacedDropCards(db *sql.DB, logf func(string, ...any)) (int, error
 	if db == nil {
 		return 0, nil
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		return 0, fmt.Errorf("steering: sweep list new feed: %w", err)
 	}
@@ -126,7 +129,7 @@ func DismissSurfacedDropCards(db *sql.DB, logf func(string, ...any)) (int, error
 		if item.SuggestedAction != string(ActionDrop) {
 			continue
 		}
-		if err := flowdb.SetFeedItemStatus(db, item.ID, "dismissed", now); err != nil {
+		if err := productdb.SetFeedItemStatus(db, item.ID, "dismissed", now); err != nil {
 			if logf != nil {
 				logf("sweep: dismiss drop card %s: %v", item.ID, err)
 			}
@@ -142,7 +145,7 @@ func DismissSurfacedDropCards(db *sql.DB, logf func(string, ...any)) (int, error
 // Mirrors matchExistingTask's selection but keyed directly on a tag. ok=false
 // when no task carries the tag.
 func findTaskByTag(db *sql.DB, tag string) (string, bool) {
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Tag: productdb.NormalizeTag(tag), IncludeArchived: true})
 	if err != nil || len(tasks) == 0 {
 		return "", false
 	}
@@ -155,9 +158,9 @@ func findTaskByTag(db *sql.DB, tag string) (string, bool) {
 }
 
 func containsTag(tags []string, want string) bool {
-	want = flowdb.NormalizeTag(want)
+	want = productdb.NormalizeTag(want)
 	for _, t := range tags {
-		if flowdb.NormalizeTag(t) == want {
+		if productdb.NormalizeTag(t) == want {
 			return true
 		}
 	}

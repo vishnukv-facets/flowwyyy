@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func webhookTestServer(t *testing.T) (*Server, *sql.DB) {
@@ -70,7 +71,7 @@ func TestGitHubWebhookRejectsBadSignature(t *testing.T) {
 		t.Fatalf("status = %d, want 401 for bad signature", rec.Code)
 	}
 	// An unauthorized delivery must never be recorded.
-	health, _ := flowdb.GitHubWebhookHealth(db)
+	health, _ := productdb.GitHubWebhookHealth(db)
 	if health.Total != 0 {
 		t.Fatalf("bad-signature delivery recorded (Total=%d)", health.Total)
 	}
@@ -104,7 +105,7 @@ func TestGitHubWebhookAcceptsAndIsIdempotent(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("redelivery status = %d, want 202", rec.Code)
 	}
-	health, err := flowdb.GitHubWebhookHealth(db)
+	health, err := productdb.GitHubWebhookHealth(db)
 	if err != nil {
 		t.Fatalf("health: %v", err)
 	}
@@ -120,11 +121,11 @@ func TestProcessGitHubDeliveryMarksSupportedProcessed(t *testing.T) {
 	s, db := webhookTestServer(t)
 	body := []byte(`{"action":"review_requested","repository":{"full_name":"o/r"},
 		"pull_request":{"number":5,"html_url":"https://github.com/o/r/pull/5","user":{"login":"a"}}}`)
-	if _, err := flowdb.RecordGitHubDelivery(db, flowdb.GitHubDeliveryEntry{DeliveryID: "p1", EventType: "pull_request", Action: "review_requested"}); err != nil {
+	if _, err := productdb.RecordGitHubDelivery(db, productdb.GitHubDeliveryEntry{DeliveryID: "p1", EventType: "pull_request", Action: "review_requested"}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	s.processGitHubDelivery(context.Background(), "pull_request", "p1", body)
-	health, _ := flowdb.GitHubWebhookHealth(db)
+	health, _ := productdb.GitHubWebhookHealth(db)
 	if health.LastStatus != "processed" {
 		t.Fatalf("LastStatus = %q, want processed", health.LastStatus)
 	}
@@ -133,11 +134,11 @@ func TestProcessGitHubDeliveryMarksSupportedProcessed(t *testing.T) {
 func TestProcessGitHubDeliveryMarksUnsupportedIgnored(t *testing.T) {
 	s, db := webhookTestServer(t)
 	body := []byte(`{"action":"opened","repository":{"full_name":"o/r"},"pull_request":{"number":5,"user":{"login":"a"}}}`)
-	if _, err := flowdb.RecordGitHubDelivery(db, flowdb.GitHubDeliveryEntry{DeliveryID: "p2", EventType: "pull_request", Action: "opened"}); err != nil {
+	if _, err := productdb.RecordGitHubDelivery(db, productdb.GitHubDeliveryEntry{DeliveryID: "p2", EventType: "pull_request", Action: "opened"}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	s.processGitHubDelivery(context.Background(), "pull_request", "p2", body)
-	health, _ := flowdb.GitHubWebhookHealth(db)
+	health, _ := productdb.GitHubWebhookHealth(db)
 	if health.LastStatus != "ignored" {
 		t.Fatalf("LastStatus = %q, want ignored", health.LastStatus)
 	}
@@ -145,11 +146,11 @@ func TestProcessGitHubDeliveryMarksUnsupportedIgnored(t *testing.T) {
 
 func TestProcessGitHubDeliveryMarksMalformedErrored(t *testing.T) {
 	s, db := webhookTestServer(t)
-	if _, err := flowdb.RecordGitHubDelivery(db, flowdb.GitHubDeliveryEntry{DeliveryID: "p3", EventType: "pull_request", Action: ""}); err != nil {
+	if _, err := productdb.RecordGitHubDelivery(db, productdb.GitHubDeliveryEntry{DeliveryID: "p3", EventType: "pull_request", Action: ""}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	s.processGitHubDelivery(context.Background(), "pull_request", "p3", []byte(`{bad json`))
-	health, _ := flowdb.GitHubWebhookHealth(db)
+	health, _ := productdb.GitHubWebhookHealth(db)
 	if health.LastStatus != "error" || health.LastError == "" {
 		t.Fatalf("health = %+v, want status=error with message", health)
 	}
@@ -196,10 +197,10 @@ func TestGitHubWebhookStatusAwaitingThenReceiving(t *testing.T) {
 	}
 
 	// Simulate a processed delivery.
-	if _, err := flowdb.RecordGitHubDelivery(db, flowdb.GitHubDeliveryEntry{DeliveryID: "s1", EventType: "pull_request", Action: "review_requested"}); err != nil {
+	if _, err := productdb.RecordGitHubDelivery(db, productdb.GitHubDeliveryEntry{DeliveryID: "s1", EventType: "pull_request", Action: "review_requested"}); err != nil {
 		t.Fatalf("record: %v", err)
 	}
-	if err := flowdb.FinishGitHubDelivery(db, "s1", "processed", "", 1); err != nil {
+	if err := productdb.FinishGitHubDelivery(db, "s1", "processed", "", 1); err != nil {
 		t.Fatalf("finish: %v", err)
 	}
 	v = decodeWebhookStatus(t, s)

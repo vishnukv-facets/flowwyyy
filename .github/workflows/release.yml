@@ -41,10 +41,20 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: '0'
         run: |
+          # Two-binary product: the core engine (cmd/flow) and the product
+          # binary (cmd/flowwyyy, which execs the sibling `flow`). The repo root
+          # no longer has a main package, so both are built from ./cmd/...
+          # INTERIM (T15): we bundle BOTH binaries in the flowwyyy tarball
+          # because official Facets-cloud/flow does not yet ship flowwyyy's core
+          # surface (T14 upstreaming milestone). Once it does, this drops the
+          # bundled `flow` and the formula switches to `depends_on` official flow.
           go build -trimpath \
             -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
-            -o flow .
-          tar -czf "${{ matrix.asset }}.tar.gz" flow
+            -o flow ./cmd/flow
+          go build -trimpath \
+            -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o flowwyyy ./cmd/flowwyyy
+          tar -czf "${{ matrix.asset }}.tar.gz" flow flowwyyy
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}.tar.gz
@@ -123,12 +133,19 @@ jobs:
               sha256 "${AMD_SHA}"
             end
 
+            # Two binaries: the core engine \`flow\` and the product binary
+            # \`flowwyyy\`. flowwyyy resolves \`flow\` as a sibling in the same
+            # prefix bin (flowclient.Resolve). INTERIM (T15): \`flow\` is bundled
+            # here until official Facets-cloud/flow ships flowwyyy's core surface
+            # (T14); then this becomes \`depends_on "facets-cloud/flow/flow"\`.
             def install
               bin.install "flow"
+              bin.install "flowwyyy"
             end
 
             test do
               assert_match "${VERSION}", shell_output("#{bin}/flow --version")
+              assert_match "${VERSION}", shell_output("#{bin}/flowwyyy --version")
             end
           end
           EOF

@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -25,7 +25,7 @@ func (s *Server) handleWorkdirs(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	workdirs, err := flowdb.ListWorkdirs(s.cfg.DB)
+	workdirs, err := productdb.ListWorkdirs(s.cfg.DB)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -37,13 +37,13 @@ func (s *Server) handleTags(w http.ResponseWriter, r *http.Request) {
 	if !getOnly(w, r) {
 		return
 	}
-	tags, err := flowdb.ListAllTags(s.cfg.DB)
+	tags, err := productdb.ListAllTags(s.cfg.DB)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 	if tags == nil {
-		tags = []flowdb.TagCount{}
+		tags = []productdb.TagCount{}
 	}
 	writeJSON(w, tags)
 }
@@ -52,12 +52,12 @@ func (s *Server) handleWebSocketPlaceholder(w http.ResponseWriter, r *http.Reque
 	writeError(w, errors.New("websocket live updates are not implemented in this build; the UI uses live fetches and refresh"), http.StatusNotImplemented)
 }
 
-func taskFilterFromQuery(q url.Values) (flowdb.TaskFilter, error) {
-	filter := flowdb.TaskFilter{
+func taskFilterFromQuery(q url.Values) (productdb.TaskFilter, error) {
+	filter := productdb.TaskFilter{
 		Status:          q.Get("status"),
 		Project:         q.Get("project"),
 		Priority:        q.Get("priority"),
-		Tag:             flowdb.NormalizeTag(q.Get("tag")),
+		Tag:             productdb.NormalizeTag(q.Get("tag")),
 		IncludeArchived: boolQuery(q, "include_archived"),
 		IncludeDeleted:  boolQuery(q, "include_deleted"),
 		DeletedOnly:     boolQuery(q, "deleted"),

@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // forwardAutoPermitStamp computes the (calibrated confidence, trusted-source)
@@ -17,7 +17,7 @@ import (
 // the unattended wake gate; neither is used here. A nil db or a calibrator load
 // failure degrades to the raw confidence — trust, not confidence, is the gate's
 // injection-safety lever, so a missing calibration never opens an unsafe door.
-func forwardAutoPermitStamp(db *sql.DB, item flowdb.FeedItem) (confidence float64, trusted bool) {
+func forwardAutoPermitStamp(db *sql.DB, item productdb.FeedItem) (confidence float64, trusted bool) {
 	confidence = item.Confidence
 	if db != nil {
 		if cal, err := LoadConfidenceCalibrator(db); err == nil {
@@ -42,7 +42,7 @@ func forwardAutoPermitStamp(db *sql.DB, item flowdb.FeedItem) (confidence float6
 // The allowlist defaults EMPTY, so out of the box only the operator's own
 // authored content is trusted — the safe, fail-closed default. Everything else
 // (unknown senders, unlisted channels, empty author) is untrusted.
-func ForwardSourceTrusted(item flowdb.FeedItem) bool {
+func ForwardSourceTrusted(item productdb.FeedItem) bool {
 	if authorIsOperator(item) {
 		return true
 	}
@@ -51,7 +51,7 @@ func ForwardSourceTrusted(item flowdb.FeedItem) bool {
 
 // authorIsOperator reports whether the item's author is the operator's own
 // identity for the item's source (Slack self user-ids or GitHub self logins).
-func authorIsOperator(item flowdb.FeedItem) bool {
+func authorIsOperator(item productdb.FeedItem) bool {
 	author := strings.TrimSpace(item.Author)
 	if author == "" {
 		return false

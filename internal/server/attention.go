@@ -11,21 +11,21 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
 // attentionMakeTask spawns a flow task from a feed item (operator-initiated →
 // manual=true bypasses the autonomy gate) and marks the row acted+linked. It is
 // a package var so tests can stub the shell-out spawn.
-var attentionMakeTask = func(s *Server, item flowdb.FeedItem) error {
+var attentionMakeTask = func(s *Server, item productdb.FeedItem) error {
 	return steering.ApplyAction(context.Background(), s.cfg.DB, item, steering.ActionMakeTask, steering.DefaultAutonomy(), true)
 }
 
 // attentionRequestHandoff asks a matched task's agent to accept/decline
 // ownership before the feed card is resolved.
-var attentionRequestHandoff = func(s *Server, item flowdb.FeedItem) (flowdb.AttentionHandoff, error) {
+var attentionRequestHandoff = func(s *Server, item productdb.FeedItem) (productdb.AttentionHandoff, error) {
 	return steering.RequestHandoff(context.Background(), s.cfg.DB, item, "attention-router")
 }
 
@@ -64,11 +64,11 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 	if status == "all" {
 		status = ""
 	}
-	if _, err := flowdb.ExpireAttentionHandoffs(s.cfg.DB, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err := productdb.ExpireAttentionHandoffs(s.cfg.DB, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	items, err := flowdb.ListFeedItems(s.cfg.DB, status)
+	items, err := productdb.ListFeedItems(s.cfg.DB, status)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -107,7 +107,7 @@ func (s *Server) handleAttention(w http.ResponseWriter, r *http.Request) {
 // warmSlackPermalinks concurrently pre-resolves the (channel, ts) permalinks for
 // the feed rows so the per-row CachedPermalink lookups are all cache hits. Derives
 // channel/ts the same way attentionItemView does (column, else thread_key).
-func (s *Server) warmSlackPermalinks(ctx context.Context, items []flowdb.FeedItem) {
+func (s *Server) warmSlackPermalinks(ctx context.Context, items []productdb.FeedItem) {
 	if s.slackPermalinker == nil || len(items) == 0 {
 		return
 	}
@@ -152,7 +152,7 @@ func (s *Server) warmSlackNames(ctx context.Context, users, chans []string) {
 // Slack name resolver so any residual <@U…> markup renders as a name; the
 // ingest-time cleaning (Cascade.TextClean) is the primary fix for new items.
 // The resolver is nil-safe — a nil resolver leaves the text unchanged.
-func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) AttentionItemView {
+func (s *Server) attentionItemView(ctx context.Context, it productdb.FeedItem) AttentionItemView {
 	summary, reason, draft := it.Summary, it.Reason, it.Draft
 	if s.nameResolver != nil {
 		summary = s.nameResolver.CleanText(ctx, summary)
@@ -217,13 +217,13 @@ func (s *Server) attentionItemView(ctx context.Context, it flowdb.FeedItem) Atte
 	}
 	v.Why = s.attentionWhyView(ctx, it)
 	v.ActionPreviews = attentionActionPreviews(it)
-	if h, ok, err := flowdb.LatestAttentionHandoffForFeed(s.cfg.DB, it.ID); err == nil && ok {
+	if h, ok, err := productdb.LatestAttentionHandoffForFeed(s.cfg.DB, it.ID); err == nil && ok {
 		v.Handoff = attentionHandoffView(h)
 	}
 	return v
 }
 
-func attentionHandoffView(h flowdb.AttentionHandoff) *AttentionHandoffView {
+func attentionHandoffView(h productdb.AttentionHandoff) *AttentionHandoffView {
 	return &AttentionHandoffView{
 		ID:               h.ID,
 		FeedItemID:       h.FeedItemID,
@@ -238,7 +238,7 @@ func attentionHandoffView(h flowdb.AttentionHandoff) *AttentionHandoffView {
 	}
 }
 
-func (s *Server) attentionWhyView(ctx context.Context, it flowdb.FeedItem) AttentionWhyView {
+func (s *Server) attentionWhyView(ctx context.Context, it productdb.FeedItem) AttentionWhyView {
 	v := AttentionWhyView{
 		Source:            it.Source,
 		Reason:            steering.SanitizeOperatorText(it.Reason),
@@ -275,7 +275,7 @@ func (s *Server) attentionWhyView(ctx context.Context, it flowdb.FeedItem) Atten
 		v.MatchedTask = s.attentionTaskMatch(ctx, matched)
 	}
 	if s.cfg.DB != nil {
-		if tr, err := flowdb.GetSteeringTraceByFeedItem(s.cfg.DB, it.ID); err == nil {
+		if tr, err := productdb.GetSteeringTraceByFeedItem(s.cfg.DB, it.ID); err == nil {
 			v.StageReached = tr.StageReached
 			v.Stage1Relevant = tr.Stage1Relevant
 			v.StageAction, v.StageConfidence = attentionStageOutcome(tr)
@@ -289,7 +289,7 @@ func (s *Server) attentionTaskMatch(_ context.Context, slug string) *AttentionTa
 	if s.cfg.DB == nil {
 		return v
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return v
 	}
@@ -316,7 +316,7 @@ func contextEvidenceCount(pack steering.ThreadContext) int {
 	return n
 }
 
-func attentionStageOutcome(t flowdb.SteeringTrace) (string, float64) {
+func attentionStageOutcome(t productdb.SteeringTrace) (string, float64) {
 	switch {
 	case t.Stage3Action != "":
 		return t.Stage3Action, t.Stage3Confidence
@@ -329,7 +329,7 @@ func attentionStageOutcome(t flowdb.SteeringTrace) (string, float64) {
 	}
 }
 
-func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
+func attentionActionPreviews(it productdb.FeedItem) []AttentionActionPreview {
 	if it.Status != "new" {
 		return nil
 	}
@@ -425,7 +425,7 @@ func attentionActionPreviews(it flowdb.FeedItem) []AttentionActionPreview {
 	return out
 }
 
-func attentionActionPrimary(it flowdb.FeedItem, action string) bool {
+func attentionActionPrimary(it productdb.FeedItem, action string) bool {
 	got := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(it.SuggestedAction)), "-", "_")
 	want := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(action)), "-", "_")
 	return got == want
@@ -451,14 +451,14 @@ func splitThreadKey(threadKey string) (channel, ts string) {
 	return "", ""
 }
 
-var launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
-	go func(it flowdb.FeedItem) {
+var launchAttentionRetriage = func(s *Server, item productdb.FeedItem) {
+	go func(it productdb.FeedItem) {
 		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if err := s.cascade.Retriage(bctx, it); err != nil {
 			fmt.Fprintf(os.Stderr, "attention: retriage %s: %v\n", it.ID, err)
 		}
-		_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
+		_ = productdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
 		s.publishUIChange("attention")
 	}(item)
 }
@@ -467,14 +467,14 @@ var launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
 // correction. Same async shape as launchAttentionRetriage, but routes through
 // RetriageFromCorrection so the corrected verdict NEVER auto-acts (always
 // re-surfaces). The correction must already be persisted to thread memory.
-var launchAttentionCorrectionRetriage = func(s *Server, item flowdb.FeedItem) {
-	go func(it flowdb.FeedItem) {
+var launchAttentionCorrectionRetriage = func(s *Server, item productdb.FeedItem) {
+	go func(it productdb.FeedItem) {
 		bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
 		if err := s.cascade.RetriageFromCorrection(bctx, it); err != nil {
 			fmt.Fprintf(os.Stderr, "attention: correction retriage %s: %v\n", it.ID, err)
 		}
-		_ = flowdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
+		_ = productdb.SetFeedRetriaging(s.cfg.DB, it.ID, "")
 		s.publishUIChange("attention")
 	}(item)
 }
@@ -487,7 +487,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 	if id == "" {
 		return actionResponse{OK: false, Message: "attention-act requires a feed item id (target)"}, http.StatusBadRequest
 	}
-	item, err := flowdb.GetFeedItem(s.cfg.DB, id)
+	item, err := productdb.GetFeedItem(s.cfg.DB, id)
 	if err != nil {
 		return actionResponse{OK: false, Message: "feed item not found: " + id}, http.StatusNotFound
 	}
@@ -509,7 +509,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		_ = s.recordAttentionFeedback(item, "retriage", "retriaged", "")
 		// Mark in-flight server-side so the spinner + disabled state survive a page
 		// refresh and can't be double-fired; clear it when the async run finishes.
-		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, time.Now().UTC().Format(time.RFC3339))
+		_ = productdb.SetFeedRetriaging(s.cfg.DB, id, time.Now().UTC().Format(time.RFC3339))
 		s.publishUIChange("attention")
 		launchAttentionRetriage(s, item)
 		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
@@ -527,7 +527,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: "correction requires context text"}, http.StatusBadRequest
 		}
 		now := time.Now().UTC().Format(time.RFC3339)
-		if err := flowdb.AppendThreadOperatorCorrection(s.cfg.DB, item.ThreadKey, flowdb.ThreadOperatorCorrection{At: now, Text: text}); err != nil {
+		if err := productdb.AppendThreadOperatorCorrection(s.cfg.DB, item.ThreadKey, productdb.ThreadOperatorCorrection{At: now, Text: text}); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		if req.Remember {
@@ -555,7 +555,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			}
 			return actionResponse{OK: true, Message: msg}, http.StatusOK
 		}
-		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, now)
+		_ = productdb.SetFeedRetriaging(s.cfg.DB, id, now)
 		s.publishUIChange("attention")
 		launchAttentionCorrectionRetriage(s, item)
 		msg := "got it — re-reading this thread with your context"
@@ -577,7 +577,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		// KB" and the card just sits there. If the background write fails, re-surface
 		// the card so they see it wasn't captured and can retry.
 		kbDir := filepath.Join(s.cfg.FlowRoot, "kb")
-		if err := flowdb.SetFeedItemActed(s.cfg.DB, id, "", time.Now().UTC().Format(time.RFC3339)); err != nil {
+		if err := productdb.SetFeedItemActed(s.cfg.DB, id, "", time.Now().UTC().Format(time.RFC3339)); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("attention")
@@ -591,13 +591,13 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			_ = s.recordAttentionFeedback(item, "capture_kb", "captured", "")
 			return actionResponse{OK: true, Message: "handed it to this conversation's steering chat to save to your KB"}, http.StatusOK
 		}
-		go func(it flowdb.FeedItem) {
+		go func(it productdb.FeedItem) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			if err := steering.CaptureKBViaAgent(bctx, s.cfg.DB, it, kbDir); err != nil {
 				fmt.Fprintf(os.Stderr, "attention: capture-kb agent: %v\n", err)
 				// The write failed — undo the optimistic resolve so the card returns.
-				if rerr := flowdb.SetFeedItemStatus(s.cfg.DB, it.ID, "new", ""); rerr != nil {
+				if rerr := productdb.SetFeedItemStatus(s.cfg.DB, it.ID, "new", ""); rerr != nil {
 					fmt.Fprintf(os.Stderr, "attention: re-surface capture-kb card %s: %v\n", it.ID, rerr)
 				}
 				s.publishUIChange("attention")
@@ -650,7 +650,7 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			// `claude -p` (no MCP needed). Run it in the background — claude -p can
 			// outlast the UI's RPC timeout; the card flips to 'acted' once the agent
 			// confirms it posted. No visible task is spawned.
-			go func(it flowdb.FeedItem, reply, ins string) {
+			go func(it productdb.FeedItem, reply, ins string) {
 				bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 				defer cancel()
 				if err := steering.SendReplyViaAgent(bctx, s.cfg.DB, it, reply, ins); err != nil {
@@ -690,8 +690,8 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 	}
 }
 
-func (s *Server) recordAttentionFeedback(item flowdb.FeedItem, finalAction, outcome, draftAfter string) error {
-	return flowdb.RecordAttentionFeedback(s.cfg.DB, flowdb.AttentionFeedbackFromFeed(item, finalAction, outcome, draftAfter, time.Now().UTC().Format(time.RFC3339)))
+func (s *Server) recordAttentionFeedback(item productdb.FeedItem, finalAction, outcome, draftAfter string) error {
+	return productdb.RecordAttentionFeedback(s.cfg.DB, productdb.AttentionFeedbackFromFeed(item, finalAction, outcome, draftAfter, time.Now().UTC().Format(time.RFC3339)))
 }
 
 // attentionMute records a permanent suppression from a feed card and sweeps any
@@ -699,15 +699,15 @@ func (s *Server) recordAttentionFeedback(item flowdb.FeedItem, finalAction, outc
 // the card's channel, mute-sender its author, mute-thread its thread key. The
 // cascade re-reads steering_mutes per event (ConfigFn), so future matching
 // events drop at Stage 0 with no restart.
-func (s *Server) attentionMute(verb string, item flowdb.FeedItem) (actionResponse, int) {
+func (s *Server) attentionMute(verb string, item productdb.FeedItem) (actionResponse, int) {
 	var scope, value, what string
 	switch strings.ToLower(strings.TrimSpace(verb)) {
 	case "mute-channel":
-		scope, value, what = flowdb.MuteScopeChannel, item.Channel, "channel"
+		scope, value, what = productdb.MuteScopeChannel, item.Channel, "channel"
 	case "mute-sender":
-		scope, value, what = flowdb.MuteScopeAuthor, item.Author, "sender"
+		scope, value, what = productdb.MuteScopeAuthor, item.Author, "sender"
 	case "mute-thread":
-		scope, value, what = flowdb.MuteScopeThread, item.ThreadKey, "thread"
+		scope, value, what = productdb.MuteScopeThread, item.ThreadKey, "thread"
 	default:
 		return actionResponse{OK: false, Message: "unknown mute verb: " + verb}, http.StatusBadRequest
 	}
@@ -746,12 +746,12 @@ func (s *Server) handleAttentionTrace(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(strings.TrimSpace(q.Get("limit"))); err == nil && n > 0 {
 		limit = n
 	}
-	funnel, err := flowdb.SteeringFunnelSince(s.cfg.DB, since)
+	funnel, err := productdb.SteeringFunnelSince(s.cfg.DB, since)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	traces, err := flowdb.ListSteeringTrace(s.cfg.DB, flowdb.TraceFilter{Disposition: disposition, Source: source, Since: since, Limit: limit})
+	traces, err := productdb.ListSteeringTrace(s.cfg.DB, productdb.TraceFilter{Disposition: disposition, Source: source, Since: since, Limit: limit})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -789,7 +789,7 @@ func (s *Server) handleAttentionDecision(w http.ResponseWriter, r *http.Request)
 		writeError(w, fmt.Errorf("feed_id required"), http.StatusBadRequest)
 		return
 	}
-	t, err := flowdb.GetSteeringTraceByFeedItem(s.cfg.DB, feedID)
+	t, err := productdb.GetSteeringTraceByFeedItem(s.cfg.DB, feedID)
 	if err != nil {
 		writeError(w, err, http.StatusNotFound)
 		return
@@ -803,7 +803,7 @@ func (s *Server) handleAttentionDecision(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, s.steeringTraceView(r.Context(), t))
 }
 
-func steeringFunnelView(f flowdb.SteeringFunnel) SteeringFunnelView {
+func steeringFunnelView(f productdb.SteeringFunnel) SteeringFunnelView {
 	return SteeringFunnelView{
 		Observed:      f.Observed,
 		DroppedStage0: f.DroppedStage0,
@@ -815,7 +815,7 @@ func steeringFunnelView(f flowdb.SteeringFunnel) SteeringFunnelView {
 	}
 }
 
-func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) SteeringTraceView {
+func (s *Server) steeringTraceView(ctx context.Context, t productdb.SteeringTrace) SteeringTraceView {
 	v := SteeringTraceView{
 		ID: t.ID, CreatedAt: t.CreatedAt, Origin: t.Origin, Source: t.Source,
 		Channel: t.Channel, ChannelType: t.ChannelType, Author: t.Author, ThreadKey: t.ThreadKey,
@@ -827,7 +827,7 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 		TS: t.TS, TeamID: t.TeamID, URL: t.URL,
 	}
 	if strings.TrimSpace(t.FeedItemID) != "" && s.cfg.DB != nil {
-		if item, err := flowdb.GetFeedItem(s.cfg.DB, t.FeedItemID); err == nil {
+		if item, err := productdb.GetFeedItem(s.cfg.DB, t.FeedItemID); err == nil {
 			target := strings.TrimSpace(item.LinkedTask)
 			if target == "" {
 				target = strings.TrimSpace(item.MatchedTask)
@@ -886,7 +886,7 @@ func (s *Server) steeringTraceView(ctx context.Context, t flowdb.SteeringTrace) 
 
 // steeringPermalink builds a best-effort deep link to the traced message,
 // delegating to the connector-blind connectorPermalink.
-func steeringPermalink(t flowdb.SteeringTrace) string {
+func steeringPermalink(t productdb.SteeringTrace) string {
 	return connectorPermalink(t.Source, t.TeamID, t.Channel, t.TS, t.URL)
 }
 

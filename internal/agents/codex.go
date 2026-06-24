@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 const (
@@ -44,7 +42,7 @@ func CaptureCodexSessionForTaskSince(db *sql.DB, taskSlug, workDir string, start
 	if err != nil || candidate.ID == "" {
 		return "", err
 	}
-	now := flowdb.NowISO()
+	now := time.Now().Format(time.RFC3339)
 	// session_path is persisted alongside session_id so the UI tick (and
 	// any other lookup) can skip the recursive walk of ~/.codex/sessions
 	// in steady state. candidate.Path was populated by
@@ -61,7 +59,7 @@ func CaptureCodexSessionForTaskSince(db *sql.DB, taskSlug, workDir string, start
 		 WHERE slug = ?
 		   AND session_provider = 'codex'
 		   AND (session_id IS NULL OR session_id = '' OR session_id = ?)`,
-		candidate.ID, flowdb.NullIfEmpty(candidate.Path), started.Format(time.RFC3339), now, taskSlug, candidate.ID,
+		candidate.ID, nullIfEmpty(candidate.Path), started.Format(time.RFC3339), now, taskSlug, candidate.ID,
 	)
 	if err != nil {
 		return "", fmt.Errorf("update codex session_id: %w", err)
@@ -259,6 +257,17 @@ func ParseTimeLoose(raw string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// nullIfEmpty returns nil for an empty string (so it binds as SQL NULL) and the
+// string otherwise. Local twin of the former flowdb.NullIfEmpty so this package
+// stays flowdb-free (it does Codex session discovery + a narrow capture write,
+// and is linked by both the core and product binaries).
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func cleanPath(path string) string {

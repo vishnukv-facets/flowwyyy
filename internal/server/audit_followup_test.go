@@ -7,8 +7,8 @@ import (
 
 	"github.com/zalando/go-keyring"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // TestWithholdUnattendedRespawn covers the P1-1 respawn-path gate: the monitor
@@ -25,13 +25,13 @@ func TestWithholdUnattendedRespawn(t *testing.T) {
 		Event: monitor.InboundEvent{Kind: "flow_tell", ChannelType: "flow", UserID: "operator", Text: "parent says proceed"},
 		Meta:  monitor.InboxEventMeta{Source: "flow", Actionable: true},
 	}}
-	bypass := &flowdb.Task{PermissionMode: "bypass"}
-	autorun := &flowdb.Task{AutoRunStatus: sql.NullString{String: "running", Valid: true}}
-	attended := &flowdb.Task{PermissionMode: "default"}
+	bypass := &productdb.Task{PermissionMode: "bypass"}
+	autorun := &productdb.Task{AutoRunStatus: sql.NullString{String: "running", Valid: true}}
+	attended := &productdb.Task{PermissionMode: "default"}
 
 	cases := []struct {
 		name    string
-		task    *flowdb.Task
+		task    *productdb.Task
 		entries []monitor.InboxEntry
 		want    bool
 	}{

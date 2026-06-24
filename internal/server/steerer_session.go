@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 
 	"github.com/google/uuid"
@@ -114,7 +114,7 @@ func steererChatSlug(key string) string {
 // the row is authoritative for resume (the manual switch / auto-fork flips it).
 // ponytail: chats.provider is the per-key override; no separate per-key store.
 func steererSessionProvider() string {
-	if p, err := flowdb.NormalizeSessionProvider(os.Getenv("FLOW_STEERER_DEFAULT_PROVIDER")); err == nil {
+	if p, err := productdb.NormalizeSessionProvider(os.Getenv("FLOW_STEERER_DEFAULT_PROVIDER")); err == nil {
 		return p
 	}
 	return "claude"
@@ -211,7 +211,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
 
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	exists := err == nil
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("steerer session: lookup chat %q: %w", slug, err)
@@ -237,7 +237,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 			return fmt.Errorf("steerer session: deliver to live session %q: %w", slug, err)
 		}
 		s.maybeUpgradeSteererTitle(chat, p, key)
-		return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
+		return productdb.TouchChat(s.cfg.DB, slug, productdb.NowISO())
 	case steererActResume:
 		s.maybeUpgradeSteererTitle(chat, p, key)
 		turn := renderSteererTurnForProvider(p, chat.Provider)
@@ -256,7 +256,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 // overrides the chat's surface-only default for this one approved turn and tells it
 // to mark the card sent on a confirmed post (mirrors the ephemeral send session's
 // doneCmd).
-func steererSendReplyPrompt(item flowdb.FeedItem, channel, threadTS, text, instructions string) string {
+func steererSendReplyPrompt(item productdb.FeedItem, channel, threadTS, text, instructions string) string {
 	var b strings.Builder
 	b.WriteString("[operator-approved reply — SEND IT NOW]\n")
 	b.WriteString("The operator reviewed and APPROVED a reply for the thread you watch. This overrides your usual surface-only stance for THIS message only — you are authorized to post it.\n\n")
@@ -278,7 +278,7 @@ func steererSendReplyPrompt(item flowdb.FeedItem, channel, threadTS, text, instr
 // Returns handled=false (caller falls back to the ephemeral floating session) when
 // sessions are off, the source isn't Slack, or no chat exists for the channel yet.
 // Per-slug serialized like DeliverToChannelSession so it never races a live turn.
-func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructions string) (bool, error) {
+func (s *Server) postApprovedReplyViaChat(item productdb.FeedItem, text, instructions string) (bool, error) {
 	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
 		return false, nil
 	}
@@ -290,7 +290,7 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 		return false, nil
 	}
 	slug := steererChatSlug(channel)
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	if err != nil || chat == nil {
 		return false, nil // no live chat for this channel → fall back to ephemeral
 	}
@@ -319,7 +319,7 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 // canonical-num collapse the cascade applies — a linked-pair card whose chat lives
 // under the sibling's number falls back to the ephemeral agent (GetChat misses),
 // which is correct, not broken. ok=false ⇒ no derivable chat → caller falls back.
-func steererChatSlugForCard(item flowdb.FeedItem) (string, bool) {
+func steererChatSlugForCard(item productdb.FeedItem) (string, bool) {
 	switch strings.ToLower(strings.TrimSpace(item.Source)) {
 	case "github":
 		repo := strings.TrimSpace(item.Channel)
@@ -360,7 +360,7 @@ func numFromLinkTag(s string) string {
 // to save an operator-approved fact to the KB — in its own context, so the chat
 // knows it captured (instead of a stateless agent doing it invisibly). Writing
 // kb/*.md is local file work the chat does natively; no connector MCP needed.
-func steererCaptureKBPrompt(item flowdb.FeedItem, kbDir string) string {
+func steererCaptureKBPrompt(item productdb.FeedItem, kbDir string) string {
 	kbDir = strings.TrimRight(strings.TrimSpace(kbDir), "/")
 	summary := strings.TrimSpace(item.Summary)
 	if summary == "" {
@@ -385,7 +385,7 @@ func steererCaptureKBPrompt(item flowdb.FeedItem, kbDir string) string {
 // handled=false (caller falls back to the ephemeral CaptureKBViaAgent) when
 // sessions are off, no chat slug is derivable, or no chat exists for the
 // conversation. Per-slug serialized like postApprovedReplyViaChat.
-func (s *Server) captureKBViaChat(item flowdb.FeedItem, kbDir string) (bool, error) {
+func (s *Server) captureKBViaChat(item productdb.FeedItem, kbDir string) (bool, error) {
 	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
 		return false, nil
 	}
@@ -393,7 +393,7 @@ func (s *Server) captureKBViaChat(item flowdb.FeedItem, kbDir string) (bool, err
 	if !ok {
 		return false, nil
 	}
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	if err != nil || chat == nil {
 		return false, nil // no live chat for this conversation → fall back to ephemeral
 	}
@@ -428,7 +428,7 @@ func steererCorrectionPrompt(text string) string {
 // the session model the chat owns this thread's understanding. Returns handled=false
 // (caller keeps the cold correction-retriage path) when sessions are off, the source
 // isn't Slack, the chat is muted, or no chat exists. Per-slug serialized.
-func (s *Server) postCorrectionToChat(item flowdb.FeedItem, text string) (bool, error) {
+func (s *Server) postCorrectionToChat(item productdb.FeedItem, text string) (bool, error) {
 	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
 		return false, nil
 	}
@@ -440,7 +440,7 @@ func (s *Server) postCorrectionToChat(item flowdb.FeedItem, text string) (bool, 
 		return false, nil
 	}
 	slug := steererChatSlug(channel)
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	if err != nil || chat == nil || chat.MutedAt.Valid {
 		return false, nil // no chat (or muted) → fall back to stateless correction-retriage
 	}
@@ -470,7 +470,7 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, turn, title, provi
 	if err != nil {
 		return fmt.Errorf("steerer session: %w", err)
 	}
-	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
+	permissionMode, _ := productdb.NormalizePermissionMode(steererChatPermissionMode)
 	sessionID := uuid.NewString()
 	prompt := steererSessionBrief() + "\n\n---\n\n" + turn
 	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "" /*no --model*/)
@@ -494,8 +494,8 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, turn, title, provi
 		slot.state = steererSlotNone
 		return fmt.Errorf("steerer session: start %q: %w", slug, err)
 	}
-	now := flowdb.NowISO()
-	if err := flowdb.UpsertChat(s.cfg.DB, flowdb.Chat{
+	now := productdb.NowISO()
+	if err := productdb.UpsertChat(s.cfg.DB, productdb.Chat{
 		Slug:           slug,
 		Title:          title,
 		Provider:       provider,
@@ -514,13 +514,13 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, turn, title, provi
 
 // resumeSteererChat rebuilds a RESUME launch from the durable row, starts it
 // detached, then delivers the turn (mirrors resumeSlackChat).
-func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn string) error {
+func (s *Server) resumeSteererChat(slot *steererSlot, chat *productdb.Chat, turn string) error {
 	slug := chat.Slug
 	sessionID := strings.TrimSpace(chat.SessionID.String)
 	if !chat.SessionID.Valid || sessionID == "" {
 		return fmt.Errorf("steerer session: chat %q has no session to resume", slug)
 	}
-	provider, err := flowdb.NormalizeSessionProvider(chat.Provider)
+	provider, err := productdb.NormalizeSessionProvider(chat.Provider)
 	if err != nil {
 		return fmt.Errorf("steerer session: %w", err)
 	}
@@ -528,7 +528,7 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 	if err != nil {
 		return fmt.Errorf("steerer session: %w", err)
 	}
-	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
+	permissionMode, _ := productdb.NormalizePermissionMode(steererChatPermissionMode)
 	args := agentTerminalArgs(provider, false /*resume*/, sessionID, absRoot, absRoot, "", permissionMode, "")
 	launch := terminalLaunch{
 		Slug: slug, SessionID: sessionID, Provider: provider, PermissionMode: permissionMode,
@@ -550,7 +550,7 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 		return fmt.Errorf("steerer session: deliver to resumed %q: %w", slug, err)
 	}
 	slot.state = steererSlotLive
-	return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
+	return productdb.TouchChat(s.cfg.DB, slug, productdb.NowISO())
 }
 
 // steererChatTitleFallback is the placeholder title when names can't be resolved
@@ -628,7 +628,7 @@ func (s *Server) resolveSteererChatTitle(ctx context.Context, p steering.Steerer
 // maybeUpgradeSteererTitle upgrades a chat still showing the placeholder
 // "Steering: <key>" to a resolved human title once names become resolvable. Never
 // touches a custom (operator-renamed) or already-resolved title. Best-effort.
-func (s *Server) maybeUpgradeSteererTitle(chat *flowdb.Chat, p steering.SteererDelivery, key string) {
+func (s *Server) maybeUpgradeSteererTitle(chat *productdb.Chat, p steering.SteererDelivery, key string) {
 	if chat == nil || s.cfg.DB == nil || chat.Title != steererChatTitleFallback(key) {
 		return
 	}
@@ -636,7 +636,7 @@ func (s *Server) maybeUpgradeSteererTitle(chat *flowdb.Chat, p steering.SteererD
 	if title == "" || title == chat.Title {
 		return
 	}
-	if err := flowdb.SetChatTitle(s.cfg.DB, chat.Slug, title, flowdb.NowISO()); err == nil {
+	if err := productdb.SetChatTitle(s.cfg.DB, chat.Slug, title, productdb.NowISO()); err == nil {
 		s.publishUIChange("chats")
 	}
 }
@@ -653,7 +653,7 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 	if s == nil || s.cfg.DB == nil || s.terminals == nil {
 		return errors.New("steerer switch: server not ready")
 	}
-	target, err := flowdb.NormalizeSessionProvider(target)
+	target, err := productdb.NormalizeSessionProvider(target)
 	if err != nil {
 		return fmt.Errorf("steerer switch: %w", err)
 	}
@@ -661,14 +661,14 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
 
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	if err != nil {
 		return fmt.Errorf("steerer switch: lookup chat %q: %w", slug, err)
 	}
 	if chat.Origin != "steerer" {
 		return fmt.Errorf("steerer switch: chat %q is not a steerer chat", slug)
 	}
-	if current, _ := flowdb.NormalizeSessionProvider(chat.Provider); current == target {
+	if current, _ := productdb.NormalizeSessionProvider(chat.Provider); current == target {
 		return nil // already on target — idempotent
 	}
 
@@ -683,7 +683,7 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 		slot.state = steererSlotNone
 		return fmt.Errorf("steerer switch: %w", err)
 	}
-	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
+	permissionMode, _ := productdb.NormalizePermissionMode(steererChatPermissionMode)
 	// Codex assigns its own id on launch (NeedsCapture fills it); Claude pre-generates.
 	sessionID := ""
 	if target == "claude" {
@@ -702,14 +702,14 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 		slot.state = steererSlotNone
 		return fmt.Errorf("steerer switch: relaunch %q: %w", slug, err)
 	}
-	now := flowdb.NowISO()
-	if err := flowdb.SetChatProvider(s.cfg.DB, slug, target, now); err != nil {
+	now := productdb.NowISO()
+	if err := productdb.SetChatProvider(s.cfg.DB, slug, target, now); err != nil {
 		slot.state = steererSlotNone
 		return fmt.Errorf("steerer switch: %w", err)
 	}
 	// Point the row at the new session id (claude: the new uuid; codex: cleared,
 	// capture fills it post-launch).
-	if err := flowdb.SetChatSession(s.cfg.DB, slug, sessionID, now); err != nil {
+	if err := productdb.SetChatSession(s.cfg.DB, slug, sessionID, now); err != nil {
 		slot.state = steererSlotNone
 		return fmt.Errorf("steerer switch: %w", err)
 	}
@@ -778,16 +778,16 @@ func shouldRecoverToClaude(now, forkedAt time.Time, recoveryAfter time.Duration,
 // steererForkHandoffPrime renders the chat's current session transcript as priming
 // for the new provider (GAP-9 hand-off). Reuses the existing fork renderer; empty
 // when there's nothing to hand off.
-func (s *Server) steererForkHandoffPrime(chat *flowdb.Chat) string {
+func (s *Server) steererForkHandoffPrime(chat *productdb.Chat) string {
 	absRoot, err := s.absFlowRoot()
 	if err != nil {
 		return ""
 	}
-	provider, perr := flowdb.NormalizeSessionProvider(chat.Provider)
+	provider, perr := productdb.NormalizeSessionProvider(chat.Provider)
 	if perr != nil {
 		return ""
 	}
-	synth := &flowdb.Task{
+	synth := &productdb.Task{
 		Slug: chat.Slug, WorkDir: absRoot, SessionProvider: provider,
 		SessionID: chat.SessionID,
 	}
@@ -807,7 +807,7 @@ func (s *Server) sweepIdleSteererSessionsOnce(now time.Time) {
 	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
 		return
 	}
-	chats, err := flowdb.ListChats(s.cfg.DB, flowdb.ChatFilter{})
+	chats, err := productdb.ListChats(s.cfg.DB, productdb.ChatFilter{})
 	if err != nil {
 		return
 	}
@@ -823,11 +823,11 @@ func (s *Server) sweepIdleSteererSessionsOnce(now time.Time) {
 		if !ch.SessionID.Valid || strings.TrimSpace(ch.SessionID.String) == "" {
 			continue
 		}
-		provider, perr := flowdb.NormalizeSessionProvider(ch.Provider)
+		provider, perr := productdb.NormalizeSessionProvider(ch.Provider)
 		if perr != nil {
 			continue
 		}
-		path, perr := resolveSessionJSONLPath(&flowdb.Task{
+		path, perr := resolveSessionJSONLPath(&productdb.Task{
 			Slug: ch.Slug, WorkDir: absRoot, SessionProvider: provider,
 			SessionID: ch.SessionID,
 		})
@@ -879,7 +879,7 @@ func (s *Server) reconcileDeletedSteererSessions() {
 		if !s.terminals.running(slug) {
 			continue
 		}
-		if _, err := flowdb.GetChat(s.cfg.DB, slug); errors.Is(err, sql.ErrNoRows) {
+		if _, err := productdb.GetChat(s.cfg.DB, slug); errors.Is(err, sql.ErrNoRows) {
 			s.terminals.stopFloating(slug)
 			sl := s.steererSlot(slug)
 			sl.mu.Lock()

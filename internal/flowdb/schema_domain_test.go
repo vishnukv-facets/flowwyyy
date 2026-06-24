@@ -16,7 +16,7 @@ func tableExists(db *sql.DB, name string) bool {
 // the product (flowwyyy) tables. This is the invariant that lets the future
 // core `flow` binary — which never imports internal/productdb — run on a
 // core-only DB. The flowdb test binary normally has the product set registered
-// (via the external-test blank import in db_export_test.go), so this test
+// (explicitly, via the external-test init in db_export_test.go), so this test
 // temporarily clears registeredSets to simulate a core-only binary.
 func TestCoreSchemaOmitsProductTables(t *testing.T) {
 	saved := registeredSets

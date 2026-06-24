@@ -1,9 +1,8 @@
 package server
 
 import (
+	"flow/internal/productdb"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 // Autonomy is off by default — a surfaced session card must NOT auto-forward or
@@ -12,20 +11,20 @@ import (
 func TestAutoActOnSurfacedCardOffByDefault(t *testing.T) {
 	t.Setenv("FLOW_STEERING_AUTONOMY", "") // default: every action disabled
 	s, db := attentionTestServer(t)
-	cards := []flowdb.FeedItem{
+	cards := []productdb.FeedItem{
 		{ID: "fwd", Source: "slack", ThreadKey: "C1:1.1", Summary: "s", SuggestedAction: "forward", MatchedTask: "some-task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"},
 		{ID: "rep", Source: "slack", ThreadKey: "C2:1.1", Summary: "s", SuggestedAction: "reply", Draft: "hi", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"},
 	}
 	for _, c := range cards {
-		if _, err := flowdb.UpsertFeedItem(db, c); err != nil {
+		if _, err := productdb.UpsertFeedItem(db, c); err != nil {
 			t.Fatalf("seed %s: %v", c.ID, err)
 		}
-		item, err := flowdb.GetFeedItem(db, c.ID)
+		item, err := productdb.GetFeedItem(db, c.ID)
 		if err != nil {
 			t.Fatalf("get %s: %v", c.ID, err)
 		}
 		s.autoActOnSurfacedCard(item) // forward path is synchronous; reply gate denies (off)
-		got, err := flowdb.GetFeedItem(db, c.ID)
+		got, err := productdb.GetFeedItem(db, c.ID)
 		if err != nil {
 			t.Fatalf("re-get %s: %v", c.ID, err)
 		}
@@ -49,19 +48,19 @@ func TestAutoActOnSurfacedCardAutoForwardsWhenOptedIn(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "f90", Source: "slack", ThreadKey: "C1:1.1", Summary: "forward me",
 		SuggestedAction: "forward", MatchedTask: "csx-test", Confidence: 0.90,
 		Status: "new", CreatedAt: now,
 	}); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
-	item, err := flowdb.GetFeedItem(db, "f90")
+	item, err := productdb.GetFeedItem(db, "f90")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
 	s.autoActOnSurfacedCard(item)
-	got, err := flowdb.GetFeedItem(db, "f90")
+	got, err := productdb.GetFeedItem(db, "f90")
 	if err != nil {
 		t.Fatalf("re-get: %v", err)
 	}

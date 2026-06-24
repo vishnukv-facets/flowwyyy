@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // slackOpenTarget reports where new slack-reply tasks should open.
@@ -335,23 +335,35 @@ func autoResolveWaitingOn(db *sql.DB, slug, authorID string, selfIDs []string) b
 			return false // the operator's own message doesn't resolve their wait
 		}
 	}
-	cleared, err := flowdb.ClearTaskWaitingOn(db, slug)
+	// waiting_on lives on the core tasks table (flow-owned), so the clear goes
+	// through `flow` exec, not a direct write. Read the current value via
+	// productdb first so we only clear — and report a real transition — when
+	// there was actually a non-empty note (mirrors flowdb.ClearTaskWaitingOn's
+	// "RowsAffected > 0" semantics).
+	task, err := productdb.GetTask(db, slug)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "monitor: auto-resolve waiting_on %s: %v\n", slug, err)
 		return false
 	}
-	return cleared
+	if !task.WaitingOn.Valid || strings.TrimSpace(task.WaitingOn.String) == "" {
+		return false // nothing to clear
+	}
+	if err := clearFlowTaskWaiting(slug); err != nil {
+		fmt.Fprintf(os.Stderr, "monitor: auto-resolve waiting_on %s: %v\n", slug, err)
+		return false
+	}
+	return true
 }
 
 func (d *Dispatcher) findTaskByThreadKey(key string) (slug string, found bool, err error) {
 	if strings.TrimSpace(key) == "" {
 		return "", false, nil
 	}
-	tag := flowdb.NormalizeTag(SlackThreadTagPrefix + key)
+	tag := productdb.NormalizeTag(SlackThreadTagPrefix + key)
 	// IncludeArchived: an archived task still tracks its thread — route replies
 	// (incl. forwarded ones) to it rather than spawning a duplicate. Archive is
 	// an active-list declutter, not a stop-tracking signal.
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
+	tasks, err := productdb.ListTasks(d.DB, productdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}
@@ -408,7 +420,7 @@ func (d *Dispatcher) createSlackTask(ctx context.Context, decision ReactionDecis
 	return slug, nil
 }
 
-// projectChoice is a small projection of flowdb.Project — just what the
+// projectChoice is a small projection of productdb.Project — just what the
 // brief's "pick a project" section needs.
 type projectChoice struct {
 	Slug      string
@@ -418,13 +430,13 @@ type projectChoice struct {
 }
 
 // listProjectChoices reads active (non-archived, non-deleted) projects
-// from flowdb. Package-level variable so the test stub can return a
+// from productdb. Package-level variable so the test stub can return a
 // canned list without touching the DB.
 var listProjectChoices = func(db *sql.DB) ([]projectChoice, error) {
 	if db == nil {
 		return nil, nil
 	}
-	projects, err := flowdb.ListProjects(db, flowdb.ProjectFilter{IncludeArchived: false})
+	projects, err := productdb.ListProjects(db, productdb.ProjectFilter{IncludeArchived: false})
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +698,7 @@ func renderProjectPicker(slug string, projects []projectChoice) string {
 	b.WriteString("   ```\n\n")
 	b.WriteString("Do NOT skip this step or proceed to the actual Slack reply work until the project is recorded.\n\n")
 	if len(projects) == 0 {
-		b.WriteString("_No active projects found in flowdb. Ask the operator whether to leave this task as adhoc, ")
+		b.WriteString("_No active projects found in productdb. Ask the operator whether to leave this task as adhoc, ")
 		b.WriteString("or to first create a project via `flow add project \"<name>\" --work-dir <path>` and then ")
 		b.WriteString("rerun the update command above._\n")
 		return b.String()
@@ -715,7 +727,7 @@ func (d *Dispatcher) BackfillSlackTaskTitles(ctx context.Context) (int, error) {
 	if d == nil || d.DB == nil {
 		return 0, nil
 	}
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: "slack-reply"})
+	tasks, err := productdb.ListTasks(d.DB, productdb.TaskFilter{Tag: "slack-reply"})
 	if err != nil {
 		return 0, err
 	}
@@ -724,7 +736,7 @@ func (d *Dispatcher) BackfillSlackTaskTitles(ctx context.Context) (int, error) {
 		if task == nil || !isLegacySlackTaskName(task.Name) {
 			continue
 		}
-		tags, err := flowdb.GetTaskTags(d.DB, task.Slug)
+		tags, err := productdb.GetTaskTags(d.DB, task.Slug)
 		if err != nil {
 			return updated, err
 		}
@@ -740,7 +752,7 @@ func (d *Dispatcher) BackfillSlackTaskTitles(ctx context.Context) (int, error) {
 }
 
 func (d *Dispatcher) refreshSlackTaskTitleIfLegacy(ctx context.Context, slug string, decision ReactionDecision) bool {
-	task, err := flowdb.GetTask(d.DB, slug)
+	task, err := productdb.GetTask(d.DB, slug)
 	if err != nil || !isLegacySlackTaskName(task.Name) {
 		return false
 	}
@@ -750,7 +762,7 @@ func (d *Dispatcher) refreshSlackTaskTitleIfLegacy(ctx context.Context, slug str
 	}
 	res, err := d.DB.Exec(
 		`UPDATE tasks SET name = ?, updated_at = ? WHERE slug = ? AND name = ?`,
-		strings.TrimSpace(title), flowdb.NowISO(), slug, task.Name,
+		strings.TrimSpace(title), productdb.NowISO(), slug, task.Name,
 	)
 	if err != nil {
 		return false
@@ -858,13 +870,26 @@ var spawnFlowTask = func(ctx context.Context, name, slug, brief, provider, proje
 
 // tagFlowTask shells out to `flow update task <slug> --tag <tag>`. The CLI
 // is the documented surface for tagging; calling it keeps us behind one
-// public API instead of poking flowdb.AddTaskTag directly (which would
+// public API instead of poking productdb.AddTaskTag directly (which would
 // bypass any future validation that lives in the CLI layer).
 var tagFlowTask = func(ctx context.Context, slug, tag string) error {
 	cmd := exec.CommandContext(ctx, "flow", "update", "task", slug, "--tag", tag)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("flow update task --tag %s: %w (output: %s)", tag, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// clearFlowTaskWaiting shells out to `flow update task <slug> --clear-waiting`.
+// waiting_on is a column on the core tasks table (flow-owned), so the clear
+// routes through the CLI rather than a direct DB write (ownership model, seam
+// §11). Package var so tests can stub it.
+var clearFlowTaskWaiting = func(slug string) error {
+	cmd := exec.Command("flow", "update", "task", slug, "--clear-waiting")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("flow update task --clear-waiting %s: %w (output: %s)", slug, err, strings.TrimSpace(string(out)))
 	}
 	return nil
 }

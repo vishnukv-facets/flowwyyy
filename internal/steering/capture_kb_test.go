@@ -2,10 +2,9 @@ package steering
 
 import (
 	"context"
+	"flow/internal/productdb"
 	"strings"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 // stubCaptureKBRunner swaps the headless agent for a canned response and records
@@ -22,8 +21,8 @@ func stubCaptureKBRunner(t *testing.T, fn func(prompt string) (string, error)) *
 	return &seen
 }
 
-func captureKBTestItem() flowdb.FeedItem {
-	return flowdb.FeedItem{
+func captureKBTestItem() productdb.FeedItem {
+	return productdb.FeedItem{
 		ID:              "feed-kb-1",
 		Source:          "slack",
 		ThreadKey:       "D08FCPGLC8P:1781000000.1",
@@ -39,7 +38,7 @@ func captureKBTestItem() flowdb.FeedItem {
 
 func TestCaptureKBViaAgentMarksActedOnConfirm(t *testing.T) {
 	db := backfillTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, captureKBTestItem()); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, captureKBTestItem()); err != nil {
 		t.Fatalf("seed feed item: %v", err)
 	}
 	prompt := stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
@@ -61,14 +60,14 @@ func TestCaptureKBViaAgentMarksActedOnConfirm(t *testing.T) {
 		t.Errorf("prompt missing provisional plan framing: %s", *prompt)
 	}
 
-	got, err := flowdb.GetFeedItem(db, "feed-kb-1")
+	got, err := productdb.GetFeedItem(db, "feed-kb-1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
 	if got.Status != "acted" {
 		t.Errorf("status = %q, want acted after a confirmed capture", got.Status)
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -79,7 +78,7 @@ func TestCaptureKBViaAgentMarksActedOnConfirm(t *testing.T) {
 
 func TestCaptureKBViaAgentLeavesCardOnFailure(t *testing.T) {
 	db := backfillTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, captureKBTestItem()); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, captureKBTestItem()); err != nil {
 		t.Fatalf("seed feed item: %v", err)
 	}
 	// Agent could not write (no file access, etc.) → strict failure.
@@ -88,7 +87,7 @@ func TestCaptureKBViaAgentLeavesCardOnFailure(t *testing.T) {
 	if err := CaptureKBViaAgent(context.Background(), db, captureKBTestItem(), "/tmp/flow/kb"); err == nil {
 		t.Fatal("expected an error when the agent did not confirm capture")
 	}
-	got, err := flowdb.GetFeedItem(db, "feed-kb-1")
+	got, err := productdb.GetFeedItem(db, "feed-kb-1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}

@@ -6,13 +6,13 @@ import (
 	"strings"
 	"unicode"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // retrievalSearch is the seam the steerer uses to pull related context from the
-// FTS index (layer 3). It points at flowdb.SearchDocsMatch in production; tests
+// FTS index (layer 3). It points at productdb.SearchDocsMatch in production; tests
 // swap it to assert bounding/degradation without seeding a real index.
-var retrievalSearch = flowdb.SearchDocsMatch
+var retrievalSearch = productdb.SearchDocsMatch
 
 // retrievalStopwords are the high-frequency words that survive a length filter
 // but carry no retrieval signal. Kept small and inline; it mirrors the server's
@@ -83,7 +83,7 @@ func (c *Cascade) retrieveHistory(in ClassifyInput, pack ThreadContext) []Retrie
 	if expr == "" {
 		return nil
 	}
-	results, err := retrievalSearch(c.DB, expr, flowdb.DefaultSearchScopes(), limit)
+	results, err := retrievalSearch(c.DB, expr, productdb.DefaultSearchScopes(), limit)
 	if err != nil {
 		c.log("retrieval: search %q: %v", expr, err)
 		return nil

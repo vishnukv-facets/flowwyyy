@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/workevents"
 )
 
@@ -228,7 +228,7 @@ func (s *Server) askFlowChanged(ctx context.Context) (string, []AskFlowCitation,
 	}
 	lines = append(lines, eventLines...)
 	citations = append(citations, eventCitations...)
-	items, err := flowdb.ListFeedItems(s.cfg.DB, "new")
+	items, err := productdb.ListFeedItems(s.cfg.DB, "new")
 	if err != nil {
 		return "", nil, err
 	}
@@ -287,7 +287,7 @@ func askFlowWorkEventLine(ev workevents.Event) string {
 }
 
 func (s *Server) askFlowDraftReplies(ctx context.Context) (string, []AskFlowCitation, error) {
-	items, err := flowdb.ListFeedItems(s.cfg.DB, "new")
+	items, err := productdb.ListFeedItems(s.cfg.DB, "new")
 	if err != nil {
 		return "", nil, err
 	}
@@ -311,9 +311,9 @@ func (s *Server) askFlowSearch(query, intent string) (string, []AskFlowCitation,
 	if terms == "" {
 		terms = query
 	}
-	scopes := flowdb.DefaultSearchScopes()
+	scopes := productdb.DefaultSearchScopes()
 	s.syncSearchThrottled(scopes)
-	results, err := flowdb.SearchDocs(s.cfg.DB, terms, scopes, 8)
+	results, err := productdb.SearchDocs(s.cfg.DB, terms, scopes, 8)
 	if err != nil {
 		return "", nil, err
 	}
@@ -335,7 +335,7 @@ func (s *Server) askFlowSearch(query, intent string) (string, []AskFlowCitation,
 	return prefix + ":\n" + strings.Join(lines, "\n"), citations, nil
 }
 
-func (s *Server) askFlowNameMatches(q string, limit int) []flowdb.SearchResult {
+func (s *Server) askFlowNameMatches(q string, limit int) []productdb.SearchResult {
 	if limit <= 0 {
 		return nil
 	}
@@ -350,13 +350,13 @@ func (s *Server) askFlowNameMatches(q string, limit int) []flowdb.SearchResult {
 		return nil
 	}
 	defer rows.Close()
-	var out []flowdb.SearchResult
+	var out []productdb.SearchResult
 	for rows.Next() {
 		var slug, name, status, updated string
 		if err := rows.Scan(&slug, &name, &status, &updated); err != nil {
 			return out
 		}
-		out = append(out, flowdb.SearchResult{
+		out = append(out, productdb.SearchResult{
 			Type:       "task_name",
 			Scope:      "name",
 			EntityType: "task",
@@ -370,7 +370,7 @@ func (s *Server) askFlowNameMatches(q string, limit int) []flowdb.SearchResult {
 }
 
 func (s *Server) askFlowTaskViews() ([]TaskView, error) {
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{IncludeArchived: false, IncludeDeleted: false, Kind: ""})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{IncludeArchived: false, IncludeDeleted: false, Kind: ""})
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +415,7 @@ func takeTaskViews(in []TaskView, n int) []TaskView {
 	return in[:n]
 }
 
-func takeFeedItems(in []flowdb.FeedItem, n int) []flowdb.FeedItem {
+func takeFeedItems(in []productdb.FeedItem, n int) []productdb.FeedItem {
 	if len(in) <= n {
 		return in
 	}
@@ -457,7 +457,7 @@ func updateCitation(task TaskView, file FileRef) AskFlowCitation {
 	}
 }
 
-func attentionCitation(ctx context.Context, s *Server, it flowdb.FeedItem) AskFlowCitation {
+func attentionCitation(ctx context.Context, s *Server, it productdb.FeedItem) AskFlowCitation {
 	title := nonempty(it.Summary, it.ThreadKey)
 	if s != nil && s.nameResolver != nil {
 		title = s.nameResolver.CleanText(ctx, title)
@@ -533,9 +533,9 @@ func workEventCitations(ev workevents.Event) []AskFlowCitation {
 	return citations
 }
 
-func searchCitation(result flowdb.SearchResult) AskFlowCitation {
+func searchCitation(result productdb.SearchResult) AskFlowCitation {
 	typ := result.Scope
-	if result.EntityType != "" && result.Scope == string(flowdb.SearchScopeBrief) {
+	if result.EntityType != "" && result.Scope == string(productdb.SearchScopeBrief) {
 		typ = result.EntityType
 	}
 	if result.EntityType == "memory" {

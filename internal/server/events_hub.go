@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // eventHub is the in-process pub/sub fan-out for live events that the UI
@@ -49,16 +49,16 @@ type eventFilter struct {
 // publisher chose to attach (typically the hook response or a
 // liveness/reconciler snapshot).
 type eventEnvelope struct {
-	Type        string            `json:"type"`
-	Timestamp   string            `json:"timestamp"`
-	SessionID   string            `json:"session_id,omitempty"`
-	TaskSlug    string            `json:"task_slug,omitempty"`
-	Seq         int64             `json:"seq,omitempty"`
-	Data        json.RawMessage   `json:"data,omitempty"`
-	HookEvent   *eventHookData    `json:"hook,omitempty"`
-	Liveness    *eventLiveness    `json:"liveness,omitempty"`
-	Runtime     *eventRuntime     `json:"runtime,omitempty"`
-	HookHealth  *uiHookHealth     `json:"hook_health,omitempty"`
+	Type       string          `json:"type"`
+	Timestamp  string          `json:"timestamp"`
+	SessionID  string          `json:"session_id,omitempty"`
+	TaskSlug   string          `json:"task_slug,omitempty"`
+	Seq        int64           `json:"seq,omitempty"`
+	Data       json.RawMessage `json:"data,omitempty"`
+	HookEvent  *eventHookData  `json:"hook,omitempty"`
+	Liveness   *eventLiveness  `json:"liveness,omitempty"`
+	Runtime    *eventRuntime   `json:"runtime,omitempty"`
+	HookHealth *uiHookHealth   `json:"hook_health,omitempty"`
 }
 
 type eventHookData struct {
@@ -118,7 +118,7 @@ func (h *eventHub) unsubscribe(sub *eventSubscriber) {
 
 func (h *eventHub) publish(env eventEnvelope) {
 	if env.Timestamp == "" {
-		env.Timestamp = flowdb.NowISO()
+		env.Timestamp = productdb.NowISO()
 	}
 	h.mu.RLock()
 	subs := make([]*eventSubscriber, 0, len(h.subscribers))
@@ -185,7 +185,6 @@ func (s *Server) publishHookEvent(resp agentHookIngestResponse, _ map[string]any
 		},
 	})
 }
-
 
 // publishUIChange signals subscribers (notably the /api/events SSE
 // loop) that server-side state visible in the UI has changed. Callers
@@ -291,7 +290,7 @@ func (s *Server) handleEventWebSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-pingTicker.C:
-			if err := conn.WriteJSON(map[string]any{"type": "ping", "ts": flowdb.NowISO()}); err != nil {
+			if err := conn.WriteJSON(map[string]any{"type": "ping", "ts": productdb.NowISO()}); err != nil {
 				return
 			}
 		case <-readCh:

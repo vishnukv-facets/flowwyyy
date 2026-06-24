@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/ghpr"
 	"flow/internal/ghref"
 )
@@ -37,7 +37,7 @@ func linkInProgressTaskPRs(ctx context.Context, db *sql.DB) {
 	if db == nil {
 		return
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Status: "in-progress"})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Status: "in-progress"})
 	if err != nil {
 		return
 	}
@@ -49,7 +49,7 @@ func linkInProgressTaskPRs(ctx context.Context, db *sql.DB) {
 		if dir == "" {
 			continue // no isolated branch checkout — nothing reliable to link
 		}
-		tags, err := flowdb.GetTaskTags(db, t.Slug)
+		tags, err := productdb.GetTaskTags(db, t.Slug)
 		if err != nil || hasGitHubPRTag(tags) {
 			continue // already tracked
 		}
@@ -63,8 +63,8 @@ func linkInProgressTaskPRs(ctx context.Context, db *sql.DB) {
 		if !ok {
 			continue
 		}
-		_ = flowdb.AddTaskTag(db, t.Slug, tag)
-		_ = flowdb.AddTaskTag(db, t.Slug, "github")
+		_ = tagFlowTask(ctx, t.Slug, tag)
+		_ = tagFlowTask(ctx, t.Slug, "github")
 	}
 }
 
@@ -90,7 +90,7 @@ func linkInProgressIssuePRs(ctx context.Context, db *sql.DB, selfLogins []string
 	if db == nil || len(selfLogins) == 0 {
 		return
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Status: "in-progress"})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Status: "in-progress"})
 	if err != nil {
 		return
 	}
@@ -98,7 +98,7 @@ func linkInProgressIssuePRs(ctx context.Context, db *sql.DB, selfLogins []string
 		if t == nil {
 			continue
 		}
-		tags, err := flowdb.GetTaskTags(db, t.Slug)
+		tags, err := productdb.GetTaskTags(db, t.Slug)
 		if err != nil {
 			continue
 		}
@@ -117,8 +117,8 @@ func linkInProgressIssuePRs(ctx context.Context, db *sql.DB, selfLogins []string
 				// Owner/repo come from the (already lowercased) gh-issue tag, so
 				// the derived gh-pr tag is lowercase and routes via findTaskByGitHubTag.
 				prTag := fmt.Sprintf("gh-pr:%s/%s#%d", issue.Owner, issue.Repo, n)
-				_ = flowdb.AddTaskTag(db, t.Slug, prTag)
-				_ = flowdb.AddTaskTag(db, t.Slug, "github")
+				_ = tagFlowTask(ctx, t.Slug, prTag)
+				_ = tagFlowTask(ctx, t.Slug, "github")
 			}
 		}
 	}

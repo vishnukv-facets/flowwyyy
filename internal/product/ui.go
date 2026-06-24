@@ -4,11 +4,10 @@ import (
 	"errors"
 	"flag"
 	"flow/internal/agenthooks"
-	"flow/internal/app"
+	"flow/internal/cli"
 	"flow/internal/flowclient"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/server"
-	"flow/internal/workdirreg"
 	"fmt"
 	"net"
 	"os"
@@ -48,7 +47,7 @@ Serve the local Mission Control UI backed by the current flow database.`)
 }
 
 func cmdUIServe(args []string) int {
-	fs := app.FlagSet("ui serve")
+	fs := cli.FlagSet("ui serve")
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	port := fs.Int("port", 8787, "TCP port to bind")
 	bg := fs.Bool("bg", false, "run the UI server in the background")
@@ -150,24 +149,30 @@ func waitPortFree(port int, timeout time.Duration) bool {
 }
 
 func serveUI(host string, port int, noQuote bool) int {
-	root, err := app.FlowRoot()
+	root, err := cli.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	dbPath, err := app.FlowDBPath()
+	dbPath, err := cli.FlowDBPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	db, err := flowdb.OpenDB(dbPath)
+	// flowwyyy opens the shared flow.db via its OWN entry point (productdb.Open):
+	// core tables come from `flow init`, and Open layers the flowwyyy-owned
+	// Bucket-F tables (seam §11). No flowdb import.
+	db, err := productdb.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: open db: %v\n", err)
 		return 1
 	}
 	defer db.Close()
-	if _, err := workdirreg.SyncGitRemotes(db); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
+	// Seed the steerer persona lazily on serve (idempotent). In the two-binary
+	// world `flow init` runs core-side and can't reach this product hook, so
+	// flowwyyy ensures the persona here instead (seam §11.3.1, Tier D).
+	if err := seedSteererPersona(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: seed steerer persona: %v\n", err)
 	}
 
 	exe, err := os.Executable()
@@ -182,7 +187,14 @@ func serveUI(host string, port int, noQuote bool) int {
 	// executable, which is itself a flow-capable binary.
 	commandPath := FlowBin
 	if commandPath == "" {
-		commandPath = app.PreferredUIFlowBinary(exe)
+		commandPath = cli.PreferredUIFlowBinary(exe)
+	}
+	// Refresh workdir git remotes (best-effort) now that the flow binary is
+	// resolved — the product-side twin of workdirreg.SyncGitRemotes: read via
+	// productdb, detect via the flowdb-free gitremote pkg, and route the
+	// Bucket-O write through `flow workdir add` exec (seam §11).
+	if _, err := syncWorkdirGitRemotes(db, commandPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
 	}
 	hookHost := host
 	if hookHost == "0.0.0.0" || hookHost == "::" {
@@ -200,7 +212,7 @@ func serveUI(host string, port int, noQuote bool) int {
 	srv := server.New(server.Config{
 		DB:           db,
 		FlowRoot:     root,
-		Version:      app.Version,
+		Version:      Version,
 		CommandPath:  commandPath,
 		Flow:         flowclient.Client{Bin: commandPath},
 		HookURL:      hookURL,
@@ -218,7 +230,7 @@ func serveUI(host string, port int, noQuote bool) int {
 }
 
 func startUIBackground(host string, port int, noQuote bool) int {
-	root, err := app.FlowRoot()
+	root, err := cli.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -228,7 +240,7 @@ func startUIBackground(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: find executable: %v\n", err)
 		return 1
 	}
-	exe = app.PreferredUIFlowBinary(exe)
+	exe = cli.PreferredUIFlowBinary(exe)
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "error: create log dir: %v\n", err)

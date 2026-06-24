@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"sort"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // defaultCalibrationMinSamples is the minimum number of resolved outcomes in a
@@ -60,7 +60,7 @@ type CalibrationCell struct {
 // ponytail: histogram-bin calibration (observed rate per band). Isotonic/Platt
 // scaling would smooth sparse bands, but binning is the lower-risk start the brief
 // called for; revisit only if bands stay too sparse to be useful.
-func NewConfidenceCalibrator(bins []flowdb.AttentionCalibrationBin, minSamples int) *ConfidenceCalibrator {
+func NewConfidenceCalibrator(bins []productdb.AttentionCalibrationBin, minSamples int) *ConfidenceCalibrator {
 	if minSamples <= 0 {
 		minSamples = defaultCalibrationMinSamples
 	}
@@ -79,7 +79,7 @@ func NewConfidenceCalibrator(bins []flowdb.AttentionCalibrationBin, minSamples i
 // LoadConfidenceCalibrator reads the feedback bins and builds a calibrator with
 // the default min-sample floor.
 func LoadConfidenceCalibrator(db *sql.DB) (*ConfidenceCalibrator, error) {
-	bins, err := flowdb.AttentionCalibrationBins(db)
+	bins, err := productdb.AttentionCalibrationBins(db)
 	if err != nil {
 		return nil, err
 	}
@@ -96,7 +96,7 @@ func (c *ConfidenceCalibrator) Calibrate(action Action, raw float64) (float64, b
 	if c == nil {
 		return raw, false
 	}
-	cell, ok := c.cells[cellKey{action, flowdb.ConfidenceBand(raw)}]
+	cell, ok := c.cells[cellKey{action, productdb.ConfidenceBand(raw)}]
 	if !ok || cell.total < c.minSamples {
 		return raw, false
 	}

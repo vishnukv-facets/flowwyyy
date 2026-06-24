@@ -10,6 +10,7 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"fmt"
 	"io/fs"
 	"mime/multipart"
@@ -366,7 +367,7 @@ func TestTaskSessionUnattended(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			task := &flowdb.Task{PermissionMode: tc.mode}
+			task := &productdb.Task{PermissionMode: tc.mode}
 			if tc.auto != "" {
 				task.AutoRunStatus = sql.NullString{String: tc.auto, Valid: true}
 			}
@@ -664,7 +665,7 @@ func TestSearchReadsMemoryBodies(t *testing.T) {
 func TestAskFlowLookNowUsesAttentionAndTasks(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID:              "card-1",
 		Source:          "slack",
 		ThreadKey:       "C1:1710000000.000100",
@@ -1061,7 +1062,7 @@ func TestUIDataIncludesTaskDependencies(t *testing.T) {
 
 func TestEmptyTrashDestroysSoftDeletedAndKeepsReferenced(t *testing.T) {
 	root, db := testRootDB(t)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	exec := func(q string, args ...any) {
 		t.Helper()
 		if _, err := db.Exec(q, args...); err != nil {
@@ -1288,7 +1289,7 @@ func TestUIEventsStreamRefreshesTopCostOnAgentHook(t *testing.T) {
 		 WHERE slug = 'build-ui'`,
 		sessionID,
 		transcriptPath,
-		flowdb.NowISO(),
+		productdb.NowISO(),
 	); err != nil {
 		t.Fatalf("update task session: %v", err)
 	}
@@ -1430,7 +1431,7 @@ func TestToolCallActivitySeriesCodexShape(t *testing.T) {
 // "LIVE" on a task that's actually done.
 func TestBuildTaskViewDoneTaskIsNotLive(t *testing.T) {
 	root, db := testRootDB(t)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	doneSID := "11111111-1111-4111-8111-111111111111"
 	wipSID := "22222222-2222-4222-8222-222222222222"
 	if _, err := db.Exec(
@@ -1445,7 +1446,7 @@ func TestBuildTaskViewDoneTaskIsNotLive(t *testing.T) {
 	// Both tasks have a lingering matching process.
 	live := map[string]bool{doneSID: true, wipSID: true}
 
-	doneTask, err := flowdb.GetTask(db, "done-task")
+	doneTask, err := productdb.GetTask(db, "done-task")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1457,7 +1458,7 @@ func TestBuildTaskViewDoneTaskIsNotLive(t *testing.T) {
 		t.Fatal("a done task must not be marked live even with a lingering session process")
 	}
 
-	wipTask, err := flowdb.GetTask(db, "wip-task")
+	wipTask, err := productdb.GetTask(db, "wip-task")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1582,7 +1583,7 @@ func TestPauseActionStopsBrowserTerminalButKeepsTaskIdle(t *testing.T) {
 	if stillRunning {
 		t.Fatal("pause should stop the browser terminal session")
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1619,7 +1620,7 @@ func TestClearWaitingActionClearsWaitingOnAndReturnsAgent(t *testing.T) {
 	if resp.Agent.WaitingFor != nil {
 		t.Fatalf("waiting_for still present: %+v", resp.Agent.WaitingFor)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1656,7 +1657,7 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	if !strings.Contains(launch.Args[6], "flow task build-ui") {
 		t.Fatalf("bootstrap prompt = %q", launch.Args[6])
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1747,7 +1748,7 @@ func TestPrepareTerminalLaunchUsesTaskWorktree(t *testing.T) {
 	if _, err := os.Stat(wantWT); err != nil {
 		t.Fatalf("worktree dir missing: %v", err)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1759,7 +1760,7 @@ func TestPrepareTerminalLaunchUsesTaskWorktree(t *testing.T) {
 func TestPrepareTerminalLaunchRefusesBlockedTask(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := db.Exec(
 		`INSERT INTO tasks (slug, name, project_slug, status, kind, priority, work_dir, created_at, updated_at)
 		 VALUES ('parent-task', 'Parent task', 'flow', 'backlog', 'regular', 'high', ?, ?, ?)`,
@@ -1775,7 +1776,7 @@ func TestPrepareTerminalLaunchRefusesBlockedTask(t *testing.T) {
 	if _, err := srv.prepareTerminalLaunch("build-ui"); err == nil || !strings.Contains(err.Error(), `depends on "parent-task"`) {
 		t.Fatalf("prepareTerminalLaunch err = %v, want dependency blocker", err)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1814,7 +1815,7 @@ func TestPrepareTerminalLaunchResumesDoneSession(t *testing.T) {
 	if launch.Provider != "codex" || launch.SessionID != sessionID {
 		t.Fatalf("launch should resume the codex session %q: %+v", sessionID, launch)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1845,7 +1846,7 @@ func TestSpawnActionRefusesBlockedTaskBeforeProviderChoice(t *testing.T) {
 	if status != http.StatusBadRequest || resp.OK || !strings.Contains(resp.Message, "waiting on external approval") {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1885,7 +1886,7 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("switch to codex: status=%d resp=%+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1894,14 +1895,14 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	}
 
 	// Once a session has started, the provider is locked.
-	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, flowdb.NowISO(), "build-ui"); err != nil {
+	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, productdb.NowISO(), "build-ui"); err != nil {
 		t.Fatal(err)
 	}
 	resp, status = srv.runAction(actionRequest{Kind: "update-provider", Slug: "build-ui", Provider: "claude"})
 	if status != http.StatusBadRequest || resp.OK || !strings.Contains(resp.Message, "before a session starts") {
 		t.Fatalf("locked switch: status=%d resp=%+v", status, resp)
 	}
-	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+	if task, err = productdb.GetTask(db, "build-ui"); err != nil {
 		t.Fatal(err)
 	}
 	if task.SessionProvider != "codex" {
@@ -1919,7 +1920,7 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("pin opus: status=%d resp=%+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1932,7 +1933,7 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("clear model: status=%d resp=%+v", status, resp)
 	}
-	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+	if task, err = productdb.GetTask(db, "build-ui"); err != nil {
 		t.Fatal(err)
 	}
 	if task.Model.Valid && strings.TrimSpace(task.Model.String) != "" {
@@ -1943,14 +1944,14 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 	if _, status := srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: "sonnet"}); status != http.StatusOK {
 		t.Fatalf("re-pin sonnet: status=%d", status)
 	}
-	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, flowdb.NowISO(), "build-ui"); err != nil {
+	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, productdb.NowISO(), "build-ui"); err != nil {
 		t.Fatal(err)
 	}
 	resp, status = srv.runAction(actionRequest{Kind: "update-model", Slug: "build-ui", Model: "haiku"})
 	if status != http.StatusBadRequest || resp.OK || !strings.Contains(resp.Message, "before a session starts") {
 		t.Fatalf("locked change: status=%d resp=%+v", status, resp)
 	}
-	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+	if task, err = productdb.GetTask(db, "build-ui"); err != nil {
 		t.Fatal(err)
 	}
 	if task.Model.String != "sonnet" {
@@ -1966,7 +1967,31 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	root, db := testRootDB(t)
 	workDir := t.TempDir()
-	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// workdirs is Bucket O — the server delegates add/rename/remove to the
+	// `flow workdir` CLI (seam §11) rather than writing the table directly. Use a
+	// fake flow that records argv so we assert the delegated command.
+	argFile := filepath.Join(root, "workdir-args.txt")
+	flowScript := filepath.Join(root, "flow-test")
+	if err := os.WriteFile(flowScript, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > "+argFile+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: flowScript})
+
+	assertArgs := func(want string) {
+		t.Helper()
+		got, rerr := os.ReadFile(argFile)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if string(got) != want+"\n" {
+			t.Fatalf("delegated args = %q, want %q", string(got), want)
+		}
+	}
 
 	resp, status := srv.runAction(actionRequest{
 		Kind:        "workdir-add",
@@ -1977,17 +2002,7 @@ func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("add status = %d, resp = %+v", status, resp)
 	}
-	abs, err := filepath.Abs(workDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wd, err := flowdb.GetWorkdir(db, abs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wd.Name.String != "Main repo" || wd.Description.String != "Primary development checkout" {
-		t.Fatalf("workdir after add = %+v", wd)
-	}
+	assertArgs("workdir add " + abs + " --name Main repo --description Primary development checkout")
 
 	resp, status = srv.runAction(actionRequest{
 		Kind:        "workdir-rename",
@@ -1998,21 +2013,13 @@ func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("rename status = %d, resp = %+v", status, resp)
 	}
-	wd, err = flowdb.GetWorkdir(db, abs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wd.Name.String != "Renamed repo" || wd.Description.String != "Renamed description" {
-		t.Fatalf("workdir after rename = %+v", wd)
-	}
+	assertArgs("workdir add " + abs + " --name Renamed repo --description Renamed description")
 
 	resp, status = srv.runAction(actionRequest{Kind: "workdir-remove", Path: workDir})
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("remove status = %d, resp = %+v", status, resp)
 	}
-	if _, err := flowdb.GetWorkdir(db, abs); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("workdir after remove err = %v, want sql.ErrNoRows", err)
-	}
+	assertArgs("workdir remove " + abs)
 }
 
 func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
@@ -2025,7 +2032,7 @@ func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
 		t.Fatalf("active destroy status = %d, resp = %+v", status, resp)
 	}
 
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := db.Exec(`UPDATE tasks SET deleted_at = ? WHERE slug = 'build-ui'`, now); err != nil {
 		t.Fatal(err)
 	}
@@ -2050,7 +2057,7 @@ func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("trash destroy status = %d, resp = %+v", status, resp)
 	}
-	if _, err := flowdb.GetTask(db, "build-ui"); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := productdb.GetTask(db, "build-ui"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("task after destroy err = %v, want sql.ErrNoRows", err)
 	}
 	if _, err := os.Stat(taskDir); !errors.Is(err, fs.ErrNotExist) {
@@ -2071,7 +2078,7 @@ func TestDestroyTaskRemovesGitWorktree(t *testing.T) {
 	repo := initGitRepoForServerTest(t)
 	worktreePath := filepath.Join(repo, ".claude", "worktrees", "build-ui")
 	runGitTest(t, repo, "worktree", "add", "-b", "flow/build-ui", worktreePath)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := db.Exec(
 		`UPDATE tasks
 		   SET work_dir = ?, worktree_path = ?, session_provider = 'claude', deleted_at = ?
@@ -2097,7 +2104,7 @@ func TestDestroyTaskRemovesGitWorktree(t *testing.T) {
 func TestDestroyProjectWithRefsIsBlocked(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
-	if _, err := db.Exec(`UPDATE projects SET deleted_at = ? WHERE slug = 'flow'`, flowdb.NowISO()); err != nil {
+	if _, err := db.Exec(`UPDATE projects SET deleted_at = ? WHERE slug = 'flow'`, productdb.NowISO()); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
@@ -2157,7 +2164,7 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	if !strings.Contains(launch.Args[len(launch.Args)-1], "flow task build-ui") {
 		t.Fatalf("bootstrap prompt = %q", launch.Args[len(launch.Args)-1])
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2208,7 +2215,7 @@ func TestSlackTaskOpenerPreservesCodexProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2241,7 +2248,7 @@ func TestPrepareTerminalLaunchResumesCodexSession(t *testing.T) {
 	if strings.Join(launch.Args, "\x00") != strings.Join(want, "\x00") {
 		t.Fatalf("codex resume args = %#v, want %#v", launch.Args, want)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2283,7 +2290,7 @@ func TestPrepareTerminalLaunchRefusesRunningAutoRun(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "autonomous run is already running") {
 		t.Fatalf("prepareTerminalLaunch err = %v, want running auto-run blocker", err)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2373,7 +2380,7 @@ func TestCreateFlowPersistsPermissionMode(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "ui-permission")
+	task, err := productdb.GetTask(db, "ui-permission")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2398,7 +2405,7 @@ func TestCreateFlowDefaultsPermissionModeAuto(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "ui-auto-default")
+	task, err := productdb.GetTask(db, "ui-auto-default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2431,7 +2438,7 @@ func TestCreateFlowNoOpenCreatesBacklogWithoutSession(t *testing.T) {
 	if resp.Agent != nil {
 		t.Error("NoOpen create should not return an agent")
 	}
-	task, err := flowdb.GetTask(db, "ui-no-open")
+	task, err := productdb.GetTask(db, "ui-no-open")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2607,7 +2614,7 @@ func TestCreateFlowPreservesExplicitDefaultPermissionMode(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "ui-explicit-default")
+	task, err := productdb.GetTask(db, "ui-explicit-default")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2633,7 +2640,7 @@ func TestCreateFlowPersistsCodexProvider(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "ui-codex")
+	task, err := productdb.GetTask(db, "ui-codex")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2753,7 +2760,7 @@ func TestCreateFlowReactivatesDeletedArchivedTask(t *testing.T) {
 	if !strings.Contains(resp.Message, "reactivated build-ui") {
 		t.Fatalf("message = %q", resp.Message)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2793,7 +2800,7 @@ func TestCreateFlowExistingActiveTaskOpensExisting(t *testing.T) {
 	if status != http.StatusOK || !resp.OK || !resp.Bridge {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2820,7 +2827,7 @@ func TestCreateProjectCreatesProject(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	project, err := flowdb.GetProject(db, "newproj")
+	project, err := productdb.GetProject(db, "newproj")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2877,7 +2884,7 @@ func TestCreatePlaybookCreatesPlaybook(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	pb, err := flowdb.GetPlaybook(db, "daily-triage")
+	pb, err := productdb.GetPlaybook(db, "daily-triage")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2952,7 +2959,7 @@ func TestUpdatePermissionModeStoresMode(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3014,7 +3021,7 @@ func TestUpdatePermissionModeRestartsLiveBrowserTerminal(t *testing.T) {
 		t.Fatal("old browser terminal session was not terminated")
 	}
 
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3063,7 +3070,7 @@ func TestUpdatePriorityStoresPriority(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3112,7 +3119,7 @@ func TestUpdateTaskNameStoresName(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3134,7 +3141,7 @@ func TestUpdateTaskNameRejectsBlankName(t *testing.T) {
 	if status != http.StatusBadRequest || resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3157,7 +3164,7 @@ func TestUpdateProjectStoresNameAndPriority(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	project, err := flowdb.GetProject(db, "flow")
+	project, err := productdb.GetProject(db, "flow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3178,7 +3185,7 @@ func TestUpdateProjectPriorityOnly(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	project, err := flowdb.GetProject(db, "flow")
+	project, err := productdb.GetProject(db, "flow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3231,7 +3238,7 @@ func TestUpdatePlaybookStoresName(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	pb, err := flowdb.GetPlaybook(db, "daily")
+	pb, err := productdb.GetPlaybook(db, "daily")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3287,7 +3294,7 @@ func TestSpawnBacklogActionAppliesProviderChoiceBeforeSessionCreation(t *testing
 	if resp.Agent.Provider != "codex" {
 		t.Fatalf("agent provider = %q, want codex", resp.Agent.Provider)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3332,7 +3339,7 @@ func TestSpawnRunActionCreatesBrowserBridgeRun(t *testing.T) {
 	if !strings.HasPrefix(resp.Agent.Slug, "tri--") {
 		t.Fatalf("run slug = %q", resp.Agent.Slug)
 	}
-	task, err := flowdb.GetTask(db, resp.Agent.Slug)
+	task, err := productdb.GetTask(db, resp.Agent.Slug)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3388,7 +3395,7 @@ func TestProjectBriefCanBeUpdatedFromUI(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectDir, "brief.md"), []byte("# Old\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := db.Exec(
 		`INSERT INTO projects (slug, name, status, priority, work_dir, created_at, updated_at)
 		 VALUES ('ops', 'Ops', 'active', 'high', ?, ?, ?)`,
@@ -3427,7 +3434,7 @@ func TestOverviewChatPreparesFloatingLaunchWithoutTask(t *testing.T) {
 	if launch.Slug == overviewTaskSlug || !strings.HasPrefix(launch.Slug, "overview-") {
 		t.Fatalf("floating launch slug = %q", launch.Slug)
 	}
-	if launch.WorkDir != root || launch.Provider != "codex" || launch.PermissionMode != flowdb.DefaultPermissionMode {
+	if launch.WorkDir != root || launch.Provider != "codex" || launch.PermissionMode != productdb.DefaultPermissionMode {
 		t.Fatalf("floating launch = %+v", launch)
 	}
 	// Codex mints its own session id on launch (the flow-generated stub never
@@ -3452,7 +3459,7 @@ func TestOverviewChatPreparesFloatingLaunchWithoutTask(t *testing.T) {
 	if !claudeLaunch.Created || claudeLaunch.NeedsCapture {
 		t.Fatalf("claude floating launch lifecycle fields = %+v", claudeLaunch)
 	}
-	if _, err := flowdb.GetTask(db, overviewTaskSlug); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := productdb.GetTask(db, overviewTaskSlug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("overview task should not exist, err = %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, "tasks", overviewTaskSlug)); !errors.Is(err, os.ErrNotExist) {
@@ -3488,20 +3495,20 @@ func TestOverviewChatActionReturnsFloatingTerminal(t *testing.T) {
 	if !ok || !launch.FreeAgent {
 		t.Fatalf("floating launch not registered as free agent: ok=%v launch=%+v", ok, launch)
 	}
-	if _, err := flowdb.GetTask(db, overviewTaskSlug); !errors.Is(err, sql.ErrNoRows) {
+	if _, err := productdb.GetTask(db, overviewTaskSlug); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("overview task should not exist, err = %v", err)
 	}
 }
 
 func TestFloatingTerminalEnvOmitsFlowTask(t *testing.T) {
-	env := terminalEnvMap("", "", "", "overview-abc", "codex", flowdb.DefaultPermissionMode, true)
+	env := terminalEnvMap("", "", "", "overview-abc", "codex", productdb.DefaultPermissionMode, true)
 	if _, ok := env["FLOW_TASK"]; ok {
 		t.Fatalf("free agent env should not include FLOW_TASK: %+v", env)
 	}
 	if env["FLOW_FREE_AGENT"] != "1" {
 		t.Fatalf("free agent marker missing: %+v", env)
 	}
-	taskEnv := terminalEnvMap("", "", "", "build-ui", "claude", flowdb.DefaultPermissionMode, false)
+	taskEnv := terminalEnvMap("", "", "", "build-ui", "claude", productdb.DefaultPermissionMode, false)
 	if taskEnv["FLOW_TASK"] != "build-ui" || taskEnv["FLOW_FREE_AGENT"] != "" {
 		t.Fatalf("task env = %+v", taskEnv)
 	}
@@ -3532,7 +3539,7 @@ func TestPrepareTerminalLaunchResumesExistingSession(t *testing.T) {
 	if launch.Args[2] != "--permission-mode" || launch.Args[3] != "auto" {
 		t.Fatalf("default permission args on resume = %#v", launch.Args)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3561,7 +3568,7 @@ func TestRestartBrowserTerminalPreservesExistingSession(t *testing.T) {
 	if !resp.OK || !resp.Bridge {
 		t.Fatalf("expected browser bridge restart response, got %+v", resp)
 	}
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3610,7 +3617,7 @@ func TestRestartFreshBrowserTerminalClearsExistingSession(t *testing.T) {
 		t.Fatal("fresh restart should stop the stale browser terminal session")
 	}
 
-	task, err := flowdb.GetTask(db, "build-ui")
+	task, err := productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3631,7 +3638,7 @@ func TestRestartFreshBrowserTerminalClearsExistingSession(t *testing.T) {
 	if len(launch.Args) < 2 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
 		t.Fatalf("args = %#v, want fresh claude launch args", launch.Args)
 	}
-	task, err = flowdb.GetTask(db, "build-ui")
+	task, err = productdb.GetTask(db, "build-ui")
 	if err != nil {
 		t.Fatal(err)
 	}

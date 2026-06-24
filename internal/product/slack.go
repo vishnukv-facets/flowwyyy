@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/app"
+	"flow/internal/cli"
 	"flow/internal/monitor"
 )
 
@@ -38,7 +38,7 @@ var slackSendNow = time.Now
 //
 // Stubbable in tests.
 var postSlackSendFn = func(channel, threadTS, text, identity, file string, postAt int64) (status int, body string, err error) {
-	url := app.FlowServerURL("/api/slack/send")
+	url := cli.FlowServerURL("/api/slack/send")
 	payload, err := json.Marshal(slackSendPayload{
 		Channel:  channel,
 		ThreadTS: threadTS,
@@ -55,7 +55,7 @@ var postSlackSendFn = func(channel, threadTS, text, identity, file string, postA
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := app.UISessionToken(); tok != "" {
+	if tok := cli.UISessionToken(); tok != "" {
 		req.Header.Set("X-Flow-Session-Token", tok)
 	}
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -94,12 +94,12 @@ var postSlackReactFn = func(channel, ts, emoji, identity string) (status int, bo
 	if err != nil {
 		return 0, "", err
 	}
-	req, err := http.NewRequest(http.MethodPost, app.FlowServerURL("/api/slack/react"), strings.NewReader(string(payload)))
+	req, err := http.NewRequest(http.MethodPost, cli.FlowServerURL("/api/slack/react"), strings.NewReader(string(payload)))
 	if err != nil {
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := app.UISessionToken(); tok != "" {
+	if tok := cli.UISessionToken(); tok != "" {
 		req.Header.Set("X-Flow-Session-Token", tok)
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
@@ -133,7 +133,7 @@ func cmdSlack(args []string) int {
 // Routes through the running server (fresh token) and falls back to the
 // in-process path when the server is unreachable, mirroring `flow slack send`.
 func cmdSlackReact(args []string) int {
-	fs := app.FlagSet("slack react")
+	fs := cli.FlagSet("slack react")
 	channel := fs.String("channel", "", "Slack channel/DM id of the message")
 	ts := fs.String("ts", "", "timestamp of the message to react to")
 	emoji := fs.String("emoji", "+1", "emoji short name without colons (default +1 — thumbs up)")
@@ -177,7 +177,7 @@ func cmdSlackReact(args []string) int {
 }
 
 func cmdSlackSend(args []string) int {
-	fs := app.FlagSet("slack send")
+	fs := cli.FlagSet("slack send")
 	channel := fs.String("channel", "", "Slack channel/DM id to post to")
 	threadTS := fs.String("thread-ts", "", "Slack thread timestamp to reply into")
 	text := fs.String("text", "", "message body (or, with --file, the attachment's initial comment)")

@@ -5,8 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"fmt"
 	"io"
 	"io/fs"
@@ -37,7 +37,7 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err, http.StatusBadRequest)
 		return
 	}
-	tasks, err := flowdb.ListTasks(s.cfg.DB, filter)
+	tasks, err := productdb.ListTasks(s.cfg.DB, filter)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -61,15 +61,15 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := parts[0]
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		// Chats are task-less but share the /attachments upload path (the same
 		// floating terminal hosts both). Resolve the slug as a chat so image
 		// attach works in chat windows; synthesize a minimal task carrying just
 		// the slug + provider, which is all the attachment path needs.
 		if errors.Is(err, sql.ErrNoRows) && len(parts) == 2 && parts[1] == "attachments" {
-			if chat, cerr := flowdb.GetChat(s.cfg.DB, slug); cerr == nil {
-				s.handleTaskAttachments(w, r, &flowdb.Task{Slug: chat.Slug, SessionProvider: chat.Provider})
+			if chat, cerr := productdb.GetChat(s.cfg.DB, slug); cerr == nil {
+				s.handleTaskAttachments(w, r, &productdb.Task{Slug: chat.Slug, SessionProvider: chat.Provider})
 				return
 			}
 		}
@@ -142,7 +142,7 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, task *flowdb.Task) {
+func (s *Server) handleTaskAttachments(w http.ResponseWriter, r *http.Request, task *productdb.Task) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -444,7 +444,7 @@ func (s *Server) handleTaskAutoRunLog(w http.ResponseWriter, r *http.Request, sl
 	writeJSON(w, autoRunLogResponse{Content: string(data), Truncated: truncated})
 }
 
-func (s *Server) handleTaskTranscript(w http.ResponseWriter, task *flowdb.Task) {
+func (s *Server) handleTaskTranscript(w http.ResponseWriter, task *productdb.Task) {
 	path, err := sessionJSONLPath(s.cfg.DB, task)
 	if err != nil {
 		writeJSON(w, TranscriptResponse{Available: false, Message: err.Error(), Entries: []TranscriptEntry{}})

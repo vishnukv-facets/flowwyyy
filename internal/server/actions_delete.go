@@ -3,7 +3,6 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
 	"net/http"
@@ -254,7 +253,7 @@ func (s *Server) workdirAction(req actionRequest) (actionResponse, int) {
 		if req.Kind == "workdir-rename" && name == "" {
 			return actionResponse{OK: false, Message: "workdir name is required"}, http.StatusBadRequest
 		}
-		if err := workdirreg.Register(s.cfg.DB, abs, name, description); err != nil {
+		if err := s.registerWorkdir(abs, name, description); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		verb := "registered"
@@ -263,7 +262,7 @@ func (s *Server) workdirAction(req actionRequest) (actionResponse, int) {
 		}
 		return actionResponse{OK: true, Message: verb + " workdir " + abs}, http.StatusOK
 	case "workdir-remove":
-		if _, err := s.cfg.DB.Exec(`DELETE FROM workdirs WHERE path = ?`, abs); err != nil {
+		if err := s.removeWorkdir(abs); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "removed workdir " + abs}, http.StatusOK

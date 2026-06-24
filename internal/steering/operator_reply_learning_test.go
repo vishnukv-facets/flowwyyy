@@ -4,22 +4,22 @@ import (
 	"context"
 	"testing"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // seedTriagedThread gives a thread prior decision state AND a surfaced card, so
 // the learning gate passes and a calibration signal can reference the card.
 func seedTriagedThread(t *testing.T, c *Cascade, threadKey, channel, suggested string, conf float64) {
 	t.Helper()
-	if _, _, err := flowdb.UpsertFeedItemSurfaced(c.DB, flowdb.FeedItem{
+	if _, _, err := productdb.UpsertFeedItemSurfaced(c.DB, productdb.FeedItem{
 		ID: "card-" + threadKey, Source: "slack", ThreadKey: threadKey, Channel: channel,
 		ChannelType: "channel", SuggestedAction: suggested, Confidence: conf, MatchedTask: "task-x",
 		Status: "new", CreatedAt: "2026-06-12T06:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed feed card: %v", err)
 	}
-	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
+	if err := productdb.RecordThreadDecision(c.DB, productdb.ThreadDecision{
 		ThreadKey: threadKey, Source: "slack", Action: suggested, Confidence: conf,
 		Reason: "prior card", At: "2026-06-12T06:00:00Z",
 	}); err != nil {
@@ -46,7 +46,7 @@ func TestOperatorReplyLearnsOnStatefulThread(t *testing.T) {
 	ev := operatorReplyEvent("C1", "1.1", "9.9", "We've decided to standardize on us-east-1 for all prod envs.")
 	c.learnFromOperatorReply(context.Background(), ev, "live")
 
-	s, ok, err := flowdb.GetThreadState(c.DB, "C1:1.1")
+	s, ok, err := productdb.GetThreadState(c.DB, "C1:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}
@@ -57,19 +57,19 @@ func TestOperatorReplyLearnsOnStatefulThread(t *testing.T) {
 		s.OperatorActions[0].Outcome != "handled" || s.OperatorActions[0].LinkedTask != "task-x" {
 		t.Errorf("OperatorActions = %+v, want one operator_reply/handled linked to task-x", s.OperatorActions)
 	}
-	card, err := flowdb.GetFeedItem(c.DB, "card-C1:1.1")
+	card, err := productdb.GetFeedItem(c.DB, "card-C1:1.1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
 	if card.Status != "acted" {
 		t.Errorf("card status = %q, want acted (operator handled it)", card.Status)
 	}
-	fb, err := flowdb.ListAttentionFeedback(c.DB, flowdb.AttentionFeedbackFilter{})
+	fb, err := productdb.ListAttentionFeedback(c.DB, productdb.AttentionFeedbackFilter{})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
 	if len(fb) != 1 || fb[0].SuggestedAction != "reply" || fb[0].FinalAction != "operator_reply" ||
-		fb[0].Outcome != flowdb.OutcomeOperatorHandled {
+		fb[0].Outcome != productdb.OutcomeOperatorHandled {
 		t.Fatalf("feedback = %+v, want one calibration row (reply→operator_reply/operator_handled)", fb)
 	}
 	if *prompt == "" {
@@ -87,10 +87,10 @@ func TestOperatorReplyDroppedOnNewThread(t *testing.T) {
 	ev := operatorReplyEvent("C9", "1.1", "1.1", "Some long message that would otherwise be substantive enough.")
 	c.learnFromOperatorReply(context.Background(), ev, "live")
 
-	if _, ok, err := flowdb.GetThreadState(c.DB, "C9:1.1"); err != nil || ok {
+	if _, ok, err := productdb.GetThreadState(c.DB, "C9:1.1"); err != nil || ok {
 		t.Errorf("thread state created for an untriaged thread (ok=%v err=%v) — firehose regression", ok, err)
 	}
-	fb, _ := flowdb.ListAttentionFeedback(c.DB, flowdb.AttentionFeedbackFilter{})
+	fb, _ := productdb.ListAttentionFeedback(c.DB, productdb.AttentionFeedbackFilter{})
 	if len(fb) != 0 {
 		t.Errorf("feedback rows = %d, want 0 for an untriaged thread", len(fb))
 	}
@@ -113,7 +113,7 @@ func TestOperatorReplyNoKBCaptureOnBackfill(t *testing.T) {
 	if *prompt != "" {
 		t.Error("KB capture invoked on backfill origin")
 	}
-	s, _, _ := flowdb.GetThreadState(c.DB, "C1:2.2")
+	s, _, _ := productdb.GetThreadState(c.DB, "C1:2.2")
 	if len(s.OperatorReplies) != 1 {
 		t.Errorf("OperatorReplies = %+v, want the reply still recorded on backfill", s.OperatorReplies)
 	}
@@ -129,14 +129,14 @@ func TestOperatorReplyDedupSameTS(t *testing.T) {
 	c.learnFromOperatorReply(context.Background(), ev, "backfill")
 	c.learnFromOperatorReply(context.Background(), ev, "backfill")
 
-	s, _, _ := flowdb.GetThreadState(c.DB, "C1:3.3")
+	s, _, _ := productdb.GetThreadState(c.DB, "C1:3.3")
 	if len(s.OperatorReplies) != 1 {
 		t.Errorf("OperatorReplies = %d, want 1 after a duplicate replay", len(s.OperatorReplies))
 	}
 	if len(s.OperatorActions) != 1 {
 		t.Errorf("OperatorActions = %d, want 1 after a duplicate replay", len(s.OperatorActions))
 	}
-	fb, _ := flowdb.ListAttentionFeedback(c.DB, flowdb.AttentionFeedbackFilter{})
+	fb, _ := productdb.ListAttentionFeedback(c.DB, productdb.AttentionFeedbackFilter{})
 	if len(fb) != 1 {
 		t.Errorf("feedback rows = %d, want 1 after a duplicate replay", len(fb))
 	}
@@ -151,7 +151,7 @@ func TestOperatorReplyNoChannelRecoveryInRegularChannel(t *testing.T) {
 	ev := operatorReplyEvent("C1", "9.9", "9.9", "Unrelated message in the same channel, a different thread.")
 	c.learnFromOperatorReply(context.Background(), ev, "live")
 
-	card, _ := flowdb.GetFeedItem(c.DB, "card-C1:1.1")
+	card, _ := productdb.GetFeedItem(c.DB, "card-C1:1.1")
 	if card.Status != "new" {
 		t.Errorf("card status = %q, want new — a regular-channel reply must not recover/resolve a different thread's card", card.Status)
 	}
@@ -170,19 +170,19 @@ func TestAgentSentReplyEchoNotRelearned(t *testing.T) {
 	// The agent posted this reply moments ago (recorded as a send_reply feedback row
 	// with the draft text), within the echo window of the cascade's fixed clock.
 	sent := "Thanks for the ping — the migration is scheduled for Friday."
-	agentRow := flowdb.AttentionFeedback{
+	agentRow := productdb.AttentionFeedback{
 		ID: "sent-1", FeedItemID: "card-C1:4.4", Source: "slack", Channel: "C1", ThreadType: "channel",
 		ThreadKey: "C1:4.4", SuggestedAction: "reply", FinalAction: "send_reply", Outcome: "approved",
 		Confidence: 0.6, DraftAfter: sent, CreatedAt: "2026-06-12T06:30:00Z",
 	}
-	if err := flowdb.RecordAttentionFeedback(c.DB, agentRow); err != nil {
+	if err := productdb.RecordAttentionFeedback(c.DB, agentRow); err != nil {
 		t.Fatalf("seed agent send_reply row: %v", err)
 	}
 
 	ev := operatorReplyEvent("C1", "4.4", "9.9", sent) // same text echoes back
 	c.learnFromOperatorReply(context.Background(), ev, "live")
 
-	s, _, _ := flowdb.GetThreadState(c.DB, "C1:4.4")
+	s, _, _ := productdb.GetThreadState(c.DB, "C1:4.4")
 	if len(s.OperatorReplies) != 0 {
 		t.Errorf("OperatorReplies = %+v, want 0 — agent echo must not be recorded as an operator reply", s.OperatorReplies)
 	}
@@ -191,9 +191,9 @@ func TestAgentSentReplyEchoNotRelearned(t *testing.T) {
 			t.Errorf("recorded an operator_reply action for an agent-sent echo: %+v", s.OperatorActions)
 		}
 	}
-	fb, _ := flowdb.ListAttentionFeedback(c.DB, flowdb.AttentionFeedbackFilter{})
+	fb, _ := productdb.ListAttentionFeedback(c.DB, productdb.AttentionFeedbackFilter{})
 	for _, row := range fb {
-		if row.Outcome == flowdb.OutcomeOperatorHandled {
+		if row.Outcome == productdb.OutcomeOperatorHandled {
 			t.Errorf("emitted an operator_handled calibration row for an agent echo: %+v", row)
 		}
 	}
@@ -201,7 +201,7 @@ func TestAgentSentReplyEchoNotRelearned(t *testing.T) {
 		t.Error("KB capture invoked for an agent-sent echo")
 	}
 	// The card is still resolved (the send path or this stand-down handles it).
-	card, _ := flowdb.GetFeedItem(c.DB, "card-C1:4.4")
+	card, _ := productdb.GetFeedItem(c.DB, "card-C1:4.4")
 	if card.Status != "acted" {
 		t.Errorf("card status = %q, want acted", card.Status)
 	}

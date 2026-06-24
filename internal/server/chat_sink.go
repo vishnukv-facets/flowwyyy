@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 
 	"github.com/google/uuid"
 )
@@ -51,7 +51,7 @@ func (s *Server) OpenOrContinueChat(ctx context.Context, channel, text string) e
 	// No server-side ack: the acknowledgment ("on it") is the agent's own first
 	// action, per slackReplyInstructions, so the operator hears from the agent
 	// that's actually doing the work — not a canned server reply.
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return s.openNewSlackChat(slug, channel, text)
@@ -64,7 +64,7 @@ func (s *Server) OpenOrContinueChat(ctx context.Context, channel, text string) e
 		if err := s.terminals.wakeTask(slug, text); err != nil {
 			return fmt.Errorf("chat sink: deliver to live chat %q: %w", slug, err)
 		}
-		if err := flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+		if err := productdb.TouchChat(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 			return fmt.Errorf("chat sink: touch chat %q: %w", slug, err)
 		}
 		return nil
@@ -82,7 +82,7 @@ func (s *Server) openNewSlackChat(slug, channel, text string) error {
 		return fmt.Errorf("chat sink: %w", err)
 	}
 	provider := slackCommandProvider()
-	permissionMode, _ := flowdb.NormalizePermissionMode(slackChatPermissionMode)
+	permissionMode, _ := productdb.NormalizePermissionMode(slackChatPermissionMode)
 	sessionID := uuid.NewString()
 	brief := overviewBrief(text) + slackReplyInstructions(channel)
 	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, brief, permissionMode, "")
@@ -106,12 +106,12 @@ func (s *Server) openNewSlackChat(slug, channel, text string) error {
 		s.terminals.stopFloating(ft.ID)
 		return fmt.Errorf("chat sink: start chat session %q: %w", slug, err)
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	// UpsertChat (not InsertChat): the slug is deterministic per IM channel, so a
 	// previously deleted chat for this channel leaves a soft-deleted tombstone
 	// under the same slug. Resurrect it into this fresh chat (new session id,
 	// deleted_at cleared) instead of failing on the primary-key conflict.
-	if err := flowdb.UpsertChat(s.cfg.DB, flowdb.Chat{
+	if err := productdb.UpsertChat(s.cfg.DB, productdb.Chat{
 		Slug:           slug,
 		Title:          title,
 		Provider:       provider,
@@ -131,14 +131,14 @@ func (s *Server) openNewSlackChat(slug, channel, text string) error {
 // resumeSlackChat rebuilds a RESUME launch from a durable chat row, starts it
 // detached, then delivers the new command into the resumed session. Mirrors the
 // resume path in reopenChat (agentTerminalArgs fresh=false → `--resume <sid>`).
-func (s *Server) resumeSlackChat(chat *flowdb.Chat, channel, text string) error {
+func (s *Server) resumeSlackChat(chat *productdb.Chat, channel, text string) error {
 	_ = channel
 	slug := chat.Slug
 	sessionID := strings.TrimSpace(chat.SessionID.String)
 	if !chat.SessionID.Valid || sessionID == "" {
 		return fmt.Errorf("chat sink: chat %q has no session to resume", slug)
 	}
-	provider, err := flowdb.NormalizeSessionProvider(chat.Provider)
+	provider, err := productdb.NormalizeSessionProvider(chat.Provider)
 	if err != nil {
 		return fmt.Errorf("chat sink: %w", err)
 	}
@@ -146,7 +146,7 @@ func (s *Server) resumeSlackChat(chat *flowdb.Chat, channel, text string) error 
 	if err != nil {
 		return fmt.Errorf("chat sink: %w", err)
 	}
-	permissionMode, _ := flowdb.NormalizePermissionMode(slackChatPermissionMode)
+	permissionMode, _ := productdb.NormalizePermissionMode(slackChatPermissionMode)
 	// fresh=false → RESUME args; empty prompt (resume carries none — the command
 	// is delivered as a separate nudge once the session is live).
 	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "")
@@ -168,7 +168,7 @@ func (s *Server) resumeSlackChat(chat *flowdb.Chat, channel, text string) error 
 	if err := s.terminals.wakeTask(slug, text); err != nil {
 		return fmt.Errorf("chat sink: deliver to resumed chat %q: %w", slug, err)
 	}
-	if err := flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+	if err := productdb.TouchChat(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 		return fmt.Errorf("chat sink: touch chat %q: %w", slug, err)
 	}
 	return nil
@@ -264,7 +264,7 @@ func slackReplyInstructions(channel string) string {
 // chats from FLOW_SLACK_COMMAND_PROVIDER (claude|codex), defaulting to claude.
 // An unrecognized value falls back to claude rather than failing the DM.
 func slackCommandProvider() string {
-	provider, err := flowdb.NormalizeSessionProvider(os.Getenv("FLOW_SLACK_COMMAND_PROVIDER"))
+	provider, err := productdb.NormalizeSessionProvider(os.Getenv("FLOW_SLACK_COMMAND_PROVIDER"))
 	if err != nil {
 		return "claude"
 	}

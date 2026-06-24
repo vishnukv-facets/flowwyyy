@@ -12,7 +12,6 @@ import (
 	"os"
 	"time"
 
-	"flow/internal/app"
 	"flow/internal/flowclient"
 	"flow/internal/product"
 )
@@ -23,7 +22,7 @@ var version = "dev"
 func main() {
 	// Product commands (ui serve) stamp this into Mission Control's version
 	// display, so the product binary's version is what the UI shows.
-	app.Version = version
+	product.Version = version
 
 	bin, err := flowclient.Resolve()
 	if err != nil {

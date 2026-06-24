@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func postJSONTo(t *testing.T, h http.HandlerFunc, path string, body any) *httptest.ResponseRecorder {
@@ -55,7 +56,7 @@ func TestSlackSendExternalGate(t *testing.T) {
 	if len(sent) != 0 {
 		t.Fatalf("external send must NOT post directly; sent=%v", sent)
 	}
-	pending, _ := flowdb.ListPendingSends(db, "pending")
+	pending, _ := productdb.ListPendingSends(db, "pending")
 	if len(pending) != 1 || pending[0].Channel != "C_EXT" || pending[0].Text != "hi partner" {
 		t.Fatalf("expected one pending external send; got %+v", pending)
 	}
@@ -82,7 +83,7 @@ func TestSlackSendExternalGate(t *testing.T) {
 	if len(sent) != 2 || sent[1] != "C_EXT|hi partner" {
 		t.Fatalf("approval must post the parked message; sent=%v", sent)
 	}
-	if rest, _ := flowdb.ListPendingSends(db, "pending"); len(rest) != 0 {
+	if rest, _ := productdb.ListPendingSends(db, "pending"); len(rest) != 0 {
 		t.Fatalf("approved send should leave the pending queue; got %d", len(rest))
 	}
 }

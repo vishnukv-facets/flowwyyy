@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // captureKBRunner runs a hidden `claude -p` session that distills an
@@ -46,7 +46,7 @@ func CaptureKBModel() string {
 // and reports CAPTURED. On a confirmed capture the feed item is marked acted; on
 // anything else the card stays 'new' so the operator sees it wasn't captured and
 // can retry — never a silent false "captured". Mirrors SendReplyViaAgent.
-func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kbDir string) error {
+func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item productdb.FeedItem, kbDir string) error {
 	if err := captureKBEffect(ctx, db, item, kbDir); err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func CaptureKBViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kb
 // can't inflate the calibrator it gated on). On anything but a confirmed capture
 // it returns an error and leaves the card 'new', so the operator sees it wasn't
 // captured and can retry — never a silent false "captured".
-func captureKBEffect(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kbDir string) error {
+func captureKBEffect(ctx context.Context, db *sql.DB, item productdb.FeedItem, kbDir string) error {
 	if strings.TrimSpace(kbDir) == "" {
 		return fmt.Errorf("steering: capture-kb requires a kb directory")
 	}
@@ -74,7 +74,7 @@ func captureKBEffect(ctx context.Context, db *sql.DB, item flowdb.FeedItem, kbDi
 	if !captureConfirmed(trimmed) {
 		return fmt.Errorf("steering: capture-kb not confirmed (agent said: %s)", truncate(trimmed, 200))
 	}
-	return flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
+	return productdb.SetFeedItemActed(db, item.ID, "", nowRFC3339())
 }
 
 // captureConfirmed reports whether the agent explicitly confirmed a KB write. We
@@ -91,7 +91,7 @@ func captureConfirmed(out string) bool {
 	return strings.Contains(up, "CAPTURED")
 }
 
-func captureKBPrompt(item flowdb.FeedItem, kbDir string) string {
+func captureKBPrompt(item productdb.FeedItem, kbDir string) string {
 	kbDir = strings.TrimRight(strings.TrimSpace(kbDir), "/")
 	summary := strings.TrimSpace(item.Summary)
 	if summary == "" {

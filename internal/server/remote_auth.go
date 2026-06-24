@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 const (
@@ -92,7 +92,7 @@ const remoteFlagHeader = "X-Flow-Remote"
 // ?token= query — the same transport the browser uses for the session token),
 // hashes it, looks up the device, and accepts it only when the row exists, is
 // not revoked, and has not expired. Best-effort last-seen touch. Fails closed.
-func (s *Server) validRemoteDeviceToken(r *http.Request) (*flowdb.RemoteDevice, bool) {
+func (s *Server) validRemoteDeviceToken(r *http.Request) (*productdb.RemoteDevice, bool) {
 	if s == nil || s.cfg.DB == nil {
 		return nil, false
 	}
@@ -103,7 +103,7 @@ func (s *Server) validRemoteDeviceToken(r *http.Request) (*flowdb.RemoteDevice, 
 	if got == "" {
 		return nil, false
 	}
-	dev, err := flowdb.GetRemoteDeviceByTokenHash(s.cfg.DB, hashRemoteToken(got))
+	dev, err := productdb.GetRemoteDeviceByTokenHash(s.cfg.DB, hashRemoteToken(got))
 	if err != nil || dev == nil {
 		return nil, false
 	}
@@ -114,7 +114,7 @@ func (s *Server) validRemoteDeviceToken(r *http.Request) (*flowdb.RemoteDevice, 
 	if err != nil || time.Now().After(exp) {
 		return nil, false
 	}
-	_ = flowdb.TouchRemoteDeviceLastSeen(s.cfg.DB, dev.ID, flowdb.NowISO())
+	_ = productdb.TouchRemoteDeviceLastSeen(s.cfg.DB, dev.ID, productdb.NowISO())
 	return dev, true
 }
 

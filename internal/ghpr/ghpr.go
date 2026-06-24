@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"flow/internal/ghref"
-	"flow/internal/workdirreg"
+	"flow/internal/gitremote"
 )
 
 // OpenURLForBranch returns the URL of the open PR whose head is dir's current
@@ -26,9 +26,9 @@ import (
 // though the PR exists on the fork. Listing by head against the origin repo
 // avoids that guess. Worktree-safe because the remote and branch are both read
 // from dir — for a task that is its dedicated worktree checkout, whose `.git`
-// is a pointer file (see workdirreg.DetectGitRemote).
+// is a pointer file (see gitremote.DetectGitRemote).
 func OpenURLForBranch(ctx context.Context, dir string) (string, error) {
-	repo, ok := ghref.RepoFromRemote(workdirreg.DetectGitRemote(dir))
+	repo, ok := ghref.RepoFromRemote(gitremote.DetectGitRemote(dir))
 	if !ok || repo == "" {
 		return "", nil
 	}

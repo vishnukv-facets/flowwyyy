@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func nullStr(s string) sql.NullString {
@@ -20,20 +21,20 @@ func nullStr(s string) sql.NullString {
 func TestTaskNeedsMonitor(t *testing.T) {
 	cases := []struct {
 		name string
-		task *flowdb.Task
+		task *productdb.Task
 		tags []string
 		want bool
 	}{
-		{"slack-reply backlog", &flowdb.Task{Status: "backlog"}, []string{"slack-reply"}, true},
-		{"gh-pr in-progress", &flowdb.Task{Status: "in-progress"}, []string{"gh-pr:o/r#1"}, true},
-		{"gh-issue backlog", &flowdb.Task{Status: "backlog"}, []string{"gh-issue:o/r#9"}, true},
-		{"slack-thread in-progress", &flowdb.Task{Status: "in-progress"}, []string{"slack-thread:C1:123.45"}, true},
-		{"worktree but no origin tag", &flowdb.Task{Status: "backlog", WorktreePath: nullStr("/tmp/wt")}, nil, false},
-		{"worktree + plain slack label only", &flowdb.Task{Status: "in-progress", WorktreePath: nullStr("/tmp/wt")}, []string{"bugfix", "cli", "slack"}, false},
-		{"no origin no worktree", &flowdb.Task{Status: "backlog"}, []string{"ui", "p1"}, false},
-		{"gh-pr but done", &flowdb.Task{Status: "done"}, []string{"gh-pr:o/r#1"}, false},
-		{"gh-pr but archived", &flowdb.Task{Status: "backlog", ArchivedAt: nullStr("2026-05-01T00:00:00Z")}, []string{"gh-pr:o/r#1"}, false},
-		{"gh-pr but deleted", &flowdb.Task{Status: "backlog", DeletedAt: nullStr("2026-05-01T00:00:00Z")}, []string{"gh-pr:o/r#1"}, false},
+		{"slack-reply backlog", &productdb.Task{Status: "backlog"}, []string{"slack-reply"}, true},
+		{"gh-pr in-progress", &productdb.Task{Status: "in-progress"}, []string{"gh-pr:o/r#1"}, true},
+		{"gh-issue backlog", &productdb.Task{Status: "backlog"}, []string{"gh-issue:o/r#9"}, true},
+		{"slack-thread in-progress", &productdb.Task{Status: "in-progress"}, []string{"slack-thread:C1:123.45"}, true},
+		{"worktree but no origin tag", &productdb.Task{Status: "backlog", WorktreePath: nullStr("/tmp/wt")}, nil, false},
+		{"worktree + plain slack label only", &productdb.Task{Status: "in-progress", WorktreePath: nullStr("/tmp/wt")}, []string{"bugfix", "cli", "slack"}, false},
+		{"no origin no worktree", &productdb.Task{Status: "backlog"}, []string{"ui", "p1"}, false},
+		{"gh-pr but done", &productdb.Task{Status: "done"}, []string{"gh-pr:o/r#1"}, false},
+		{"gh-pr but archived", &productdb.Task{Status: "backlog", ArchivedAt: nullStr("2026-05-01T00:00:00Z")}, []string{"gh-pr:o/r#1"}, false},
+		{"gh-pr but deleted", &productdb.Task{Status: "backlog", DeletedAt: nullStr("2026-05-01T00:00:00Z")}, []string{"gh-pr:o/r#1"}, false},
 		{"nil task", nil, []string{"slack-reply"}, false},
 	}
 	for _, c := range cases {

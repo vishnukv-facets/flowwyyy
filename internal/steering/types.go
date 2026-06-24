@@ -146,7 +146,7 @@ type ThreadContext struct {
 }
 
 // PriorUnderstanding is the model-facing snapshot of a thread's persistent
-// running understanding (flowdb.ThreadState), fed into incremental deep-triage so
+// running understanding (productdb.ThreadState), fed into incremental deep-triage so
 // Stage 3 updates its prior decision with the new delta instead of cold
 // re-deriving. The cascade builds it from the thread-state row read back before
 // triaging; a nil *PriorUnderstanding means this is the thread's first triage.

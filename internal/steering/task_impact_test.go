@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func taskImpactDB(t *testing.T) (*sql.DB, string) {
@@ -33,7 +34,7 @@ func seedImpactTask(t *testing.T, db *sql.DB, slug, name, status, priority, wait
 	if _, err := db.Exec(
 		`INSERT INTO tasks (slug, name, status, kind, priority, work_dir, waiting_on, assignee, session_provider, session_id, created_at, updated_at)
 		 VALUES (?, ?, ?, 'regular', ?, ?, ?, ?, 'codex', ?, ?, ?)`,
-		slug, name, status, priority, t.TempDir(), flowdb.NullIfEmpty(waitingOn), flowdb.NullIfEmpty(assignee), flowdb.NullIfEmpty(sessionID), now, now,
+		slug, name, status, priority, t.TempDir(), productdb.NullIfEmpty(waitingOn), productdb.NullIfEmpty(assignee), productdb.NullIfEmpty(sessionID), now, now,
 	); err != nil {
 		t.Fatalf("seed task %s: %v", slug, err)
 	}

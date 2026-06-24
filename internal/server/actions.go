@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"mime/multipart"
 	"net/http"
@@ -407,7 +407,7 @@ func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
 	if s.terminals != nil && s.terminals.wakeSharedTask(slug, text) {
 		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound
 	}
@@ -464,13 +464,13 @@ func (s *Server) clearWaiting(target string) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	if _, err := flowdb.GetTask(s.cfg.DB, target); err != nil {
+	if _, err := productdb.GetTask(s.cfg.DB, target); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
-	if _, err := s.cfg.DB.Exec(`UPDATE tasks SET waiting_on = NULL, updated_at = ? WHERE slug = ?`, flowdb.NowISO(), target); err != nil {
+	if _, err := s.cfg.DB.Exec(`UPDATE tasks SET waiting_on = NULL, updated_at = ? WHERE slug = ?`, productdb.NowISO(), target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	agent, err := s.agentForTask(target)
@@ -487,13 +487,13 @@ func (s *Server) markInboxRead(target string) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	if _, err := flowdb.GetTask(s.cfg.DB, target); err != nil {
+	if _, err := productdb.GetTask(s.cfg.DB, target); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := s.cfg.DB.Exec(`UPDATE tasks SET inbox_seen_at = ?, updated_at = ? WHERE slug = ?`, now, now, target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -545,7 +545,7 @@ func (h *terminalHub) running(slug string) bool {
 }
 
 func (s *Server) agentForTask(slug string) (*uiAgent, error) {
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return nil, err
 	}
