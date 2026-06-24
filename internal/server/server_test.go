@@ -4256,7 +4256,7 @@ func testFlowBinary(t *testing.T) string {
 		t.Fatal(err)
 	}
 	script := filepath.Join(t.TempDir(), "flow-test")
-	body := "#!/bin/sh\ncd " + shellQuote(repoRoot) + " && exec go run . \"$@\"\n"
+	body := "#!/bin/sh\ncd " + shellQuote(repoRoot) + " && exec go run ./cmd/flow \"$@\"\n"
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
