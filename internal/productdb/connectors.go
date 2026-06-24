@@ -156,36 +156,5 @@ func SetSteeringWatermark(db *sql.DB, channel, lastTS, updatedAt string) error {
 	return nil
 }
 
-// ---------- attention_thread_state (Slack thread cursors) ----------
-
-// ThreadCursor is a steerer-tracked Slack thread plus its last_seen_ts recovery
-// floor (twin of flowdb.ThreadCursor).
-type ThreadCursor struct {
-	ThreadKey  string
-	LastSeenTS string
-}
-
-// ListRecentSlackThreadCursors returns up to `limit` most-recently-updated Slack
-// threads the steerer has tracked, each with its last_seen_ts recovery floor.
-func ListRecentSlackThreadCursors(db *sql.DB, limit int) ([]ThreadCursor, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	rows, err := db.Query(
-		`SELECT thread_key, last_seen_ts FROM attention_thread_state
-		 WHERE source = 'slack' AND last_seen_ts <> ''
-		 ORDER BY updated_at DESC LIMIT ?`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []ThreadCursor
-	for rows.Next() {
-		var tc ThreadCursor
-		if err := rows.Scan(&tc.ThreadKey, &tc.LastSeenTS); err != nil {
-			return nil, err
-		}
-		out = append(out, tc)
-	}
-	return out, rows.Err()
-}
+// ThreadCursor + ListRecentSlackThreadCursors live in attention_thread_state.go
+// (ported from flowdb alongside the rest of the thread-state read layer).
