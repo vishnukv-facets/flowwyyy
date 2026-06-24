@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"flow/internal/flowclient"
 	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/monitor"
@@ -1661,6 +1662,68 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	}
 	if task.Status != "in-progress" || !task.SessionID.Valid || task.SessionID.String != launch.SessionID || !task.SessionStarted.Valid {
 		t.Fatalf("task after launch = %+v", task)
+	}
+}
+
+// When a core flow binary is configured, the bridge routes launch prep through
+// `flow do --prepare-only --json` (the decoupling seam) and builds the browser
+// launch from the returned descriptor. The fake flow binary stands in for the
+// core prep so this test exercises the exec + parse + arg-building path without
+// a real flow on disk.
+func TestPrepareTerminalLaunchViaCoreParsesDescriptor(t *testing.T) {
+	root, db := testRootDB(t)
+	t.Setenv("FLOW_MODEL_TIER", "medium")
+	insertProjectTask(t, db, root)
+
+	const sid = "11111111-1111-4111-8111-111111111111"
+	fakeFlow := filepath.Join(t.TempDir(), "flow")
+	script := fmt.Sprintf(`#!/bin/sh
+# Stand-in for `+"`flow do <slug> --prepare-only --json`"+`.
+printf '{"slug":"build-ui","session_id":"%s","provider":"claude","permission_mode":"auto","work_dir":"%s","created":true,"needs_capture":false}\n'
+`, sid, root)
+	if err := os.WriteFile(fakeFlow, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false", Flow: flowclient.Client{Bin: fakeFlow}})
+	launch, err := srv.prepareTerminalLaunch("build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !launch.Created || launch.Slug != "build-ui" || launch.SessionID != sid || launch.WorkDir != root {
+		t.Fatalf("launch = %+v", launch)
+	}
+	// The descriptor carries session/workdir/created; the bridge still builds the
+	// browser-flavored args + resolves the model itself (high-priority build-ui →
+	// medium upshifts to opus), proving the seam splits state-mutation (core) from
+	// arg-building (bridge).
+	if len(launch.Args) < 4 || launch.Args[0] != "--session-id" || launch.Args[1] != sid {
+		t.Fatalf("args = %#v", launch.Args)
+	}
+	if launch.Args[2] != "--model" || launch.Args[3] != "opus" {
+		t.Fatalf("model args = %#v", launch.Args)
+	}
+	if !strings.Contains(launch.Args[len(launch.Args)-1], "flow task build-ui") {
+		t.Fatalf("bootstrap prompt = %q", launch.Args[len(launch.Args)-1])
+	}
+}
+
+// A non-zero exit from the core prep surfaces as an error carrying the core's
+// stderr (e.g. a dependency blocker), matching the in-process path's error.
+func TestPrepareTerminalLaunchViaCoreSurfacesCoreError(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+
+	fakeFlow := filepath.Join(t.TempDir(), "flow")
+	script := "#!/bin/sh\n" + `echo 'error: task "build-ui" depends on "parent-task" which is not done' 1>&2` + "\nexit 1\n"
+	if err := os.WriteFile(fakeFlow, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false", Flow: flowclient.Client{Bin: fakeFlow}})
+	_, err := srv.prepareTerminalLaunch("build-ui")
+	if err == nil || !strings.Contains(err.Error(), `depends on "parent-task"`) {
+		t.Fatalf("prepareTerminalLaunch err = %v, want core dependency blocker", err)
 	}
 }
 

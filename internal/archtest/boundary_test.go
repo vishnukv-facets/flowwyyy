@@ -44,6 +44,30 @@ func deps(t *testing.T, pkg string) []string {
 	return strings.Fields(string(out))
 }
 
+// productBinaryPkgs are packages the core `flow` binary must never pull in:
+// the product surface plus its DB layers. Importing any of them would mean the
+// core binary carries Mission Control / connector / steering code or creates
+// product tables — defeating the two-binary split.
+var productBinaryPkgs = map[string]bool{
+	"flow/internal/server":    true,
+	"flow/internal/monitor":   true,
+	"flow/internal/steering":  true,
+	"flow/internal/product":   true,
+	"flow/internal/productdb": true,
+}
+
+// TestCoreBinaryStaysProductFree asserts cmd/flow (the core engine binary) does
+// not transitively import any product package. This keeps the core binary
+// independently shippable and ensures `flow init` opens a core-only schema (no
+// product tables), which the flowwyyy binary owns and migrates separately.
+func TestCoreBinaryStaysProductFree(t *testing.T) {
+	for _, d := range deps(t, "flow/cmd/flow") {
+		if productBinaryPkgs[d] {
+			t.Errorf("cmd/flow (core binary) imports product package %s — it must stay product-free", d)
+		}
+	}
+}
+
 func TestCoreDoesNotImportProduct(t *testing.T) {
 	var clean []string
 	for _, pkg := range corePackages {

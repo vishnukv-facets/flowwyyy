@@ -68,6 +68,8 @@ func cmdDo(args []string) int {
 	force := fs.Bool("force", false, "open even if the task's Claude session is already running elsewhere")
 	here := fs.Bool("here", false, "bind THIS Claude/Codex session to the task (no new tab); requires running inside an agent session")
 	noWorktree := fs.Bool("no-worktree", false, "spawn the agent in the task's work_dir directly instead of a per-task git worktree")
+	prepareOnly := fs.Bool("prepare-only", false, "perform the launch preparation (status flip, session-id allocation, worktree, persist) WITHOUT spawning a terminal; print a launch descriptor and exit. Used by the Mission Control terminal bridge so the browser pty goes through the same core launch path as `flow do`")
+	jsonOut := fs.Bool("json", false, "with --prepare-only, emit the launch descriptor as JSON")
 	auto := fs.Bool("auto", false, "run headlessly in the background (no tab, no human; Claude or Codex). The session self-completes via `flow done`")
 	withInstr := fs.String("with", "", "one-off instruction appended to the autonomous prompt (requires --auto)")
 	withFile := fs.String("with-file", "", "file whose contents are appended to the autonomous prompt (requires --auto)")
@@ -100,6 +102,10 @@ func cmdDo(args []string) int {
 	}
 	if *auto && *here {
 		fmt.Fprintln(os.Stderr, "error: --auto cannot be used with --here (--auto launches its own detached session; --here binds the current one)")
+		return 2
+	}
+	if *prepareOnly && (*auto || *here) {
+		fmt.Fprintln(os.Stderr, "error: --prepare-only cannot be combined with --auto or --here")
 		return 2
 	}
 	if (*withInstr != "" || *withFile != "") && !*auto && !spawner.IsBackground() {
@@ -162,6 +168,14 @@ func cmdDo(args []string) int {
 	}
 	if requestedProvider != "" {
 		provider = requestedProvider
+	}
+	if *prepareOnly {
+		// Mission Control terminal bridge: do the canonical launch prep (status
+		// flip, session-id allocation, worktree, persist) in core, print a
+		// descriptor, and exit WITHOUT spawning a tab. The bridge then attaches
+		// its own browser pty to the prepared session. This is the dedup that
+		// removes server/terminal_launch.go's reimplementation of `flow do`.
+		return runPrepareLaunch(db, task, provider, *fresh, *jsonOut)
 	}
 	if spawner.IsBackground() {
 		if *auto {

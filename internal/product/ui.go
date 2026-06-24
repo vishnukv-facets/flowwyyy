@@ -5,6 +5,7 @@ import (
 	"flag"
 	"flow/internal/agenthooks"
 	"flow/internal/app"
+	"flow/internal/flowclient"
 	"flow/internal/flowdb"
 	"flow/internal/server"
 	"flow/internal/workdirreg"
@@ -174,7 +175,15 @@ func serveUI(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: find executable: %v\n", err)
 		return 1
 	}
-	commandPath := app.PreferredUIFlowBinary(exe)
+	// Prefer the flowclient-resolved core `flow` binary (set by the flowwyyy
+	// main): the server execs it for mutations + launch prep, and the agent hook
+	// command path / scheduler tick-due must invoke `flow`, not flowwyyy. In the
+	// no-FlowBin case (tests / running flow directly), fall back to the running
+	// executable, which is itself a flow-capable binary.
+	commandPath := FlowBin
+	if commandPath == "" {
+		commandPath = app.PreferredUIFlowBinary(exe)
+	}
 	hookHost := host
 	if hookHost == "0.0.0.0" || hookHost == "::" {
 		hookHost = "127.0.0.1"
@@ -193,6 +202,7 @@ func serveUI(host string, port int, noQuote bool) int {
 		FlowRoot:     root,
 		Version:      app.Version,
 		CommandPath:  commandPath,
+		Flow:         flowclient.Client{Bin: commandPath},
 		HookURL:      hookURL,
 		DisableQuote: noQuote,
 	})

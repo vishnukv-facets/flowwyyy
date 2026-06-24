@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
@@ -42,7 +44,119 @@ func stripTerminalGeneratedInput(data string) string {
 	return terminalGeneratedInputRE.ReplaceAllString(data, "")
 }
 
+// prepareTerminalLaunch performs the launch preparation for a Mission Control
+// terminal session and returns the descriptor the bridge uses to spawn/attach
+// its browser pty.
+//
+// For a regular task, when a core `flow` binary is configured (s.cfg.Flow.Bin),
+// the parity-critical state mutation (status flip + session-id allocation +
+// per-task worktree) runs IN CORE via `flow do --prepare-only` — the SAME path
+// as `flow do` — and this layer only builds the browser-flavored launch from the
+// returned descriptor. That is the decoupling seam: the server no longer
+// reimplements `flow do`'s launch prep. The overview task (no `flow do` analog)
+// and the no-binary fallback (tests) use prepareTerminalLaunchInProcess, the
+// byte-identical legacy in-process preparation.
 func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
+	if strings.TrimSpace(s.cfg.Flow.Bin) == "" || slug == overviewTaskSlug {
+		return s.prepareTerminalLaunchInProcess(slug)
+	}
+	return s.prepareTerminalLaunchViaCore(slug)
+}
+
+// prepareTerminalLaunchViaCore runs the core launch prep through the flow binary
+// and assembles the browser launch from the JSON descriptor it prints.
+func (s *Server) prepareTerminalLaunchViaCore(slug string) (terminalLaunch, error) {
+	// Read the task (read-only) for the fields the bridge needs to build the
+	// prompt / args / model — none of which the prep mutates.
+	task, err := flowdb.ScanTask(s.cfg.DB.QueryRow("SELECT "+flowdb.TaskCols+" FROM tasks WHERE slug = ?", slug))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return terminalLaunch{}, fmt.Errorf("task not found: %s", slug)
+		}
+		return terminalLaunch{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, runErr := s.cfg.Flow.Do(ctx, slug, "--prepare-only", "--json")
+	if runErr != nil || res.Code != 0 {
+		// Surface the core error text (e.g. dependency blocker, live auto-run)
+		// the way the in-process path used to return it.
+		msg := strings.TrimSpace(res.Stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(res.Stdout)
+		}
+		if msg == "" && runErr != nil {
+			msg = runErr.Error()
+		}
+		return terminalLaunch{}, errors.New(msg)
+	}
+
+	var prep flowLaunchPrep
+	if err := json.Unmarshal([]byte(res.Stdout), &prep); err != nil {
+		return terminalLaunch{}, fmt.Errorf("parse launch descriptor: %w", err)
+	}
+	provider := prep.Provider
+	if provider == "" {
+		provider = agents.ProviderClaude
+	}
+	// Reflect the prep's resolved work_dir (a per-task worktree when work_dir is
+	// a git repo) onto the in-memory task so prompt/model resolution see it.
+	task.WorkDir = prep.WorkDir
+	if prep.WorkDir != "" {
+		task.WorktreePath = sql.NullString{String: prep.WorkDir, Valid: true}
+	}
+
+	// Install local agent hooks for the resolved work_dir. Kept here (not in
+	// core) so the hook command path + URL stay the server's; idempotent.
+	if _, err := agenthooks.InstallLocalWithOptions(prep.WorkDir, agenthooks.InstallOptions{
+		CommandPath: s.cfg.CommandPath,
+		HookURL:     s.cfg.HookURL,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: install local agent hooks: %v\n", err)
+	}
+
+	if prep.Created {
+		prompt := buildBrowserTerminalBootstrapPrompt(s.cfg.DB, task)
+		args := agentTerminalArgs(provider, true, prep.SessionID, prep.WorkDir, s.cfg.FlowRoot, prompt, prep.PermissionMode, s.resolveTaskLaunchModel(task, provider, true))
+		return terminalLaunch{
+			Slug:           task.Slug,
+			SessionID:      prep.SessionID,
+			Provider:       provider,
+			PermissionMode: prep.PermissionMode,
+			WorkDir:        prep.WorkDir,
+			Args:           args,
+			Created:        true,
+			NeedsCapture:   prep.NeedsCapture,
+			StartedAt:      time.Now().Add(-2 * time.Second),
+		}, nil
+	}
+	args := agentTerminalArgs(provider, false, prep.SessionID, prep.WorkDir, s.cfg.FlowRoot, "", prep.PermissionMode, s.resolveTaskLaunchModel(task, provider, false))
+	return terminalLaunch{
+		Slug:           task.Slug,
+		SessionID:      prep.SessionID,
+		Provider:       provider,
+		PermissionMode: prep.PermissionMode,
+		WorkDir:        prep.WorkDir,
+		Args:           args,
+		Created:        false,
+	}, nil
+}
+
+// flowLaunchPrep mirrors app.LaunchPrep — the JSON contract printed by
+// `flow do --prepare-only --json`. Kept as its own type so the product side
+// does not depend on the core app package for it.
+type flowLaunchPrep struct {
+	Slug           string `json:"slug"`
+	SessionID      string `json:"session_id"`
+	Provider       string `json:"provider"`
+	PermissionMode string `json:"permission_mode"`
+	WorkDir        string `json:"work_dir"`
+	Created        bool   `json:"created"`
+	NeedsCapture   bool   `json:"needs_capture"`
+}
+
+func (s *Server) prepareTerminalLaunchInProcess(slug string) (terminalLaunch, error) {
 	tx, err := s.cfg.DB.Begin()
 	if err != nil {
 		return terminalLaunch{}, err

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"flow/internal/flowclient"
 	"flow/internal/monitor"
 	"flow/internal/steering"
 )
@@ -17,7 +18,13 @@ type Config struct {
 	FlowRoot    string
 	Version     string
 	CommandPath string
-	HookURL     string
+	// Flow is the resolved core `flow` binary the server execs for every
+	// mutation/launch (the decoupling seam: writes go through `flow`, reads
+	// stay in-process). Set by cmd/flowwyyy from flowclient.Resolve(); in the
+	// single composed binary / tests it equals CommandPath. runFlowCommand
+	// prefers Flow.Bin and falls back to CommandPath when unset.
+	Flow    flowclient.Client
+	HookURL string
 	// DisableQuote turns off the anime quote beside the Mission Control
 	// greeting (flow ui serve --no-quote). The endpoint then returns an empty
 	// quote, which the UI hides — falling back to the static subtitle.

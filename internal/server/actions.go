@@ -591,7 +591,15 @@ func claudePIDForSession(sessionID string) (int, error) {
 }
 
 func (s *Server) runFlowCommand(args ...string) (string, error) {
-	exe := s.cfg.CommandPath
+	// Mutations route through the flowclient-resolved core binary (the
+	// decoupling seam). Fall back to CommandPath in the single composed
+	// binary / tests where Flow is unset. Output semantics (CombinedOutput,
+	// 2-minute budget, inherited env) are preserved exactly so the UI's
+	// Done/Archive/etc. behavior is unchanged.
+	exe := s.cfg.Flow.Bin
+	if exe == "" {
+		exe = s.cfg.CommandPath
+	}
 	if exe == "" {
 		return "", errors.New("flow command path is not configured")
 	}
