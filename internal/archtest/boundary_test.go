@@ -28,7 +28,7 @@ var productPkgs = map[string]bool{
 var knownViolations = map[string]bool{}
 
 var corePackages = []string{
-	"flow/internal/app", "flow/internal/flowdb", "flow/internal/workevents",
+	"flow/internal/app", "flow/internal/flowdb",
 	"flow/internal/briefing", "flow/internal/agents", "flow/internal/agenthooks",
 	"flow/internal/worktree", "flow/internal/workdirreg", "flow/internal/memorysrc",
 	"flow/internal/schedule", "flow/internal/flowbackup", "flow/internal/listfmt",
@@ -113,6 +113,10 @@ var productGoPkgs = []string{
 	"flow/internal/steering",
 	"flow/internal/product",
 	"flow/internal/productdb",
+	// workevents is the activity-log read model — used ONLY by server (cmd/flow
+	// does not pull it), reads product tables (attention_feed/steering_trace), so
+	// it was reclassified from core to product and cut onto productdb (T13).
+	"flow/internal/workevents",
 }
 
 // productImportsCoreGo is the SECOND ratchet (plan T13): product packages that

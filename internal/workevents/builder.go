@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/inbox"
+	"flow/internal/productdb"
 )
 
 // Build derives normalized assistant work events from existing Flow storage.
@@ -18,11 +18,11 @@ func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
 	if db == nil {
 		return Result{}, fmt.Errorf("workevents: db is required")
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: false})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{IncludeArchived: false})
 	if err != nil {
 		return Result{}, err
 	}
-	bySlug := make(map[string]*flowdb.Task, len(tasks))
+	bySlug := make(map[string]*productdb.Task, len(tasks))
 	for _, task := range tasks {
 		bySlug[task.Slug] = task
 	}
@@ -40,8 +40,8 @@ func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
 	return Result{Items: items, Counts: Count(items)}, nil
 }
 
-func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error) {
-	rows, err := flowdb.ListFeedItems(db, "new")
+func attentionEvents(db *sql.DB, tasks map[string]*productdb.Task) ([]Event, error) {
+	rows, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error)
 			taskLink(task),
 			{Kind: "source", Target: row.URL, URL: row.URL},
 		})
-		if trace, err := flowdb.GetSteeringTraceByFeedItem(db, row.ID); err == nil && trace.ID != "" {
+		if trace, err := productdb.GetSteeringTraceByFeedItem(db, row.ID); err == nil && trace.ID != "" {
 			links = append(links, Link{Kind: "trace", Target: trace.ID})
 		}
 		out = append(out, Event{
@@ -86,7 +86,7 @@ func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error)
 	return out, nil
 }
 
-func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
+func taskStateEvents(db *sql.DB, tasks []*productdb.Task) []Event {
 	var out []Event
 	for _, task := range tasks {
 		if task == nil || (task.Kind != "" && task.Kind != "regular") {
@@ -114,7 +114,7 @@ func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
 			continue
 		}
 		if task.Status == "backlog" && task.Priority == "high" {
-			blocker, err := flowdb.TaskStartBlockerFor(db, task)
+			blocker, err := productdb.TaskStartBlockerFor(db, task)
 			if err == nil && blocker == nil {
 				out = append(out, Event{
 					ID:          "task:" + task.Slug + ":next-up",
@@ -139,7 +139,7 @@ func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
 	return out
 }
 
-func inboxEvents(tasks []*flowdb.Task) []Event {
+func inboxEvents(tasks []*productdb.Task) []Event {
 	var out []Event
 	for _, task := range tasks {
 		if task == nil {
@@ -243,7 +243,7 @@ func githubPRKey(ev inbox.InboundEvent) string {
 	return ""
 }
 
-func classifyInboxEvent(task *flowdb.Task, ev inbox.InboundEvent, source string) (Bucket, string, string) {
+func classifyInboxEvent(task *productdb.Task, ev inbox.InboundEvent, source string) (Bucket, string, string) {
 	if source == "github" {
 		switch ev.Kind {
 		case "pr_head_updated":
@@ -273,7 +273,7 @@ func classifyInboxEvent(task *flowdb.Task, ev inbox.InboundEvent, source string)
 	return BucketFYI, "inbox_activity_fyi", "Task inbox activity was recorded."
 }
 
-func taskIsDone(task *flowdb.Task) bool {
+func taskIsDone(task *productdb.Task) bool {
 	return task != nil && task.Status == "done"
 }
 
@@ -306,14 +306,14 @@ func validLinks(in []Link) []Link {
 	return out
 }
 
-func taskLink(task *flowdb.Task) Link {
+func taskLink(task *productdb.Task) Link {
 	if task == nil {
 		return Link{}
 	}
 	return Link{Kind: "task", Target: task.Slug}
 }
 
-func taskProject(task *flowdb.Task) string {
+func taskProject(task *productdb.Task) string {
 	if task != nil && task.ProjectSlug.Valid {
 		return task.ProjectSlug.String
 	}
