@@ -8,7 +8,6 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
 	"flow/internal/productdb"
-	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
 	"os"
@@ -320,7 +319,7 @@ func (s *Server) prepareTerminalLaunchInProcess(slug string) (terminalLaunch, er
 		}
 	}
 
-	if err := workdirreg.Touch(s.cfg.DB, originalWorkDir); err != nil {
+	if err := s.touchWorkdir(originalWorkDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
 	}
 	if _, err := agenthooks.InstallLocalWithOptions(task.WorkDir, agenthooks.InstallOptions{

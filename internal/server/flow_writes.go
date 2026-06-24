@@ -31,6 +31,36 @@ func (s *Server) tagTask(slug, tag string) error {
 	return taskTagWriter(s, slug, tag)
 }
 
+// registerWorkdir upserts a workdir via `flow workdir add` (workdirs is Bucket O).
+// Replaces workdirreg.Register so server no longer imports the flowdb-bound
+// workdirreg package. name/description are optional flags the CLI parses anywhere.
+func (s *Server) registerWorkdir(path, name, description string) error {
+	args := []string{"workdir", "add", path}
+	if name != "" {
+		args = append(args, "--name", name)
+	}
+	if description != "" {
+		args = append(args, "--description", description)
+	}
+	_, err := s.runFlowCommand(args...)
+	return err
+}
+
+// touchWorkdir bumps a workdir's last_used_at by re-upserting it via `flow
+// workdir add` (idempotent; keeps name/description via COALESCE). Replaces
+// workdirreg.Touch.
+func (s *Server) touchWorkdir(path string) error {
+	_, err := s.runFlowCommand("workdir", "add", path)
+	return err
+}
+
+// removeWorkdir deletes a workdir via `flow workdir remove` (Bucket O). Replaces
+// the prior raw `DELETE FROM workdirs` (a direct core-table write).
+func (s *Server) removeWorkdir(path string) error {
+	_, err := s.runFlowCommand("workdir", "remove", path)
+	return err
+}
+
 // setTaskWaitingIfClear sets a task's waiting_on note only when it is currently
 // empty, so an automated marker never clobbers an operator's own note. It reads
 // the current note via productdb, then routes the write through `flow update

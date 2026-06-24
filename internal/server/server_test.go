@@ -1967,7 +1967,31 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	root, db := testRootDB(t)
 	workDir := t.TempDir()
-	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	abs, err := filepath.Abs(workDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// workdirs is Bucket O — the server delegates add/rename/remove to the
+	// `flow workdir` CLI (seam §11) rather than writing the table directly. Use a
+	// fake flow that records argv so we assert the delegated command.
+	argFile := filepath.Join(root, "workdir-args.txt")
+	flowScript := filepath.Join(root, "flow-test")
+	if err := os.WriteFile(flowScript, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" > "+argFile+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: flowScript})
+
+	assertArgs := func(want string) {
+		t.Helper()
+		got, rerr := os.ReadFile(argFile)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if string(got) != want+"\n" {
+			t.Fatalf("delegated args = %q, want %q", string(got), want)
+		}
+	}
 
 	resp, status := srv.runAction(actionRequest{
 		Kind:        "workdir-add",
@@ -1978,17 +2002,7 @@ func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("add status = %d, resp = %+v", status, resp)
 	}
-	abs, err := filepath.Abs(workDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wd, err := productdb.GetWorkdir(db, abs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wd.Name.String != "Main repo" || wd.Description.String != "Primary development checkout" {
-		t.Fatalf("workdir after add = %+v", wd)
-	}
+	assertArgs("workdir add " + abs + " --name Main repo --description Primary development checkout")
 
 	resp, status = srv.runAction(actionRequest{
 		Kind:        "workdir-rename",
@@ -1999,21 +2013,13 @@ func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("rename status = %d, resp = %+v", status, resp)
 	}
-	wd, err = productdb.GetWorkdir(db, abs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if wd.Name.String != "Renamed repo" || wd.Description.String != "Renamed description" {
-		t.Fatalf("workdir after rename = %+v", wd)
-	}
+	assertArgs("workdir add " + abs + " --name Renamed repo --description Renamed description")
 
 	resp, status = srv.runAction(actionRequest{Kind: "workdir-remove", Path: workDir})
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("remove status = %d, resp = %+v", status, resp)
 	}
-	if _, err := productdb.GetWorkdir(db, abs); !errors.Is(err, sql.ErrNoRows) {
-		t.Fatalf("workdir after remove err = %v, want sql.ErrNoRows", err)
-	}
+	assertArgs("workdir remove " + abs)
 }
 
 func TestDestroyOnlyDeletesTrashItems(t *testing.T) {
