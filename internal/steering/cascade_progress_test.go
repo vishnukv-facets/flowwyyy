@@ -2,10 +2,9 @@ package steering
 
 import (
 	"context"
+	"flow/internal/productdb"
 	"strings"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 // captureStages wires c.Progress to append into a slice, so a test can assert on
@@ -90,5 +89,5 @@ func TestStageEmitIsNoOpWithoutHook(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	// No Progress hook set: stage() must be a safe no-op (and tolerate a nil tr).
 	c.stage(nil, c.now(), "received", "running", "x")
-	c.stage(&flowdb.SteeringTrace{ID: "id1"}, c.now(), "stage0", "passed", "x")
+	c.stage(&productdb.SteeringTrace{ID: "id1"}, c.now(), "stage0", "passed", "x")
 }

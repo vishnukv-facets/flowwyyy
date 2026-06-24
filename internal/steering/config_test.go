@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func TestWatchConfigFromEnv(t *testing.T) {
@@ -51,7 +52,7 @@ func TestWatchConfigFnWithMutesOverlaysLearnedSuppressions(t *testing.T) {
 	defer db.Close()
 
 	for i := 0; i < 3; i++ {
-		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+		if err := productdb.RecordAttentionFeedback(db, productdb.AttentionFeedback{
 			ID: "learned-config-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
 			Channel: "C_NOISE", Author: "U_NOISE", ThreadType: "channel", ThreadKey: "C_NOISE:1",
 			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
@@ -83,7 +84,7 @@ func TestWatchConfigFnWithMutesLearnsThreadNotChannel(t *testing.T) {
 
 	// Repeated dismissals in ONE thread of a watched channel.
 	for i := 0; i < 3; i++ {
-		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+		if err := productdb.RecordAttentionFeedback(db, productdb.AttentionFeedback{
 			ID: "thread-learn-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
 			Channel: "C_WATCHED", Author: "U_X", ThreadType: "channel", ThreadKey: "C_WATCHED:111.1",
 			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",
@@ -105,7 +106,7 @@ func TestWatchConfigFnWithMutesLearnsThreadNotChannel(t *testing.T) {
 	}
 
 	// An explicit channel mute still wins.
-	if err := flowdb.AddSteeringMute(db, flowdb.MuteScopeChannel, "C_WATCHED"); err != nil {
+	if err := productdb.AddSteeringMute(db, productdb.MuteScopeChannel, "C_WATCHED"); err != nil {
 		t.Fatalf("AddSteeringMute: %v", err)
 	}
 	cfg = WatchConfigFnWithMutes(db)()

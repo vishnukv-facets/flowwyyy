@@ -2,13 +2,12 @@ package server
 
 import (
 	"encoding/json"
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 func kpiByKey(p AnalyticsPayload, key string) Kpi {
@@ -66,7 +65,7 @@ func TestBuildAnalyticsPayloadActivity(t *testing.T) {
 	now := time.Date(2026, 6, 20, 12, 0, 0, 0, time.Local)
 	q, _ := parseAnalyticsRange(url.Values{"range": {"7d"}}, now)
 
-	tasks := []*flowdb.Task{
+	tasks := []*productdb.Task{
 		mkTask("a", "done", atDay(2026, 6, 15), atDay(2026, 6, 16)), // done in window
 		mkTask("b", "done", atDay(2026, 6, 17), atDay(2026, 6, 18)), // done in window
 		mkTask("c", "done", atDay(2026, 6, 8), atDay(2026, 6, 9)),   // done in the previous 7d window
@@ -118,9 +117,9 @@ func TestBuildAnalyticsPayloadDomains(t *testing.T) {
 	q, _ := parseAnalyticsRange(url.Values{"range": {"7d"}}, now)
 
 	in := analyticsInputs{
-		tasks:  []*flowdb.Task{mkTask("a", "done", atDay(2026, 6, 15), atDay(2026, 6, 16))},
+		tasks:  []*productdb.Task{mkTask("a", "done", atDay(2026, 6, 15), atDay(2026, 6, 16))},
 		usages: tokenUsagesFixture(),
-		runs: []*flowdb.BrainRun{
+		runs: []*productdb.BrainRun{
 			mkRun("r1", "completed", "2026-06-15T10:00:00Z", "2026-06-15T10:10:00Z"),
 			mkRun("r2", "dead", "2026-06-17T09:00:00Z", "2026-06-17T09:50:00Z"),
 		},

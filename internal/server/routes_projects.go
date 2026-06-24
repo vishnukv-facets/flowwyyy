@@ -2,7 +2,7 @@ package server
 
 import (
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"io"
 	"net/http"
 	"os"
@@ -18,7 +18,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	filter := flowdb.ProjectFilter{
+	filter := productdb.ProjectFilter{
 		Status:          r.URL.Query().Get("status"),
 		IncludeArchived: boolQuery(r.URL.Query(), "include_archived"),
 		IncludeDeleted:  boolQuery(r.URL.Query(), "include_deleted"),
@@ -27,7 +27,7 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 	if filter.DeletedOnly {
 		filter.IncludeArchived = true
 	}
-	projects, err := flowdb.ListProjects(s.cfg.DB, filter)
+	projects, err := productdb.ListProjects(s.cfg.DB, filter)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -54,7 +54,7 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := parts[0]
-	project, err := flowdb.GetProject(s.cfg.DB, slug)
+	project, err := productdb.GetProject(s.cfg.DB, slug)
 	if err != nil {
 		writeNotFoundOrError(w, err)
 		return
@@ -98,7 +98,7 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 		if !getOnly(w, r) {
 			return
 		}
-		filter := flowdb.TaskFilter{
+		filter := productdb.TaskFilter{
 			Project:        slug,
 			IncludeDeleted: boolQuery(r.URL.Query(), "include_deleted"),
 			DeletedOnly:    boolQuery(r.URL.Query(), "deleted"),
@@ -107,7 +107,7 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 		if filter.DeletedOnly {
 			filter.IncludeArchived = true
 		}
-		tasks, err := flowdb.ListTasks(s.cfg.DB, filter)
+		tasks, err := productdb.ListTasks(s.cfg.DB, filter)
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -123,7 +123,7 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 		if !getOnly(w, r) {
 			return
 		}
-		pbs, err := flowdb.ListPlaybooks(s.cfg.DB, flowdb.PlaybookFilter{Project: slug})
+		pbs, err := productdb.ListPlaybooks(s.cfg.DB, productdb.PlaybookFilter{Project: slug})
 		if err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
@@ -139,7 +139,7 @@ func (s *Server) handleProjectRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) saveProjectBrief(w http.ResponseWriter, r *http.Request, project *flowdb.Project) {
+func (s *Server) saveProjectBrief(w http.ResponseWriter, r *http.Request, project *productdb.Project) {
 	path := filepath.Join(s.cfg.FlowRoot, "projects", project.Slug, "brief.md")
 	cleanBase := filepath.Join(filepath.Clean(s.cfg.FlowRoot), "projects") + string(os.PathSeparator)
 	cleanPath := filepath.Clean(path)
@@ -161,7 +161,7 @@ func (s *Server) saveProjectBrief(w http.ResponseWriter, r *http.Request, projec
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := s.cfg.DB.Exec(`UPDATE projects SET updated_at = ? WHERE slug = ?`, now, project.Slug); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

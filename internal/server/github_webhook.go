@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 const githubWebhookMaxBody = 1 << 20 // 1 MiB
@@ -66,7 +66,7 @@ func (s *Server) handleGitHubWebhook(w http.ResponseWriter, r *http.Request) {
 	// Delivery-level idempotency: GitHub redelivers with the same
 	// X-GitHub-Delivery id. Record once; if this id was already seen, the prior
 	// receipt already handled it, so don't reprocess.
-	isNew, err := flowdb.RecordGitHubDelivery(s.cfg.DB, flowdb.GitHubDeliveryEntry{
+	isNew, err := productdb.RecordGitHubDelivery(s.cfg.DB, productdb.GitHubDeliveryEntry{
 		DeliveryID: delivery,
 		EventType:  event,
 		Action:     webhookAction(body),
@@ -97,11 +97,11 @@ func (s *Server) processGitHubDelivery(ctx context.Context, eventType, deliveryI
 	}
 	events, err := monitor.NormalizeGitHubWebhook(eventType, deliveryID, body)
 	if err != nil {
-		_ = flowdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, "error", err.Error(), 0)
+		_ = productdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, "error", err.Error(), 0)
 		return
 	}
 	if len(events) == 0 {
-		_ = flowdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, "ignored", "", 0)
+		_ = productdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, "ignored", "", 0)
 		return
 	}
 	var dispatchErr error
@@ -118,7 +118,7 @@ func (s *Server) processGitHubDelivery(ctx context.Context, eventType, deliveryI
 	if dispatchErr != nil {
 		status, msg = "error", dispatchErr.Error()
 	}
-	_ = flowdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, status, msg, len(events))
+	_ = productdb.FinishGitHubDelivery(s.cfg.DB, deliveryID, status, msg, len(events))
 }
 
 // webhookAction best-effort extracts the top-level "action" for the delivery
@@ -163,7 +163,7 @@ func (s *Server) githubWebhookStatus() GitHubWebhookStatusView {
 		WebhookURL:       s.connectorCallbackURL("/api/github/webhook"),
 	}
 	if s.cfg.DB != nil {
-		if h, err := flowdb.GitHubWebhookHealth(s.cfg.DB); err == nil {
+		if h, err := productdb.GitHubWebhookHealth(s.cfg.DB); err == nil {
 			v.DeliveriesTotal = h.Total
 			v.LastReceivedAt = h.LastReceivedAt
 			v.LastStatus = h.LastStatus

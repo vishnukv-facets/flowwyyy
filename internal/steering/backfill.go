@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 const backfillInaccessibleCooldown = 15 * time.Minute
@@ -164,7 +164,7 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 	if b.backfillSkipped(channel) {
 		return
 	}
-	wm, err := flowdb.GetSteeringWatermark(b.db, channel)
+	wm, err := productdb.GetSteeringWatermark(b.db, channel)
 	if err != nil {
 		b.logFn("steering backfill %s: watermark: %v", channel, err)
 		return
@@ -252,7 +252,7 @@ func (b *SteeringBackfill) backfillChannel(ctx context.Context, channel, channel
 		}
 	}
 	if maxTS != "" && maxTS != wm {
-		if err := flowdb.SetSteeringWatermark(b.db, channel, maxTS, b.now().UTC().Format(time.RFC3339)); err != nil {
+		if err := productdb.SetSteeringWatermark(b.db, channel, maxTS, b.now().UTC().Format(time.RFC3339)); err != nil {
 			b.logFn("steering backfill %s: set watermark: %v", channel, err)
 		}
 	}

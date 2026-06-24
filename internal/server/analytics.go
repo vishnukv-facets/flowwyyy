@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // bucketUnit is the calendar granularity of an analytics time bucket.
@@ -207,7 +207,7 @@ func gridPoints(g bucketGrid, vals []float64) []Point {
 // completed throughput series. A task counts as "created" in the bucket holding
 // its created_at, and "completed" in the bucket holding its status_changed_at
 // when status=done. Timestamps outside the window are skipped.
-func activitySeries(tasks []*flowdb.Task, g bucketGrid) Series {
+func activitySeries(tasks []*productdb.Task, g bucketGrid) Series {
 	created := make([]float64, g.Len())
 	done := make([]float64, g.Len())
 	for _, t := range tasks {
@@ -238,7 +238,7 @@ func activitySeries(tasks []*flowdb.Task, g bucketGrid) Series {
 // cycleTimeMedianDays is the median days from created_at to status_changed_at
 // for tasks completed within the window. ok is false when no task qualifies, so
 // the KPI is omitted rather than shown as a misleading 0.
-func cycleTimeMedianDays(tasks []*flowdb.Task, g bucketGrid) (float64, bool) {
+func cycleTimeMedianDays(tasks []*productdb.Task, g bucketGrid) (float64, bool) {
 	var durs []float64
 	for _, t := range tasks {
 		if t.Status != "done" || !t.StatusChangedAt.Valid {
@@ -283,13 +283,13 @@ func median(vals []float64) float64 {
 // AnalyticsPayload is the response envelope for GET /api/analytics. Adding a
 // metric means a new entry in KPIs/Series, never a new route.
 type AnalyticsPayload struct {
-	Range       string     `json:"range,omitempty"`
-	Bucket      bucketUnit `json:"bucket"`
-	From        string     `json:"from"`
-	To          string     `json:"to"`
-	TZ          string     `json:"tz"`
-	GeneratedAt string     `json:"generated_at"`
-	Partial     bool        `json:"partial_bucket"`
+	Range       string             `json:"range,omitempty"`
+	Bucket      bucketUnit         `json:"bucket"`
+	From        string             `json:"from"`
+	To          string             `json:"to"`
+	TZ          string             `json:"tz"`
+	GeneratedAt string             `json:"generated_at"`
+	Partial     bool               `json:"partial_bucket"`
 	KPIs        []Kpi              `json:"kpis"`
 	Series      []Series           `json:"series"`
 	Breakdowns  []Breakdown        `json:"breakdowns,omitempty"`
@@ -310,10 +310,10 @@ type SourceConversion struct {
 // them keeps buildAnalyticsPayload's signature stable as domains are added and
 // avoids a long run of same-typed slice arguments at the call sites.
 type analyticsInputs struct {
-	tasks        []*flowdb.Task
+	tasks        []*productdb.Task
 	usages       []taskTokenUsage
-	runs         []*flowdb.BrainRun
-	traces       []flowdb.SteeringTraceLite
+	runs         []*productdb.BrainRun
+	traces       []productdb.SteeringTraceLite
 	tags         map[string][]string // task slug -> tags (for task-origin breakdown)
 	projectNames map[string]string   // project slug -> display name
 }
@@ -510,7 +510,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	// completion bumps) so KPI deltas have prior-period data. Regular tasks only —
 	// playbook runs are automated and excluded from manual throughput.
 	since := q.From.Add(-q.To.Sub(q.From)).Format(time.RFC3339)
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{
 		Kind:            "regular",
 		Since:           since,
 		IncludeArchived: true,
@@ -522,11 +522,11 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	// Autonomous-run ledger + steering trace over the same comparison span for
 	// the autonomy and funnel domains. Read failures degrade gracefully — the
 	// page drops those charts rather than erroring the whole request.
-	runs, err := flowdb.ListBrainRunsSince(s.cfg.DB, since)
+	runs, err := productdb.ListBrainRunsSince(s.cfg.DB, since)
 	if err != nil {
 		runs = nil
 	}
-	traces, err := flowdb.ListSteeringTraceLite(s.cfg.DB, since)
+	traces, err := productdb.ListSteeringTraceLite(s.cfg.DB, since)
 	if err != nil {
 		traces = nil
 	}
@@ -536,12 +536,12 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tasks {
 		slugs = append(slugs, t.Slug)
 	}
-	tags, err := flowdb.GetTaskTagsBatch(s.cfg.DB, slugs)
+	tags, err := productdb.GetTaskTagsBatch(s.cfg.DB, slugs)
 	if err != nil {
 		tags = nil
 	}
 	projectNames := map[string]string{}
-	if projects, perr := flowdb.ListProjects(s.cfg.DB, flowdb.ProjectFilter{IncludeArchived: true}); perr == nil {
+	if projects, perr := productdb.ListProjects(s.cfg.DB, productdb.ProjectFilter{IncludeArchived: true}); perr == nil {
 		for _, p := range projects {
 			projectNames[p.Slug] = p.Name
 		}
@@ -559,7 +559,7 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 // resolveTokenUsage lifts per-task transcript usage out of the cache, deduped by
 // resolved session path (mirrors buildTokenSeries). Tasks without a session are
 // skipped; a transcript read error is tolerated (that task contributes nothing).
-func (s *Server) resolveTokenUsage(tasks []*flowdb.Task) []taskTokenUsage {
+func (s *Server) resolveTokenUsage(tasks []*productdb.Task) []taskTokenUsage {
 	var usages []taskTokenUsage
 	seen := map[string]bool{}
 	for _, t := range tasks {
@@ -720,7 +720,7 @@ func modelBreakdown(agg tokenAgg) Breakdown {
 
 // brainRunStarted is the run's start time (started_at, falling back to
 // created_at), or the zero time if neither parses.
-func brainRunStarted(r *flowdb.BrainRun) time.Time {
+func brainRunStarted(r *productdb.BrainRun) time.Time {
 	if r.StartedAt.Valid {
 		if t := parseLocal(r.StartedAt.String); !t.IsZero() {
 			return t
@@ -733,7 +733,7 @@ func brainRunStarted(r *flowdb.BrainRun) time.Time {
 // (zero, false) for one still in flight. finished_at is set in exactly one
 // place at terminal time (auto.go), so its presence is the authoritative
 // "is this run done?" signal.
-func brainRunFinished(r *flowdb.BrainRun) (time.Time, bool) {
+func brainRunFinished(r *productdb.BrainRun) (time.Time, bool) {
 	if !r.FinishedAt.Valid {
 		return time.Time{}, false
 	}
@@ -751,7 +751,7 @@ func brainRunSucceeded(status string) bool { return status == "completed" }
 // autonomySeries buckets autonomous-run volume: runs started per bucket (by
 // start time) and runs that finished successfully per bucket (by finish time).
 // In-flight runs count toward "started" but never "completed".
-func autonomySeries(runs []*flowdb.BrainRun, g bucketGrid) Series {
+func autonomySeries(runs []*productdb.BrainRun, g bucketGrid) Series {
 	started := make([]float64, g.Len())
 	completed := make([]float64, g.Len())
 	for _, r := range runs {
@@ -793,7 +793,7 @@ type autonomyStats struct {
 
 // computeAutonomy tallies run volume (started within the grid) and outcome
 // stats (success rate + p50 duration over finished runs).
-func computeAutonomy(runs []*flowdb.BrainRun, g bucketGrid) autonomyStats {
+func computeAutonomy(runs []*productdb.BrainRun, g bucketGrid) autonomyStats {
 	var st autonomyStats
 	var succeeded float64
 	var durs []float64
@@ -840,7 +840,7 @@ type Funnel struct {
 
 // steeringFunnel tallies the window-total funnel over lite trace rows whose
 // created_at falls within the grid.
-func steeringFunnel(rows []flowdb.SteeringTraceLite, g bucketGrid) Funnel {
+func steeringFunnel(rows []productdb.SteeringTraceLite, g bucketGrid) Funnel {
 	var f Funnel
 	dropped := map[string]float64{}
 	for _, r := range rows {
@@ -876,7 +876,7 @@ func steeringFunnel(rows []flowdb.SteeringTraceLite, g bucketGrid) Funnel {
 // steeringSeries builds the per-bucket funnel volume (observed vs surfaced) and
 // the p50 triage-latency trend. Latency is a true per-bucket median over the
 // raw rows in that bucket; empty buckets are 0.
-func steeringSeries(rows []flowdb.SteeringTraceLite, g bucketGrid) (volume Series, latency Series) {
+func steeringSeries(rows []productdb.SteeringTraceLite, g bucketGrid) (volume Series, latency Series) {
 	observed := make([]float64, g.Len())
 	surfaced := make([]float64, g.Len())
 	lat := make([][]float64, g.Len())
@@ -993,7 +993,7 @@ func taskSource(tags []string) string {
 
 // taskSourceBreakdown counts tasks CREATED within the window by their origin.
 // The slack/github/manual segments are always present (stable legend) even at 0.
-func taskSourceBreakdown(tasks []*flowdb.Task, tags map[string][]string, g bucketGrid) Breakdown {
+func taskSourceBreakdown(tasks []*productdb.Task, tags map[string][]string, g bucketGrid) Breakdown {
 	counts := map[string]float64{"slack": 0, "github": 0, "manual": 0}
 	for _, t := range tasks {
 		c := parseLocal(t.CreatedAt)
@@ -1018,7 +1018,7 @@ func taskSourceBreakdown(tasks []*flowdb.Task, tags map[string][]string, g bucke
 // sourceConversions builds a per-connector funnel (observed → surfaced → made a
 // task) over the window from steering traces. "Tasks" counts events the steerer
 // routed to make_task. Most-active source first; only slack/github are tracked.
-func sourceConversions(traces []flowdb.SteeringTraceLite, g bucketGrid) []SourceConversion {
+func sourceConversions(traces []productdb.SteeringTraceLite, g bucketGrid) []SourceConversion {
 	type agg struct{ observed, surfaced, tasks int }
 	by := map[string]*agg{}
 	for _, tr := range traces {

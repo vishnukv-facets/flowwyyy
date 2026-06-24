@@ -13,13 +13,14 @@ import (
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // captureTraces wires c.trace to append into a slice and returns a pointer to
 // it, so a test can assert on the decision-trace rows the cascade emits.
-func captureTraces(c *Cascade) *[]flowdb.SteeringTrace {
-	var traces []flowdb.SteeringTrace
-	c.trace = func(t flowdb.SteeringTrace) { traces = append(traces, t) }
+func captureTraces(c *Cascade) *[]productdb.SteeringTrace {
+	var traces []productdb.SteeringTrace
+	c.trace = func(t productdb.SteeringTrace) { traces = append(traces, t) }
 	return &traces
 }
 
@@ -119,7 +120,7 @@ func TestCascadeSurfacesSurvivor(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "need help")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -150,7 +151,7 @@ func TestCascadeFeedCapturesSourceContext(t *testing.T) {
 	if err := c.Observe(context.Background(), ev); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -201,7 +202,7 @@ func TestCascadeFetchesContextForDeepTriageAndStoresJSON(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "need help")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -295,7 +296,7 @@ func TestCascadeStoresFallbackContextWhenFetchFails(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "fallback from event")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -325,7 +326,7 @@ func TestCascadeScrubsInternalFetchDetailsBeforeWritingFeed(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "1.1", "U_OTHER", "I'll be on leave tomorrow and the day after.")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -346,7 +347,7 @@ func TestCascadeStage0DropWritesNothing(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "2.1", "U_ME", "note")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Errorf("expected no feed items, got %d", len(items))
 	}
 }
@@ -366,7 +367,7 @@ func TestCascadeStage1FalseStillReachesDeepTriage(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "3.1", "U_OTHER", "lol")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Errorf("expected no feed items, got %d", len(items))
 	}
 	if len(*traces) != 1 {
@@ -401,7 +402,7 @@ func TestCascadeDeepDropNotSurfaced(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "7.1", "U_OTHER", "create+close dashboard task")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 0 {
 		t.Errorf("drop verdict must not surface a feed card, got %d", len(items))
 	}
 	if len(*traces) != 1 {
@@ -442,7 +443,7 @@ func TestCascadeVerdictCacheSkipsRepeat(t *testing.T) {
 	if calls != callsAfterFirst {
 		t.Errorf("second Observe should hit verdict cache and make no model calls (calls %d -> %d)", callsAfterFirst, calls)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 1 {
 		t.Errorf("cache must prevent a duplicate feed row, got %d", len(items))
 	}
 }
@@ -464,7 +465,7 @@ func TestCascadeBudgetExhaustionSurfacesStage2(t *testing.T) {
 	if deepCalled {
 		t.Error("deep triage must NOT run when budget is exhausted")
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 || items[0].Summary != "stage2 only" {
 		t.Errorf("budget exhaustion must still surface the stage2 verdict, got %+v", items)
 	}
@@ -494,7 +495,7 @@ func TestCascadeClassifierBudgetDropsBeforeStage1(t *testing.T) {
 	if deepCalled {
 		t.Fatal("deep triage must not run when classifier budget is exhausted")
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Fatalf("classifier-budget drop must not write feed items, got %d", len(items))
 	}
 	if len(*traces) != 1 {
@@ -538,7 +539,7 @@ func TestCascadeClassifierBudgetDropsBeforeStage2(t *testing.T) {
 	if deepCalled {
 		t.Fatal("deep triage must not run after the classifier budget is exhausted")
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Fatalf("classifier-budget drop must not write feed items, got %d", len(items))
 	}
 	if len(*traces) != 1 {
@@ -576,7 +577,7 @@ func TestCascadeStage1ErrorDoesNotRunStage2(t *testing.T) {
 	if deepCalled {
 		t.Fatal("deep triage must not run after stage1 classifier error")
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Fatalf("stage1 error must not write feed items, got %d", len(items))
 	}
 	if len(*traces) != 1 {
@@ -618,7 +619,7 @@ func TestCascadeStage2UnavailableErrorOpensClassifierCooldown(t *testing.T) {
 	if stage2Calls != 1 {
 		t.Fatalf("stage2 calls = %d, want 1; cooldown should stop repeated stage2 launches", stage2Calls)
 	}
-	if items, _ := flowdb.ListFeedItems(db, ""); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, ""); len(items) != 0 {
 		t.Fatalf("classifier-unavailable path must not write feed items, got %d", len(items))
 	}
 	if len(*traces) != 2 {
@@ -824,7 +825,7 @@ func TestCascadeCodeRabbitPotentialIssueBypassesStage1Drop(t *testing.T) {
 	if err := c.Observe(context.Background(), ev); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1 actionable CodeRabbit item", len(items))
 	}
@@ -972,7 +973,7 @@ func TestCascadeMatchExistingTaskRewritesMakeTask(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "90.1", "U_OTHER", "please")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -1000,7 +1001,7 @@ func TestCascadeMatchExistingTaskBudgetExhaustedPath(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "91.1", "U_OTHER", "please")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -1027,7 +1028,7 @@ func TestCascadeNoExistingTaskLeavesActionUnchanged(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "92.1", "U_OTHER", "please")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("feed len = %d, want 1", len(items))
 	}
@@ -1087,10 +1088,10 @@ func TestCascadeAutoActsWhenAutonomyEnabled(t *testing.T) {
 	if *spawns != 1 {
 		t.Errorf("taskSpawner calls = %d, want 1 (auto-acted)", *spawns)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 0 {
 		t.Errorf("new feed items = %d, want 0 (auto-acted → acted)", len(items))
 	}
-	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("acted feed items = %d, want 1", len(items))
 	}
 }
@@ -1101,8 +1102,8 @@ func TestCascadeAutoActsOnCalibratedConfidence(t *testing.T) {
 	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.80}}
 	// Calibration says: in make_task's 0.60 band the operator historically agreed
 	// 9/10 → calibrated 0.90, which clears 0.80. This is the wiring this task adds.
-	cal := NewConfidenceCalibrator([]flowdb.AttentionCalibrationBin{
-		{Action: "make_task", ConfidenceBand: flowdb.ConfidenceBand(0.60), Approved: 9, Negative: 1},
+	cal := NewConfidenceCalibrator([]productdb.AttentionCalibrationBin{
+		{Action: "make_task", ConfidenceBand: productdb.ConfidenceBand(0.60), Approved: 9, Negative: 1},
 	}, 0)
 	c.CalibratorFn = func() *ConfidenceCalibrator { return cal }
 	old := matchExistingTask
@@ -1124,7 +1125,7 @@ func TestCascadeAutoActsOnCalibratedConfidence(t *testing.T) {
 	if *spawns != 1 {
 		t.Errorf("taskSpawner calls = %d, want 1 (calibration lifted raw 0.60 → 0.90 >= 0.80)", *spawns)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("acted feed items = %d, want 1", len(items))
 	}
 }
@@ -1147,10 +1148,10 @@ func TestCascadeAutoDismissesDigestOnly(t *testing.T) {
 	if err := c.Observe(context.Background(), msg("C1", "98.1", "U_OTHER", "fyi heads up")); err != nil {
 		t.Fatalf("Observe: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 0 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 0 {
 		t.Errorf("new feed items = %d, want 0 (digest_only auto-dismissed)", len(items))
 	}
-	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("dismissed feed items = %d, want 1 (auto-dismiss resolved the FYI card)", len(items))
 	}
 }
@@ -1159,7 +1160,7 @@ func TestMaybeAutoActSuppressedByCorrectionContext(t *testing.T) {
 	c, db := cascadeFixture(t)
 	c.Autonomy = AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.1}}
 	stubTaskSpawner(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "c1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s",
 		SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-12T06:00:00Z",
 	}); err != nil {
@@ -1236,7 +1237,7 @@ func TestCascadeTraceRecordsAutonomyFailureAndLeavesFeedVisible(t *testing.T) {
 	if *spawns != 1 {
 		t.Fatalf("taskSpawner calls = %d, want 1", *spawns)
 	}
-	items, _ := flowdb.ListFeedItems(db, "new")
+	items, _ := productdb.ListFeedItems(db, "new")
 	if len(items) != 1 {
 		t.Fatalf("new feed items = %d, want 1 after failed auto-action", len(items))
 	}
@@ -1267,7 +1268,7 @@ func TestCascadeSurfaceOnlyWhenAutonomyOff(t *testing.T) {
 	if *spawns != 0 {
 		t.Errorf("taskSpawner calls = %d, want 0 (surface-only by default)", *spawns)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 1 {
 		t.Errorf("new feed items = %d, want 1 (surfaced, not acted)", len(items))
 	}
 }
@@ -1430,7 +1431,7 @@ func TestCascadeConsumesLearnedSuppressionsWithoutRestart(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+		if err := productdb.RecordAttentionFeedback(db, productdb.AttentionFeedback{
 			ID: "cascade-learn-" + string(rune('a'+i)), FeedItemID: "feed", Source: "slack",
 			Channel: "C_NOISE", Author: "U_OTHER", ThreadType: "channel", ThreadKey: "C_NOISE:1.1",
 			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",

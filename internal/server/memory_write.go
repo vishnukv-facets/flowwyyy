@@ -3,8 +3,8 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"flow/internal/flowdb"
 	"flow/internal/memorysrc"
+	"flow/internal/productdb"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,7 +18,7 @@ import (
 // arbitrary file on disk.
 func (s *Server) memorySourceAllowSet() map[string]bool {
 	set := map[string]bool{}
-	regs, err := flowdb.ListWorkdirs(s.cfg.DB)
+	regs, err := productdb.ListWorkdirs(s.cfg.DB)
 	if err != nil {
 		return set
 	}

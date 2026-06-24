@@ -3,9 +3,9 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
 	"flow/internal/iterm"
 	"flow/internal/kitty"
+	"flow/internal/productdb"
 	"flow/internal/spawner"
 	macterminal "flow/internal/terminal"
 	"flow/internal/warp"
@@ -19,7 +19,7 @@ import (
 )
 
 func (s *Server) openBrowserTerminalBridge(target, providerChoice string) (actionResponse, int) {
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -27,7 +27,7 @@ func (s *Server) openBrowserTerminalBridge(target, providerChoice string) (actio
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	if task.Status != "done" {
-		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+		if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 		}
 	}
@@ -57,7 +57,7 @@ func (s *Server) openBrowserTerminalBridge(target, providerChoice string) (actio
 }
 
 func (s *Server) restartBrowserTerminalBridge(target string) (actionResponse, int) {
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -67,7 +67,7 @@ func (s *Server) restartBrowserTerminalBridge(target string) (actionResponse, in
 	if task.Status == "done" {
 		return actionResponse{OK: false, Message: "task " + target + " is done; move it back to in-progress before reopening"}, http.StatusBadRequest
 	}
-	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+	if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 	}
 	provider := strings.TrimSpace(task.SessionProvider)
@@ -78,7 +78,7 @@ func (s *Server) restartBrowserTerminalBridge(target string) (actionResponse, in
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
 	s.terminals.stop(target)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if strings.TrimSpace(task.SessionID.String) != "" {
 		if _, err := s.cfg.DB.Exec(
 			`UPDATE tasks SET
@@ -99,7 +99,7 @@ func (s *Server) restartBrowserTerminalBridge(target string) (actionResponse, in
 }
 
 func (s *Server) restartFreshBrowserTerminalBridge(target string) (actionResponse, int) {
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -109,7 +109,7 @@ func (s *Server) restartFreshBrowserTerminalBridge(target string) (actionRespons
 	if task.Status == "done" {
 		return actionResponse{OK: false, Message: "task " + target + " is done; move it back to in-progress before reopening"}, http.StatusBadRequest
 	}
-	if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+	if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 	}
 	provider := strings.TrimSpace(task.SessionProvider)
@@ -120,7 +120,7 @@ func (s *Server) restartFreshBrowserTerminalBridge(target string) (actionRespons
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
 	s.terminals.stop(target)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := s.cfg.DB.Exec(
 		`UPDATE tasks SET
 			status = 'backlog',
@@ -140,7 +140,7 @@ func (s *Server) restartFreshBrowserTerminalBridge(target string) (actionRespons
 }
 
 func (s *Server) openTaskBridge(target, terminalKind string, force bool) (actionResponse, int) {
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -158,7 +158,7 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 	// the prior session (loading its context), mirroring the browser bridge
 	// which already special-cases done. Only gate startability for non-done.
 	if task.Status != "done" {
-		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+		if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 		}
 	}
@@ -204,11 +204,11 @@ func (s *Server) spawnPlaybookRunBridge(target string, req actionRequest) (actio
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	permissionMode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	permissionMode, err := productdb.NormalizePermissionMode(req.PermissionMode)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	pb, err := flowdb.GetPlaybook(s.cfg.DB, target)
+	pb, err := productdb.GetPlaybook(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "playbook not found: " + target}, http.StatusNotFound
@@ -358,7 +358,7 @@ func pathWithCommandDir(current, commandPath string) string {
 	return dir + string(os.PathListSeparator) + current
 }
 
-func nativeTerminalTitle(task *flowdb.Task) string {
+func nativeTerminalTitle(task *productdb.Task) string {
 	if task.ProjectSlug.Valid && task.ProjectSlug.String != "" {
 		return task.ProjectSlug.String + "/" + task.Slug
 	}
@@ -432,7 +432,7 @@ func terminalLabel(kind string) string {
 }
 
 func taskStartErrorStatus(err error) int {
-	var blocker *flowdb.TaskStartBlocker
+	var blocker *productdb.TaskStartBlocker
 	if errors.As(err, &blocker) {
 		return http.StatusBadRequest
 	}
@@ -448,7 +448,7 @@ func (s *Server) switchBranch(req actionRequest) (actionResponse, int) {
 	if err := validateBranch(branch); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound

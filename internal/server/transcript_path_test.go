@@ -2,11 +2,10 @@ package server
 
 import (
 	"database/sql"
+	"flow/internal/productdb"
 	"os"
 	"path/filepath"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 // Claude derives its transcript path from the launch cwd. A worktree session's
@@ -30,7 +29,7 @@ func TestResolveSessionJSONLPathPrefersWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		WorkDir:         repo,
 		WorktreePath:    sql.NullString{String: worktree, Valid: true},
 		SessionProvider: "claude",
@@ -61,7 +60,7 @@ func TestResolveSessionJSONLPathFallsBackToWorkDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		WorkDir:         repo,
 		SessionProvider: "claude",
 		SessionID:       sql.NullString{String: sid, Valid: true},
@@ -84,7 +83,7 @@ func TestSessionJSONLPathUsesStoredCodexPath(t *testing.T) {
 	if err := os.WriteFile(file, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		WorkDir:         "/Users/x/.claude/worktrees/feature", // worktree cwd, irrelevant for codex
 		SessionProvider: "codex",
 		SessionID:       sql.NullString{String: "33333333-3333-4333-8333-333333333333", Valid: true},

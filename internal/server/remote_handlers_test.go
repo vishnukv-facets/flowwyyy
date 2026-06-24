@@ -1,13 +1,12 @@
 package server
 
 import (
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 func TestHandleRemotePairHappyPath(t *testing.T) {
@@ -26,7 +25,7 @@ func TestHandleRemotePairHappyPath(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"token"`) {
 		t.Fatalf("expected token in response: %s", rec.Body.String())
 	}
-	list, _ := flowdb.ListRemoteDevices(s.cfg.DB)
+	list, _ := productdb.ListRemoteDevices(s.cfg.DB)
 	if len(list) != 1 || list[0].Label != "iPhone" {
 		t.Fatalf("device not persisted: %+v", list)
 	}
@@ -48,9 +47,9 @@ func TestHandleRemotePairBadCode(t *testing.T) {
 // clear them) and validates input.
 func TestHandleRemoteDeviceDelete(t *testing.T) {
 	s := newTestServer(t)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	exp := time.Now().Add(time.Hour).Format(time.RFC3339)
-	if err := flowdb.InsertRemoteDevice(s.cfg.DB, "dev1", "iPhone", "hashAAA", now, exp); err != nil {
+	if err := productdb.InsertRemoteDevice(s.cfg.DB, "dev1", "iPhone", "hashAAA", now, exp); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
 
@@ -67,7 +66,7 @@ func TestHandleRemoteDeviceDelete(t *testing.T) {
 	if rec.Code != 200 {
 		t.Fatalf("delete: got %d body=%s", rec.Code, rec.Body.String())
 	}
-	list, _ := flowdb.ListRemoteDevices(s.cfg.DB)
+	list, _ := productdb.ListRemoteDevices(s.cfg.DB)
 	if len(list) != 0 {
 		t.Fatalf("expected 0 devices after delete, got %d", len(list))
 	}

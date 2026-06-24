@@ -1,14 +1,13 @@
 package server
 
 import (
+	"flow/internal/productdb"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
-func steeringFixture() []flowdb.SteeringTraceLite {
-	return []flowdb.SteeringTraceLite{
+func steeringFixture() []productdb.SteeringTraceLite {
+	return []productdb.SteeringTraceLite{
 		{CreatedAt: "2026-06-15T10:00:00Z", Disposition: "surfaced", StageReached: "stage3", LatencyMS: 100},
 		{CreatedAt: "2026-06-15T11:00:00Z", Disposition: "surfaced", StageReached: "stage3", LatencyMS: 300},
 		{CreatedAt: "2026-06-15T12:00:00Z", Disposition: "dropped", StageReached: "stage1", LatencyMS: 50},

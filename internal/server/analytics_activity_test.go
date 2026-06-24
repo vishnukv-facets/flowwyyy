@@ -2,18 +2,17 @@ package server
 
 import (
 	"database/sql"
+	"flow/internal/productdb"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 func atDay(y, m, d int) string {
 	return time.Date(y, time.Month(m), d, 10, 0, 0, 0, time.Local).Format(time.RFC3339)
 }
 
-func mkTask(slug, status, created, changed string) *flowdb.Task {
-	t := &flowdb.Task{Slug: slug, Status: status, CreatedAt: created}
+func mkTask(slug, status, created, changed string) *productdb.Task {
+	t := &productdb.Task{Slug: slug, Status: status, CreatedAt: created}
 	if changed != "" {
 		t.StatusChangedAt = sql.NullString{String: changed, Valid: true}
 	}
@@ -44,11 +43,11 @@ func TestActivitySeriesBucketsCreatedAndDone(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d")
 	g := bucketsFor(from, to, unit, now) // daily buckets 6/13..6/20
 
-	tasks := []*flowdb.Task{
-		mkTask("a", "done", atDay(2026, 6, 14), atDay(2026, 6, 16)),       // created 6/14, done 6/16
-		mkTask("b", "in-progress", atDay(2026, 6, 14), ""),               // created 6/14
-		mkTask("c", "done", atDay(2026, 6, 1), atDay(2026, 6, 20)),        // created before window, done 6/20 (live bucket)
-		mkTask("d", "backlog", atDay(2026, 6, 10), ""),                   // created before window — not counted
+	tasks := []*productdb.Task{
+		mkTask("a", "done", atDay(2026, 6, 14), atDay(2026, 6, 16)), // created 6/14, done 6/16
+		mkTask("b", "in-progress", atDay(2026, 6, 14), ""),          // created 6/14
+		mkTask("c", "done", atDay(2026, 6, 1), atDay(2026, 6, 20)),  // created before window, done 6/20 (live bucket)
+		mkTask("d", "backlog", atDay(2026, 6, 10), ""),              // created before window — not counted
 	}
 
 	s := activitySeries(tasks, g)
@@ -80,11 +79,11 @@ func TestCycleTimeMedianDays(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "30d")
 	g := bucketsFor(from, to, unit, now)
 
-	tasks := []*flowdb.Task{
+	tasks := []*productdb.Task{
 		mkTask("x1", "done", atDay(2026, 6, 10), atDay(2026, 6, 12)), // 2d
 		mkTask("x2", "done", atDay(2026, 6, 10), atDay(2026, 6, 14)), // 4d
 		mkTask("x3", "done", atDay(2026, 6, 10), atDay(2026, 6, 16)), // 6d
-		mkTask("ip", "in-progress", atDay(2026, 6, 10), ""),         // ignored
+		mkTask("ip", "in-progress", atDay(2026, 6, 10), ""),          // ignored
 	}
 	med, ok := cycleTimeMedianDays(tasks, g)
 	if !ok {

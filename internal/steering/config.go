@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // WatchConfigFromEnv builds a WatchConfig from environment configuration. The
@@ -42,7 +42,7 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 			return cfg
 		}
 		cfg.TaskLinkedGitHubThreads = taskLinkedGitHubThreads(db)
-		mutes, err := flowdb.ListSteeringMutes(db)
+		mutes, err := productdb.ListSteeringMutes(db)
 		if err != nil {
 			return cfg // on error, fall back to env-only rather than failing the cascade
 		}
@@ -56,7 +56,7 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 		}
 		cfg.MutedAuthors = mergeBoolSet(cfg.MutedAuthors, mutes.Authors)
 		cfg.MutedThreads = mergeBoolSet(cfg.MutedThreads, mutes.Threads)
-		learned, err := flowdb.LearnedAttentionPolicyFromFeedback(db, flowdb.LearnedAttentionPolicyOptions{})
+		learned, err := productdb.LearnedAttentionPolicyFromFeedback(db, productdb.LearnedAttentionPolicyOptions{})
 		if err != nil {
 			return cfg
 		}
@@ -73,7 +73,7 @@ func WatchConfigFnWithMutes(db *sql.DB) func() WatchConfig {
 
 func taskLinkedGitHubThreads(db *sql.DB) map[string]bool {
 	out := map[string]bool{}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: false})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{IncludeArchived: false})
 	if err != nil || len(tasks) == 0 {
 		return out
 	}
@@ -86,7 +86,7 @@ func taskLinkedGitHubThreads(db *sql.DB) map[string]bool {
 	if len(slugs) == 0 {
 		return out
 	}
-	tags, err := flowdb.GetTaskTagsBatch(db, slugs)
+	tags, err := productdb.GetTaskTagsBatch(db, slugs)
 	if err != nil {
 		return out
 	}

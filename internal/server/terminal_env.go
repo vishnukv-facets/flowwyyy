@@ -2,7 +2,7 @@ package server
 
 import (
 	"context"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -93,9 +93,9 @@ func terminalEnvMap(flowRoot, commandPath, hookURL, slug, provider, permissionMo
 }
 
 func normalizedTerminalPermissionMode(mode string) string {
-	normalized, err := flowdb.NormalizePermissionMode(mode)
+	normalized, err := productdb.NormalizePermissionMode(mode)
 	if err != nil {
-		return flowdb.DefaultPermissionMode
+		return productdb.DefaultPermissionMode
 	}
 	return normalized
 }

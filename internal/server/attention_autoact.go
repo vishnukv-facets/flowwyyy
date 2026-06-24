@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
@@ -24,7 +24,7 @@ func (s *Server) attentionAutoAct(req actionRequest) (actionResponse, int) {
 	if id == "" {
 		return actionResponse{OK: false, Message: "attention-autoact requires a feed item id (target)"}, http.StatusBadRequest
 	}
-	item, err := flowdb.GetFeedItem(s.cfg.DB, id)
+	item, err := productdb.GetFeedItem(s.cfg.DB, id)
 	if err != nil {
 		return actionResponse{OK: false, Message: "feed item not found: " + id}, http.StatusNotFound
 	}
@@ -44,7 +44,7 @@ func (s *Server) attentionAutoAct(req actionRequest) (actionResponse, int) {
 // row (audit is the steering trace + the agent's send confirmation), so they
 // cannot inflate the calibration they gate on — same invariant as the cascade.
 // Best-effort: any miss leaves the card surfaced for manual handling.
-func (s *Server) autoActOnSurfacedCard(item flowdb.FeedItem) {
+func (s *Server) autoActOnSurfacedCard(item productdb.FeedItem) {
 	if s == nil || s.cfg.DB == nil {
 		return
 	}
@@ -103,7 +103,7 @@ func (s *Server) autoActOnSurfacedCard(item flowdb.FeedItem) {
 // the gh agent. Neither records an attention_feedback row. If no Slack chat
 // exists yet, the reply is left for manual send rather than spinning a
 // context-blind ephemeral session without operator approval.
-func (s *Server) autoSendReply(item flowdb.FeedItem, conf float64) {
+func (s *Server) autoSendReply(item productdb.FeedItem, conf float64) {
 	switch strings.TrimSpace(item.Source) {
 	case "slack":
 		if s.terminals == nil {

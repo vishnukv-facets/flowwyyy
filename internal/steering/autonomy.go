@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // ActionPolicy is the operator's autonomy setting for one action: whether the
@@ -233,7 +233,7 @@ func AutonomyFnWithFeedback(db *sql.DB, base func() AutonomyPolicy) func() Auton
 		if base != nil {
 			pol = cloneAutonomyPolicy(base())
 		}
-		learned, err := flowdb.LearnedAttentionPolicyFromFeedback(db, flowdb.LearnedAttentionPolicyOptions{})
+		learned, err := productdb.LearnedAttentionPolicyFromFeedback(db, productdb.LearnedAttentionPolicyOptions{})
 		if err != nil {
 			return pol
 		}

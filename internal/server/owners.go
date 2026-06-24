@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"net/http"
 	"strings"
 	"time"
@@ -22,7 +22,7 @@ func (s *Server) handleOwners(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	owners, err := flowdb.ListOwners(s.cfg.DB, flowdb.OwnerFilter{
+	owners, err := productdb.ListOwners(s.cfg.DB, productdb.OwnerFilter{
 		Status:          r.URL.Query().Get("status"),
 		IncludeArchived: boolQuery(r.URL.Query(), "include_archived"),
 	})
@@ -47,7 +47,7 @@ func (s *Server) handleOwnerRoute(w http.ResponseWriter, r *http.Request) {
 		if !getOnly(w, r) {
 			return
 		}
-		o, err := flowdb.GetOwner(s.cfg.DB, slug)
+		o, err := productdb.GetOwner(s.cfg.DB, slug)
 		if err != nil {
 			writeNotFoundOrError(w, err)
 			return
@@ -64,18 +64,22 @@ func (s *Server) handleOwnerRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch parts[1] {
+	// Owners are Bucket O (official-flow-owned): mutate via the `flow owner`
+	// verbs, never by writing the owners table directly (seam §11). The verbs
+	// match the prior flowdb calls exactly — `owner start` = ActivateOwner(now),
+	// `owner next --at` = SetOwnerNextWake(explicit time).
 	case "start":
-		if err := flowdb.ActivateOwner(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+		if _, err := s.runFlowCommand("owner", "start", slug); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
 	case "pause":
-		if err := flowdb.PauseOwner(s.cfg.DB, slug); err != nil {
+		if _, err := s.runFlowCommand("owner", "pause", slug); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
 	case "retire":
-		if err := flowdb.RetireOwner(s.cfg.DB, slug); err != nil {
+		if _, err := s.runFlowCommand("owner", "retire", slug); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -85,7 +89,7 @@ func (s *Server) handleOwnerRoute(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err, http.StatusBadRequest)
 			return
 		}
-		if err := flowdb.SetOwnerNextWake(s.cfg.DB, slug, next.Format(time.RFC3339)); err != nil {
+		if _, err := s.runFlowCommand("owner", "next", slug, "--at", next.Format(time.RFC3339)); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -102,7 +106,7 @@ func (s *Server) handleOwnerRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	o, err := flowdb.GetOwner(s.cfg.DB, slug)
+	o, err := productdb.GetOwner(s.cfg.DB, slug)
 	if err != nil {
 		writeNotFoundOrError(w, err)
 		return

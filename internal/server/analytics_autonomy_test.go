@@ -2,15 +2,14 @@ package server
 
 import (
 	"database/sql"
+	"flow/internal/productdb"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 // mkRun builds a brain-run fixture. finished == "" means in-flight.
-func mkRun(id, status, started, finished string) *flowdb.BrainRun {
-	r := &flowdb.BrainRun{
+func mkRun(id, status, started, finished string) *productdb.BrainRun {
+	r := &productdb.BrainRun{
 		RunID:    id,
 		Status:   status,
 		Provider: "claude",
@@ -31,7 +30,7 @@ func TestAutonomySeriesVolume(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d") // daily 6/13..6/20
 	g := bucketsFor(from, to, unit, now)
 
-	runs := []*flowdb.BrainRun{
+	runs := []*productdb.BrainRun{
 		mkRun("a", "completed", "2026-06-15T10:00:00Z", "2026-06-15T10:05:00Z"),
 		mkRun("b", "completed", "2026-06-15T14:00:00Z", "2026-06-15T14:20:00Z"),
 		mkRun("c", "dead", "2026-06-17T09:00:00Z", "2026-06-17T09:40:00Z"),
@@ -68,7 +67,7 @@ func TestComputeAutonomyStats(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d")
 	g := bucketsFor(from, to, unit, now)
 
-	runs := []*flowdb.BrainRun{
+	runs := []*productdb.BrainRun{
 		mkRun("a", "completed", "2026-06-15T10:00:00Z", "2026-06-15T10:10:00Z"), // 10 min
 		mkRun("b", "completed", "2026-06-15T14:00:00Z", "2026-06-15T14:30:00Z"), // 30 min
 		mkRun("c", "dead", "2026-06-17T09:00:00Z", "2026-06-17T09:50:00Z"),      // 50 min, failed
@@ -101,7 +100,7 @@ func TestComputeAutonomyNoFinishedRuns(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d")
 	g := bucketsFor(from, to, unit, now)
 
-	runs := []*flowdb.BrainRun{
+	runs := []*productdb.BrainRun{
 		mkRun("a", "running", "2026-06-18T09:00:00Z", ""),
 	}
 	st := computeAutonomy(runs, g)

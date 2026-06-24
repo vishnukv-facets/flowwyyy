@@ -1,13 +1,13 @@
 package server
 
 import (
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"path/filepath"
 )
 
 func (s *Server) uiTrash() uiTrash {
 	var out uiTrash
-	tasks, _ := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: true, DeletedOnly: true})
+	tasks, _ := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{Kind: "", IncludeArchived: true, DeletedOnly: true})
 	for _, task := range tasks {
 		out.Tasks = append(out.Tasks, uiTrashItem{
 			Kind:      "task",
@@ -21,7 +21,7 @@ func (s *Server) uiTrash() uiTrash {
 			Archived:  task.ArchivedAt.Valid,
 		})
 	}
-	projects, _ := flowdb.ListProjects(s.cfg.DB, flowdb.ProjectFilter{IncludeArchived: true, DeletedOnly: true})
+	projects, _ := productdb.ListProjects(s.cfg.DB, productdb.ProjectFilter{IncludeArchived: true, DeletedOnly: true})
 	for _, project := range projects {
 		out.Projects = append(out.Projects, uiTrashItem{
 			Kind:      "project",
@@ -34,7 +34,7 @@ func (s *Server) uiTrash() uiTrash {
 			Archived:  project.ArchivedAt.Valid,
 		})
 	}
-	playbooks, _ := flowdb.ListPlaybooks(s.cfg.DB, flowdb.PlaybookFilter{IncludeArchived: true, DeletedOnly: true})
+	playbooks, _ := productdb.ListPlaybooks(s.cfg.DB, productdb.PlaybookFilter{IncludeArchived: true, DeletedOnly: true})
 	for _, playbook := range playbooks {
 		out.Playbooks = append(out.Playbooks, uiTrashItem{
 			Kind:      "playbook",
@@ -51,7 +51,7 @@ func (s *Server) uiTrash() uiTrash {
 }
 
 func (s *Server) uiProjects() ([]uiProject, error) {
-	projects, err := flowdb.ListProjects(s.cfg.DB, flowdb.ProjectFilter{})
+	projects, err := productdb.ListProjects(s.cfg.DB, productdb.ProjectFilter{})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +78,7 @@ func (s *Server) uiProjects() ([]uiProject, error) {
 }
 
 func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
-	playbooks, err := flowdb.ListPlaybooks(s.cfg.DB, flowdb.PlaybookFilter{})
+	playbooks, err := productdb.ListPlaybooks(s.cfg.DB, productdb.PlaybookFilter{})
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +123,7 @@ func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
 }
 
 func (s *Server) uiWorkdirs() ([]uiWorkdir, error) {
-	workdirs, err := flowdb.ListWorkdirs(s.cfg.DB)
+	workdirs, err := productdb.ListWorkdirs(s.cfg.DB)
 	if err != nil {
 		return nil, err
 	}

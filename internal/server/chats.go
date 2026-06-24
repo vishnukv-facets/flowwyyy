@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // chatTitleMaxRunes bounds a derived chat title so the sidebar list stays tidy.
@@ -71,14 +71,14 @@ type chatView struct {
 
 // listChats returns the chats for the Chats sidebar, newest activity first.
 // Archived chats are excluded unless includeArchived is true; deleted chats are
-// always hidden (handled by flowdb.ListChats). The returned slice is never nil
+// always hidden (handled by productdb.ListChats). The returned slice is never nil
 // so JSON encodes an empty list as [] rather than null.
 func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 	out := []chatView{}
 	if s.cfg.DB == nil {
 		return out, nil
 	}
-	chats, err := flowdb.ListChats(s.cfg.DB, flowdb.ChatFilter{IncludeArchived: includeArchived})
+	chats, err := productdb.ListChats(s.cfg.DB, productdb.ChatFilter{IncludeArchived: includeArchived})
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 // context-window occupancy as a 0–100 % (the same used/max the /compact worker
 // reads — GAP-5). All zero when the chat has no resolvable session yet. Memoized
 // via transcriptCache, so it stays cheap on the buildUIData hot path.
-func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyPct int) {
+func (s *Server) chatUsage(c *productdb.Chat) (tokens int, cost float64, occupancyPct int) {
 	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
 		return 0, 0, 0
 	}
@@ -116,11 +116,11 @@ func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyP
 	if err != nil {
 		return 0, 0, 0
 	}
-	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
+	provider, err := productdb.NormalizeSessionProvider(c.Provider)
 	if err != nil {
 		return 0, 0, 0
 	}
-	path, err := resolveSessionJSONLPath(&flowdb.Task{
+	path, err := resolveSessionJSONLPath(&productdb.Task{
 		Slug:            c.Slug,
 		WorkDir:         absRoot,
 		SessionProvider: provider,
@@ -149,7 +149,7 @@ func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyP
 // transcript can't be resolved/read, or the agent hasn't spoken yet. Best
 // effort: any error yields "" (the row simply shows no preview). The transcript
 // parse is memoized by transcriptCache, so repeated list calls are cheap.
-func (s *Server) chatLastReply(c *flowdb.Chat) string {
+func (s *Server) chatLastReply(c *productdb.Chat) string {
 	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
 		return ""
 	}
@@ -161,14 +161,14 @@ func (s *Server) chatLastReply(c *flowdb.Chat) string {
 	if err != nil {
 		return ""
 	}
-	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
+	provider, err := productdb.NormalizeSessionProvider(c.Provider)
 	if err != nil {
 		return ""
 	}
 	// Synthetic task carrying just what resolveSessionJSONLPath needs; the slug
 	// is not in the tasks table, so we resolve the path directly (no DB
 	// self-heal) rather than via sessionJSONLPath.
-	task := &flowdb.Task{
+	task := &productdb.Task{
 		Slug:            c.Slug,
 		WorkDir:         absRoot,
 		SessionProvider: provider,
@@ -206,7 +206,7 @@ func (s *Server) chatStatAgents() []uiAgent {
 	if s.cfg.DB == nil {
 		return nil
 	}
-	chats, err := flowdb.ListChats(s.cfg.DB, flowdb.ChatFilter{IncludeArchived: true})
+	chats, err := productdb.ListChats(s.cfg.DB, productdb.ChatFilter{IncludeArchived: true})
 	if err != nil {
 		return nil
 	}
@@ -215,7 +215,7 @@ func (s *Server) chatStatAgents() []uiAgent {
 		if c == nil {
 			continue
 		}
-		provider, perr := flowdb.NormalizeSessionProvider(c.Provider)
+		provider, perr := productdb.NormalizeSessionProvider(c.Provider)
 		if perr != nil {
 			continue
 		}
@@ -261,13 +261,13 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 	}
 	switch req.Kind {
 	case "chat-archive":
-		if err := flowdb.ArchiveChat(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+		if err := productdb.ArchiveChat(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
 		return actionResponse{OK: true, Message: "archived chat"}, http.StatusOK
 	case "chat-unarchive":
-		if err := flowdb.UnarchiveChat(s.cfg.DB, slug); err != nil {
+		if err := productdb.UnarchiveChat(s.cfg.DB, slug); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
@@ -279,7 +279,7 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 		if s.terminals != nil {
 			s.terminals.stopFloating(slug)
 		}
-		if err := flowdb.DeleteChat(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+		if err := productdb.DeleteChat(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
@@ -291,7 +291,7 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 		if title == "" {
 			return actionResponse{OK: false, Message: "name required"}, http.StatusBadRequest
 		}
-		if err := flowdb.SetChatTitle(s.cfg.DB, slug, title, flowdb.NowISO()); err != nil {
+		if err := productdb.SetChatTitle(s.cfg.DB, slug, title, productdb.NowISO()); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
@@ -307,13 +307,13 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 	case "chat-mute":
 		// Mute a steerer chat: the cascade stops forwarding events to it (gated in
 		// DeliverToChannelSession) until unmuted. The chat row + session survive.
-		if err := flowdb.SetChatMuted(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+		if err := productdb.SetChatMuted(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
 		return actionResponse{OK: true, Message: "muted chat — no events will be forwarded until you unmute"}, http.StatusOK
 	case "chat-unmute":
-		if err := flowdb.SetChatMuted(s.cfg.DB, slug, ""); err != nil {
+		if err := productdb.SetChatMuted(s.cfg.DB, slug, ""); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		s.publishUIChange("chats")
@@ -331,7 +331,7 @@ func (s *Server) chatAction(req actionRequest) (actionResponse, int) {
 // registers a fresh floating session that resumes the original agent
 // conversation by session id.
 func (s *Server) reopenChat(slug string) (actionResponse, int) {
-	chat, err := flowdb.GetChat(s.cfg.DB, slug)
+	chat, err := productdb.GetChat(s.cfg.DB, slug)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "chat not found"}, http.StatusNotFound
@@ -357,7 +357,7 @@ func (s *Server) reopenChat(slug string) (actionResponse, int) {
 	if !chat.SessionID.Valid || sessionID == "" {
 		return actionResponse{OK: false, Message: "chat has no session to resume"}, http.StatusConflict
 	}
-	provider, err := flowdb.NormalizeSessionProvider(chat.Provider)
+	provider, err := productdb.NormalizeSessionProvider(chat.Provider)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -373,7 +373,7 @@ func (s *Server) reopenChat(slug string) (actionResponse, int) {
 	// derives it from the request, defaulting to DefaultPermissionMode); resume
 	// mirrors that. The chat row does not persist a permission mode, so use the
 	// normalized default. fresh=false → RESUME args; empty prompt (resume carries none).
-	permissionMode, _ := flowdb.NormalizePermissionMode("")
+	permissionMode, _ := productdb.NormalizePermissionMode("")
 	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "")
 	launch := terminalLaunch{
 		Slug:           chat.Slug,
@@ -387,7 +387,7 @@ func (s *Server) reopenChat(slug string) (actionResponse, int) {
 		NeedsCapture:   provider == "codex",
 	}
 	terminal := s.terminals.registerFloatingLaunch(launch, chat.Title)
-	if err := flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO()); err != nil {
+	if err := productdb.TouchChat(s.cfg.DB, slug, productdb.NowISO()); err != nil {
 		// Best-effort: the session is registered; a touch hiccup must not fail reopen.
 		return actionResponse{OK: true, Message: "reopened chat", FloatingTerminal: &terminal}, http.StatusOK
 	}

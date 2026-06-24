@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 const (
@@ -31,7 +31,7 @@ const (
 // PR has nothing external feeding its inbox. Once a PR is raised it is tagged
 // gh-pr: (tracked by the GitHub poller), which is what flips this on — "we
 // updated THE PR", not merely "we made a branch". Pure function — no I/O.
-func taskNeedsMonitor(t *flowdb.Task, tags []string) bool {
+func taskNeedsMonitor(t *productdb.Task, tags []string) bool {
 	if t == nil {
 		return false
 	}
@@ -147,7 +147,7 @@ func (r *monitorReconciler) tick() {
 	if s == nil || s.cfg.DB == nil || s.inboxMonitors == nil {
 		return
 	}
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{IncludeArchived: false})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{IncludeArchived: false})
 	if err != nil {
 		return
 	}
@@ -156,7 +156,7 @@ func (r *monitorReconciler) tick() {
 	desired := make(map[string]bool, len(tasks))
 	for _, t := range tasks {
 		active[t.Slug] = t.Status != "done"
-		tags, terr := flowdb.GetTaskTags(s.cfg.DB, t.Slug)
+		tags, terr := productdb.GetTaskTags(s.cfg.DB, t.Slug)
 		if terr != nil {
 			continue // skip this task this tick; retry next round
 		}
@@ -225,7 +225,7 @@ func (s *Server) noteWithheldContent(slug string) {
 	if s == nil || s.cfg.DB == nil {
 		return
 	}
-	set, err := flowdb.SetTaskWaitingOnIfClear(s.cfg.DB, slug, withheldWaitingNote)
+	set, err := s.setTaskWaitingIfClear(slug, withheldWaitingNote)
 	if err != nil {
 		log.Printf("flow monitor: note withheld content for %s: %v", slug, err)
 		return
@@ -241,7 +241,7 @@ func (s *Server) clearWithheldContent(slug string) {
 	if s == nil || s.cfg.DB == nil {
 		return
 	}
-	if cleared, err := flowdb.ClearTaskWaitingOnIfNote(s.cfg.DB, slug, withheldWaitingNote); err == nil && cleared {
+	if cleared, err := s.clearTaskWaitingIfNote(slug, withheldWaitingNote); err == nil && cleared {
 		s.publishUIChange("tasks")
 	}
 }
@@ -254,7 +254,7 @@ func (s *Server) sessionConfirmedAttended(slug string) bool {
 	if s == nil || s.cfg.DB == nil {
 		return false
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil || task == nil {
 		return false
 	}
@@ -266,7 +266,7 @@ func (s *Server) sessionConfirmedAttended(slug string) bool {
 // (every tool auto-runs, no prompt) or an autonomous --auto run currently in
 // flight. These are exactly the sessions where injecting untrusted connector
 // text could drive tool execution with no approval (security audit P1-1).
-func taskSessionUnattended(t *flowdb.Task) bool {
+func taskSessionUnattended(t *productdb.Task) bool {
 	if t == nil {
 		return false
 	}
@@ -289,7 +289,7 @@ func taskSessionUnattended(t *flowdb.Task) bool {
 // no-human-approval agent at bootstrap. In that case we leave the events queued
 // in inbox.jsonl for a supervised (human-initiated) open instead. Mirrors the
 // fail-closed live-path gate (security audit P1-1, respawn path).
-func withholdUnattendedRespawn(task *flowdb.Task, entries []monitor.InboxEntry) bool {
+func withholdUnattendedRespawn(task *productdb.Task, entries []monitor.InboxEntry) bool {
 	return entriesIncludeUntrusted(entries) && taskSessionUnattended(task)
 }
 
@@ -315,7 +315,7 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	if s.terminals != nil && s.terminals.wakeSharedTask(slug, s.inboxWakePrompt(slug, entries)) {
 		return nil
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return nil // task gone — nothing to deliver to
 	}
@@ -357,7 +357,7 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 
 // taskAgentProcessLive reports whether the task's stored session is alive in
 // the OS process table (provider-agnostic, via cachedLiveAgentSessions).
-func (s *Server) taskAgentProcessLive(t *flowdb.Task) bool {
+func (s *Server) taskAgentProcessLive(t *productdb.Task) bool {
 	if t == nil || !t.SessionID.Valid || strings.TrimSpace(t.SessionID.String) == "" {
 		return false
 	}

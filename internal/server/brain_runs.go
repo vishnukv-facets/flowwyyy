@@ -9,14 +9,14 @@ import (
 	"strconv"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
-func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *flowdb.Task) {
+func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *productdb.Task) {
 	if !getOnly(w, r) {
 		return
 	}
-	root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
+	root, err := productdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -34,7 +34,7 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *fl
 		}
 		limit = n
 	}
-	runs, err := flowdb.ListBrainRunsForFamily(s.cfg.DB, familySlug, limit)
+	runs, err := productdb.ListBrainRunsForFamily(s.cfg.DB, familySlug, limit)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -42,7 +42,7 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *fl
 	views := make([]BrainRunView, 0, len(runs))
 	for _, run := range runs {
 		view := brainRunViewFromDB(run)
-		if t, err := flowdb.GetTask(s.cfg.DB, run.TaskSlug); err == nil {
+		if t, err := productdb.GetTask(s.cfg.DB, run.TaskSlug); err == nil {
 			attachTaskToBrainRunView(&view, t)
 		}
 		views = append(views, view)
@@ -50,17 +50,17 @@ func (s *Server) handleTaskRuns(w http.ResponseWriter, r *http.Request, task *fl
 	writeJSON(w, BrainRunsResponse{TaskSlug: task.Slug, FamilySlug: familySlug, Runs: views})
 }
 
-func (s *Server) handleTaskRunDetail(w http.ResponseWriter, r *http.Request, task *flowdb.Task, runID string) {
+func (s *Server) handleTaskRunDetail(w http.ResponseWriter, r *http.Request, task *productdb.Task, runID string) {
 	if !getOnly(w, r) {
 		return
 	}
-	root, err := flowdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
+	root, err := productdb.TaskFamilyRoot(s.cfg.DB, task.Slug)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 	familySlug := root
-	run, err := flowdb.GetBrainRun(s.cfg.DB, runID)
+	run, err := productdb.GetBrainRun(s.cfg.DB, runID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			http.NotFound(w, r)
@@ -74,13 +74,13 @@ func (s *Server) handleTaskRunDetail(w http.ResponseWriter, r *http.Request, tas
 		return
 	}
 	view := brainRunViewFromDB(run)
-	if t, err := flowdb.GetTask(s.cfg.DB, run.TaskSlug); err == nil {
+	if t, err := productdb.GetTask(s.cfg.DB, run.TaskSlug); err == nil {
 		attachTaskToBrainRunView(&view, t)
 	}
 	writeJSON(w, view)
 }
 
-func brainRunViewFromDB(run *flowdb.BrainRun) BrainRunView {
+func brainRunViewFromDB(run *productdb.BrainRun) BrainRunView {
 	if run == nil {
 		return BrainRunView{}
 	}
@@ -111,7 +111,7 @@ func brainRunViewFromDB(run *flowdb.BrainRun) BrainRunView {
 	}
 }
 
-func attachTaskToBrainRunView(view *BrainRunView, task *flowdb.Task) {
+func attachTaskToBrainRunView(view *BrainRunView, task *productdb.Task) {
 	if view == nil || task == nil {
 		return
 	}

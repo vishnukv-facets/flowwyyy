@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // Cascade is the triage brain: Stage 0 (free) -> Stage 1 (cheap relevance) ->
@@ -76,7 +76,7 @@ type Cascade struct {
 	// trace records one decision-trace row per observed event. NewCascade
 	// defaults it to a writer that inserts into the steering_trace table; tests
 	// swap it to capture rows in memory.
-	trace func(flowdb.SteeringTrace)
+	trace func(productdb.SteeringTrace)
 
 	// Progress, when set, receives a StageEvent at each cascade boundary so the
 	// server can stream live triage progress to Mission Control. NewCascade
@@ -122,7 +122,7 @@ func NewCascade(db *sql.DB, cfg WatchConfig) *Cascade {
 		budget:           newBudgetGuard(deepBudgetPerHour()),
 		classifierBudget: newBudgetGuard(classifierBudgetPerHour()),
 		log:              monitor.NewStderrLogger("[steering] "),
-		trace:            func(t flowdb.SteeringTrace) { _ = flowdb.InsertSteeringTrace(db, t) },
+		trace:            func(t productdb.SteeringTrace) { _ = productdb.InsertSteeringTrace(db, t) },
 		Autonomy:         DefaultAutonomy(),
 	}
 }
@@ -173,7 +173,7 @@ type autonomyTrace struct {
 	action, decision, reason string
 }
 
-func (a autonomyTrace) applyTo(t *flowdb.SteeringTrace) {
+func (a autonomyTrace) applyTo(t *productdb.SteeringTrace) {
 	t.AutonomyAction = a.action
 	t.AutonomyDecision = a.decision
 	t.AutonomyReason = a.reason
@@ -211,7 +211,7 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 	if !decision.Allowed {
 		return audit
 	}
-	item, err := flowdb.GetFeedItem(c.DB, feedID)
+	item, err := productdb.GetFeedItem(c.DB, feedID)
 	if err != nil {
 		audit.decision = "failed"
 		audit.reason = fmt.Sprintf("auto-act %s could not load feed item %s: %v", v.SuggestedAction, feedID, err)
@@ -227,7 +227,7 @@ func (c *Cascade) maybeAutoAct(ctx context.Context, feedID string, v Verdict) au
 			audit.reason = "capture_kb auto-act enabled but no KB directory configured" + confidenceProvenance(grounded, gateConf, v.Confidence)
 			return audit
 		}
-		go func(it flowdb.FeedItem) {
+		go func(it productdb.FeedItem) {
 			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
 			if err := ApplyActionAuto(bctx, c.DB, it, ActionCaptureKB, c.KBDir, pol, gateConf); err != nil {
@@ -290,7 +290,7 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	if key == "" {
 		return
 	}
-	prior, hadPrior, err := flowdb.GetThreadState(c.DB, key)
+	prior, hadPrior, err := productdb.GetThreadState(c.DB, key)
 	if err != nil {
 		c.log("thread-state: get %s for operator reply: %v", key, err)
 		return
@@ -318,7 +318,7 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	// stand down any still-open card (idempotent; covers the race where the echo
 	// beats `attention sent` bookkeeping), and stop short of operator-learning.
 	if c.isAgentSentEcho(key, text) {
-		if n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
+		if n, err := productdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
 			c.log("agent-sent reply echoed on %s; resolved %d open feed item(s)", key, n)
 		}
 		c.log("self-authored reply on %s recognized as agent-sent echo; not re-learning", key)
@@ -326,7 +326,7 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	}
 
 	// 1. Persist the operator's own reply into the running understanding.
-	if err := flowdb.AppendThreadOperatorReply(c.DB, key, flowdb.ThreadOperatorReply{
+	if err := productdb.AppendThreadOperatorReply(c.DB, key, productdb.ThreadOperatorReply{
 		At: now, TS: ev.TS, Author: ev.UserID, Text: text,
 	}); err != nil {
 		c.log("thread-state: record operator reply for %s: %v", key, err)
@@ -334,10 +334,10 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 
 	// 2. The operator handled it outside flow — stand down any open card and
 	//    recover the prior card (for the matched task + the calibration signal).
-	if n, err := flowdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
+	if n, err := productdb.ResolveOpenFeedItemsByThread(c.DB, key, now); err == nil && n > 0 {
 		c.log("operator handled %s directly; resolved %d open feed item(s)", key, n)
 	}
-	priorCard, hadCard, cerr := flowdb.LatestFeedItemByThread(c.DB, key)
+	priorCard, hadCard, cerr := productdb.LatestFeedItemByThread(c.DB, key)
 	if cerr != nil {
 		c.log("thread-state: latest card for %s: %v", key, cerr)
 	}
@@ -349,7 +349,7 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	if hadCard {
 		matched = strings.TrimSpace(priorCard.MatchedTask)
 	}
-	if err := flowdb.AppendThreadOperatorAction(c.DB, key, flowdb.ThreadOperatorAction{
+	if err := productdb.AppendThreadOperatorAction(c.DB, key, productdb.ThreadOperatorAction{
 		At: now, Action: "operator_reply", Outcome: "handled", LinkedTask: matched,
 	}); err != nil {
 		c.log("thread-state: record operator action for %s: %v", key, err)
@@ -359,8 +359,8 @@ func (c *Cascade) learnFromOperatorReply(ctx context.Context, ev monitor.Inbound
 	//    Needs a feed item for the id; when the thread was deep-dropped without a
 	//    card the signal still lives in the operator action recorded above.
 	if hadCard {
-		fb := flowdb.AttentionFeedbackFromFeed(priorCard, "operator_reply", flowdb.OutcomeOperatorHandled, "", now)
-		if err := flowdb.RecordAttentionFeedback(c.DB, fb); err != nil {
+		fb := productdb.AttentionFeedbackFromFeed(priorCard, "operator_reply", productdb.OutcomeOperatorHandled, "", now)
+		if err := productdb.RecordAttentionFeedback(c.DB, fb); err != nil {
 			c.log("attention-feedback: record operator-reply calibration for %s: %v", key, err)
 		}
 	}
@@ -390,7 +390,7 @@ func (c *Cascade) isAgentSentEcho(threadKey, text string) bool {
 		return false
 	}
 	since := c.now().UTC().Add(-time.Hour).Format(time.RFC3339)
-	drafts, err := flowdb.RecentAgentReplyDrafts(c.DB, threadKey, since)
+	drafts, err := productdb.RecentAgentReplyDrafts(c.DB, threadKey, since)
 	if err != nil {
 		c.log("attention-feedback: recent agent drafts for %s: %v", threadKey, err)
 		return false
@@ -467,7 +467,7 @@ func (c *Cascade) ObserveSelfAuthored(ctx context.Context, ev monitor.InboundEve
 // Shared by the single-event observe() and the batched ObserveBatch() so the
 // two paths can't drift — they did once, and backfill kept surfacing digest_only
 // FYI cards after the live path moved to sessions.
-func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time, cacheKey string) bool {
+func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.InboundEvent, tr *productdb.SteeringTrace, start time.Time, cacheKey string) bool {
 	if !SteererSessionsEnabled() || c.SessionSink == nil {
 		return false
 	}
@@ -492,7 +492,7 @@ func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.Inbou
 // returns false so the caller emits the normal Stage-0 drop trace (fail-open).
 // Mirror of the inline block observe() used to carry; shared so ObserveBatch
 // gets the same behavior.
-func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time) bool {
+func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.InboundEvent, tr *productdb.SteeringTrace, start time.Time) bool {
 	if !SteererSessionsEnabled() || c.SessionSink == nil {
 		return false
 	}
@@ -592,7 +592,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 // budget gate → Stage 3 deep triage → feed write — and emits a trace at every
 // exit. It assumes Stage 0/cache/Stage 1 have already passed and tr.ThreadKey
 // + tr.Stage1Relevant are set.
-func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.SteeringTrace, start time.Time, ev monitor.InboundEvent, cacheKey string) error {
+func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *productdb.SteeringTrace, start time.Time, ev monitor.InboundEvent, cacheKey string) error {
 	if reason, ok := c.classifierUnavailable(c.now()); ok {
 		c.dropForClassifierUnavailable(tr, start, cacheKey, "stage2", reason)
 		return nil
@@ -612,7 +612,7 @@ func (c *Cascade) finishItem(ctx context.Context, in ClassifyInput, tr *flowdb.S
 	// no longer stateless across events — the prior decision plus any operator
 	// actions/replies feed the incremental deep-triage prompt below
 	// ([[steerer-context-assembly]] layer 2).
-	prior, hadPrior, perr := flowdb.GetThreadState(c.DB, in.ThreadKey)
+	prior, hadPrior, perr := productdb.GetThreadState(c.DB, in.ThreadKey)
 	if perr != nil {
 		c.log("thread-state: load %s: %v", in.ThreadKey, perr)
 	} else if hadPrior {
@@ -755,7 +755,7 @@ var matchExistingTask = func(db *sql.DB, ev monitor.InboundEvent) (string, bool)
 		// thread/PR — archiving only declutters the active list, it doesn't stop
 		// tracking. Without this, a new comment on an archived-but-open PR matches
 		// nothing and the cascade suggests make_task instead of forwarding.
-		tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
+		tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Tag: productdb.NormalizeTag(tag), IncludeArchived: true})
 		if err != nil || len(tasks) == 0 {
 			continue
 		}
@@ -844,7 +844,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 		in       ClassifyInput
 		stage1In ClassifyInput
 		cacheKey string
-		tr       *flowdb.SteeringTrace
+		tr       *productdb.SteeringTrace
 		start    time.Time
 		ev       monitor.InboundEvent
 	}
@@ -949,7 +949,7 @@ func (c *Cascade) allowClassifier(now time.Time) bool {
 	return c.classifierBudget.allow(now)
 }
 
-func (c *Cascade) dropForClassifierBudget(tr *flowdb.SteeringTrace, start time.Time, cacheKey, stage string) {
+func (c *Cascade) dropForClassifierBudget(tr *productdb.SteeringTrace, start time.Time, cacheKey, stage string) {
 	tr.Disposition = "dropped"
 	tr.StageReached = stage
 	tr.DropReason = "classifier budget exhausted"
@@ -959,7 +959,7 @@ func (c *Cascade) dropForClassifierBudget(tr *flowdb.SteeringTrace, start time.T
 	c.emitTrace(tr, start)
 }
 
-func (c *Cascade) dropForClassifierUnavailable(tr *flowdb.SteeringTrace, start time.Time, cacheKey, stage, reason string) {
+func (c *Cascade) dropForClassifierUnavailable(tr *productdb.SteeringTrace, start time.Time, cacheKey, stage, reason string) {
 	tr.Disposition = "dropped"
 	tr.StageReached = stage
 	tr.DropReason = "classifier unavailable: " + reason
@@ -1220,8 +1220,8 @@ func rawSlackPersonID(name string) bool {
 // newTrace seeds a decision-trace row from the inbound event with the fields
 // known before any stage runs. cleaned is the de-ID'd message text (see
 // cleanText) used for the stored preview so the trace never surfaces raw IDs.
-func (c *Cascade) newTrace(ev monitor.InboundEvent, origin, cleaned string) *flowdb.SteeringTrace {
-	return &flowdb.SteeringTrace{
+func (c *Cascade) newTrace(ev monitor.InboundEvent, origin, cleaned string) *productdb.SteeringTrace {
+	return &productdb.SteeringTrace{
 		ID:          c.newID(),
 		CreatedAt:   c.now().UTC().Format(time.RFC3339),
 		Origin:      origin,
@@ -1238,7 +1238,7 @@ func (c *Cascade) newTrace(ev monitor.InboundEvent, origin, cleaned string) *flo
 }
 
 // emitTrace stamps the latency and hands the finished trace row to the sink.
-func (c *Cascade) emitTrace(tr *flowdb.SteeringTrace, start time.Time) {
+func (c *Cascade) emitTrace(tr *productdb.SteeringTrace, start time.Time) {
 	tr.LatencyMS = c.now().Sub(start).Milliseconds()
 	// Terminal stage event. Every exit path funnels through emitTrace, so this
 	// fires exactly once per run with the final disposition — no need to sprinkle
@@ -1250,7 +1250,7 @@ func (c *Cascade) emitTrace(tr *flowdb.SteeringTrace, start time.Time) {
 // stage emits a live progress signal for one cascade boundary. Nil-safe: with no
 // Progress hook (the default) it is a cheap no-op, so triage behavior is
 // identical whether or not anyone is watching.
-func (c *Cascade) stage(tr *flowdb.SteeringTrace, start time.Time, stage, status, detail string) {
+func (c *Cascade) stage(tr *productdb.SteeringTrace, start time.Time, stage, status, detail string) {
 	if c.Progress == nil || tr == nil {
 		return
 	}
@@ -1282,7 +1282,7 @@ func verdictStatus(disposition string) string {
 	}
 }
 
-func verdictDetail(tr *flowdb.SteeringTrace) string {
+func verdictDetail(tr *productdb.SteeringTrace) string {
 	if tr.Error != "" {
 		return tr.Error
 	}
@@ -1309,7 +1309,7 @@ func verdictDetail(tr *flowdb.SteeringTrace) string {
 // one-shot path. Coalesces by growth so a token-rate stream emits a bounded
 // number of progress updates (each carries the full accumulated text, so dropped
 // intermediate events are harmless — the store keeps the latest).
-func (c *Cascade) deepStreamCtx(ctx context.Context, tr *flowdb.SteeringTrace, start time.Time) context.Context {
+func (c *Cascade) deepStreamCtx(ctx context.Context, tr *productdb.SteeringTrace, start time.Time) context.Context {
 	if c.Progress == nil || !streamingEnabled() {
 		return ctx
 	}
@@ -1328,7 +1328,7 @@ func (c *Cascade) deepStreamCtx(ctx context.Context, tr *flowdb.SteeringTrace, s
 // stageStream emits a streaming update for an in-flight stage (Status "running"
 // with the accumulated model text). The server folds it into the existing stage
 // row in place rather than appending.
-func (c *Cascade) stageStream(tr *flowdb.SteeringTrace, start time.Time, stage, text string) {
+func (c *Cascade) stageStream(tr *productdb.SteeringTrace, start time.Time, stage, text string) {
 	if c.Progress == nil || tr == nil {
 		return
 	}
@@ -1361,7 +1361,7 @@ func preview(s string) string {
 // surfaced == false means the operator already dismissed this thread/message and
 // the upsert left it dismissed — the caller must not re-surface or auto-act.
 func (c *Cascade) writeFeed(_ context.Context, v Verdict, ev monitor.InboundEvent, pack ThreadContext) (string, bool, error) {
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID:                c.newID(),
 		Source:            v.Source,
 		ThreadKey:         v.ThreadKey,
@@ -1388,7 +1388,7 @@ func (c *Cascade) writeFeed(_ context.Context, v Verdict, ev monitor.InboundEven
 	if item.SuggestedAction == "" {
 		item.SuggestedAction = string(ActionDrop)
 	}
-	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(c.DB, item)
+	id, surfaced, err := productdb.UpsertFeedItemSurfaced(c.DB, item)
 	if err != nil {
 		return "", false, fmt.Errorf("steering: write feed item: %w", err)
 	}
@@ -1406,7 +1406,7 @@ func (c *Cascade) writeFeed(_ context.Context, v Verdict, ev monitor.InboundEven
 // card uses — item.ThreadKey (post-club) on the surfaced path, in.ThreadKey on
 // the drop paths — never the raw verdict key.
 func (c *Cascade) recordThreadDecision(threadKey, summary string, v Verdict, ts string) {
-	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
+	if err := productdb.RecordThreadDecision(c.DB, productdb.ThreadDecision{
 		ThreadKey:  threadKey,
 		Source:     v.Source,
 		Action:     string(v.SuggestedAction),
@@ -1426,7 +1426,7 @@ func (c *Cascade) recordThreadDecision(threadKey, summary string, v Verdict, ts 
 // back to cold framing. A row that carries only operator actions/replies (the
 // cascade never carded it, but the operator acted/replied) still counts as prior
 // understanding worth feeding.
-func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
+func priorUnderstanding(s productdb.ThreadState, had bool) *PriorUnderstanding {
 	if !had {
 		return nil
 	}
@@ -1460,11 +1460,11 @@ func priorUnderstanding(s flowdb.ThreadState, had bool) *PriorUnderstanding {
 // threadStateEmpty reports that a thread-state row carries no triage decision yet
 // (the inverse of priorUnderstanding's "has decision" test). The operator-reply
 // learn path uses it to decide a thread was never deep-triaged here.
-func threadStateEmpty(s flowdb.ThreadState) bool {
+func threadStateEmpty(s productdb.ThreadState) bool {
 	return s.EventCount == 0 && strings.TrimSpace(s.CurrentAction) == ""
 }
 
-func formatOperatorAction(a flowdb.ThreadOperatorAction) string {
+func formatOperatorAction(a productdb.ThreadOperatorAction) string {
 	s := a.Action
 	if a.Outcome != "" && a.Outcome != a.Action {
 		s += " (" + a.Outcome + ")"

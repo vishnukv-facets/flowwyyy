@@ -1,13 +1,12 @@
 package steering
 
 import (
+	"flow/internal/productdb"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestConfidenceCalibratorGroundedAndFallback(t *testing.T) {
-	bins := []flowdb.AttentionCalibrationBin{
+	bins := []productdb.AttentionCalibrationBin{
 		// make_task 0.80-0.89: agreed = 2 approved + 1 operator_handled = 3; total 4
 		// (>= minSamples). Calibrated = 3/4 = 0.75.
 		{Action: "make_task", ConfidenceBand: "0.80-0.89", Approved: 2, Negative: 1, OperatorHandled: 1},
@@ -35,7 +34,7 @@ func TestConfidenceCalibratorGroundedAndFallback(t *testing.T) {
 }
 
 func TestConfidenceCalibratorCells(t *testing.T) {
-	bins := []flowdb.AttentionCalibrationBin{
+	bins := []productdb.AttentionCalibrationBin{
 		{Action: "forward", ConfidenceBand: "0.50-0.59", Approved: 1, Negative: 1},
 		{Action: "make_task", ConfidenceBand: "0.80-0.89", Approved: 3, Negative: 0},
 	}

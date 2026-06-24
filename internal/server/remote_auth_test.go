@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func TestHashRemoteTokenDeterministic(t *testing.T) {
@@ -62,12 +63,12 @@ func TestPairingStoreUnknown(t *testing.T) {
 
 func insertTestDevice(t *testing.T, s *Server, token string, expiresAt time.Time, revoked bool) {
 	t.Helper()
-	now := flowdb.NowISO()
-	if err := flowdb.InsertRemoteDevice(s.cfg.DB, "dev-"+token[:6], "test", hashRemoteToken(token), now, expiresAt.Format(time.RFC3339)); err != nil {
+	now := productdb.NowISO()
+	if err := productdb.InsertRemoteDevice(s.cfg.DB, "dev-"+token[:6], "test", hashRemoteToken(token), now, expiresAt.Format(time.RFC3339)); err != nil {
 		t.Fatalf("insert device: %v", err)
 	}
 	if revoked {
-		_ = flowdb.RevokeRemoteDevice(s.cfg.DB, "dev-"+token[:6], now)
+		_ = productdb.RevokeRemoteDevice(s.cfg.DB, "dev-"+token[:6], now)
 	}
 }
 

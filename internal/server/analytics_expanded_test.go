@@ -1,10 +1,9 @@
 package server
 
 import (
+	"flow/internal/productdb"
 	"testing"
 	"time"
-
-	"flow/internal/flowdb"
 )
 
 // atLocalH builds an RFC3339 timestamp at a specific local hour.
@@ -55,7 +54,7 @@ func TestTaskSourceBreakdown(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d")
 	g := bucketsFor(from, to, unit, now)
 
-	tasks := []*flowdb.Task{
+	tasks := []*productdb.Task{
 		mkTask("s1", "backlog", atLocalH(2026, 6, 15, 10), ""),
 		mkTask("g1", "done", atLocalH(2026, 6, 16, 10), atLocalH(2026, 6, 16, 12)),
 		mkTask("m1", "in-progress", atLocalH(2026, 6, 17, 10), ""),
@@ -86,7 +85,7 @@ func TestSourceConversions(t *testing.T) {
 	from, to, unit, _ := rangeWindow(now, "7d")
 	g := bucketsFor(from, to, unit, now)
 
-	traces := []flowdb.SteeringTraceLite{
+	traces := []productdb.SteeringTraceLite{
 		{CreatedAt: atLocalH(2026, 6, 15, 10), Source: "slack", Disposition: "surfaced", FinalAction: "make_task"},
 		{CreatedAt: atLocalH(2026, 6, 15, 11), Source: "slack", Disposition: "dropped"},
 		{CreatedAt: atLocalH(2026, 6, 16, 10), Source: "github", Disposition: "surfaced", FinalAction: "reply"},

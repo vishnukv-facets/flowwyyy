@@ -2,16 +2,15 @@ package server
 
 import (
 	"encoding/json"
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestHandleWorkEventsFiltersByBucketAndSource(t *testing.T) {
 	s, db := attentionTestServer(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "we-feed", Source: "github", ThreadKey: "gh:1", Summary: "PR needs review",
 		SuggestedAction: "forward", MatchedTask: "", Urgency: "normal", Confidence: 0.9,
 		Reason: "task-linked PR changed", URL: "https://github.com/o/r/pull/1",

@@ -121,12 +121,17 @@ var productGoPkgs = []string{
 // read layer end to end. Like knownViolations, the test fails in both
 // directions — on a new violation and when a ratcheted package becomes clean.
 var productImportsCoreGo = map[string]bool{
-	"flow/cmd/flowwyyy":      true, // app.Version + transitive flowdb via product/server
-	"flow/internal/server":   true, // reads/writes via flowdb directly (51 non-test files)
-	"flow/internal/steering": true, // attention_feed/steering_trace reads+writes via flowdb
-	"flow/internal/product":  true, // attention.go/ui.go read via flowdb
+	"flow/cmd/flowwyyy":    true, // app.Version + transitive flowdb via product/server
+	"flow/internal/server": true, // own flowdb use CLEARED; still transitively pulls flowdb
+	//   via 4 flowdb-bound CORE packages it consumes: briefing (standup),
+	//   workevents (activity log), workdirreg (workdir registry), agents (session
+	//   discovery). Clearing server needs those reads moved onto productdb /
+	//   flow-exec — the next burndown step.
+	"flow/internal/product": true, // attention.go/ui.go still open the DB via flowdb.OpenDB (T13 step 4)
 	// monitor: CLEARED (T13) — reads via productdb, connector tables via productdb,
-	// core writes via flow exec, git detection via the flowdb-free gitremote pkg.
+	//   core writes via flow exec, git detection via the flowdb-free gitremote pkg.
+	// steering: CLEARED (T13) — attention/steering tables via productdb, tag write
+	//   via the taskTagger flow-exec helper; product-table registration is test-only.
 }
 
 // TestProductDoesNotImportCoreGo enforces the Phase-3 boundary: the flowwyyy

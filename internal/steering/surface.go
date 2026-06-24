@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // SurfaceCardParams is the structured verdict a per-channel steerer session
@@ -37,7 +37,7 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 	rawKey := p.Channel + ":" + firstNonEmpty(p.ThreadTS, p.TS)
 	key := validateSurfaceThreadKey(db, p, rawKey)
 	action := firstNonEmpty(p.Action, string(ActionDrop))
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	v := Verdict{
 		Source:          p.Source,
 		ThreadKey:       key,
@@ -48,7 +48,7 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 		Confidence:      p.Confidence,
 		Reason:          p.Reason,
 	}
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID:              randomUUID(),
 		Source:          p.Source,
 		ThreadKey:       key,
@@ -78,7 +78,7 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 		return id, refreshed, err
 	}
 
-	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, item)
+	id, surfaced, err := productdb.UpsertFeedItemSurfaced(db, item)
 	if err != nil {
 		return "", false, err
 	}
@@ -86,12 +86,12 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 	return id, surfaced, nil
 }
 
-func refreshOpenSurfaceCard(db *sql.DB, item flowdb.FeedItem) (string, bool, error) {
-	existing, ok, err := flowdb.LatestFeedItemByThread(db, item.ThreadKey)
+func refreshOpenSurfaceCard(db *sql.DB, item productdb.FeedItem) (string, bool, error) {
+	existing, ok, err := productdb.LatestFeedItemByThread(db, item.ThreadKey)
 	if err != nil || !ok || existing.Status != "new" {
 		return "", false, err
 	}
-	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, item)
+	id, surfaced, err := productdb.UpsertFeedItemSurfaced(db, item)
 	if err != nil {
 		return "", false, err
 	}
@@ -99,11 +99,11 @@ func refreshOpenSurfaceCard(db *sql.DB, item flowdb.FeedItem) (string, bool, err
 }
 
 func resolveOpenSurfaceCard(db *sql.DB, threadKey, at string) (string, bool, error) {
-	existing, ok, err := flowdb.LatestFeedItemByThread(db, threadKey)
+	existing, ok, err := productdb.LatestFeedItemByThread(db, threadKey)
 	if err != nil || !ok || existing.Status != "new" {
 		return "", false, err
 	}
-	n, err := flowdb.ResolveOpenFeedItemsByThread(db, threadKey, at)
+	n, err := productdb.ResolveOpenFeedItemsByThread(db, threadKey, at)
 	return existing.ID, n > 0, err
 }
 
@@ -113,7 +113,7 @@ func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) st
 		return rawKey
 	}
 	since := time.Now().Add(-surfaceClubWindow).UTC().Format(time.RFC3339)
-	cands, err := flowdb.ListOpenClubCandidates(db, p.Channel, "", since, 50)
+	cands, err := productdb.ListOpenClubCandidates(db, p.Channel, "", since, 50)
 	if err != nil {
 		return rawKey
 	}
@@ -123,7 +123,7 @@ func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) st
 	return rawKey
 }
 
-func anchorIndex(anchors []flowdb.FeedItem, threadKey string) int {
+func anchorIndex(anchors []productdb.FeedItem, threadKey string) int {
 	if threadKey == "" {
 		return -1
 	}
@@ -136,7 +136,7 @@ func anchorIndex(anchors []flowdb.FeedItem, threadKey string) int {
 }
 
 func recordSurfaceThreadDecision(db *sql.DB, key string, v Verdict, ts, at string) {
-	_ = flowdb.RecordThreadDecision(db, flowdb.ThreadDecision{
+	_ = productdb.RecordThreadDecision(db, productdb.ThreadDecision{
 		ThreadKey:  key,
 		Source:     v.Source,
 		Action:     string(v.SuggestedAction),

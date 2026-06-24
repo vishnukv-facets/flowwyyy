@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // autoActSuppressKey marks a context whose re-triage must NOT auto-act, even if
@@ -28,7 +28,7 @@ func autoActSuppressed(ctx context.Context) bool {
 // autonomy is enabled for the resulting action. The correction must already be
 // persisted to the thread's running understanding so deep triage reads it as
 // authoritative context.
-func (c *Cascade) RetriageFromCorrection(ctx context.Context, item flowdb.FeedItem) error {
+func (c *Cascade) RetriageFromCorrection(ctx context.Context, item productdb.FeedItem) error {
 	return c.Retriage(withAutoActSuppressed(ctx), item)
 }
 
@@ -39,7 +39,7 @@ func (c *Cascade) RetriageFromCorrection(ctx context.Context, item flowdb.FeedIt
 // after the matching logic or a task's brief/updates changed. writeFeed coalesces
 // by thread_key, so the existing 'new' card is updated in place rather than
 // duplicated.
-func (c *Cascade) Retriage(ctx context.Context, item flowdb.FeedItem) error {
+func (c *Cascade) Retriage(ctx context.Context, item productdb.FeedItem) error {
 	ev := feedItemToEvent(item)
 	cleaned := c.cleanText(ctx, item.Summary)
 	tr := c.newTrace(ev, "retriage", cleaned)
@@ -56,7 +56,7 @@ func (c *Cascade) Retriage(ctx context.Context, item flowdb.FeedItem) error {
 // "<owner/repo>:<gh-pr|gh-issue:owner/repo#N>" for GitHub — split on the FIRST
 // colon so the GitHub link tag (which itself contains colons) stays intact as the
 // thread anchor.
-func feedItemToEvent(item flowdb.FeedItem) monitor.InboundEvent {
+func feedItemToEvent(item productdb.FeedItem) monitor.InboundEvent {
 	channel, anchor := splitThreadKeyFirst(item.ThreadKey)
 	ts := strings.TrimSpace(item.TS)
 	if ts == "" {

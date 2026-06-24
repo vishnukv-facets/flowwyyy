@@ -2,12 +2,11 @@ package server
 
 import (
 	"encoding/json"
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestHandleOverviewIncludesBriefing(t *testing.T) {
@@ -30,7 +29,7 @@ func TestHandleOverviewIncludesBriefing(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "overview-feed", Source: "slack", ThreadKey: "C1:overview",
 		Summary: "Deploy needs an answer", SuggestedAction: "forward",
 		MatchedTask: "deploy-followup", SuggestedProject: "flow-manager",

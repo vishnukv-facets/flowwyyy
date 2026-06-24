@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // attentionTestDB points FLOW_ROOT/HOME at a temp dir and returns an open DB at
@@ -26,7 +27,7 @@ func attentionTestDB(t *testing.T) *sql.DB {
 }
 
 func TestRenderAttentionFeed(t *testing.T) {
-	items := []flowdb.FeedItem{
+	items := []productdb.FeedItem{
 		{ID: "abc123", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "make_task", Confidence: 0.88, Urgency: "urgent", MatchedTask: "", Summary: "Customer wants rollout date"},
 	}
 	out := renderAttentionFeed(items)
@@ -42,16 +43,16 @@ func TestRenderAttentionFeed(t *testing.T) {
 
 func TestCmdAttentionActDismiss(t *testing.T) {
 	db := attentionTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "d1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{ID: "d1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if rc := cmdAttentionAct([]string{"d1", "dismiss"}); rc != 0 {
 		t.Fatalf("act dismiss rc = %d, want 0", rc)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed, got %d dismissed rows", len(items))
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "d1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "d1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -62,7 +63,7 @@ func TestCmdAttentionActDismiss(t *testing.T) {
 
 func TestCmdAttentionSent(t *testing.T) {
 	db := attentionTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "s1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Draft: "ok to ship", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{ID: "s1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Draft: "ok to ship", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// No --close-floating + no FLOW_HOOK_URL → the close is a no-op, but the card
@@ -70,14 +71,14 @@ func TestCmdAttentionSent(t *testing.T) {
 	if rc := cmdAttentionSent([]string{"s1"}); rc != 0 {
 		t.Fatalf("sent rc = %d, want 0", rc)
 	}
-	acted, _ := flowdb.ListFeedItems(db, "acted")
+	acted, _ := productdb.ListFeedItems(db, "acted")
 	if len(acted) != 1 || acted[0].ID != "s1" {
 		t.Fatalf("item should be acted, got %d acted rows", len(acted))
 	}
-	if news, _ := flowdb.ListFeedItems(db, "new"); len(news) != 0 {
+	if news, _ := productdb.ListFeedItems(db, "new"); len(news) != 0 {
 		t.Errorf("no items should remain 'new', got %d", len(news))
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "s1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "s1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -110,7 +111,7 @@ func TestCmdAttentionSurface(t *testing.T) {
 	}); rc != 0 {
 		t.Fatalf("surface rc = %d, want 0", rc)
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		t.Fatalf("ListFeedItems: %v", err)
 	}
@@ -121,13 +122,13 @@ func TestCmdAttentionSurface(t *testing.T) {
 
 func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 	db := attentionTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "ha-cli", Source: "slack", ThreadKey: "C1:cli", SuggestedAction: "forward",
 		MatchedTask: "owner-task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
-	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+	h, err := productdb.CreateAttentionHandoff(db, productdb.AttentionHandoff{
 		FeedItemID: "ha-cli", Sender: "attention-router", Receiver: "owner-task",
 		Context: "context", RequestedVerdict: "accept_or_decline",
 		RequestedAt: "2026-06-05T10:01:00Z", ExpiresAt: "2026-06-05T11:01:00Z",
@@ -138,7 +139,7 @@ func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 	if rc := cmdAttentionHandoff([]string{"respond", h.ID, "maybe", "--reason", "unclear"}); rc != 2 {
 		t.Fatalf("malformed verdict rc = %d, want 2", rc)
 	}
-	if got, _ := flowdb.GetAttentionHandoff(db, h.ID); got.Status != "pending" {
+	if got, _ := productdb.GetAttentionHandoff(db, h.ID); got.Status != "pending" {
 		t.Fatalf("malformed response should leave pending, got %+v", got)
 	}
 
@@ -150,7 +151,7 @@ func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 	if !strings.Contains(out, "accepted "+h.ID) {
 		t.Fatalf("accept output = %q", out)
 	}
-	item, _ := flowdb.GetFeedItem(db, "ha-cli")
+	item, _ := productdb.GetFeedItem(db, "ha-cli")
 	if item.Status != "acted" || item.LinkedTask != "owner-task" {
 		t.Fatalf("accepted handoff should act/link feed item, got %+v", item)
 	}
@@ -158,7 +159,7 @@ func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 
 func TestCmdAttentionActErrors(t *testing.T) {
 	db := attentionTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "e1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{ID: "e1", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if rc := cmdAttentionAct([]string{"e1"}); rc != 2 {
@@ -181,12 +182,12 @@ func TestCmdAttentionListRuns(t *testing.T) {
 
 func TestCmdAttentionFeedbackReportsByChannel(t *testing.T) {
 	db := attentionTestDB(t)
-	rows := []flowdb.AttentionFeedback{
+	rows := []productdb.AttentionFeedback{
 		{ID: "a", FeedItemID: "fa", Source: "slack", Channel: "C1", Author: "U1", ThreadType: "channel", ThreadKey: "C1:1", SuggestedAction: "reply", FinalAction: "send_reply", Outcome: "approved", Confidence: 0.91, ConfidenceBand: "0.90-1.00", CreatedAt: "2026-06-05T10:00:00Z"},
 		{ID: "b", FeedItemID: "fb", Source: "slack", Channel: "C1", Author: "U2", ThreadType: "channel", ThreadKey: "C1:2", SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed", Confidence: 0.72, ConfidenceBand: "0.70-0.79", CreatedAt: "2026-06-05T11:00:00Z"},
 	}
 	for _, row := range rows {
-		if err := flowdb.RecordAttentionFeedback(db, row); err != nil {
+		if err := productdb.RecordAttentionFeedback(db, row); err != nil {
 			t.Fatalf("RecordAttentionFeedback: %v", err)
 		}
 	}
@@ -204,14 +205,14 @@ func TestCmdAttentionFeedbackReportsByChannel(t *testing.T) {
 }
 
 func TestRenderTrace(t *testing.T) {
-	funnel := flowdb.SteeringFunnel{
+	funnel := productdb.SteeringFunnel{
 		Observed:      5,
 		DroppedStage0: 2,
 		DroppedStage1: 1,
 		Surfaced:      1,
 		Errors:        1,
 	}
-	items := []flowdb.SteeringTrace{
+	items := []productdb.SteeringTrace{
 		{
 			CreatedAt:       "2026-06-05T10:00:00Z",
 			Origin:          "slack",

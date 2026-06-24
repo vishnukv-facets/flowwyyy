@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // MuteAndSweep records a permanent suppression (channel / author / thread) and
@@ -12,15 +12,15 @@ import (
 // operator's "perma drop" both stops future events (Stage 0 reads steering_mutes
 // via the cascade ConfigFn) and clears the noise already sitting in the feed.
 // Returns the number of open cards dismissed. Scope must be one of the
-// flowdb.MuteScope* constants.
+// productdb.MuteScope* constants.
 func MuteAndSweep(db *sql.DB, scope, value string) (int, error) {
 	if db == nil {
 		return 0, fmt.Errorf("steering: mute requires a db")
 	}
-	if err := flowdb.AddSteeringMute(db, scope, value); err != nil {
+	if err := productdb.AddSteeringMute(db, scope, value); err != nil {
 		return 0, err
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		return 0, fmt.Errorf("steering: mute sweep list feed: %w", err)
 	}
@@ -30,20 +30,20 @@ func MuteAndSweep(db *sql.DB, scope, value string) (int, error) {
 		if !muteMatches(scope, value, it) {
 			continue
 		}
-		if err := flowdb.SetFeedItemStatus(db, it.ID, "dismissed", now); err == nil {
+		if err := productdb.SetFeedItemStatus(db, it.ID, "dismissed", now); err == nil {
 			swept++
 		}
 	}
 	return swept, nil
 }
 
-func muteMatches(scope, value string, it flowdb.FeedItem) bool {
+func muteMatches(scope, value string, it productdb.FeedItem) bool {
 	switch scope {
-	case flowdb.MuteScopeChannel:
+	case productdb.MuteScopeChannel:
 		return it.Channel == value
-	case flowdb.MuteScopeAuthor:
+	case productdb.MuteScopeAuthor:
 		return it.Author == value
-	case flowdb.MuteScopeThread:
+	case productdb.MuteScopeThread:
 		return it.ThreadKey == value
 	}
 	return false

@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // sendReplyRunner runs a hidden Haiku `claude -p` session that POSTS an
@@ -33,7 +33,7 @@ var sendReplyRunner = func(ctx context.Context, prompt string) (string, error) {
 // it, rather than creating a new task that then trips the auto-mode permission
 // gate. Returns an error (leaving the card unresolved so it can be retried) when
 // the agent reports it could not post.
-func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, text, instructions string) error {
+func SendReplyViaAgent(ctx context.Context, db *sql.DB, item productdb.FeedItem, text, instructions string) error {
 	if strings.TrimSpace(text) == "" {
 		return fmt.Errorf("steering: send-reply requires non-empty text")
 	}
@@ -53,7 +53,7 @@ func SendReplyViaAgent(ctx context.Context, db *sql.DB, item flowdb.FeedItem, te
 		return fmt.Errorf("steering: send-reply not confirmed posted (agent said: %s)", truncate(trimmed, 200))
 	}
 	// No linked task — the hidden agent posted directly.
-	if err := flowdb.SetFeedItemActed(db, item.ID, "", nowRFC3339()); err != nil {
+	if err := productdb.SetFeedItemActed(db, item.ID, "", nowRFC3339()); err != nil {
 		return err
 	}
 	return recordActionFeedback(db, item, "send_reply", "approved", text)
@@ -80,7 +80,7 @@ func truncate(s string, n int) string {
 	return s[:n] + "…"
 }
 
-func sendReplyPrompt(item flowdb.FeedItem, text, instructions string) string {
+func sendReplyPrompt(item productdb.FeedItem, text, instructions string) string {
 	// With no extra instructions: post the approved draft as-is (minor wording
 	// only). With instructions: the draft is a starting point — revise it per the
 	// operator's instructions, then post.

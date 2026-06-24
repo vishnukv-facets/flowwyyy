@@ -89,28 +89,30 @@ func TestOwnersAPILifecycle(t *testing.T) {
 		return owner
 	}
 
-	if o := post("/api/owners/deploy-owner/pause", `{}`); o.Status != "paused" {
-		t.Fatalf("after pause = %+v", o)
+	assertArgs := func(want string) {
+		t.Helper()
+		got, err := os.ReadFile(argFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want+"\n" {
+			t.Fatalf("delegated args = %q, want %q", string(got), want)
+		}
 	}
-	if o := post("/api/owners/deploy-owner/start", `{}`); o.Status != "active" || o.NextWakeAt == nil {
-		t.Fatalf("after start = %+v", o)
-	}
+
+	// Owner lifecycle actions are Bucket O — the server delegates the write to the
+	// `flow owner` CLI (asserted via the recorded args) rather than mutating the
+	// owners table directly (seam §11). `owner start` = ActivateOwner(now);
+	// `owner next --at` = SetOwnerNextWake(explicit time).
+	post("/api/owners/deploy-owner/pause", `{}`)
+	assertArgs("owner pause deploy-owner")
+	post("/api/owners/deploy-owner/start", `{}`)
+	assertArgs("owner start deploy-owner")
 	next := time.Now().Add(10 * time.Minute).Format(time.RFC3339)
-	if o := post("/api/owners/deploy-owner/next", `{"at":"`+next+`"}`); o.NextWakeAt == nil || *o.NextWakeAt != next {
-		t.Fatalf("after next = %+v, want %s", o, next)
-	}
-	if o := post("/api/owners/deploy-owner/retire", `{}`); o.Status != "retired" || o.ArchivedAt == nil {
-		t.Fatalf("after retire = %+v", o)
-	}
-	if _, err := db.Exec(`UPDATE owners SET status='active', archived_at=NULL WHERE slug='deploy-owner'`); err != nil {
-		t.Fatal(err)
-	}
-	_ = post("/api/owners/deploy-owner/tick", `{}`)
-	got, err := os.ReadFile(argFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "owner tick deploy-owner --auto\n" {
-		t.Fatalf("tick args = %q", got)
-	}
+	post("/api/owners/deploy-owner/next", `{"at":"`+next+`"}`)
+	assertArgs("owner next deploy-owner --at " + next)
+	post("/api/owners/deploy-owner/retire", `{}`)
+	assertArgs("owner retire deploy-owner")
+	post("/api/owners/deploy-owner/tick", `{}`)
+	assertArgs("owner tick deploy-owner --auto")
 }

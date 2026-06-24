@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func (s *Server) handleBrainGraphNodeDetail(w http.ResponseWriter, r *http.Request) {
@@ -41,7 +41,7 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 	switch {
 	case strings.HasPrefix(nodeID, "task:"):
 		slug := strings.TrimPrefix(nodeID, "task:")
-		task, err := flowdb.GetTask(db, slug)
+		task, err := productdb.GetTask(db, slug)
 		if err != nil {
 			return BrainGraphNodeDetail{}, err
 		}
@@ -52,7 +52,7 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 		}, nil
 	case strings.HasPrefix(nodeID, "transcript:"):
 		slug := strings.TrimPrefix(nodeID, "transcript:")
-		task, err := flowdb.GetTask(db, slug)
+		task, err := productdb.GetTask(db, slug)
 		if err != nil {
 			return BrainGraphNodeDetail{}, err
 		}
@@ -72,7 +72,7 @@ func BuildBrainGraphNodeDetail(db *sql.DB, root, nodeID string) (BrainGraphNodeD
 	}
 }
 
-func brainGraphTaskDetail(root string, task *flowdb.Task) *BrainGraphTaskDetail {
+func brainGraphTaskDetail(root string, task *productdb.Task) *BrainGraphTaskDetail {
 	briefPath := filepath.Join(root, "tasks", task.Slug, "brief.md")
 	updates := markdownFiles(filepath.Join(root, "tasks", task.Slug, "updates"), true)
 	if updates == nil {
@@ -102,7 +102,7 @@ func brainGraphTaskDetail(root string, task *flowdb.Task) *BrainGraphTaskDetail 
 	}
 }
 
-func brainGraphTranscriptDetail(task *flowdb.Task) *BrainGraphEvidenceDetail {
+func brainGraphTranscriptDetail(task *productdb.Task) *BrainGraphEvidenceDetail {
 	if task == nil || !task.SessionID.Valid || strings.TrimSpace(task.SessionID.String) == "" {
 		return nil
 	}
@@ -132,7 +132,7 @@ func brainGraphGitHubEvidenceDetail(db *sql.DB, escapedTag string) (BrainGraphNo
 	if err != nil {
 		return BrainGraphNodeDetail{}, err
 	}
-	tag = flowdb.NormalizeTag(tag)
+	tag = productdb.NormalizeTag(tag)
 	var taskSlug string
 	err = db.QueryRow(`SELECT task_slug FROM task_tags WHERE tag = ? ORDER BY task_slug LIMIT 1`, tag).Scan(&taskSlug)
 	if err != nil {

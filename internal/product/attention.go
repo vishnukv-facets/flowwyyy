@@ -11,6 +11,7 @@ import (
 
 	"flow/internal/app"
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
@@ -76,11 +77,11 @@ func cmdAttentionList(args []string) int {
 	if filter == "all" {
 		filter = ""
 	}
-	if _, err := flowdb.ExpireAttentionHandoffs(db, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err := productdb.ExpireAttentionHandoffs(db, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	items, err := flowdb.ListFeedItems(db, filter)
+	items, err := productdb.ListFeedItems(db, filter)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -195,7 +196,7 @@ func cmdAttentionAct(args []string) int {
 	}
 	defer db.Close()
 
-	item, err := flowdb.GetFeedItem(db, id)
+	item, err := productdb.GetFeedItem(db, id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: no feed item with id %q\n", id)
 		return 1
@@ -303,7 +304,7 @@ func cmdAttentionSent(args []string) int {
 	}
 	defer db.Close()
 
-	item, err := flowdb.GetFeedItem(db, id)
+	item, err := productdb.GetFeedItem(db, id)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: no feed item with id %q\n", id)
 		return 1
@@ -314,7 +315,7 @@ func cmdAttentionSent(args []string) int {
 	if link == "" {
 		link = strings.TrimSpace(item.MatchedTask)
 	}
-	if err := flowdb.SetFeedItemActed(db, id, link, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if err := productdb.SetFeedItemActed(db, id, link, time.Now().UTC().Format(time.RFC3339)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
@@ -329,8 +330,8 @@ func cmdAttentionSent(args []string) int {
 	return 0
 }
 
-func recordAttentionSentFeedback(db *sql.DB, item flowdb.FeedItem) error {
-	existing, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID, Limit: 50})
+func recordAttentionSentFeedback(db *sql.DB, item productdb.FeedItem) error {
+	existing, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: item.ID, Limit: 50})
 	if err != nil {
 		return err
 	}
@@ -339,7 +340,7 @@ func recordAttentionSentFeedback(db *sql.DB, item flowdb.FeedItem) error {
 			return nil
 		}
 	}
-	return flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedbackFromFeed(item, "send_reply", "sent", item.Draft, time.Now().UTC().Format(time.RFC3339)))
+	return productdb.RecordAttentionFeedback(db, productdb.AttentionFeedbackFromFeed(item, "send_reply", "sent", item.Draft, time.Now().UTC().Format(time.RFC3339)))
 }
 
 // closeFloatingTerminalBestEffort asks the running flow server to close a
@@ -383,7 +384,7 @@ func serverBaseFromHookURL() string {
 // runAttentionAction applies an operator-initiated (manual) feed action and
 // reports the result. manual=true bypasses the autonomy gate — the operator
 // at the terminal is the authorization.
-func runAttentionAction(db *sql.DB, item flowdb.FeedItem, action steering.Action, verb string) int {
+func runAttentionAction(db *sql.DB, item productdb.FeedItem, action steering.Action, verb string) int {
 	if err := steering.ApplyAction(context.Background(), db, item, action, steering.DefaultAutonomy(), true); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -398,6 +399,8 @@ func openAttentionDB() (*sql.DB, int) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return nil, 1
 	}
+	// product still opens the shared DB via flowdb.OpenDB (it keeps a flowdb
+	// import for this — product is the last package to shed flowdb, T13 step 4).
 	db, err := flowdb.OpenDB(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -408,7 +411,7 @@ func openAttentionDB() (*sql.DB, int) {
 
 // renderAttentionFeed renders feed items as a compact table. Pure (no I/O) so
 // it's unit-testable.
-func renderAttentionFeed(items []flowdb.FeedItem) string {
+func renderAttentionFeed(items []productdb.FeedItem) string {
 	if len(items) == 0 {
 		return "No attention items.\n"
 	}
@@ -464,12 +467,12 @@ func cmdAttentionTrace(args []string) int {
 	if disp == "all" {
 		disp = ""
 	}
-	funnel, err := flowdb.SteeringFunnelSince(db, sinceTS)
+	funnel, err := productdb.SteeringFunnelSince(db, sinceTS)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	items, err := flowdb.ListSteeringTrace(db, flowdb.TraceFilter{Disposition: disp, Since: sinceTS, Limit: *limit})
+	items, err := productdb.ListSteeringTrace(db, productdb.TraceFilter{Disposition: disp, Since: sinceTS, Limit: *limit})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -495,7 +498,7 @@ func cmdAttentionFeedback(args []string) int {
 	}
 	defer db.Close()
 
-	rows, err := flowdb.AttentionFeedbackReport(db, groupKey)
+	rows, err := productdb.AttentionFeedbackReport(db, groupKey)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -514,7 +517,7 @@ func attentionFeedbackGroupKey(s string) (string, error) {
 	}
 }
 
-func renderAttentionFeedbackReport(rows []flowdb.AttentionFeedbackAggregate) string {
+func renderAttentionFeedbackReport(rows []productdb.AttentionFeedbackAggregate) string {
 	if len(rows) == 0 {
 		return "No attention feedback rows.\n"
 	}
@@ -594,7 +597,7 @@ func sinceToRFC3339(s string) (string, error) {
 
 // renderTrace renders the funnel summary line + a compact decision table. Pure
 // (no I/O) so it's unit-testable.
-func renderTrace(f flowdb.SteeringFunnel, items []flowdb.SteeringTrace) string {
+func renderTrace(f productdb.SteeringFunnel, items []productdb.SteeringTrace) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "observed %d · stage0 %d · cache %d · stage1 %d · stage2 %d · surfaced %d · errors %d\n\n",
 		f.Observed, f.DroppedStage0, f.DroppedCache, f.DroppedStage1, f.DroppedStage2, f.Surfaced, f.Errors)

@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flow/internal/agents"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,7 +54,7 @@ type contentBlock struct {
 // lane. Persistence is best-effort — a failed UPDATE never breaks the
 // caller. Pass db=nil to skip persistence (used by call sites that
 // don't have a DB handle wired through).
-func sessionJSONLPath(db *sql.DB, task *flowdb.Task) (string, error) {
+func sessionJSONLPath(db *sql.DB, task *productdb.Task) (string, error) {
 	if !task.SessionID.Valid || task.SessionID.String == "" {
 		return "", errors.New("task has no session")
 	}
@@ -128,7 +128,7 @@ func (s *Server) backfillSessionPaths() {
 	}
 }
 
-func resolveSessionJSONLPath(task *flowdb.Task) (string, error) {
+func resolveSessionJSONLPath(task *productdb.Task) (string, error) {
 	if task.SessionProvider == agents.ProviderCodex {
 		path, err := agents.FindCodexSessionPathByID(task.SessionID.String)
 		if err != nil {

@@ -8,7 +8,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 type TaskImpactInput struct {
@@ -38,7 +38,7 @@ func BuildTaskImpactHints(db *sql.DB, in TaskImpactInput) ([]TaskImpactHint, err
 		return nil, nil
 	}
 
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Kind: "", IncludeArchived: true})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Kind: "", IncludeArchived: true})
 	if err != nil {
 		return nil, fmt.Errorf("steering: list tasks for impact hints: %w", err)
 	}
@@ -48,7 +48,7 @@ func BuildTaskImpactHints(db *sql.DB, in TaskImpactInput) ([]TaskImpactHint, err
 			slugs = append(slugs, task.Slug)
 		}
 	}
-	tagsByTask, err := flowdb.GetTaskTagsBatch(db, slugs)
+	tagsByTask, err := productdb.GetTaskTagsBatch(db, slugs)
 	if err != nil {
 		return nil, fmt.Errorf("steering: task tags for impact hints: %w", err)
 	}
@@ -78,11 +78,11 @@ func BuildTaskImpactHints(db *sql.DB, in TaskImpactInput) ([]TaskImpactHint, err
 	return hints, nil
 }
 
-func impactTaskActive(task *flowdb.Task) bool {
+func impactTaskActive(task *productdb.Task) bool {
 	return task != nil && !task.DeletedAt.Valid && task.Status != "done"
 }
 
-func impactHintForTask(task *flowdb.Task, people, tags []string) (TaskImpactHint, bool) {
+func impactHintForTask(task *productdb.Task, people, tags []string) (TaskImpactHint, bool) {
 	if person, evidence, ok := impactMatchPeopleField(people, task.WaitingOn); ok {
 		return impactHint(task, "strong", "waiting_on mentions "+person, evidence), true
 	}
@@ -104,7 +104,7 @@ func impactHintForTask(task *flowdb.Task, people, tags []string) (TaskImpactHint
 	return TaskImpactHint{}, false
 }
 
-func impactHint(task *flowdb.Task, strength, reason, evidence string) TaskImpactHint {
+func impactHint(task *productdb.Task, strength, reason, evidence string) TaskImpactHint {
 	hint := TaskImpactHint{
 		TaskSlug: task.Slug,
 		TaskName: task.Name,

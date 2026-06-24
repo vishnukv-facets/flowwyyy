@@ -2,7 +2,7 @@ package server
 
 import (
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"io"
 	"net/http"
 	"os"
@@ -18,7 +18,7 @@ func (s *Server) handlePlaybooks(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	filter := flowdb.PlaybookFilter{
+	filter := productdb.PlaybookFilter{
 		Project:         r.URL.Query().Get("project"),
 		IncludeArchived: boolQuery(r.URL.Query(), "include_archived"),
 		IncludeDeleted:  boolQuery(r.URL.Query(), "include_deleted"),
@@ -27,7 +27,7 @@ func (s *Server) handlePlaybooks(w http.ResponseWriter, r *http.Request) {
 	if filter.DeletedOnly {
 		filter.IncludeArchived = true
 	}
-	pbs, err := flowdb.ListPlaybooks(s.cfg.DB, filter)
+	pbs, err := productdb.ListPlaybooks(s.cfg.DB, filter)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -54,7 +54,7 @@ func (s *Server) handlePlaybookRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slug := parts[0]
-	pb, err := flowdb.GetPlaybook(s.cfg.DB, slug)
+	pb, err := productdb.GetPlaybook(s.cfg.DB, slug)
 	if err != nil {
 		writeNotFoundOrError(w, err)
 		return
@@ -109,7 +109,7 @@ func (s *Server) handlePlaybookRoute(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) savePlaybookBrief(w http.ResponseWriter, r *http.Request, pb *flowdb.Playbook) {
+func (s *Server) savePlaybookBrief(w http.ResponseWriter, r *http.Request, pb *productdb.Playbook) {
 	path := filepath.Join(s.cfg.FlowRoot, "playbooks", pb.Slug, "brief.md")
 	cleanBase := filepath.Join(filepath.Clean(s.cfg.FlowRoot), "playbooks") + string(os.PathSeparator)
 	cleanPath := filepath.Clean(path)
@@ -131,7 +131,7 @@ func (s *Server) savePlaybookBrief(w http.ResponseWriter, r *http.Request, pb *f
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := s.cfg.DB.Exec(`UPDATE playbooks SET updated_at = ? WHERE slug = ?`, now, pb.Slug); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

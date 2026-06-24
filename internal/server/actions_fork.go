@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"net/http"
 	"os"
@@ -16,7 +16,7 @@ func (s *Server) forkTask(req actionRequest) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	source, err := flowdb.GetTask(s.cfg.DB, target)
+	source, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -65,11 +65,11 @@ func (s *Server) forkTask(req actionRequest) (actionResponse, int) {
 	}
 	if _, err := s.cfg.DB.Exec(
 		`UPDATE tasks SET forked_from_slug = ?, fork_reason = ?, updated_at = ? WHERE slug = ?`,
-		source.Slug, reason, flowdb.NowISO(), slug,
+		source.Slug, reason, productdb.NowISO(), slug,
 	); err != nil {
 		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 	}
-	fork, err := flowdb.GetTask(s.cfg.DB, slug)
+	fork, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error(), Output: out}, http.StatusInternalServerError
 	}
@@ -82,7 +82,7 @@ func (s *Server) forkTask(req actionRequest) (actionResponse, int) {
 	return actionResponse{OK: true, Message: "forked " + target + " to " + slug, Output: out, Agent: agent}, http.StatusOK
 }
 
-func (s *Server) defaultForkProvider(source *flowdb.Task, requested string) string {
+func (s *Server) defaultForkProvider(source *productdb.Task, requested string) string {
 	if strings.TrimSpace(requested) != "" {
 		return strings.TrimSpace(requested)
 	}
@@ -96,7 +96,7 @@ func (s *Server) defaultForkProvider(source *flowdb.Task, requested string) stri
 	return "claude"
 }
 
-func (s *Server) writeForkContext(source, fork *flowdb.Task, reason string) error {
+func (s *Server) writeForkContext(source, fork *productdb.Task, reason string) error {
 	if source == nil || fork == nil {
 		return errors.New("source and fork tasks are required")
 	}
@@ -153,7 +153,7 @@ func copyMarkdownFile(src, dst string) (bool, error) {
 	return true, os.WriteFile(dst, body, 0o644)
 }
 
-func (s *Server) renderForkTranscript(source *flowdb.Task) (string, bool, error) {
+func (s *Server) renderForkTranscript(source *productdb.Task) (string, bool, error) {
 	if source == nil || !source.SessionID.Valid || strings.TrimSpace(source.SessionID.String) == "" {
 		return "", false, nil
 	}
@@ -195,7 +195,7 @@ func forkTranscriptEntryBody(entry TranscriptEntry) string {
 	}
 }
 
-func forkBrief(source, fork *flowdb.Task, reason string, copied []string) string {
+func forkBrief(source, fork *productdb.Task, reason string, copied []string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", fork.Name)
 	fmt.Fprintf(&b, "## What\nContinue `%s` in a forked `%s` session using the copied source context.\n\n", source.Slug, firstNonEmpty(fork.SessionProvider, "claude"))

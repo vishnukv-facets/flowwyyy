@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func parseBrainGraphFilters(r *http.Request) BrainGraphFilters {
@@ -50,17 +50,17 @@ func BuildBrainGraph(db *sql.DB, root string, filters BrainGraphFilters, now tim
 		SelectedActions: defaultBrainGraphActions(),
 		Warnings:        []BrainGraphWarning{},
 	}
-	allTasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Kind: ""})
+	allTasks, err := productdb.ListTasks(db, productdb.TaskFilter{Kind: ""})
 	if err != nil {
 		return view, err
 	}
 	visibleTasks := filterBrainGraphTasks(allTasks, filters)
 	slugs := taskSlugs(allTasks)
-	tagsByTask, err := flowdb.GetTaskTagsBatch(db, slugs)
+	tagsByTask, err := productdb.GetTaskTagsBatch(db, slugs)
 	if err != nil {
 		return view, err
 	}
-	owners, err := flowdb.ListOwners(db, flowdb.OwnerFilter{})
+	owners, err := productdb.ListOwners(db, productdb.OwnerFilter{})
 	if err != nil {
 		return view, err
 	}
@@ -162,9 +162,9 @@ func visibleBrainGraphWarnings(warnings []BrainGraphWarning, visible map[string]
 	return out
 }
 
-func filterBrainGraphTasks(tasks []*flowdb.Task, filters BrainGraphFilters) []*flowdb.Task {
+func filterBrainGraphTasks(tasks []*productdb.Task, filters BrainGraphFilters) []*productdb.Task {
 	query := strings.ToLower(strings.TrimSpace(filters.Query))
-	out := make([]*flowdb.Task, 0, len(tasks))
+	out := make([]*productdb.Task, 0, len(tasks))
 	for _, task := range tasks {
 		if filters.Project != "" && nullStringValue(task.ProjectSlug) != filters.Project {
 			continue
@@ -183,7 +183,7 @@ func filterBrainGraphTasks(tasks []*flowdb.Task, filters BrainGraphFilters) []*f
 	return out
 }
 
-func taskSlugs(tasks []*flowdb.Task) []string {
+func taskSlugs(tasks []*productdb.Task) []string {
 	slugs := make([]string, 0, len(tasks))
 	for _, task := range tasks {
 		slugs = append(slugs, task.Slug)
@@ -191,12 +191,12 @@ func taskSlugs(tasks []*flowdb.Task) []string {
 	return slugs
 }
 
-func resolveBrainGraphOwners(tasks []*flowdb.Task, owners []*flowdb.Owner, tagsByTask map[string][]string) (map[string]*flowdb.Owner, map[string]string, []BrainGraphWarning) {
-	ownerBySlug := make(map[string]*flowdb.Owner, len(owners))
+func resolveBrainGraphOwners(tasks []*productdb.Task, owners []*productdb.Owner, tagsByTask map[string][]string) (map[string]*productdb.Owner, map[string]string, []BrainGraphWarning) {
+	ownerBySlug := make(map[string]*productdb.Owner, len(owners))
 	for _, owner := range owners {
 		ownerBySlug[owner.Slug] = owner
 	}
-	taskBySlug := make(map[string]*flowdb.Task, len(tasks))
+	taskBySlug := make(map[string]*productdb.Task, len(tasks))
 	for _, task := range tasks {
 		taskBySlug[task.Slug] = task
 	}
@@ -205,8 +205,8 @@ func resolveBrainGraphOwners(tasks []*flowdb.Task, owners []*flowdb.Owner, tagsB
 	warnedUnknown := map[string]bool{}
 	var warnings []BrainGraphWarning
 
-	var resolve func(*flowdb.Task) string
-	resolve = func(task *flowdb.Task) string {
+	var resolve func(*productdb.Task) string
+	resolve = func(task *productdb.Task) string {
 		if owner, ok := resolved[task.Slug]; ok {
 			return owner
 		}
@@ -278,7 +278,7 @@ func brainGraphOwnerTags(tags []string) []string {
 	return owners
 }
 
-func appendOwnerBoundaries(view *BrainGraphView, owners []*flowdb.Owner) {
+func appendOwnerBoundaries(view *BrainGraphView, owners []*productdb.Owner) {
 	for _, owner := range owners {
 		view.Owners = append(view.Owners, BrainGraphOwnerView{
 			ID:     "owner:" + owner.Slug,
@@ -289,7 +289,7 @@ func appendOwnerBoundaries(view *BrainGraphView, owners []*flowdb.Owner) {
 	}
 }
 
-func brainGraphTaskNode(task *flowdb.Task, ownerSlug string, tags []string, filters BrainGraphFilters) BrainGraphNode {
+func brainGraphTaskNode(task *productdb.Task, ownerSlug string, tags []string, filters BrainGraphFilters) BrainGraphNode {
 	nodeID := "task:" + task.Slug
 	return BrainGraphNode{
 		ID:             nodeID,
@@ -318,7 +318,7 @@ func brainGraphTaskNode(task *flowdb.Task, ownerSlug string, tags []string, filt
 	}
 }
 
-func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*flowdb.Task, visible map[string]bool, tagsByTask map[string][]string, filters BrainGraphFilters) {
+func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*productdb.Task, visible map[string]bool, tagsByTask map[string][]string, filters BrainGraphFilters) {
 	emittedRefs := map[string]bool{}
 	emittedEdges := map[string]bool{}
 	for _, task := range tasks {
@@ -376,7 +376,7 @@ func appendBrainGraphEvidenceNodes(view *BrainGraphView, tasks []*flowdb.Task, v
 	}
 }
 
-func brainGraphTaskExpanded(task *flowdb.Task, filters BrainGraphFilters) bool {
+func brainGraphTaskExpanded(task *productdb.Task, filters BrainGraphFilters) bool {
 	if task == nil {
 		return false
 	}
@@ -390,11 +390,11 @@ func brainGraphGitHubTag(tag string) bool {
 }
 
 func brainGraphGitHubRefNodeID(tag string) string {
-	return "github:" + url.PathEscape(flowdb.NormalizeTag(tag))
+	return "github:" + url.PathEscape(productdb.NormalizeTag(tag))
 }
 
 func brainGraphGitHubRefURL(tag string) string {
-	tag = flowdb.NormalizeTag(tag)
+	tag = productdb.NormalizeTag(tag)
 	kind, rest, ok := strings.Cut(tag, ":")
 	if !ok {
 		return ""
@@ -427,7 +427,7 @@ func appendBrainGraphExternalRefEdge(view *BrainGraphView, emitted map[string]bo
 	emitted[edgeID] = true
 }
 
-func brainGraphTaskSummary(task *flowdb.Task) string {
+func brainGraphTaskSummary(task *productdb.Task) string {
 	var parts []string
 	if task.ProjectSlug.Valid && strings.TrimSpace(task.ProjectSlug.String) != "" {
 		parts = append(parts, "project:"+strings.TrimSpace(task.ProjectSlug.String))

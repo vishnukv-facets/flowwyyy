@@ -2,7 +2,7 @@ package server
 
 import (
 	"flow/internal/briefing"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"net/http"
 	"strings"
@@ -14,7 +14,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live, _ := s.cachedLiveAgentSessions()
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{IncludeArchived: false, Kind: ""})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{IncludeArchived: false, Kind: ""})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -53,7 +53,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 			out.Stale = append(out.Stale, task)
 		}
 	}
-	pbs, err := flowdb.ListPlaybooks(s.cfg.DB, flowdb.PlaybookFilter{})
+	pbs, err := productdb.ListPlaybooks(s.cfg.DB, productdb.PlaybookFilter{})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

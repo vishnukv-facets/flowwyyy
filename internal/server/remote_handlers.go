@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func clientIP(r *http.Request) string {
@@ -56,7 +56,7 @@ func (s *Server) handleRemotePair(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	expires := now.Add(remoteDeviceTokenTTL)
 	id := mintRemoteToken()[:16]
-	if err := flowdb.InsertRemoteDevice(s.cfg.DB, id, label, hashRemoteToken(token),
+	if err := productdb.InsertRemoteDevice(s.cfg.DB, id, label, hashRemoteToken(token),
 		now.Format(time.RFC3339), expires.Format(time.RFC3339)); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -93,7 +93,7 @@ func (s *Server) handleRemotePairCode(w http.ResponseWriter, r *http.Request) {
 
 // handleRemoteDevices (LOCAL) lists paired devices.
 func (s *Server) handleRemoteDevices(w http.ResponseWriter, r *http.Request) {
-	list, err := flowdb.ListRemoteDevices(s.cfg.DB)
+	list, err := productdb.ListRemoteDevices(s.cfg.DB)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -125,7 +125,7 @@ func (s *Server) handleRemoteDeviceRevoke(w http.ResponseWriter, r *http.Request
 		writeError(w, errors.New("device id required"), http.StatusBadRequest)
 		return
 	}
-	if err := flowdb.RevokeRemoteDevice(s.cfg.DB, body.ID, flowdb.NowISO()); err != nil {
+	if err := productdb.RevokeRemoteDevice(s.cfg.DB, body.ID, productdb.NowISO()); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
@@ -148,7 +148,7 @@ func (s *Server) handleRemoteDeviceDelete(w http.ResponseWriter, r *http.Request
 		writeError(w, errors.New("device id required"), http.StatusBadRequest)
 		return
 	}
-	if err := flowdb.DeleteRemoteDevice(s.cfg.DB, body.ID); err != nil {
+	if err := productdb.DeleteRemoteDevice(s.cfg.DB, body.ID); err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
