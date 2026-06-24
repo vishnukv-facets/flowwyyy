@@ -177,7 +177,18 @@ Product packages must shed **both** fenced core packages: `flowdb` (→ `product
 7. `cmd/flowwyyy`: product-side version (drop `app.Version`) → ratchet empty.
 8. `make test` + Mission Control read/write parity spot-check; revise this doc to "Phase 3 / T13 complete."
 
-**Ratchet state (2026-06-24):** was 5 → now **2** remaining (`product`, `cmd/flowwyyy`); `monitor`, `steering`, **`server`** cleared; `workevents` reclassified core→product; new product-side `productbriefing`/`flowclient` guarded flowdb-free. **Measured surface (start):** 180 distinct `flowdb` symbols across 75 non-test files (server 51, steering 16, monitor 5, product 2, productdb 1). T13 is a sub-milestone; the brief sanctions splitting it into finer tasks.
+**Ratchet state (2026-06-24):** was 5 → now **2** remaining (`product`, `cmd/flowwyyy`); `monitor`, `steering`, **`server`** cleared; `workevents` reclassified core→product; new product-side `productbriefing`/`flowclient` guarded flowdb-free. **Keystone done:** `productdb.Open` + `coreGapSchemaDDL` (6 core-gap tables, parity-tested) — unblocks product's DB open. **Measured surface (start):** 180 distinct `flowdb` symbols across 75 non-test files (server 51, steering 16, monitor 5, product 2, productdb 1). T13 is a sub-milestone; the brief sanctions splitting it into finer tasks.
+
+### 11.3.1 App-shedding survey (clearing `product`'s 13 `app.*` deps)
+
+`product` stays ratcheted because it imports `app` (which transitively pulls `flowdb`) for 13 helpers, exported via `internal/app/exports.go`. The survey sorts them into 4 tiers by what they actually depend on:
+
+- **Tier A — pure utilities → relocate to `internal/cli`** (already flowdb/app-free; product imports it; `uiSessionToken` already uses `cli.SessionTokenFileName`). Impls touch only flag/os/env/filepath: `flagSet`, `leadingHelpArg`, `parseFlagSet` (helpers.go); `flowRoot`, `flowDBPath` (init.go); `flowServerURL`, `uiSessionToken` (tell.go); `preferredUIFlowBinary` (flow_binary.go). app keeps thin lowercase wrappers → its many call sites stay unchanged (low core risk). Removes 8 of 13 deps.
+- **Tier B — `Version` → product-local var.** `cmd/flowwyyy` sets `app.Version`; switch to a product-side var the UI reads. Trivial; removes 1 dep.
+- **Tier C — skill machinery → extract to a neutral pkg (~500 LOC, the bulk).** `cmdSkill` (skill.go: install/update/print/uninstall — writes `~/.claude/skills/flow/SKILL.md` + wires SessionStart/UserPromptSubmit hooks) plus the `//go:embed skill/SKILL.core.md`. Shared by `flow skill` (core) and `flowwyyy skill` (which composes core+product). Plan: move install logic + the core-skill embed to e.g. `internal/skillinstall`, parameterized by skill bytes; app & product each call it with their content. (exec-`flow skill install` can't carry product's composed content.)
+- **Tier D — init hook → architectural redesign, NOT relocation.** `product/seed.go` does `app.RegisterInitHook(seedSteererPersona)`, but in the split `flow init` runs in the CORE binary which never imports product → the persona seed silently never fires. Must move to a flowwyyy-side trigger (lazily on first `ui serve` / first steerer use, or a flowwyyy init step). **Open decision.**
+
+**Execution order:** A+B (one mechanical low-risk chunk) → C → D → then wire `product/ui.go`+`attention.go` to `productdb.Open`, drop product.go's `productdbreg` blank-import (+ test-only re-add), `cmd/flowwyyy` drop `app.Version` → ratchet EMPTY = T13 complete. **Open decisions:** (1) `internal/cli` vs a new `internal/flowpath` as Tier-A home; (2) Tier-D seed trigger.
 
 ### 11.4 What this changes vs. `flow-core-upstream-delta.md`
 
