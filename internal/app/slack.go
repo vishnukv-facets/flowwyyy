@@ -114,6 +114,15 @@ func cmdSlack(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: flow slack send --channel <id> (--text <message>|--text-file <path>|--file <path>) [--at <when>]")
 		fmt.Fprintln(os.Stderr, "       flow slack react --channel <id> --ts <ts> [--emoji +1]")
+		fmt.Fprintln(os.Stderr, "       flow slack search-users [--format table|json|tsv] <query>")
+		fmt.Fprintln(os.Stderr, "       flow slack user (--id <U...>|--email <addr>) [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack list-channels [--kind public,private,im,mpim] [--match <s>] [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack search-channels [--format table|json|tsv] <query>")
+		fmt.Fprintln(os.Stderr, "       flow slack history --channel <id|#name|name> [--limit N] [--oldest <ts>] [--latest <ts>] [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack thread --channel <id|#name|name> --ts <thread_ts> [--limit N] [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack members --channel <id|#name|name> [--limit N] [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack reactions --channel <id|#name|name> --ts <ts> [--format table|json|tsv]")
+		fmt.Fprintln(os.Stderr, "       flow slack search [--limit N] [--sort score|timestamp] [--format table|json|tsv] <query>")
 		return 2
 	}
 	switch args[0] {
@@ -121,6 +130,24 @@ func cmdSlack(args []string) int {
 		return cmdSlackSend(args[1:])
 	case "react":
 		return cmdSlackReact(args[1:])
+	case "search-users":
+		return cmdSlackSearchUsers(args[1:])
+	case "user":
+		return cmdSlackUser(args[1:])
+	case "list-channels":
+		return cmdSlackListChannels(args[1:])
+	case "search-channels":
+		return cmdSlackSearchChannels(args[1:])
+	case "history":
+		return cmdSlackHistory(args[1:])
+	case "thread":
+		return cmdSlackThread(args[1:])
+	case "members":
+		return cmdSlackMembers(args[1:])
+	case "reactions":
+		return cmdSlackReactions(args[1:])
+	case "search":
+		return cmdSlackSearchMessages(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown slack subcommand %q\n", args[0])
 		return 2

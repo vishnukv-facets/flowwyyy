@@ -180,5 +180,10 @@ Playbooks:
 
 Slack:
   flow slack send  --channel <id> --text <message> [--at <when>]   (post now or schedule; requires FLOW_SLACK_WRITES_ENABLED=1)
-  flow slack react --channel <id> --ts <ts> [--emoji +1]           (ack a message with an emoji reaction)`)
+  flow slack react --channel <id> --ts <ts> [--emoji +1]           (ack a message with an emoji reaction)
+  flow slack search-users <query> | user --id <U...>|--email <addr>
+  flow slack list-channels | search-channels <query>
+  flow slack history --channel <id|#name|name> | thread --channel <c> --ts <thread_ts>
+  flow slack members --channel <c> | reactions --channel <c> --ts <ts>
+  flow slack search <query> [--sort score|timestamp]               (requires user token with search:read)`)
 }

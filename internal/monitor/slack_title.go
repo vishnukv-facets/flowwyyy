@@ -561,13 +561,18 @@ func slackFileSecurityFindings(content string) []string {
 	return findings
 }
 
-// SlackUser is the small, testable subset of users.info data needed for
-// human-readable participant names.
+// SlackUser is the compact user shape used by Slack title generation and the
+// read-only CLI fallback.
 type SlackUser struct {
-	ID          string
-	Name        string
-	RealName    string
-	DisplayName string
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	RealName    string `json:"real_name"`
+	DisplayName string `json:"display_name"`
+	Email       string `json:"email,omitempty"`
+	Title       string `json:"title,omitempty"`
+	TeamID      string `json:"team_id,omitempty"`
+	IsBot       bool   `json:"is_bot"`
+	Deleted     bool   `json:"deleted"`
 }
 
 // SlackTitleClient hides slack-go behind the exact read calls title generation
