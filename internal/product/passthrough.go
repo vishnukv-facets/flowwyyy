@@ -17,6 +17,9 @@ var productVerbs = map[string]bool{
 	"serve":     true,
 	"attention": true,
 	"slack":     true,
+	// skill is handled in-process so the composed (core + product) skill is
+	// installed; passing it through would install the core-only skill.
+	"skill": true,
 }
 
 // RunWithPassthrough dispatches a product command in-process, or execs the core

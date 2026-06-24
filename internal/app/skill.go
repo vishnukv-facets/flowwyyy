@@ -9,8 +9,10 @@ import (
 	"strings"
 )
 
-//go:embed skill/SKILL.md
-var embeddedSkill []byte
+//go:embed skill/SKILL.core.md
+var embeddedCoreSkill []byte
+
+var embeddedSkill = embeddedCoreSkill
 
 // hookCommand is the exact string written into settings.json under
 // hooks.SessionStart so install/uninstall can idempotently find it.
@@ -167,10 +169,10 @@ func maybeAutoUpgradeSkill() {
 	fmt.Fprintf(os.Stderr, "flow: upgraded skill to %s\n", Version)
 }
 
-// cmdSkill dispatches `flow skill install|uninstall|update`.
+// cmdSkill dispatches `flow skill install|uninstall|update|print`.
 func cmdSkill(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: skill requires a subcommand (install|uninstall|update)")
+		fmt.Fprintln(os.Stderr, "error: skill requires a subcommand (install|uninstall|update|print)")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -181,6 +183,21 @@ func cmdSkill(args []string) int {
 		return skillInstall(rest, true)
 	case "uninstall":
 		return skillUninstall(rest)
+	case "print":
+		if len(rest) != 0 {
+			fmt.Fprintln(os.Stderr, "error: skill print takes no arguments")
+			return 2
+		}
+		// embeddedSkill is the core-only fragment in the core binary, and the
+		// composed core+product skill in the flowwyyy binary (set via
+		// SetEmbeddedSkill). So `flow skill print` stays core-only while
+		// `flowwyyy skill print` emits the full composed skill.
+		_, err := os.Stdout.Write(embeddedSkill)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: write skill: %v\n", err)
+			return 1
+		}
+		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown skill subcommand %q\n", sub)
 		return 2

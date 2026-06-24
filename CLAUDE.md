@@ -120,9 +120,10 @@ flow/
   (osascript, claude/codex, Slack, GitHub) are mocked via function vars.
 - **Skill file is the source of truth** for how Claude/Codex sessions interact
   with flow. If the skill says something, the code must support it.
-- **Skill embed path:** `internal/app/skill/SKILL.md` is embedded at compile
-  time via `//go:embed` in `internal/app/skill.go`. Rebuild after editing for
-  `flow skill update` to pick it up.
+- **Skill embed paths:** `internal/app/skill/SKILL.core.md` is embedded by
+  core via `//go:embed`; `internal/product/skill/SKILL.flowwyyy.md` is the
+  product fragment composed by flowwyyy. Rebuild after editing for skill
+  update/install flows to pick it up.
 
 ## Data safety (`internal/flowbackup`)
 

@@ -80,8 +80,11 @@ install: build
 					echo "Skipped. Add the line to $$rc_file yourself, or invoke flow with the full path: $(INSTALL_DIR)/$(BINARY)" ;; \
 			esac ;; \
 	esac
-	@# Install skill + SessionStart hook
-	@./$(BINARY) skill install --force
+	@# Install the composed (core + product) skill + SessionStart hook via the
+	@# flowwyyy product binary. The core binary would install a core-only skill;
+	@# flowwyyy composes in the Attention/Slack/Owners/inbox-monitor sections so
+	@# agent sessions get today's full skill.
+	@./flowwyyy skill install --force
 	@echo ""
 	@echo "Run 'flow init' to create ~/.flow/ and the database."
 

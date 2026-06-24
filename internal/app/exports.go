@@ -33,6 +33,22 @@ func UISessionToken() string { return uiSessionToken() }
 // PreferredUIFlowBinary picks which binary UI-related child processes re-exec.
 func PreferredUIFlowBinary(current string) string { return preferredUIFlowBinary(current) }
 
+// EmbeddedCoreSkill returns the embedded core skill fragment (SKILL.core.md).
+// The product layer composes this with its own fragment to install the full
+// agent skill via `flowwyyy skill install`.
+func EmbeddedCoreSkill() []byte { return embeddedCoreSkill }
+
+// SetEmbeddedSkill overrides the skill content that `flow skill install/update`
+// and `flow skill print` emit. The flowwyyy binary sets this to the composed
+// core+product skill so a product install preserves today's full agent
+// experience; the core binary leaves it at the core-only default.
+func SetEmbeddedSkill(b []byte) { embeddedSkill = b }
+
+// RunSkillCommand dispatches a `skill` subcommand (install|update|print|
+// uninstall) using the current embeddedSkill. The product layer calls this
+// after SetEmbeddedSkill so install reuses the core path/hook-wiring logic.
+func RunSkillCommand(args []string) int { return cmdSkill(args) }
+
 // initHooks are run by `flow init` after core seeding. The product layer
 // registers hooks (e.g. the steerer-persona seed) via RegisterInitHook so the
 // core init path takes no dependency on product packages.
