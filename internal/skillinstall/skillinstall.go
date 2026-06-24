@@ -1,4 +1,15 @@
-package app
+// Package skillinstall installs/updates/uninstalls/prints the flow agent skill
+// (the SKILL.md under ~/.claude/skills/flow and ~/.codex/skills/flow) and wires
+// the SessionStart hook in ~/.claude/settings.json.
+//
+// It is flowwyyy's OWN copy of the skill-install machinery, parameterized by the
+// skill CONTENT and binary VERSION (the only things that differ per binary): the
+// flowwyyy product binary installs the COMPOSED core+product skill, while the
+// core `flow` binary keeps its own equivalent under internal/app. In the
+// two-binary world the official `flow` and `flowwyyy` never share code, so this
+// duplication is by design (Phase-3 decoupling, seam §11.3.1, Tier C). The
+// package is pure stdlib + internal/cli — no flowdb, no app.
+package skillinstall
 
 import (
 	"encoding/json"
@@ -7,173 +18,32 @@ import (
 	"path/filepath"
 	"strings"
 
-	"flow/internal/coreskill"
+	"flow/internal/cli"
 )
 
-// embeddedCoreSkill is the core agent skill fragment. It lives in the neutral
-// internal/coreskill package (single copy, also read by the flowwyyy product
-// binary) rather than being embedded directly here (Phase-3 decoupling).
-var embeddedCoreSkill = coreskill.Bytes()
-
-var embeddedSkill = embeddedCoreSkill
+// Config carries the per-binary inputs: the skill bytes to install/print and
+// the binary version recorded in the install sidecar.
+type Config struct {
+	Content []byte
+	Version string
+}
 
 // hookCommand is the exact string written into settings.json under
-// hooks.SessionStart so install/uninstall can idempotently find it.
-// Keep it stable — changing this string would orphan existing
-// installations.
+// hooks.SessionStart so install/uninstall can idempotently find it. Keep it
+// stable — changing it would orphan existing installations. It is "flow ..."
+// (not "flowwyyy ...") because the SessionStart hook invokes the core hook
+// handler, which both binaries expose at the same verb.
 const hookCommand = "flow hook session-start"
 
-// hookMatcher is the SessionStart matcher string — fires on both
-// fresh startup and `claude --resume`.
+// hookMatcher is the SessionStart matcher — fires on fresh startup and resume.
 const hookMatcher = "startup|resume"
 
-// userPromptSubmitHookCommand is the exact string written into
-// settings.json under hooks.UserPromptSubmit. Same stability rule as
-// hookCommand: changing this string would orphan existing installs.
+// userPromptSubmitHookCommand is the (removed) UserPromptSubmit hook command;
+// install/uninstall actively strip any stale entry left by older binaries.
 const userPromptSubmitHookCommand = "flow hook user-prompt-submit"
 
-// skillInstallPath returns the Claude skill installation path. It remains the
-// primary path for version tracking and Claude hooks.
-func skillInstallPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("no home dir: %w", err)
-	}
-	return filepath.Join(home, ".claude", "skills", "flow", "SKILL.md"), nil
-}
-
-func codexSkillInstallPath() (string, error) {
-	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
-		return filepath.Join(codexHome, "skills", "flow", "SKILL.md"), nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("no home dir: %w", err)
-	}
-	return filepath.Join(home, ".codex", "skills", "flow", "SKILL.md"), nil
-}
-
-func skillInstallPaths() ([]string, error) {
-	claudePath, err := skillInstallPath()
-	if err != nil {
-		return nil, err
-	}
-	codexPath, err := codexSkillInstallPath()
-	if err != nil {
-		return nil, err
-	}
-	if codexPath == claudePath {
-		return []string{claudePath}, nil
-	}
-	return []string{claudePath, codexPath}, nil
-}
-
-// skillVersionPath returns the sidecar file that records which binary
-// version installed the current SKILL.md — used by the auto-upgrade
-// check to decide whether to refresh the skill.
-func skillVersionPath() (string, error) {
-	skill, err := skillInstallPath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(skill), "VERSION"), nil
-}
-
-// readSkillVersion returns the recorded version string, or "" if the
-// sidecar file is missing or unreadable.
-func readSkillVersion() string {
-	p, err := skillVersionPath()
-	if err != nil {
-		return ""
-	}
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(b))
-}
-
-// writeSkillVersion records v as the version of the binary that
-// installed the current SKILL.md. Errors are non-fatal — failing to
-// write the sidecar should never block a successful skill install.
-func writeSkillVersion(v string) error {
-	p, err := skillVersionPath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(p, []byte(v+"\n"), 0o644)
-}
-
-// userSettingsPath returns ~/.claude/settings.json.
-func userSettingsPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("no home dir: %w", err)
-	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
-}
-
-// maybeAutoUpgradeSkill checks the recorded skill version against the
-// running binary's version and, if they differ, refreshes the skill +
-// SessionStart hook. Designed to run on every flow invocation so the
-// user gets a self-healing upgrade flow after replacing the binary.
-//
-// The check is intentionally conservative — it does nothing when:
-//   - The binary is a "dev" build (Version == "dev"). Local devs use
-//     `make install` and shouldn't fight an auto-installer.
-//   - The skill isn't installed at all (sentinel: SKILL.md missing).
-//     Treat this as an explicit user opt-out; never re-install.
-//   - The recorded version already matches Version. The common path.
-//
-// All errors are silent — auto-upgrade is best-effort plumbing, not a
-// command. A user-visible failure here would be far more annoying than
-// the eventual symptom of a stale skill.
-func maybeAutoUpgradeSkill() {
-	if Version == "" || Version == "dev" {
-		return
-	}
-	paths, err := skillInstallPaths()
-	if err != nil {
-		return
-	}
-	installed := false
-	for _, path := range paths {
-		if _, err := os.Stat(path); err == nil {
-			installed = true
-			break
-		}
-	}
-	if !installed {
-		// Not installed anywhere → user opted out; don't reinstall behind
-		// their back.
-		return
-	}
-	if readSkillVersion() == Version {
-		return
-	}
-	// Version mismatch — refresh skill bytes and the SessionStart hook.
-	for _, path := range paths {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return
-		}
-		if err := os.WriteFile(path, embeddedSkill, 0o644); err != nil {
-			return
-		}
-	}
-	_ = writeSkillVersion(Version)
-	_, _ = installSessionStartHook()
-	// UserPromptSubmit hook was removed in v0.1.0-alpha.7 — the
-	// per-prompt token cost wasn't worth the marginal value. Actively
-	// uninstall any stale entry left behind by older binaries.
-	_, _ = uninstallUserPromptSubmitHook()
-	fmt.Fprintf(os.Stderr, "flow: upgraded skill to %s\n", Version)
-}
-
-// cmdSkill dispatches `flow skill install|uninstall|update|print`.
-func cmdSkill(args []string) int {
+// Run dispatches `skill install|update|uninstall|print` using cfg.
+func Run(args []string, cfg Config) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "error: skill requires a subcommand (install|uninstall|update|print)")
 		return 2
@@ -181,22 +51,17 @@ func cmdSkill(args []string) int {
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "install":
-		return skillInstall(rest, false)
+		return install(rest, cfg, false)
 	case "update":
-		return skillInstall(rest, true)
+		return install(rest, cfg, true)
 	case "uninstall":
-		return skillUninstall(rest)
+		return uninstall(rest)
 	case "print":
 		if len(rest) != 0 {
 			fmt.Fprintln(os.Stderr, "error: skill print takes no arguments")
 			return 2
 		}
-		// embeddedSkill is the core-only fragment in the core binary, and the
-		// composed core+product skill in the flowwyyy binary (set via
-		// SetEmbeddedSkill). So `flow skill print` stays core-only while
-		// `flowwyyy skill print` emits the full composed skill.
-		_, err := os.Stdout.Write(embeddedSkill)
-		if err != nil {
+		if _, err := os.Stdout.Write(cfg.Content); err != nil {
 			fmt.Fprintf(os.Stderr, "error: write skill: %v\n", err)
 			return 1
 		}
@@ -207,8 +72,8 @@ func cmdSkill(args []string) int {
 	}
 }
 
-func skillInstall(args []string, forceDefault bool) int {
-	fs := flagSet("skill install")
+func install(args []string, cfg Config, forceDefault bool) int {
+	fs := cli.FlagSet("skill install")
 	force := fs.Bool("force", forceDefault, "overwrite an existing installation")
 	skipHook := fs.Bool("skip-hook", false, "don't auto-install the SessionStart hook in ~/.claude/settings.json")
 	if err := fs.Parse(args); err != nil {
@@ -234,13 +99,13 @@ func skillInstall(args []string, forceDefault bool) int {
 			fmt.Fprintf(os.Stderr, "error: create %s: %v\n", filepath.Dir(dest), err)
 			return 1
 		}
-		if err := os.WriteFile(dest, embeddedSkill, 0o644); err != nil {
+		if err := os.WriteFile(dest, cfg.Content, 0o644); err != nil {
 			fmt.Fprintf(os.Stderr, "error: write %s: %v\n", dest, err)
 			return 1
 		}
 		fmt.Printf("installed flow skill to %s\n", dest)
 	}
-	if err := writeSkillVersion(Version); err != nil {
+	if err := writeSkillVersion(cfg.Version); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not record skill version: %v\n", err)
 	}
 
@@ -250,9 +115,6 @@ func skillInstall(args []string, forceDefault bool) int {
 	}
 	if added, err := installSessionStartHook(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not install SessionStart hook: %v\n", err)
-		// Non-fatal: the skill is still usable without the hook; the
-		// user can wire it manually. Return 0 so `flow init` doesn't
-		// fail on a settings.json quirk.
 		return 0
 	} else if added {
 		settings, _ := userSettingsPath()
@@ -260,10 +122,6 @@ func skillInstall(args []string, forceDefault bool) int {
 	} else {
 		fmt.Println("SessionStart hook already installed — leaving as is")
 	}
-	// UserPromptSubmit hook was removed in v0.1.0-alpha.7. Actively
-	// uninstall any stale entry left behind by older binaries so a
-	// fresh `flow skill install` (or `update`) leaves a clean
-	// settings.json.
 	if removed, err := uninstallUserPromptSubmitHook(); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not remove stale UserPromptSubmit hook: %v\n", err)
 		return 0
@@ -274,8 +132,8 @@ func skillInstall(args []string, forceDefault bool) int {
 	return 0
 }
 
-func skillUninstall(args []string) int {
-	fs := flagSet("skill uninstall")
+func uninstall(args []string) int {
+	fs := cli.FlagSet("skill uninstall")
 	keepHook := fs.Bool("keep-hook", false, "don't remove the SessionStart hook from ~/.claude/settings.json")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -326,37 +184,86 @@ func skillUninstall(args []string) int {
 	return 0
 }
 
-// installSessionStartHook idempotently adds the flow SessionStart hook
-// to ~/.claude/settings.json. Thin wrapper around installClaudeHook.
+// ---------- install paths + version sidecar ----------
+
+func skillInstallPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no home dir: %w", err)
+	}
+	return filepath.Join(home, ".claude", "skills", "flow", "SKILL.md"), nil
+}
+
+func codexSkillInstallPath() (string, error) {
+	if codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME")); codexHome != "" {
+		return filepath.Join(codexHome, "skills", "flow", "SKILL.md"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no home dir: %w", err)
+	}
+	return filepath.Join(home, ".codex", "skills", "flow", "SKILL.md"), nil
+}
+
+func skillInstallPaths() ([]string, error) {
+	claudePath, err := skillInstallPath()
+	if err != nil {
+		return nil, err
+	}
+	codexPath, err := codexSkillInstallPath()
+	if err != nil {
+		return nil, err
+	}
+	if codexPath == claudePath {
+		return []string{claudePath}, nil
+	}
+	return []string{claudePath, codexPath}, nil
+}
+
+func skillVersionPath() (string, error) {
+	skill, err := skillInstallPath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(skill), "VERSION"), nil
+}
+
+func writeSkillVersion(v string) error {
+	p, err := skillVersionPath()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(v+"\n"), 0o644)
+}
+
+// ---------- ~/.claude/settings.json hook wiring ----------
+
+func userSettingsPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("no home dir: %w", err)
+	}
+	return filepath.Join(home, ".claude", "settings.json"), nil
+}
+
 func installSessionStartHook() (bool, error) {
 	return installClaudeHook("SessionStart", hookMatcher, hookCommand)
 }
 
-// uninstallSessionStartHook removes the flow SessionStart hook entry.
-// Thin wrapper around uninstallClaudeHook.
 func uninstallSessionStartHook() (bool, error) {
 	return uninstallClaudeHook("SessionStart", hookCommand)
 }
 
-// uninstallUserPromptSubmitHook removes any stale flow UserPromptSubmit
-// hook entry from ~/.claude/settings.json. The hook itself was
-// removed in v0.1.0-alpha.7 — see cmdHookUserPromptSubmit. Both
-// `flow skill install` and `maybeAutoUpgradeSkill` call this on every
-// upgrade so existing-user installs converge to a clean settings.json.
 func uninstallUserPromptSubmitHook() (bool, error) {
 	return uninstallClaudeHook("UserPromptSubmit", userPromptSubmitHookCommand)
 }
 
-// installClaudeHook idempotently adds a hook entry for the given
-// Claude Code event to ~/.claude/settings.json. matcher may be empty —
-// some events (UserPromptSubmit, Notification) don't use a matcher and
-// the field is omitted from the entry. command is both the literal
-// command Claude Code will execute AND the marker we look for to decide
-// whether the hook is already installed.
-//
+// installClaudeHook idempotently adds a hook entry for the given Claude Code
+// event to ~/.claude/settings.json, preserving all other keys/events/entries.
 // Returns (added, err) where added is true iff the file was modified.
-// The merge preserves all existing top-level keys, all hooks under
-// other events, and all existing entries under the same event.
 func installClaudeHook(event, matcher, command string) (bool, error) {
 	path, err := userSettingsPath()
 	if err != nil {
@@ -429,9 +336,8 @@ func installClaudeHook(event, matcher, command string) (bool, error) {
 	return true, nil
 }
 
-// uninstallClaudeHook removes any entry under hooks.<event> whose
-// inner hook list contains a command matching the given marker.
-// Returns (removed, err) where removed is true iff the file changed.
+// uninstallClaudeHook removes any entry under hooks.<event> whose inner hook
+// list contains a command matching the marker. Returns (removed, err).
 func uninstallClaudeHook(event, command string) (bool, error) {
 	path, err := userSettingsPath()
 	if err != nil {
