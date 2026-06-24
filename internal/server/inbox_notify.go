@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 type inboxNotifyRequest struct {
@@ -153,7 +153,7 @@ func (s *Server) wakeTaskForInboxNotify(slug, prompt string) error {
 	if s.cfg.DB == nil {
 		return nil
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		return nil
 	}

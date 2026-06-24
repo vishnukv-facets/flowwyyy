@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func graphTestTime() time.Time {
@@ -164,7 +165,7 @@ func TestBrainGraphExpandedTaskAddsEvidenceReferences(t *testing.T) {
 		t.Fatalf("missing transcript external_ref edge: %#v", got.Edges)
 	}
 	for _, tag := range []string{"gh-pr:Facets-cloud/flow-manager#33", "gh-issue:Facets-cloud/flow-manager#123"} {
-		tag = flowdb.NormalizeTag(tag)
+		tag = productdb.NormalizeTag(tag)
 		nodeID := brainGraphGitHubRefNodeID(tag)
 		node, ok := graphNodeByID(got, nodeID)
 		if !ok {

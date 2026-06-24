@@ -1,7 +1,7 @@
 package server
 
 import (
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"strings"
 	"sync"
@@ -172,7 +172,7 @@ func (h *terminalHub) floatingSessions() []floatingSessionInfo {
 	for _, s := range snaps {
 		waiting, why := false, ""
 		if s.sid != "" && h.server != nil && h.server.cfg.DB != nil {
-			if st, err := flowdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, s.provider, s.sid); err == nil && st != nil && st.Status == "waiting" {
+			if st, err := productdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, s.provider, s.sid); err == nil && st != nil && st.Status == "waiting" {
 				waiting = true
 				if st.Message.Valid {
 					why = strings.TrimSpace(st.Message.String)

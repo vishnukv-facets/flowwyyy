@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"sync"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // wakeQueue is the persistent buffer of wake prompts withheld because a session
@@ -25,29 +25,29 @@ func newWakeQueue(db *sql.DB) *wakeQueue {
 
 // push appends a prompt to slug's persistent queue.
 func (q *wakeQueue) push(slug, prompt string) error {
-	_, err := flowdb.EnqueuePendingWake(q.db, slug, prompt)
+	_, err := productdb.EnqueuePendingWake(q.db, slug, prompt)
 	return err
 }
 
 // peek returns the oldest buffered wake for slug without removing it. ok=false
 // when empty. Non-destructive so a row survives a failed/interrupted delivery
 // and is dropped only by ack after a confirmed inject.
-func (q *wakeQueue) peek(slug string) (flowdb.PendingWake, bool) {
-	pw, ok, err := flowdb.PeekPendingWake(q.db, slug)
+func (q *wakeQueue) peek(slug string) (productdb.PendingWake, bool) {
+	pw, ok, err := productdb.PeekPendingWake(q.db, slug)
 	if err != nil {
-		return flowdb.PendingWake{}, false
+		return productdb.PendingWake{}, false
 	}
 	return pw, ok
 }
 
 // ack removes a delivered wake row.
 func (q *wakeQueue) ack(id int64) {
-	_ = flowdb.AckPendingWake(q.db, id)
+	_ = productdb.AckPendingWake(q.db, id)
 }
 
 // has reports whether slug has any buffered wake.
 func (q *wakeQueue) has(slug string) bool {
-	has, err := flowdb.HasPendingWakes(q.db, slug)
+	has, err := productdb.HasPendingWakes(q.db, slug)
 	return err == nil && has
 }
 

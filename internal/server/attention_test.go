@@ -14,6 +14,7 @@ import (
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
@@ -32,7 +33,7 @@ func attentionTestServer(t *testing.T) (*Server, *sql.DB) {
 
 func seedFeedItem(t *testing.T, db *sql.DB, id, status string) {
 	t.Helper()
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: id, Source: "slack", ThreadKey: "C1:" + id, Summary: "s-" + id,
 		SuggestedAction: "make_task", Confidence: 0.8, Status: status, CreatedAt: "2026-06-05T10:00:00Z",
 	}); err != nil {
@@ -87,7 +88,7 @@ func TestHandleAttentionIncludesExplainabilityFields(t *testing.T) {
 		"parent":{"kind":"parent","author":"alice","text":"Can we ship the deploy Friday?","ts":"1.1"},
 		"messages":[{"kind":"reply","author":"bob","text":"Needs rollback note first.","ts":"1.2"}]
 	}`
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "why1", Source: "slack", ThreadKey: "C1:1.1", Summary: "Deploy follow-up",
 		SuggestedAction: "forward", MatchedTask: "deploy-followup", SuggestedProject: "flow-manager",
 		Confidence: 0.86, Reason: "existing task already owns this deploy thread", ContextJSON: contextJSON,
@@ -96,7 +97,7 @@ func TestHandleAttentionIncludesExplainabilityFields(t *testing.T) {
 		t.Fatalf("seed feed: %v", err)
 	}
 	relevant := true
-	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+	if err := productdb.InsertSteeringTrace(db, productdb.SteeringTrace{
 		ID: "why-trace", CreatedAt: now, Origin: "live", Source: "slack", Channel: "C1", Author: "alice",
 		ThreadKey: "C1:1.1", TextPreview: "Can we ship?", Disposition: "surfaced", StageReached: "stage3",
 		Stage1Relevant: &relevant, Stage2Action: "reply", Stage2Confidence: 0.74,
@@ -146,7 +147,7 @@ func TestHandleAttentionIncludesExplainabilityFields(t *testing.T) {
 
 func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 	s, db := attentionTestServer(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "act1", Source: "slack", ThreadKey: "C1:1.1", Summary: "Needs reply",
 		SuggestedAction: "forward", MatchedTask: "deploy-followup", Draft: "On it.",
 		Channel: "C1", Author: "alice", Confidence: 0.75, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -207,14 +208,14 @@ func TestHandleAttentionIncludesActionPreviews(t *testing.T) {
 
 func TestAttentionItemViewIncludesLatestHandoff(t *testing.T) {
 	s, db := attentionTestServer(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "hv1", Source: "slack", ThreadKey: "C1:hv1", Summary: "Needs owner check",
 		SuggestedAction: "forward", MatchedTask: "deploy-followup", Confidence: 0.75,
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
-	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+	h, err := productdb.CreateAttentionHandoff(db, productdb.AttentionHandoff{
 		FeedItemID: "hv1", Sender: "attention-router", Receiver: "deploy-followup",
 		Context: "context", RequestedVerdict: "accept_or_decline",
 		RequestedAt: "2099-06-05T10:01:00Z", ExpiresAt: "2099-06-05T10:31:00Z",
@@ -243,7 +244,7 @@ func TestAttentionItemViewIncludesLatestHandoff(t *testing.T) {
 
 func TestAttentionActConfirmHandoff(t *testing.T) {
 	s, db := attentionTestServer(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "ch1", Source: "slack", ThreadKey: "C1:ch1", Summary: "Needs owner check",
 		SuggestedAction: "forward", MatchedTask: "deploy-followup", Confidence: 0.75,
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -251,8 +252,8 @@ func TestAttentionActConfirmHandoff(t *testing.T) {
 		t.Fatalf("seed feed: %v", err)
 	}
 	old := attentionRequestHandoff
-	attentionRequestHandoff = func(_ *Server, item flowdb.FeedItem) (flowdb.AttentionHandoff, error) {
-		return flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+	attentionRequestHandoff = func(_ *Server, item productdb.FeedItem) (productdb.AttentionHandoff, error) {
+		return productdb.CreateAttentionHandoff(db, productdb.AttentionHandoff{
 			FeedItemID: item.ID, Sender: "attention-router", Receiver: item.MatchedTask,
 			Context: "context", RequestedVerdict: "accept_or_decline",
 			RequestedAt: "2026-06-05T10:01:00Z", ExpiresAt: "2026-06-05T10:31:00Z",
@@ -264,7 +265,7 @@ func TestAttentionActConfirmHandoff(t *testing.T) {
 	if status != 200 || !resp.OK {
 		t.Fatalf("confirm-handoff = (%+v, %d), want OK 200", resp, status)
 	}
-	item, _ := flowdb.GetFeedItem(db, "ch1")
+	item, _ := productdb.GetFeedItem(db, "ch1")
 	if item.Status != "new" {
 		t.Fatalf("confirm-handoff request must leave card open, got %+v", item)
 	}
@@ -278,10 +279,10 @@ func TestAttentionActDismiss(t *testing.T) {
 	if status != 200 || !resp.OK {
 		t.Fatalf("runAction = (%+v, %d), want OK 200", resp, status)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed, got %d dismissed", len(items))
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "d1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "d1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -298,8 +299,8 @@ func TestAttentionActMakeTaskStart(t *testing.T) {
 	// `flow spawn`, no PTY). The make-task seam marks the row acted+linked.
 	oldMake, oldStart := attentionMakeTask, attentionStartSession
 	startedCh := make(chan string, 4) // buffered: session start is now async (goroutine)
-	attentionMakeTask = func(srv *Server, item flowdb.FeedItem) error {
-		return flowdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
+	attentionMakeTask = func(srv *Server, item productdb.FeedItem) error {
+		return productdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
 	}
 	attentionStartSession = func(_ *Server, slug string) error { startedCh <- slug; return nil }
 	t.Cleanup(func() { attentionMakeTask, attentionStartSession = oldMake, oldStart })
@@ -308,7 +309,7 @@ func TestAttentionActMakeTaskStart(t *testing.T) {
 	if status != 200 || !resp.OK {
 		t.Fatalf("runAction = (%+v, %d), want OK 200", resp, status)
 	}
-	item, _ := flowdb.GetFeedItem(db, "ms1")
+	item, _ := productdb.GetFeedItem(db, "ms1")
 	wantSlug := steering.FeedTaskSlug(item)
 	// The action returns immediately; the open runs in the background.
 	select {
@@ -334,8 +335,8 @@ func TestAttentionActMakeTaskStartOpenBestEffort(t *testing.T) {
 	seedFeedItem(t, db, "be1", "new")
 
 	oldMake, oldStart := attentionMakeTask, attentionStartSession
-	attentionMakeTask = func(srv *Server, item flowdb.FeedItem) error {
-		return flowdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
+	attentionMakeTask = func(srv *Server, item productdb.FeedItem) error {
+		return productdb.SetFeedItemActed(srv.cfg.DB, item.ID, steering.FeedTaskSlug(item), "2026-06-05T11:00:00Z")
 	}
 	attentionStartSession = func(_ *Server, _ string) error { return errors.New("pty down") }
 	t.Cleanup(func() { attentionMakeTask, attentionStartSession = oldMake, oldStart })
@@ -346,14 +347,14 @@ func TestAttentionActMakeTaskStartOpenBestEffort(t *testing.T) {
 	if status != 200 || !resp.OK {
 		t.Fatalf("best-effort open: runAction = (%+v, %d), want OK 200", resp, status)
 	}
-	if item, _ := flowdb.GetFeedItem(db, "be1"); item.Status != "acted" {
+	if item, _ := productdb.GetFeedItem(db, "be1"); item.Status != "acted" {
 		t.Errorf("feed row should still be acted, got %q", item.Status)
 	}
 }
 
 func seedReplyFeedItem(t *testing.T, db *sql.DB, id, matchedTask, draft string) {
 	t.Helper()
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: id, Source: "slack", ThreadKey: "C1:" + id, Summary: "s-" + id,
 		SuggestedAction: "send_reply", MatchedTask: matchedTask, Draft: draft,
 		Confidence: 0.8, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -382,7 +383,7 @@ func TestAttentionSendReplyEmpty(t *testing.T) {
 	if status != http.StatusBadRequest || resp.OK {
 		t.Fatalf("empty draft → (%+v, %d), want not-OK 400", resp, status)
 	}
-	if item, _ := flowdb.GetFeedItem(db, "sre1"); item.Status != "new" {
+	if item, _ := productdb.GetFeedItem(db, "sre1"); item.Status != "new" {
 		t.Errorf("feed row should be untouched ('new'), got %q", item.Status)
 	}
 	// Underscore alias is also recognized as send-reply (still 400 on empty).
@@ -445,7 +446,7 @@ func TestAttentionActErrors(t *testing.T) {
 
 func TestAttentionActMuteRecordsFeedback(t *testing.T) {
 	s, db := attentionTestServer(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "mute1", Source: "slack", ThreadKey: "C_MUTED:1.1", Summary: "noise",
 		SuggestedAction: "reply", Confidence: 0.8, Status: "new", Channel: "C_MUTED",
 		ChannelType: "channel", Author: "U_NOISE", CreatedAt: "2026-06-05T10:00:00Z",
@@ -457,7 +458,7 @@ func TestAttentionActMuteRecordsFeedback(t *testing.T) {
 	if status != 200 || !resp.OK {
 		t.Fatalf("runAction = (%+v, %d), want OK 200", resp, status)
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "mute1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "mute1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -472,9 +473,9 @@ func TestAttentionActRetriageAndOpenSignalsRecordFeedback(t *testing.T) {
 	s.cascade = steering.NewCascade(db, steering.WatchConfig{})
 	oldLaunch := launchAttentionRetriage
 	launched := false
-	launchAttentionRetriage = func(s *Server, item flowdb.FeedItem) {
+	launchAttentionRetriage = func(s *Server, item productdb.FeedItem) {
 		launched = true
-		_ = flowdb.SetFeedRetriaging(s.cfg.DB, item.ID, "")
+		_ = productdb.SetFeedRetriaging(s.cfg.DB, item.ID, "")
 	}
 	t.Cleanup(func() { launchAttentionRetriage = oldLaunch })
 
@@ -490,7 +491,7 @@ func TestAttentionActRetriageAndOpenSignalsRecordFeedback(t *testing.T) {
 		t.Fatalf("open-source = (%+v, %d), want OK 200", resp, status)
 	}
 
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "sig1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "sig1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -508,7 +509,7 @@ func TestAttentionActRetriageAndOpenSignalsRecordFeedback(t *testing.T) {
 
 func TestAttentionItemView(t *testing.T) {
 	s, _ := attentionTestServer(t) // nil nameResolver
-	v := s.attentionItemView(context.Background(), flowdb.FeedItem{ID: "x", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi <@U1>", SuggestedAction: "reply", Confidence: 0.5, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"})
+	v := s.attentionItemView(context.Background(), productdb.FeedItem{ID: "x", Source: "slack", ThreadKey: "C1:1.1", Summary: "hi <@U1>", SuggestedAction: "reply", Confidence: 0.5, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"})
 	if v.ID != "x" || v.Source != "slack" || v.SuggestedAction != "reply" || v.Confidence != 0.5 {
 		t.Errorf("view = %+v", v)
 	}
@@ -559,7 +560,7 @@ func TestHandleSlackChannelsError(t *testing.T) {
 
 func seedTrace(t *testing.T, db *sql.DB, id, disposition, stage, createdAt string) {
 	t.Helper()
-	tr := flowdb.SteeringTrace{
+	tr := productdb.SteeringTrace{
 		ID: id, CreatedAt: createdAt, Origin: "slack", Source: "slack",
 		Channel: "C1", ChannelType: "channel", Author: "u1", ThreadKey: "C1:" + id,
 		TextPreview: "preview-" + id, Disposition: disposition, StageReached: stage,
@@ -570,7 +571,7 @@ func seedTrace(t *testing.T, db *sql.DB, id, disposition, stage, createdAt strin
 		tr.AutonomyDecision = "acted"
 		tr.AutonomyReason = "confidence 0.95 >= threshold 0.80"
 	}
-	if err := flowdb.InsertSteeringTrace(db, tr); err != nil {
+	if err := productdb.InsertSteeringTrace(db, tr); err != nil {
 		t.Fatalf("seedTrace %s: %v", id, err)
 	}
 }
@@ -679,7 +680,7 @@ func TestHandleAttentionDecision(t *testing.T) {
 	s, db := attentionTestServer(t)
 	seedFeedItem(t, db, "fd1", "new")
 	// A trace whose feed_item_id points at the seeded feed item.
-	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+	if err := productdb.InsertSteeringTrace(db, productdb.SteeringTrace{
 		ID: "dt1", CreatedAt: "2026-06-05T10:00:00Z", Origin: "live", Source: "slack",
 		Channel: "C1", ChannelType: "channel", Author: "u1", ThreadKey: "C1:fd1",
 		TextPreview: "why", Disposition: "surfaced", StageReached: "stage3",
@@ -735,14 +736,14 @@ func TestAttentionTraceIncludesForwardedTaskTarget(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID: "ft1", Source: "github", ThreadKey: "facets-cloud/raptor:gh-pr:facets-cloud/raptor#159",
 		Summary: "Raptor PR moved", SuggestedAction: "forward", MatchedTask: "raptor-review",
 		Confidence: 0.93, Status: "acted", LinkedTask: "raptor-review", CreatedAt: now, ActedAt: now,
 	}); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
-	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+	if err := productdb.InsertSteeringTrace(db, productdb.SteeringTrace{
 		ID: "ft-trace", CreatedAt: now, Origin: "live", Source: "github", Channel: "facets-cloud/raptor",
 		ThreadKey: "facets-cloud/raptor:gh-pr:facets-cloud/raptor#159", TextPreview: "head changed",
 		Disposition: "surfaced", StageReached: "stage3", FinalAction: "forward", FinalConfidence: 0.93,
@@ -794,7 +795,7 @@ func TestHandleAttentionTraceSourceFilter(t *testing.T) {
 	// Two slack traces (seedTrace defaults to slack) + one github.
 	seedTrace(t, db, "sa1", "surfaced", "stage3", "2026-06-05T10:00:00Z")
 	seedTrace(t, db, "sa2", "dropped", "stage1", "2026-06-05T10:01:00Z")
-	if err := flowdb.InsertSteeringTrace(db, flowdb.SteeringTrace{
+	if err := productdb.InsertSteeringTrace(db, productdb.SteeringTrace{
 		ID: "ga1", CreatedAt: "2026-06-05T10:02:00Z", Origin: "live", Source: "github",
 		Channel: "o/r", Author: "octocat", ThreadKey: "o/r:gh-pr:o/r#5",
 		TextPreview: "review", Disposition: "surfaced", StageReached: "stage3",
@@ -870,7 +871,7 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 
 	// Slack channel message: nil resolver leaves names empty, but Channel/
 	// ChannelType/Author pass through and a slack permalink is built.
-	v := s.attentionItemView(context.Background(), flowdb.FeedItem{
+	v := s.attentionItemView(context.Background(), productdb.FeedItem{
 		ID: "x1", Source: "slack", ThreadKey: "C700:700.1", SuggestedAction: "reply",
 		Channel: "C700", ChannelType: "channel", Author: "U_BOB", TS: "700.1", TeamID: "T1",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -886,7 +887,7 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 	}
 
 	// Slack DM (im) with no resolver → ChannelName falls back to "Direct message".
-	dm := s.attentionItemView(context.Background(), flowdb.FeedItem{
+	dm := s.attentionItemView(context.Background(), productdb.FeedItem{
 		ID: "x2", Source: "slack", ThreadKey: "D30:30.1", SuggestedAction: "reply",
 		Channel: "D30", ChannelType: "im", Author: "U_BOB", TS: "30.1", TeamID: "T1",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -896,7 +897,7 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 	}
 
 	// GitHub: channel/author are already human; URL is the permalink.
-	gh := s.attentionItemView(context.Background(), flowdb.FeedItem{
+	gh := s.attentionItemView(context.Background(), productdb.FeedItem{
 		ID: "x3", Source: "github", ThreadKey: "o/r:gh-pr:o/r#5", SuggestedAction: "reply",
 		Channel: "o/r", Author: "octocat", URL: "https://github.com/o/r/pull/5",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
@@ -911,7 +912,7 @@ func TestAttentionItemViewSourceContext(t *testing.T) {
 
 func TestAttentionItemViewScrubsStoredInternalFetchDetails(t *testing.T) {
 	s, _ := attentionTestServer(t)
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "leaky", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "digest_only",
 		Summary: "Slack context fetch failed (not_in_channel), but leave notice is FYI-only.",
 		Reason:  "Plain leave notice. Slack context fetch failed (not_in_channel) so the sender's name couldn't be resolved, but the message text is self-contained and clearly FYI-only. Worth surfacing in a digest.",
@@ -963,7 +964,7 @@ func TestAttentionItemViewDerivesFromThreadKey(t *testing.T) {
 	// derivation should populate v.Channel from thread_key and, with the
 	// permalinker nil, fall back to the slack:// deep link built from TeamID +
 	// the derived channel/ts — proving thread_key feeds the permalink.
-	v := s.attentionItemView(context.Background(), flowdb.FeedItem{
+	v := s.attentionItemView(context.Background(), productdb.FeedItem{
 		ID: "tk1", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "reply",
 		TeamID: "T1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 		// Channel, TS deliberately empty.
@@ -976,7 +977,7 @@ func TestAttentionItemViewDerivesFromThreadKey(t *testing.T) {
 	}
 
 	// Stored Channel/TS take precedence over thread_key when present.
-	v2 := s.attentionItemView(context.Background(), flowdb.FeedItem{
+	v2 := s.attentionItemView(context.Background(), productdb.FeedItem{
 		ID: "tk2", Source: "slack", ThreadKey: "C1:1.2", SuggestedAction: "reply",
 		Channel: "C999", TS: "9.9", TeamID: "T1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	})
@@ -994,7 +995,7 @@ func TestSteeringTraceViewDerivesFromThreadKey(t *testing.T) {
 	// Pre-capture trace: Channel/TS empty, thread_key carries them. The trace
 	// view should derive channel/ts and, with the permalinker nil, fall back to
 	// the slack:// deep link built from TeamID + derived channel/ts.
-	v := s.steeringTraceView(context.Background(), flowdb.SteeringTrace{
+	v := s.steeringTraceView(context.Background(), productdb.SteeringTrace{
 		ID: "trk1", Source: "slack", ThreadKey: "C1:1.2", TeamID: "T1",
 		TextPreview: "hi", CreatedAt: "2026-06-05T10:00:00Z",
 	})
@@ -1007,24 +1008,24 @@ func TestSteeringTraceViewDerivesFromThreadKey(t *testing.T) {
 }
 
 func TestSteeringPermalink(t *testing.T) {
-	got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", TeamID: "T1", Channel: "C1", TS: "123.45"})
+	got := steeringPermalink(productdb.SteeringTrace{Source: "slack", TeamID: "T1", Channel: "C1", TS: "123.45"})
 	want := "slack://channel?team=T1&id=C1&message=123.45"
 	if got != want {
 		t.Errorf("permalink = %q, want %q", got, want)
 	}
 	// Missing team → empty.
-	if got := steeringPermalink(flowdb.SteeringTrace{Source: "slack", Channel: "C1", TS: "123.45"}); got != "" {
+	if got := steeringPermalink(productdb.SteeringTrace{Source: "slack", Channel: "C1", TS: "123.45"}); got != "" {
 		t.Errorf("missing team: permalink = %q, want empty", got)
 	}
 	// Non-slack source → empty.
-	if got := steeringPermalink(flowdb.SteeringTrace{Source: "github", TeamID: "T1", Channel: "C1", TS: "123.45"}); got != "" {
+	if got := steeringPermalink(productdb.SteeringTrace{Source: "github", TeamID: "T1", Channel: "C1", TS: "123.45"}); got != "" {
 		t.Errorf("non-slack source: permalink = %q, want empty", got)
 	}
 }
 
 func TestSteeringTraceViewGitHub(t *testing.T) {
 	s, _ := attentionTestServer(t) // nil nameResolver
-	tr := flowdb.SteeringTrace{
+	tr := productdb.SteeringTrace{
 		Source: "github", Channel: "o/r", Author: "octocat",
 		TextPreview: "please review", URL: "https://github.com/o/r/pull/5",
 	}

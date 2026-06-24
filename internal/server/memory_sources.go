@@ -2,8 +2,8 @@ package server
 
 import (
 	"errors"
-	"flow/internal/flowdb"
 	"flow/internal/memorysrc"
+	"flow/internal/productdb"
 	"io/fs"
 	"net/http"
 	"os"
@@ -62,7 +62,7 @@ func (s *Server) handleMemorySources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	live, _ := s.cachedLiveAgentSessions()
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: false})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{Kind: "", IncludeArchived: false})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return

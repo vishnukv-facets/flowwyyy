@@ -3,8 +3,12 @@
 package app
 
 import (
+	"encoding/json"
+	"flow/internal/flowdb"
 	"fmt"
 	"os"
+
+	"flow/internal/cli"
 )
 
 // Version holds the binary version string, set by main.go from a
@@ -31,79 +35,56 @@ func Run(args []string) int {
 		maybeAutoUpgradeSkill()
 	}
 
+	// Special cases handled directly (not in the command registry).
 	switch cmd {
 	case "--version", "-v", "version":
-		fmt.Println(Version)
-		return 0
-	case "init":
-		return cmdInit(rest)
-	case "add":
-		return cmdAdd(rest)
-	case "do":
-		return cmdDo(rest)
-	case "run":
-		return cmdRun(rest)
-	case "playbook":
-		return cmdPlaybook(rest)
-	case "done":
-		return cmdDone(rest)
-	case "show":
-		return cmdShow(rest)
-	case "search":
-		return cmdSearch(rest)
-	case "standup":
-		return cmdStandup(rest)
-	case "owner":
-		return cmdOwner(rest)
-	case "ui":
-		return cmdUI(rest)
-	case "serve":
-		return cmdUIServe(rest)
-	case "list":
-		return cmdList(rest)
-	case "edit":
-		return cmdEdit(rest)
-	case "update":
-		return cmdUpdate(rest)
-	case "archive":
-		return cmdArchive(rest)
-	case "unarchive":
-		return cmdUnarchive(rest)
-	case "delete":
-		return cmdDelete(rest)
-	case "restore":
-		return cmdRestore(rest)
-	case "workdir":
-		return cmdWorkdir(rest)
-	case "skill":
-		return cmdSkill(rest)
-	case "transcript":
-		return cmdTranscript(rest)
-	case "hook":
-		return cmdHook(rest)
-	case "spawn":
-		return cmdSpawn(rest)
-	case "tell":
-		return cmdTell(rest)
-	case "slack":
-		return cmdSlack(rest)
-	case "wait":
-		return cmdWait(rest)
-	case "attention":
-		return cmdAttention(rest)
-	case "backup":
-		return cmdBackup(rest)
-	case "__auto-exec":
-		return cmdAutoExec(rest)
-	case "__owner-tick":
-		return cmdOwnerTick(rest)
+		return cmdVersion(rest)
 	case "-h", "--help", "help":
 		printUsage()
 		return 0
 	}
+
+	// Every other verb dispatches through the shared cli registry, populated
+	// by registerCore() in register.go.
+	if c, ok := cli.Lookup(cmd); ok {
+		return c.Run(rest)
+	}
 	fmt.Fprintf(os.Stderr, "error: unknown subcommand %q\n", cmd)
 	printUsage()
 	return 2
+}
+
+func cmdVersion(args []string) int {
+	if len(args) == 1 && args[0] == "--json" {
+		payload := struct {
+			Version      string   `json:"version"`
+			Schema       int      `json:"schema"`
+			Capabilities []string `json:"capabilities"`
+		}{
+			Version: Version,
+			Schema:  flowdb.SchemaVersion,
+			Capabilities: []string{
+				"version-json",
+				"tasks",
+				"projects",
+				"playbooks",
+				"owners",
+				"auto-runs",
+				"backups",
+			},
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(payload); err != nil {
+			fmt.Fprintf(os.Stderr, "error: encode version: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if len(args) > 0 {
+		fmt.Fprintln(os.Stderr, "usage: flow version [--json]")
+		return 2
+	}
+	fmt.Println(Version)
+	return 0
 }
 
 func printUsage() {
@@ -114,6 +95,7 @@ Setup:
   flow skill install [--force]
   flow skill uninstall
   flow skill update
+  flow skill print
 
 Create:
   flow add project "<name>" --work-dir <path> [--slug <s>] [--priority h|m|l] [--mkdir]

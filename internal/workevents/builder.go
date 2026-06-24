@@ -6,23 +6,23 @@ import (
 	"sort"
 	"strings"
 
-	"flow/internal/flowdb"
-	"flow/internal/monitor"
+	"flow/internal/inbox"
+	"flow/internal/productdb"
 )
 
 // Build derives normalized assistant work events from existing Flow storage.
 // It is a read model: callers can render or answer from the result without
 // mutating inbox.jsonl, attention_feed, or task state.
 func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
-	_ = flowRoot // monitor.ReadInboxEntries already resolves FLOW_ROOT/HOME.
+	_ = flowRoot // inbox.ReadInboxEntries already resolves FLOW_ROOT/HOME.
 	if db == nil {
 		return Result{}, fmt.Errorf("workevents: db is required")
 	}
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: false})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{IncludeArchived: false})
 	if err != nil {
 		return Result{}, err
 	}
-	bySlug := make(map[string]*flowdb.Task, len(tasks))
+	bySlug := make(map[string]*productdb.Task, len(tasks))
 	for _, task := range tasks {
 		bySlug[task.Slug] = task
 	}
@@ -40,8 +40,8 @@ func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
 	return Result{Items: items, Counts: Count(items)}, nil
 }
 
-func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error) {
-	rows, err := flowdb.ListFeedItems(db, "new")
+func attentionEvents(db *sql.DB, tasks map[string]*productdb.Task) ([]Event, error) {
+	rows, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +57,7 @@ func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error)
 			taskLink(task),
 			{Kind: "source", Target: row.URL, URL: row.URL},
 		})
-		if trace, err := flowdb.GetSteeringTraceByFeedItem(db, row.ID); err == nil && trace.ID != "" {
+		if trace, err := productdb.GetSteeringTraceByFeedItem(db, row.ID); err == nil && trace.ID != "" {
 			links = append(links, Link{Kind: "trace", Target: trace.ID})
 		}
 		out = append(out, Event{
@@ -86,7 +86,7 @@ func attentionEvents(db *sql.DB, tasks map[string]*flowdb.Task) ([]Event, error)
 	return out, nil
 }
 
-func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
+func taskStateEvents(db *sql.DB, tasks []*productdb.Task) []Event {
 	var out []Event
 	for _, task := range tasks {
 		if task == nil || (task.Kind != "" && task.Kind != "regular") {
@@ -114,7 +114,7 @@ func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
 			continue
 		}
 		if task.Status == "backlog" && task.Priority == "high" {
-			blocker, err := flowdb.TaskStartBlockerFor(db, task)
+			blocker, err := productdb.TaskStartBlockerFor(db, task)
 			if err == nil && blocker == nil {
 				out = append(out, Event{
 					ID:          "task:" + task.Slug + ":next-up",
@@ -139,13 +139,13 @@ func taskStateEvents(db *sql.DB, tasks []*flowdb.Task) []Event {
 	return out
 }
 
-func inboxEvents(tasks []*flowdb.Task) []Event {
+func inboxEvents(tasks []*productdb.Task) []Event {
 	var out []Event
 	for _, task := range tasks {
 		if task == nil {
 			continue
 		}
-		entries, err := monitor.ReadInboxEntries(task.Slug)
+		entries, err := inbox.ReadInboxEntries(task.Slug)
 		if err != nil {
 			continue
 		}
@@ -153,7 +153,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 		for i, entry := range entries {
 			source := strings.TrimSpace(entry.Meta.Source)
 			if source == "" || source == "unknown" {
-				source = monitor.ClassifyInboxEvent(entry.Event).Source
+				source = inbox.ClassifyInboxEvent(entry.Event).Source
 			}
 			if source == "unknown" {
 				source = ""
@@ -168,7 +168,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 				Source:         source,
 				Kind:           firstNonEmpty(ev.Kind, "inbox"),
 				EventKey:       inboxEventKey(task.Slug, entry),
-				ThreadKey:      monitor.ThreadKey(ev.Channel, ev.ThreadTS),
+				ThreadKey:      inbox.ThreadKey(ev.Channel, ev.ThreadTS),
 				URL:            ev.URL,
 				Title:          inboxTitle(ev),
 				Summary:        strings.TrimSpace(ev.Text),
@@ -190,7 +190,7 @@ func inboxEvents(tasks []*flowdb.Task) []Event {
 	return out
 }
 
-func terminalGitHubPRIndexes(entries []monitor.InboxEntry) map[string]int {
+func terminalGitHubPRIndexes(entries []inbox.InboxEntry) map[string]int {
 	out := map[string]int{}
 	for i, entry := range entries {
 		ev := entry.Event
@@ -208,7 +208,7 @@ func terminalGitHubPRIndexes(entries []monitor.InboxEntry) map[string]int {
 	return out
 }
 
-func githubActionSuperseded(ev monitor.InboundEvent, index int, terminalPR map[string]int) bool {
+func githubActionSuperseded(ev inbox.InboundEvent, index int, terminalPR map[string]int) bool {
 	if !githubActionKind(ev.Kind) {
 		return false
 	}
@@ -233,7 +233,7 @@ func githubActionKind(kind string) bool {
 	}
 }
 
-func githubPRKey(ev monitor.InboundEvent) string {
+func githubPRKey(ev inbox.InboundEvent) string {
 	if strings.HasPrefix(ev.ThreadTS, "gh-pr:") {
 		return ev.ThreadTS
 	}
@@ -243,7 +243,7 @@ func githubPRKey(ev monitor.InboundEvent) string {
 	return ""
 }
 
-func classifyInboxEvent(task *flowdb.Task, ev monitor.InboundEvent, source string) (Bucket, string, string) {
+func classifyInboxEvent(task *productdb.Task, ev inbox.InboundEvent, source string) (Bucket, string, string) {
 	if source == "github" {
 		switch ev.Kind {
 		case "pr_head_updated":
@@ -273,7 +273,7 @@ func classifyInboxEvent(task *flowdb.Task, ev monitor.InboundEvent, source strin
 	return BucketFYI, "inbox_activity_fyi", "Task inbox activity was recorded."
 }
 
-func taskIsDone(task *flowdb.Task) bool {
+func taskIsDone(task *productdb.Task) bool {
 	return task != nil && task.Status == "done"
 }
 
@@ -306,21 +306,21 @@ func validLinks(in []Link) []Link {
 	return out
 }
 
-func taskLink(task *flowdb.Task) Link {
+func taskLink(task *productdb.Task) Link {
 	if task == nil {
 		return Link{}
 	}
 	return Link{Kind: "task", Target: task.Slug}
 }
 
-func taskProject(task *flowdb.Task) string {
+func taskProject(task *productdb.Task) string {
 	if task != nil && task.ProjectSlug.Valid {
 		return task.ProjectSlug.String
 	}
 	return ""
 }
 
-func inboxEntityKind(ev monitor.InboundEvent, source string) string {
+func inboxEntityKind(ev inbox.InboundEvent, source string) string {
 	if source == "github" {
 		if strings.HasPrefix(ev.ThreadTS, "gh-pr:") || strings.HasPrefix(ev.Kind, "pr_") {
 			return "pr"
@@ -332,7 +332,7 @@ func inboxEntityKind(ev monitor.InboundEvent, source string) string {
 	return "thread"
 }
 
-func inboxEventKey(taskSlug string, entry monitor.InboxEntry) string {
+func inboxEventKey(taskSlug string, entry inbox.InboxEntry) string {
 	ev := entry.Event
 	if strings.TrimSpace(ev.EventKey) != "" {
 		return strings.Join([]string{taskSlug, ev.EventKey}, ":")
@@ -340,7 +340,7 @@ func inboxEventKey(taskSlug string, entry monitor.InboxEntry) string {
 	return strings.Join([]string{taskSlug, ev.Kind, ev.Channel, ev.ThreadTS, ev.TS, entry.EnqueuedAt}, ":")
 }
 
-func inboxTitle(ev monitor.InboundEvent) string {
+func inboxTitle(ev inbox.InboundEvent) string {
 	switch ev.Kind {
 	case "pr_review_requested":
 		return "PR review requested"

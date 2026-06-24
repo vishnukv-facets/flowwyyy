@@ -1,7 +1,6 @@
 package server
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,8 +11,8 @@ import (
 	"time"
 	"unicode"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // CurrentHookVersion is bumped whenever the agent-event hook wire format
@@ -99,14 +98,14 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 		HookOutdated: hookVersion > 0 && hookVersion < CurrentHookVersion,
 	}
 	if sessionID != "" {
-		if task, err := flowdb.TaskBySessionID(s.cfg.DB, sessionID); err == nil {
+		if task, err := productdb.TaskBySessionID(s.cfg.DB, sessionID); err == nil {
 			resp.Task = task.Slug
 		}
 	}
 	// When the agent sends a DM (Claude or Codex), register that DM thread on
 	// the task so the recipient's replies stream back — deterministic, at the
 	// source, no dependence on the agent self-tagging or a fresh brief.
-	if tag, ok := maybeRegisterDMThread(s.cfg.DB, eventName, resp.Task, payload); ok {
+	if tag, ok := s.maybeRegisterDMThread(eventName, resp.Task, payload); ok {
 		fmt.Fprintf(os.Stderr, "monitor: registered DM thread %s -> %s (tool-use hook)\n", tag, resp.Task)
 	}
 	body := agentHookBody(payload)
@@ -114,7 +113,7 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 	// Recording them on agent_runtime_states would flicker the parent
 	// between idle and running, so we skip the upsert.
 	if runtimeStatus := agentHookRuntimeStatus(kind, provider); runtimeStatus != "" && sessionID != "" && !isSubagentEvent(kind, subagentID) {
-		if err := flowdb.UpsertAgentRuntimeState(s.cfg.DB, flowdb.AgentRuntimeStateInput{
+		if err := productdb.UpsertAgentRuntimeState(s.cfg.DB, productdb.AgentRuntimeStateInput{
 			Provider:  provider,
 			SessionID: sessionID,
 			TaskSlug:  resp.Task,
@@ -131,7 +130,7 @@ func (s *Server) ingestAgentHook(r *http.Request, payload map[string]any, raw st
 		// is a no-op when the queue is empty or the session is still awaiting
 		// input, so this is safe to call on every recorded transition.
 		if s.terminals != nil && resp.Task != "" &&
-			!(&flowdb.AgentRuntimeState{Status: runtimeStatus, EventKind: kind}).AwaitingHumanInput() {
+			!(&productdb.AgentRuntimeState{Status: runtimeStatus, EventKind: kind}).AwaitingHumanInput() {
 			s.terminals.flushWakes(resp.Task)
 		}
 	}
@@ -152,11 +151,11 @@ func isSubagentEvent(kind, subagentID string) bool {
 	return strings.TrimSpace(subagentID) != ""
 }
 
-func (s *Server) agentHookRuntimeState(tv TaskView, provider string) *flowdb.AgentRuntimeState {
+func (s *Server) agentHookRuntimeState(tv TaskView, provider string) *productdb.AgentRuntimeState {
 	if tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
 		return nil
 	}
-	state, err := flowdb.AgentRuntimeStateBySessionID(s.cfg.DB, provider, *tv.SessionID)
+	state, err := productdb.AgentRuntimeStateBySessionID(s.cfg.DB, provider, *tv.SessionID)
 	if err != nil {
 		return nil
 	}
@@ -166,7 +165,7 @@ func (s *Server) agentHookRuntimeState(tv TaskView, provider string) *flowdb.Age
 	return state
 }
 
-func (s *Server) agentHookHealth(tv TaskView, provider string, transcript []uiTranscript, state *flowdb.AgentRuntimeState) *uiHookHealth {
+func (s *Server) agentHookHealth(tv TaskView, provider string, transcript []uiTranscript, state *productdb.AgentRuntimeState) *uiHookHealth {
 	if provider != "codex" || tv.SessionID == nil || strings.TrimSpace(*tv.SessionID) == "" {
 		return nil
 	}
@@ -479,16 +478,17 @@ func slackDMSendFromHook(eventName string, payload map[string]any) (channel, thr
 // slack-thread:<dm-channel>:<root> — so the existing thread routing and backfill
 // handle it with no special-casing. Returns the tag and true when it registered,
 // ("", false) otherwise (not a DM send, no task, or DB error). Idempotent.
-func maybeRegisterDMThread(db *sql.DB, eventName, taskSlug string, payload map[string]any) (string, bool) {
-	if db == nil || strings.TrimSpace(taskSlug) == "" {
+func (s *Server) maybeRegisterDMThread(eventName, taskSlug string, payload map[string]any) (string, bool) {
+	if s == nil || s.cfg.DB == nil || strings.TrimSpace(taskSlug) == "" {
 		return "", false
 	}
 	ch, root, ok := slackDMSendFromHook(eventName, payload)
 	if !ok {
 		return "", false
 	}
-	tag := flowdb.NormalizeTag(monitor.SlackThreadTagPrefix + monitor.ThreadKey(ch, root))
-	if err := flowdb.AddTaskTag(db, taskSlug, tag); err != nil {
+	tag := productdb.NormalizeTag(monitor.SlackThreadTagPrefix + monitor.ThreadKey(ch, root))
+	// task_tags is Bucket O — tag via `flow update task --tag` (seam §11).
+	if err := s.tagTask(taskSlug, tag); err != nil {
 		return "", false
 	}
 	return tag, true

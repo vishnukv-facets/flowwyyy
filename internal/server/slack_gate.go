@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // slackExtVerdict is the cached external-channel send-gate verdict for one
@@ -83,7 +83,7 @@ func slackConversationLabel(c monitor.SlackConversation, channel string) string 
 func newPendingSendID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return "ps-" + flowdb.NowISO()
+		return "ps-" + productdb.NowISO()
 	}
 	return "ps-" + hex.EncodeToString(b[:])
 }
@@ -96,20 +96,20 @@ func (s *Server) handleSlackPendingList(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if s.cfg.DB == nil {
-		writeJSON(w, map[string]any{"pending": []flowdb.PendingSend{}})
+		writeJSON(w, map[string]any{"pending": []productdb.PendingSend{}})
 		return
 	}
 	status := strings.TrimSpace(r.URL.Query().Get("status"))
 	if status == "" {
 		status = "pending"
 	}
-	items, err := flowdb.ListPendingSends(s.cfg.DB, status)
+	items, err := productdb.ListPendingSends(s.cfg.DB, status)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
 	}
 	if items == nil {
-		items = []flowdb.PendingSend{}
+		items = []productdb.PendingSend{}
 	}
 	writeJSON(w, map[string]any{"pending": items})
 }
@@ -137,7 +137,7 @@ func (s *Server) handleSlackPendingDecide(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	ps, ok, err := flowdb.GetPendingSend(s.cfg.DB, req.ID)
+	ps, ok, err := productdb.GetPendingSend(s.cfg.DB, req.ID)
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -152,7 +152,7 @@ func (s *Server) handleSlackPendingDecide(w http.ResponseWriter, r *http.Request
 	}
 	switch strings.ToLower(strings.TrimSpace(req.Action)) {
 	case "discard", "reject", "cancel":
-		if err := flowdb.SetPendingSendStatus(s.cfg.DB, ps.ID, "discarded"); err != nil {
+		if err := productdb.SetPendingSendStatus(s.cfg.DB, ps.ID, "discarded"); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}
@@ -176,7 +176,7 @@ func (s *Server) handleSlackPendingDecide(w http.ResponseWriter, r *http.Request
 			writeError(w, sendErr, http.StatusBadGateway)
 			return
 		}
-		if err := flowdb.SetPendingSendStatus(s.cfg.DB, ps.ID, "sent"); err != nil {
+		if err := productdb.SetPendingSendStatus(s.cfg.DB, ps.ID, "sent"); err != nil {
 			writeError(w, err, http.StatusInternalServerError)
 			return
 		}

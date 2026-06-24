@@ -12,6 +12,7 @@ import (
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // fakeHistory is a stand-in SlackHistory that returns canned messages per
@@ -113,7 +114,7 @@ func TestBackfillColdStartLookback(t *testing.T) {
 	if len(got[0]) != 2 {
 		t.Fatalf("events in batch = %d, want 2", len(got[0]))
 	}
-	wm, err := flowdb.GetSteeringWatermark(db, "C1")
+	wm, err := productdb.GetSteeringWatermark(db, "C1")
 	if err != nil {
 		t.Fatalf("GetSteeringWatermark: %v", err)
 	}
@@ -124,7 +125,7 @@ func TestBackfillColdStartLookback(t *testing.T) {
 
 func TestBackfillWarmOnlyNewer(t *testing.T) {
 	db := backfillTestDB(t)
-	if err := flowdb.SetSteeringWatermark(db, "C1", "150.000000", fixedNow.Format(time.RFC3339)); err != nil {
+	if err := productdb.SetSteeringWatermark(db, "C1", "150.000000", fixedNow.Format(time.RFC3339)); err != nil {
 		t.Fatalf("SetSteeringWatermark: %v", err)
 	}
 	fake := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
@@ -152,7 +153,7 @@ func TestBackfillWarmOnlyNewer(t *testing.T) {
 	if got[0][0].TS != "200.000000" {
 		t.Fatalf("event TS = %q, want %q", got[0][0].TS, "200.000000")
 	}
-	wm, err := flowdb.GetSteeringWatermark(db, "C1")
+	wm, err := productdb.GetSteeringWatermark(db, "C1")
 	if err != nil {
 		t.Fatalf("GetSteeringWatermark: %v", err)
 	}
@@ -238,7 +239,7 @@ func TestBackfillSkipsSystemSubtypes(t *testing.T) {
 	if got[0][0].TS != "300.000000" {
 		t.Fatalf("event TS = %q, want %q", got[0][0].TS, "300.000000")
 	}
-	wm, err := flowdb.GetSteeringWatermark(db, "C1")
+	wm, err := productdb.GetSteeringWatermark(db, "C1")
 	if err != nil {
 		t.Fatalf("GetSteeringWatermark: %v", err)
 	}
@@ -253,7 +254,7 @@ func TestBackfillSkipsSystemSubtypes(t *testing.T) {
 // new replies — and recover the reply. The thread root must not be double-counted.
 func TestBackfillFollowsActiveThreadReplies(t *testing.T) {
 	db := backfillTestDB(t)
-	if err := flowdb.SetSteeringWatermark(db, "C1", "100.000000", fixedNow.Format(time.RFC3339)); err != nil {
+	if err := productdb.SetSteeringWatermark(db, "C1", "100.000000", fixedNow.Format(time.RFC3339)); err != nil {
 		t.Fatalf("SetSteeringWatermark: %v", err)
 	}
 	// The thread parent is newer than the (stale, pre-gap) watermark, so it's in
@@ -314,7 +315,7 @@ func TestBackfillFollowsActiveThreadReplies(t *testing.T) {
 // up: the sweep must NOT spend a conversations.replies call on it.
 func TestBackfillSkipsRepliesWhenNoneNewer(t *testing.T) {
 	db := backfillTestDB(t)
-	if err := flowdb.SetSteeringWatermark(db, "C1", "250.000000", fixedNow.Format(time.RFC3339)); err != nil {
+	if err := productdb.SetSteeringWatermark(db, "C1", "250.000000", fixedNow.Format(time.RFC3339)); err != nil {
 		t.Fatalf("SetSteeringWatermark: %v", err)
 	}
 	hist := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
@@ -378,7 +379,7 @@ func TestBackfillDMsViaIMLister(t *testing.T) {
 
 func TestBackfillDMsFallsBackToKnownWatermarksWhenListIMsFails(t *testing.T) {
 	db := backfillTestDB(t)
-	if err := flowdb.SetSteeringWatermark(db, "D03LH2RCZMG", "1780915520.729909", fixedNow.Format(time.RFC3339)); err != nil {
+	if err := productdb.SetSteeringWatermark(db, "D03LH2RCZMG", "1780915520.729909", fixedNow.Format(time.RFC3339)); err != nil {
 		t.Fatalf("SetSteeringWatermark: %v", err)
 	}
 	fake := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
@@ -419,7 +420,7 @@ func TestBackfillDMsFallsBackToKnownWatermarksWhenListIMsFails(t *testing.T) {
 	if !strings.Contains(ev.Text, "PHASE2-PHASE3-EXECUTION-PLAN.md") || !strings.Contains(ev.Text, "Markdown") {
 		t.Fatalf("event text = %q, want readable file fallback", ev.Text)
 	}
-	wm, err := flowdb.GetSteeringWatermark(db, "D03LH2RCZMG")
+	wm, err := productdb.GetSteeringWatermark(db, "D03LH2RCZMG")
 	if err != nil {
 		t.Fatalf("GetSteeringWatermark: %v", err)
 	}

@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/go-github/v84/github"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // backfillMaxPages bounds how far back a single backfill walks GitHub's hook
@@ -67,7 +67,7 @@ func replayDelivery(ctx context.Context, db *sql.DB, client *github.Client, d *g
 	if guid == "" || event == "" {
 		return false
 	}
-	isNew, err := flowdb.RecordGitHubDelivery(db, flowdb.GitHubDeliveryEntry{
+	isNew, err := productdb.RecordGitHubDelivery(db, productdb.GitHubDeliveryEntry{
 		DeliveryID: guid,
 		EventType:  event,
 		Action:     d.GetAction(),
@@ -78,7 +78,7 @@ func replayDelivery(ctx context.Context, db *sql.DB, client *github.Client, d *g
 
 	full, _, err := client.Apps.GetHookDelivery(ctx, d.GetID())
 	if err != nil {
-		_ = flowdb.FinishGitHubDelivery(db, guid, "error", err.Error(), 0)
+		_ = productdb.FinishGitHubDelivery(db, guid, "error", err.Error(), 0)
 		return false
 	}
 	var payload []byte
@@ -87,16 +87,16 @@ func replayDelivery(ctx context.Context, db *sql.DB, client *github.Client, d *g
 	}
 	events, err := NormalizeGitHubWebhook(event, guid, payload)
 	if err != nil {
-		_ = flowdb.FinishGitHubDelivery(db, guid, "error", err.Error(), 0)
+		_ = productdb.FinishGitHubDelivery(db, guid, "error", err.Error(), 0)
 		return false
 	}
 	if len(events) == 0 {
-		_ = flowdb.FinishGitHubDelivery(db, guid, "ignored", "", 0)
+		_ = productdb.FinishGitHubDelivery(db, guid, "ignored", "", 0)
 		return false
 	}
 	for _, ev := range events {
 		_ = dispatch(ctx, ev)
 	}
-	_ = flowdb.FinishGitHubDelivery(db, guid, "processed", "", len(events))
+	_ = productdb.FinishGitHubDelivery(db, guid, "processed", "", len(events))
 	return true
 }

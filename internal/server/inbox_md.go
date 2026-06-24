@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // slackIDTokenRe matches a bare Slack id token (optionally @/# prefixed). A
@@ -118,7 +118,7 @@ func readInboxEntries(path string) ([]InboxEntry, error) {
 // inbox_seen_at watermark. Entries whose timestamps fail to parse are
 // skipped (treated as "old enough") to avoid over-counting on malformed
 // lines.
-func unreadInboxCount(task *flowdb.Task, entries []InboxEntry) int {
+func unreadInboxCount(task *productdb.Task, entries []InboxEntry) int {
 	if len(entries) == 0 {
 		return 0
 	}
@@ -275,7 +275,7 @@ func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{IncludeArchived: false})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{IncludeArchived: false})
 	if err != nil {
 		writeError(w, err, http.StatusInternalServerError)
 		return
@@ -385,7 +385,7 @@ func (s *Server) handleInboxConversation(w http.ResponseWriter, r *http.Request)
 		writeError(w, errors.New("slug query parameter is required"), http.StatusBadRequest)
 		return
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	task, err := productdb.GetTask(s.cfg.DB, slug)
 	if err != nil {
 		writeNotFoundOrError(w, err)
 		return

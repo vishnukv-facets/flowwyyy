@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"flow/internal/agents"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"os"
 	"strings"
@@ -22,7 +22,7 @@ func (s *Server) uiTranscriptForTaskLimit(tv TaskView, limit int) []uiTranscript
 	if tv.SessionProvider != nil && strings.TrimSpace(*tv.SessionProvider) != "" {
 		provider = *tv.SessionProvider
 	}
-	t := &flowdb.Task{
+	t := &productdb.Task{
 		Slug:            tv.Slug,
 		WorkDir:         tv.WorkDir,
 		WorktreePath:    nullStringFromPtr(tv.WorktreePath),

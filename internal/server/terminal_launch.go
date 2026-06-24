@@ -1,12 +1,13 @@
 package server
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
-	"flow/internal/flowdb"
-	"flow/internal/workdirreg"
+	"flow/internal/productdb"
 	"flow/internal/worktree"
 	"fmt"
 	"os"
@@ -42,14 +43,126 @@ func stripTerminalGeneratedInput(data string) string {
 	return terminalGeneratedInputRE.ReplaceAllString(data, "")
 }
 
+// prepareTerminalLaunch performs the launch preparation for a Mission Control
+// terminal session and returns the descriptor the bridge uses to spawn/attach
+// its browser pty.
+//
+// For a regular task, when a core `flow` binary is configured (s.cfg.Flow.Bin),
+// the parity-critical state mutation (status flip + session-id allocation +
+// per-task worktree) runs IN CORE via `flow do --prepare-only` — the SAME path
+// as `flow do` — and this layer only builds the browser-flavored launch from the
+// returned descriptor. That is the decoupling seam: the server no longer
+// reimplements `flow do`'s launch prep. The overview task (no `flow do` analog)
+// and the no-binary fallback (tests) use prepareTerminalLaunchInProcess, the
+// byte-identical legacy in-process preparation.
 func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
+	if strings.TrimSpace(s.cfg.Flow.Bin) == "" || slug == overviewTaskSlug {
+		return s.prepareTerminalLaunchInProcess(slug)
+	}
+	return s.prepareTerminalLaunchViaCore(slug)
+}
+
+// prepareTerminalLaunchViaCore runs the core launch prep through the flow binary
+// and assembles the browser launch from the JSON descriptor it prints.
+func (s *Server) prepareTerminalLaunchViaCore(slug string) (terminalLaunch, error) {
+	// Read the task (read-only) for the fields the bridge needs to build the
+	// prompt / args / model — none of which the prep mutates.
+	task, err := productdb.ScanTask(s.cfg.DB.QueryRow("SELECT "+productdb.TaskCols+" FROM tasks WHERE slug = ?", slug))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return terminalLaunch{}, fmt.Errorf("task not found: %s", slug)
+		}
+		return terminalLaunch{}, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, runErr := s.cfg.Flow.Do(ctx, slug, "--prepare-only", "--json")
+	if runErr != nil || res.Code != 0 {
+		// Surface the core error text (e.g. dependency blocker, live auto-run)
+		// the way the in-process path used to return it.
+		msg := strings.TrimSpace(res.Stderr)
+		if msg == "" {
+			msg = strings.TrimSpace(res.Stdout)
+		}
+		if msg == "" && runErr != nil {
+			msg = runErr.Error()
+		}
+		return terminalLaunch{}, errors.New(msg)
+	}
+
+	var prep flowLaunchPrep
+	if err := json.Unmarshal([]byte(res.Stdout), &prep); err != nil {
+		return terminalLaunch{}, fmt.Errorf("parse launch descriptor: %w", err)
+	}
+	provider := prep.Provider
+	if provider == "" {
+		provider = agents.ProviderClaude
+	}
+	// Reflect the prep's resolved work_dir (a per-task worktree when work_dir is
+	// a git repo) onto the in-memory task so prompt/model resolution see it.
+	task.WorkDir = prep.WorkDir
+	if prep.WorkDir != "" {
+		task.WorktreePath = sql.NullString{String: prep.WorkDir, Valid: true}
+	}
+
+	// Install local agent hooks for the resolved work_dir. Kept here (not in
+	// core) so the hook command path + URL stay the server's; idempotent.
+	if _, err := agenthooks.InstallLocalWithOptions(prep.WorkDir, agenthooks.InstallOptions{
+		CommandPath: s.cfg.CommandPath,
+		HookURL:     s.cfg.HookURL,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: install local agent hooks: %v\n", err)
+	}
+
+	if prep.Created {
+		prompt := buildBrowserTerminalBootstrapPrompt(s.cfg.DB, task)
+		args := agentTerminalArgs(provider, true, prep.SessionID, prep.WorkDir, s.cfg.FlowRoot, prompt, prep.PermissionMode, s.resolveTaskLaunchModel(task, provider, true))
+		return terminalLaunch{
+			Slug:           task.Slug,
+			SessionID:      prep.SessionID,
+			Provider:       provider,
+			PermissionMode: prep.PermissionMode,
+			WorkDir:        prep.WorkDir,
+			Args:           args,
+			Created:        true,
+			NeedsCapture:   prep.NeedsCapture,
+			StartedAt:      time.Now().Add(-2 * time.Second),
+		}, nil
+	}
+	args := agentTerminalArgs(provider, false, prep.SessionID, prep.WorkDir, s.cfg.FlowRoot, "", prep.PermissionMode, s.resolveTaskLaunchModel(task, provider, false))
+	return terminalLaunch{
+		Slug:           task.Slug,
+		SessionID:      prep.SessionID,
+		Provider:       provider,
+		PermissionMode: prep.PermissionMode,
+		WorkDir:        prep.WorkDir,
+		Args:           args,
+		Created:        false,
+	}, nil
+}
+
+// flowLaunchPrep mirrors app.LaunchPrep — the JSON contract printed by
+// `flow do --prepare-only --json`. Kept as its own type so the product side
+// does not depend on the core app package for it.
+type flowLaunchPrep struct {
+	Slug           string `json:"slug"`
+	SessionID      string `json:"session_id"`
+	Provider       string `json:"provider"`
+	PermissionMode string `json:"permission_mode"`
+	WorkDir        string `json:"work_dir"`
+	Created        bool   `json:"created"`
+	NeedsCapture   bool   `json:"needs_capture"`
+}
+
+func (s *Server) prepareTerminalLaunchInProcess(slug string) (terminalLaunch, error) {
 	tx, err := s.cfg.DB.Begin()
 	if err != nil {
 		return terminalLaunch{}, err
 	}
 	defer tx.Rollback()
 
-	task, err := flowdb.ScanTask(tx.QueryRow("SELECT "+flowdb.TaskCols+" FROM tasks WHERE slug = ?", slug))
+	task, err := productdb.ScanTask(tx.QueryRow("SELECT "+productdb.TaskCols+" FROM tasks WHERE slug = ?", slug))
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return terminalLaunch{}, fmt.Errorf("task not found: %s", slug)
@@ -68,7 +181,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		if err := os.MkdirAll(filepath.Join(absRoot, "tasks", overviewTaskSlug, "updates"), 0o755); err != nil {
 			return terminalLaunch{}, err
 		}
-		now := flowdb.NowISO()
+		now := productdb.NowISO()
 		if _, err := tx.Exec(
 			`UPDATE tasks SET
 				project_slug = NULL,
@@ -112,12 +225,12 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 	// not be blocked by a now-unfinished dependency — while a fresh start of a
 	// non-done task still gets the full check.
 	if task.Status != "done" {
-		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+		if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 			return terminalLaunch{}, err
 		}
 	}
 
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	sessionID := strings.TrimSpace(task.SessionID.String)
 	provider := task.SessionProvider
 	if provider == "" {
@@ -192,7 +305,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			task.WorktreePath = sql.NullString{String: wt.WorktreePath, Valid: true}
 			if _, err := s.cfg.DB.Exec(
 				`UPDATE tasks SET worktree_path = ?, updated_at = ? WHERE slug = ?`,
-				wt.WorktreePath, flowdb.NowISO(), task.Slug,
+				wt.WorktreePath, productdb.NowISO(), task.Slug,
 			); err != nil {
 				if created {
 					s.rollbackPreparedTerminalLaunch(terminalLaunch{
@@ -206,7 +319,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		}
 	}
 
-	if err := workdirreg.Touch(s.cfg.DB, originalWorkDir); err != nil {
+	if err := s.touchWorkdir(originalWorkDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
 	}
 	if _, err := agenthooks.InstallLocalWithOptions(task.WorkDir, agenthooks.InstallOptions{
@@ -259,11 +372,11 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 	if err != nil {
 		return terminalLaunch{}, err
 	}
-	provider, err := flowdb.NormalizeSessionProvider(req.Provider)
+	provider, err := productdb.NormalizeSessionProvider(req.Provider)
 	if err != nil {
 		return terminalLaunch{}, err
 	}
-	permissionMode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	permissionMode, err := productdb.NormalizePermissionMode(req.PermissionMode)
 	if err != nil {
 		return terminalLaunch{}, err
 	}
@@ -302,14 +415,14 @@ func (s *terminalSession) captureCodexChatSession(started time.Time) string {
 	if db == nil {
 		return ""
 	}
-	if _, err := flowdb.GetChat(db, s.slug); err != nil {
+	if _, err := productdb.GetChat(db, s.slug); err != nil {
 		return "" // not a chat (or deleted) — nothing to capture here
 	}
 	candidate, err := agents.FindCodexSessionForTask(s.slug, s.workDir, started)
 	if err != nil || candidate.ID == "" {
 		return ""
 	}
-	if err := flowdb.SetChatSession(db, s.slug, candidate.ID, flowdb.NowISO()); err != nil {
+	if err := productdb.SetChatSession(db, s.slug, candidate.ID, productdb.NowISO()); err != nil {
 		return ""
 	}
 	s.hub.server.publishUIChange("chats")
@@ -405,7 +518,7 @@ func modelTerminalArgs(model string) []string {
 // is downshifted one rung when the brief is descriptive enough. On resume it
 // passes only an explicit pin, never re-running the heuristic, so a live session
 // never silently switches models mid-life. Empty result = pass no --model.
-func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fresh bool) string {
+func (s *Server) resolveTaskLaunchModel(task *productdb.Task, provider string, fresh bool) string {
 	if task == nil {
 		return ""
 	}
@@ -414,7 +527,7 @@ func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fres
 		explicit = task.Model.String
 	}
 	if !fresh {
-		return flowdb.NormalizeModel(explicit)
+		return productdb.NormalizeModel(explicit)
 	}
 	briefText := ""
 	if root := strings.TrimSpace(s.cfg.FlowRoot); root != "" {
@@ -422,10 +535,10 @@ func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fres
 			briefText = string(b)
 		}
 	}
-	return flowdb.ResolveSessionModel(provider, explicit, briefText, task.Priority).Model
+	return productdb.ResolveSessionModel(provider, explicit, briefText, task.Priority).Model
 }
 
-func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *flowdb.Task) error {
+func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *productdb.Task) error {
 	if task == nil || !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "running" {
 		return nil
 	}
@@ -436,7 +549,7 @@ func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *flowdb.Task) error {
 	if terminalProcessAlive(pid) {
 		return fmt.Errorf("task %q autonomous run is already running (pid %d); wait for it to finish before opening an interactive session", task.Slug, pid)
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := tx.Exec(
 		`UPDATE tasks SET auto_run_status='dead', auto_run_finished=COALESCE(auto_run_finished, ?),
 		 auto_run_pid=NULL, updated_at=? WHERE slug=? AND auto_run_status='running'`,
@@ -521,7 +634,7 @@ func codexPermissionArgs(mode string) []string {
 	}
 }
 
-func overviewInitialPrompt(root string, task *flowdb.Task) string {
+func overviewInitialPrompt(root string, task *productdb.Task) string {
 	body, err := os.ReadFile(filepath.Join(root, "tasks", task.Slug, "brief.md"))
 	if err != nil {
 		return ""
@@ -551,7 +664,7 @@ func (s *Server) rollbackPreparedTerminalLaunch(launch terminalLaunch) {
 				status_changed_at = NULL,
 				updated_at = ?
 			 WHERE slug = ? AND session_provider = 'codex' AND session_id IS NULL`,
-			flowdb.NowISO(), launch.Slug,
+			productdb.NowISO(), launch.Slug,
 		); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: rollback browser codex terminal session: %v\n", err)
 		}
@@ -568,13 +681,13 @@ func (s *Server) rollbackPreparedTerminalLaunch(launch terminalLaunch) {
 			status_changed_at = NULL,
 			updated_at = ?
 		 WHERE slug = ? AND session_id = ?`,
-		flowdb.NowISO(), launch.Slug, launch.SessionID,
+		productdb.NowISO(), launch.Slug, launch.SessionID,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: rollback browser terminal session: %v\n", err)
 	}
 }
 
-func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
+func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *productdb.Task) string {
 	if task.Kind != "playbook_run" {
 		prompt := fmt.Sprintf(
 			"You are the execution session for flow task %s. Do ALL of the following in order before touching code:\n"+
@@ -587,7 +700,7 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 			task.Slug, task.Slug, task.Slug,
 		)
 		// Brief the session on upstream dependency work that may be unmerged.
-		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
+		if note := productdb.DependencyBootstrapNote(db, task.Slug); note != "" {
 			prompt += "\n\n" + note
 		}
 		return prompt

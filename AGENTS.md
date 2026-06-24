@@ -44,14 +44,14 @@ flow/
 │   │   ├── list.go                  # flow list tasks|projects
 │   │   ├── priority.go              # flow priority
 │   │   ├── show.go                  # flow show task|project
-│   │   ├── skill.go                 # flow skill install|uninstall|update
+│   │   ├── skill.go                 # flow skill install|uninstall|update|print
 │   │   ├── transcript.go            # flow transcript — session jsonl reader
 │   │   ├── waiting.go               # flow waiting
 │   │   ├── workdir.go               # flow workdir
 │   │   ├── bootstrap.go             # UUID gen, session file scanning
 │   │   ├── resolve.go               # task/project slug resolution
 │   │   ├── slug.go                  # name-to-slug conversion
-│   │   ├── skill/SKILL.md           # embedded skill (//go:embed)
+│   │   ├── skill/SKILL.core.md      # embedded core skill (//go:embed)
 │   │   └── *_test.go
 │   ├── flowdb/                      # SQLite data layer
 │   │   ├── db.go                    # schema, models, CRUD queries
@@ -81,7 +81,7 @@ flow/
 - **Tests:** Table-driven where possible. Command tests live alongside source in `internal/app/`. `e2e_test.go` exercises the full command surface in sequence.
 - **No mocks for DB.** Tests use real SQLite in a temp directory. Only osascript is mocked (via `iterm.Runner` function var).
 - **Skill file is the source of truth** for how Codex sessions interact with flow. If the skill says something, the code must support it.
-- **Skill embed path:** `internal/app/skill/SKILL.md` is embedded at compile time via `//go:embed` in `internal/app/skill.go`. After editing, rebuild for `flow skill update` to pick up changes.
+- **Skill embed paths:** `internal/app/skill/SKILL.core.md` is embedded by core via `//go:embed`; `internal/product/skill/SKILL.flowwyyy.md` is the product fragment composed by flowwyyy. After editing, rebuild for skill update/install flows to pick up changes.
 
 ## Data directory layout
 

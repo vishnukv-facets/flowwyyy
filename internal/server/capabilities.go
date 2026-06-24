@@ -2,8 +2,8 @@ package server
 
 import (
 	"context"
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"fmt"
 	"os"
 	"os/exec"
@@ -109,7 +109,7 @@ func capabilityByID(items []uiToolCapability, id string) uiToolCapability {
 }
 
 func (s *Server) availableProvider(raw string) (string, error) {
-	provider, err := flowdb.NormalizeSessionProvider(raw)
+	provider, err := productdb.NormalizeSessionProvider(raw)
 	if err != nil {
 		return "", err
 	}

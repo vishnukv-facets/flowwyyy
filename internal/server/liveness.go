@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // livenessReconciler is the periodic process-scan reconciler that catches
@@ -213,7 +213,7 @@ func (r *livenessReconciler) reconcileTasks(db *sql.DB, live liveSessionSet) {
 	}
 	cutoff := time.Now().Add(-r.grace).UTC().Format(time.RFC3339)
 	for _, row := range stale {
-		state, err := flowdb.AgentRuntimeStateBySessionID(db, row.provider, row.sessionID)
+		state, err := productdb.AgentRuntimeStateBySessionID(db, row.provider, row.sessionID)
 		if err != nil {
 			continue
 		}
@@ -227,7 +227,7 @@ func (r *livenessReconciler) reconcileTasks(db *sql.DB, live liveSessionSet) {
 			// before we flip to dead.
 			continue
 		}
-		_ = flowdb.UpsertAgentRuntimeState(db, flowdb.AgentRuntimeStateInput{
+		_ = productdb.UpsertAgentRuntimeState(db, productdb.AgentRuntimeStateInput{
 			Provider:  row.provider,
 			SessionID: row.sessionID,
 			TaskSlug:  row.slug,

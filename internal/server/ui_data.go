@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 type uiData struct {
@@ -279,22 +279,22 @@ type uiTrashItem struct {
 }
 
 type uiAgent struct {
-	Slug            string         `json:"slug"`
-	Name            string         `json:"name"`
-	Project         *string        `json:"project"`
-	Kind            string         `json:"kind"`
-	PlaybookSlug    *string        `json:"playbook_slug,omitempty"`
-	Parent          *TaskSummary   `json:"parent,omitempty"`
-	Parents         []TaskSummary  `json:"parents,omitempty"`
-	Children        []TaskSummary  `json:"children,omitempty"`
-	ForkedFromSlug  *string        `json:"forked_from_slug,omitempty"`
-	ForkedFrom      *TaskSummary   `json:"forked_from,omitempty"`
-	ForkReason      *string        `json:"fork_reason,omitempty"`
-	Forks           []TaskSummary  `json:"forks,omitempty"`
-	Branch          string         `json:"branch"`
-	Branches        []string       `json:"branches,omitempty"`
-	WorkDir         string         `json:"work_dir"`
-	Provider        string         `json:"provider"`
+	Slug           string        `json:"slug"`
+	Name           string        `json:"name"`
+	Project        *string       `json:"project"`
+	Kind           string        `json:"kind"`
+	PlaybookSlug   *string       `json:"playbook_slug,omitempty"`
+	Parent         *TaskSummary  `json:"parent,omitempty"`
+	Parents        []TaskSummary `json:"parents,omitempty"`
+	Children       []TaskSummary `json:"children,omitempty"`
+	ForkedFromSlug *string       `json:"forked_from_slug,omitempty"`
+	ForkedFrom     *TaskSummary  `json:"forked_from,omitempty"`
+	ForkReason     *string       `json:"fork_reason,omitempty"`
+	Forks          []TaskSummary `json:"forks,omitempty"`
+	Branch         string        `json:"branch"`
+	Branches       []string      `json:"branches,omitempty"`
+	WorkDir        string        `json:"work_dir"`
+	Provider       string        `json:"provider"`
 	// Origin tags a chat-backed agent ("steerer" | "slack" | "ui"); empty for
 	// task sessions. Lets buildUIStats attribute the Steering slice (GAP-12).
 	Origin          string         `json:"origin,omitempty"`
@@ -554,7 +554,7 @@ func (s *Server) freshUIData() (uiData, error) {
 
 func (s *Server) buildUIData() (uiData, error) {
 	live, _ := s.cachedLiveAgentSessions()
-	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: false})
+	tasks, err := productdb.ListTasks(s.cfg.DB, productdb.TaskFilter{Kind: "", IncludeArchived: false})
 	if err != nil {
 		return uiData{}, err
 	}

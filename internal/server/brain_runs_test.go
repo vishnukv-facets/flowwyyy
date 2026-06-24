@@ -3,19 +3,18 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"flow/internal/productdb"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestTaskRunsAPIReturnsLedgerRowsAndDetail(t *testing.T) {
 	root, db := testRootDB(t)
 	insertProjectTask(t, db, root)
-	now := flowdb.NowISO()
-	run := &flowdb.BrainRun{
+	now := productdb.NowISO()
+	run := &productdb.BrainRun{
 		RunID:          "run-123",
 		FamilySlug:     "build-ui",
 		TaskSlug:       "build-ui",
@@ -31,7 +30,7 @@ func TestTaskRunsAPIReturnsLedgerRowsAndDetail(t *testing.T) {
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := flowdb.UpsertBrainRun(db, run); err != nil {
+	if err := productdb.UpsertBrainRun(db, run); err != nil {
 		t.Fatalf("UpsertBrainRun: %v", err)
 	}
 

@@ -1,10 +1,9 @@
 package steering
 
 import (
+	"flow/internal/productdb"
 	"strings"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestTitleFromSummary(t *testing.T) {
@@ -51,7 +50,7 @@ func TestTitleFromSummary(t *testing.T) {
 
 func TestFeedTaskNameFallback(t *testing.T) {
 	// Empty summary falls back to the thread key, not a blank title.
-	got := feedTaskName(flowdb.FeedItem{ThreadKey: "slack-c1:1.2"})
+	got := feedTaskName(productdb.FeedItem{ThreadKey: "slack-c1:1.2"})
 	if got != "Attention: slack-c1:1.2" {
 		t.Fatalf("empty-summary fallback: got %q", got)
 	}

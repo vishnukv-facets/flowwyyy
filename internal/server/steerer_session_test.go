@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
@@ -60,7 +60,7 @@ func TestSteererTitleFor(t *testing.T) {
 }
 
 func TestSteererSendReplyPromptUsesFlowSlackSendAsUser(t *testing.T) {
-	item := flowdb.FeedItem{ID: "sr1", Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"}
+	item := productdb.FeedItem{ID: "sr1", Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"}
 
 	got := steererSendReplyPrompt(item, "C0AL6LAGKUK", "1781260302.168129", "approved reply", "")
 
@@ -84,36 +84,36 @@ func TestSteererSendReplyPromptUsesFlowSlackSendAsUser(t *testing.T) {
 func TestSteererChatSlugForCard(t *testing.T) {
 	cases := []struct {
 		name     string
-		item     flowdb.FeedItem
+		item     productdb.FeedItem
 		wantSlug string
 		wantOK   bool
 	}{
 		{
 			name:     "slack card → channel chat",
-			item:     flowdb.FeedItem{Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"},
+			item:     productdb.FeedItem{Source: "slack", ThreadKey: "C0AL6LAGKUK:1781260302.168129"},
 			wantSlug: steererChatSlug("C0AL6LAGKUK"),
 			wantOK:   true,
 		},
 		{
 			name:     "slack card with only channel field",
-			item:     flowdb.FeedItem{Source: "slack", Channel: "D03HFQ402DU"},
+			item:     productdb.FeedItem{Source: "slack", Channel: "D03HFQ402DU"},
 			wantSlug: steererChatSlug("D03HFQ402DU"),
 			wantOK:   true,
 		},
 		{
 			name:     "github card → gh-<repo>-<num> chat",
-			item:     flowdb.FeedItem{Source: "github", Channel: "Facets-cloud/agent-factory", ThreadKey: "Facets-cloud/agent-factory:gh-issue:Facets-cloud/agent-factory#7"},
+			item:     productdb.FeedItem{Source: "github", Channel: "Facets-cloud/agent-factory", ThreadKey: "Facets-cloud/agent-factory:gh-issue:Facets-cloud/agent-factory#7"},
 			wantSlug: steererChatSlug("gh-Facets-cloud-agent-factory-7"),
 			wantOK:   true,
 		},
 		{
 			name:   "github card without a number → no chat",
-			item:   flowdb.FeedItem{Source: "github", Channel: "o/r", ThreadKey: "o/r:gh-issue:o/r"},
+			item:   productdb.FeedItem{Source: "github", Channel: "o/r", ThreadKey: "o/r:gh-issue:o/r"},
 			wantOK: false,
 		},
 		{
 			name:   "no channel anywhere → no chat",
-			item:   flowdb.FeedItem{Source: "slack"},
+			item:   productdb.FeedItem{Source: "slack"},
 			wantOK: false,
 		},
 	}
@@ -128,7 +128,7 @@ func TestSteererChatSlugForCard(t *testing.T) {
 }
 
 func TestSteererCaptureKBPromptInstructsInContextWrite(t *testing.T) {
-	item := flowdb.FeedItem{ID: "ck1", Source: "slack", ThreadKey: "C1:123.45", Summary: "Team standardized on RFC3339 timestamps everywhere"}
+	item := productdb.FeedItem{ID: "ck1", Source: "slack", ThreadKey: "C1:123.45", Summary: "Team standardized on RFC3339 timestamps everywhere"}
 	got := steererCaptureKBPrompt(item, "/Users/x/.flow/kb")
 	for _, want := range []string{
 		"SAVE TO KB NOW",

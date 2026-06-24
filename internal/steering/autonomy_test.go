@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func TestAutonomyFromEnv(t *testing.T) {
@@ -193,7 +194,7 @@ func TestAutonomyFnWithFeedbackAdjustsThresholdsWithoutEnablingActions(t *testin
 	defer db.Close()
 
 	for i := 0; i < 3; i++ {
-		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+		if err := productdb.RecordAttentionFeedback(db, productdb.AttentionFeedback{
 			ID: "approved-forward-" + string(rune('a'+i)), FeedItemID: "fa", Source: "slack",
 			Channel: "C_SIGNAL", Author: "U_OK", ThreadType: "channel", ThreadKey: "C_SIGNAL:1",
 			SuggestedAction: "forward", FinalAction: "forward", Outcome: "approved",
@@ -201,7 +202,7 @@ func TestAutonomyFnWithFeedbackAdjustsThresholdsWithoutEnablingActions(t *testin
 		}); err != nil {
 			t.Fatalf("record approval %d: %v", i, err)
 		}
-		if err := flowdb.RecordAttentionFeedback(db, flowdb.AttentionFeedback{
+		if err := productdb.RecordAttentionFeedback(db, productdb.AttentionFeedback{
 			ID: "dismiss-reply-" + string(rune('a'+i)), FeedItemID: "fd", Source: "slack",
 			Channel: "C_NOISE", Author: "U_NO", ThreadType: "channel", ThreadKey: "C_NOISE:1",
 			SuggestedAction: "reply", FinalAction: "dismiss", Outcome: "dismissed",

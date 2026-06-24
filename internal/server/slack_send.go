@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 type slackSendRequest struct {
@@ -112,7 +112,7 @@ func (s *Server) handleSlackSend(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.DB != nil {
 		if v := s.classifySlackChannel(r.Context(), req.Channel); v.external {
 			id := newPendingSendID()
-			if err := flowdb.CreatePendingSend(s.cfg.DB, flowdb.PendingSend{
+			if err := productdb.CreatePendingSend(s.cfg.DB, productdb.PendingSend{
 				ID: id, Channel: req.Channel, ChannelLabel: v.label, ThreadTS: req.ThreadTS,
 				Text: req.Text, Identity: req.As, FilePath: req.File, PostAt: req.PostAt,
 				Reason: v.reason, Status: "pending",

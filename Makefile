@@ -23,7 +23,8 @@ build:
 		echo "UI bundle missing — building it first..."; \
 		$(MAKE) ui; \
 	fi
-	go build -ldflags '$(LDFLAGS)' -o $(BINARY) .
+	go build -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/flow
+	go build -ldflags '$(LDFLAGS)' -o flowwyyy ./cmd/flowwyyy
 
 # Rebuild the web UI (Vite + React + TypeScript) into internal/server/static.
 # Run after editing UI source under internal/server/ui; the emitted bundles are
@@ -47,7 +48,9 @@ install: build
 	@# clean and `rm -rf` of this clone won't break their shell.
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(BINARY) $(INSTALL_DIR)/$(BINARY)
+	@cp flowwyyy $(INSTALL_DIR)/flowwyyy
 	@echo "Installed $(BINARY) -> $(INSTALL_DIR)/$(BINARY)"
+	@echo "Installed flowwyyy -> $(INSTALL_DIR)/flowwyyy (product entry: 'flowwyyy ui serve'; core verbs pass through to flow)"
 	@# Offer to add $(INSTALL_DIR) to PATH if it isn't already there.
 	@case ":$$PATH:" in \
 		*":$(INSTALL_DIR):"*) \
@@ -77,8 +80,11 @@ install: build
 					echo "Skipped. Add the line to $$rc_file yourself, or invoke flow with the full path: $(INSTALL_DIR)/$(BINARY)" ;; \
 			esac ;; \
 	esac
-	@# Install skill + SessionStart hook
-	@./$(BINARY) skill install --force
+	@# Install the composed (core + product) skill + SessionStart hook via the
+	@# flowwyyy product binary. The core binary would install a core-only skill;
+	@# flowwyyy composes in the Attention/Slack/Owners/inbox-monitor sections so
+	@# agent sessions get today's full skill.
+	@./flowwyyy skill install --force
 	@echo ""
 	@echo "Run 'flow init' to create ~/.flow/ and the database."
 
@@ -112,4 +118,4 @@ clear-dev:
 	@echo "Then restart the server to pick it up:  flow ui serve --bg"
 
 clean:
-	rm -f $(BINARY) flowde
+	rm -f $(BINARY) flowwyyy

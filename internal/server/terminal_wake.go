@@ -2,7 +2,7 @@ package server
 
 import (
 	"flow/internal/agents"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"os"
 	"os/exec"
@@ -252,7 +252,7 @@ func (h *terminalHub) awaitingHumanInput(slug string) bool {
 	if provider == "" || sid == "" {
 		return false
 	}
-	st, err := flowdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, provider, sid)
+	st, err := productdb.AgentRuntimeStateBySessionID(h.server.cfg.DB, provider, sid)
 	if err != nil {
 		return false
 	}
@@ -275,7 +275,7 @@ func (h *terminalHub) sessionIdentity(slug string) (string, string) {
 		return provider, sid
 	}
 	if h.server != nil && h.server.cfg.DB != nil {
-		if task, err := flowdb.GetTask(h.server.cfg.DB, slug); err == nil && task != nil && task.SessionID.Valid {
+		if task, err := productdb.GetTask(h.server.cfg.DB, slug); err == nil && task != nil && task.SessionID.Valid {
 			return task.SessionProvider, strings.TrimSpace(task.SessionID.String)
 		}
 	}
@@ -341,7 +341,7 @@ func (h *terminalHub) resumeBufferedWakes() {
 	if h.server == nil || h.server.cfg.DB == nil {
 		return
 	}
-	slugs, err := flowdb.PendingWakeSlugs(h.server.cfg.DB)
+	slugs, err := productdb.PendingWakeSlugs(h.server.cfg.DB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[term-wake] resume buffered wakes: %v\n", err)
 		return

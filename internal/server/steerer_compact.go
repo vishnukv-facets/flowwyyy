@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/steering"
 )
 
@@ -118,7 +118,7 @@ func (w *steererCompactWorker) tick(now time.Time) {
 	if !steering.SteererSessionsEnabled() {
 		return
 	}
-	chats, err := flowdb.ListChats(w.srv.cfg.DB, flowdb.ChatFilter{})
+	chats, err := productdb.ListChats(w.srv.cfg.DB, productdb.ChatFilter{})
 	if err != nil {
 		return
 	}
@@ -131,18 +131,18 @@ func (w *steererCompactWorker) tick(now time.Time) {
 	}
 }
 
-func (w *steererCompactWorker) sweepOne(ch *flowdb.Chat, absRoot string, now time.Time) {
+func (w *steererCompactWorker) sweepOne(ch *productdb.Chat, absRoot string, now time.Time) {
 	if ch == nil || ch.Origin != "steerer" || !w.srv.terminals.running(ch.Slug) {
 		return
 	}
 	if !ch.SessionID.Valid || strings.TrimSpace(ch.SessionID.String) == "" {
 		return
 	}
-	provider, err := flowdb.NormalizeSessionProvider(ch.Provider)
+	provider, err := productdb.NormalizeSessionProvider(ch.Provider)
 	if err != nil {
 		return
 	}
-	path, err := resolveSessionJSONLPath(&flowdb.Task{
+	path, err := resolveSessionJSONLPath(&productdb.Task{
 		Slug: ch.Slug, WorkDir: absRoot, SessionProvider: provider,
 		SessionID: sql.NullString{String: strings.TrimSpace(ch.SessionID.String), Valid: true},
 	})
@@ -181,7 +181,7 @@ func (w *steererCompactWorker) sweepOne(ch *flowdb.Chat, absRoot string, now tim
 // gated by FLOW_STEERER_FORK_PROVIDER; the manual switch is the dependable path.
 // Returns true if it switched the provider (the slot was relaunched). Never forks
 // mid-turn (same idle gate as compact).
-func (w *steererCompactWorker) maybeForkSteererChat(ch *flowdb.Chat, provider string, entry *transcriptCacheEntry, now time.Time) bool {
+func (w *steererCompactWorker) maybeForkSteererChat(ch *productdb.Chat, provider string, entry *transcriptCacheEntry, now time.Time) bool {
 	if entry == nil || !steererForkEnabled() {
 		return false
 	}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // A single surfaced verdict seeds the thread's running understanding under the
@@ -20,7 +20,7 @@ func TestWriteFeedRecordsThreadDecision(t *testing.T) {
 	if _, _, err := c.writeFeed(context.Background(), v, ev, ThreadContext{}); err != nil {
 		t.Fatalf("writeFeed: %v", err)
 	}
-	s, ok, err := flowdb.GetThreadState(c.DB, "C9:1.1")
+	s, ok, err := productdb.GetThreadState(c.DB, "C9:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}
@@ -52,14 +52,14 @@ func TestWriteFeedStandaloneDMsDoNotClubAfterSessionCleanup(t *testing.T) {
 	if n := openCardCount(t, c); n != 2 {
 		t.Fatalf("open cards = %d, want 2 (standalone DMs no longer merge here)", n)
 	}
-	firstState, ok, err := flowdb.GetThreadState(c.DB, "D7:1000.0")
+	firstState, ok, err := productdb.GetThreadState(c.DB, "D7:1000.0")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState(first) ok=%v err=%v", ok, err)
 	}
 	if firstState.EventCount != 1 {
 		t.Errorf("first EventCount = %d, want 1", firstState.EventCount)
 	}
-	secondState, ok, err := flowdb.GetThreadState(c.DB, "D7:1100.0")
+	secondState, ok, err := productdb.GetThreadState(c.DB, "D7:1100.0")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState(second) ok=%v err=%v", ok, err)
 	}
@@ -92,7 +92,7 @@ func TestCascadeObserveAccumulatesThreadState(t *testing.T) {
 		t.Fatalf("observe 2: %v", err)
 	}
 
-	s, ok, err := flowdb.GetThreadState(db, "C1:1.1")
+	s, ok, err := productdb.GetThreadState(db, "C1:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}
@@ -110,9 +110,9 @@ func TestCascadeObserveAccumulatesThreadState(t *testing.T) {
 // degrades gracefully when layer-3 retrieval errors.
 func TestIncrementalReplayStableDecision(t *testing.T) {
 	c, db := cascadeFixture(t)
-	t.Cleanup(func() { retrievalSearch = flowdb.SearchDocsMatch })
+	t.Cleanup(func() { retrievalSearch = productdb.SearchDocsMatch })
 	// Layer 3 errors on every call — triage must still complete (degrades to nil).
-	retrievalSearch = func(*sql.DB, string, []flowdb.SearchScope, int) ([]flowdb.SearchResult, error) {
+	retrievalSearch = func(*sql.DB, string, []productdb.SearchScope, int) ([]productdb.SearchResult, error) {
 		return nil, errors.New("index cold")
 	}
 	stubClassifier(t, func(prompt string) (string, error) {
@@ -157,7 +157,7 @@ func TestIncrementalReplayStableDecision(t *testing.T) {
 		}
 	}
 	// The decision stayed stable across the replay (no flip-flop).
-	s, ok, err := flowdb.GetThreadState(db, "C1:1.1")
+	s, ok, err := productdb.GetThreadState(db, "C1:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}
@@ -195,17 +195,17 @@ func priorActionFromPrompt(prompt string) string {
 // running understanding via the recordActionFeedback chokepoint.
 func TestOperatorActionRecordedOnDismiss(t *testing.T) {
 	c := newSteeringTestCascade(t)
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "f1", Source: "slack", ThreadKey: "C1:5.5", SuggestedAction: "reply",
 		Status: "new", CreatedAt: "2026-06-12T06:40:00Z",
 	}
-	if _, _, err := flowdb.UpsertFeedItemSurfaced(c.DB, item); err != nil {
+	if _, _, err := productdb.UpsertFeedItemSurfaced(c.DB, item); err != nil {
 		t.Fatalf("seed feed item: %v", err)
 	}
 	if err := DismissFeed(c.DB, "f1"); err != nil {
 		t.Fatalf("DismissFeed: %v", err)
 	}
-	s, ok, err := flowdb.GetThreadState(c.DB, "C1:5.5")
+	s, ok, err := productdb.GetThreadState(c.DB, "C1:5.5")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}
@@ -220,7 +220,7 @@ func TestOperatorActionRecordedOnDismiss(t *testing.T) {
 // learning tests for the unwatched/new-thread drop case.
 func TestOperatorReplyRecorded(t *testing.T) {
 	c := newSteeringTestCascade(t)
-	if err := flowdb.RecordThreadDecision(c.DB, flowdb.ThreadDecision{
+	if err := productdb.RecordThreadDecision(c.DB, productdb.ThreadDecision{
 		ThreadKey: "C1:1.1", Source: "slack", Action: "reply", Confidence: 0.7,
 		Reason: "prior card", At: "2026-06-12T06:40:00Z",
 	}); err != nil {
@@ -228,7 +228,7 @@ func TestOperatorReplyRecorded(t *testing.T) {
 	}
 	ev := monitor.InboundEvent{Channel: "C1", ChannelType: "channel", ThreadTS: "1.1", TS: "1.1", UserID: "U_ME", Text: "I'll take it from here"}
 	c.learnFromOperatorReply(context.Background(), ev, "backfill")
-	s, ok, err := flowdb.GetThreadState(c.DB, "C1:1.1")
+	s, ok, err := productdb.GetThreadState(c.DB, "C1:1.1")
 	if err != nil || !ok {
 		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
 	}

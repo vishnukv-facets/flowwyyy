@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"flow/internal/cli"
 )
 
 // This file locks down the unauthenticated local data plane (audit finding
@@ -42,7 +44,7 @@ const sessionTokenHeader = "X-Flow-Session-Token"
 // writes its minted token. Trusted local CLIs (flow wait / slack send /
 // attention sent) read it to authenticate to token-gated routes and the WS
 // handshake. Exported so internal/app can locate it without re-deriving.
-const SessionTokenFileName = ".ui-session-token"
+const SessionTokenFileName = cli.SessionTokenFileName
 
 // mintSessionToken returns a fresh 256-bit token as hex. On the (catastrophic)
 // event that crypto/rand fails, it returns "" — which makes validSessionToken

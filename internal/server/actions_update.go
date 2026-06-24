@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -16,11 +16,11 @@ func (s *Server) updatePermissionMode(req actionRequest) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	mode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	mode, err := productdb.NormalizePermissionMode(req.PermissionMode)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -33,7 +33,7 @@ func (s *Server) updatePermissionMode(req actionRequest) (actionResponse, int) {
 
 	if _, err := s.cfg.DB.Exec(
 		`UPDATE tasks SET permission_mode = ?, updated_at = ? WHERE slug = ?`,
-		mode, flowdb.NowISO(), task.Slug,
+		mode, productdb.NowISO(), task.Slug,
 	); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -83,7 +83,7 @@ func (s *Server) updateProvider(req actionRequest) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	provider, err := flowdb.NormalizeSessionProvider(req.Provider)
+	provider, err := productdb.NormalizeSessionProvider(req.Provider)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
@@ -112,7 +112,7 @@ func (s *Server) updateModel(req actionRequest) (actionResponse, int) {
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	if model := flowdb.NormalizeModel(req.Model); model != "" {
+	if model := productdb.NormalizeModel(req.Model); model != "" {
 		return actionResponse{OK: true, Message: "model set to " + model}, http.StatusOK
 	}
 	return actionResponse{OK: true, Message: "model cleared (auto — resolved at launch)"}, http.StatusOK
@@ -123,8 +123,8 @@ func (s *Server) updateModel(req actionRequest) (actionResponse, int) {
 // The same "only before a session starts" guard applies; a no-op change on an
 // already-started task is allowed so re-saving the unchanged value never errors.
 func (s *Server) applyBacklogModelChoice(target, rawModel string) error {
-	model := flowdb.NormalizeModel(rawModel)
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	model := productdb.NormalizeModel(rawModel)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func (s *Server) applyBacklogModelChoice(target, rawModel string) error {
 	_, err = s.cfg.DB.Exec(
 		`UPDATE tasks SET model = ?, updated_at = ?
 		 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
-		modelArg, flowdb.NowISO(), target,
+		modelArg, productdb.NowISO(), target,
 	)
 	return err
 }
@@ -158,7 +158,7 @@ func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 	if err != nil {
 		return err
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		return err
 	}
@@ -172,7 +172,7 @@ func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 		}
 		return fmt.Errorf("provider can only be changed before a session starts")
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	_, err = s.cfg.DB.Exec(
 		`UPDATE tasks SET session_provider = ?, harness = ?, updated_at = ?
 			 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
@@ -186,11 +186,11 @@ func (s *Server) updatePriority(req actionRequest) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	priority, err := flowdb.NormalizePriority(req.Priority)
+	priority, err := productdb.NormalizePriority(req.Priority)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -202,7 +202,7 @@ func (s *Server) updatePriority(req actionRequest) (actionResponse, int) {
 	}
 	if _, err := s.cfg.DB.Exec(
 		`UPDATE tasks SET priority = ?, updated_at = ? WHERE slug = ?`,
-		priority, flowdb.NowISO(), task.Slug,
+		priority, productdb.NowISO(), task.Slug,
 	); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -218,7 +218,7 @@ func (s *Server) updateTaskName(req actionRequest) (actionResponse, int) {
 	if name == "" {
 		return actionResponse{OK: false, Message: "task name is required"}, http.StatusBadRequest
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, target)
+	task, err := productdb.GetTask(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
@@ -230,7 +230,7 @@ func (s *Server) updateTaskName(req actionRequest) (actionResponse, int) {
 	}
 	if _, err := s.cfg.DB.Exec(
 		`UPDATE tasks SET name = ?, updated_at = ? WHERE slug = ?`,
-		name, flowdb.NowISO(), task.Slug,
+		name, productdb.NowISO(), task.Slug,
 	); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
@@ -254,20 +254,20 @@ func (s *Server) updateProject(req actionRequest) (actionResponse, int) {
 	}
 	var priority string
 	if priorityRaw != "" {
-		p, err := flowdb.NormalizePriority(priorityRaw)
+		p, err := productdb.NormalizePriority(priorityRaw)
 		if err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 		}
 		priority = p
 	}
-	project, err := flowdb.GetProject(s.cfg.DB, target)
+	project, err := productdb.GetProject(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "project not found: " + target}, http.StatusNotFound
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	var changed []string
 	if name != "" && name != project.Name {
 		if _, err := s.cfg.DB.Exec(`UPDATE projects SET name = ?, updated_at = ? WHERE slug = ?`, name, now, project.Slug); err != nil {
@@ -298,7 +298,7 @@ func (s *Server) updatePlaybook(req actionRequest) (actionResponse, int) {
 	if name == "" {
 		return actionResponse{OK: false, Message: "playbook name is required"}, http.StatusBadRequest
 	}
-	pb, err := flowdb.GetPlaybook(s.cfg.DB, target)
+	pb, err := productdb.GetPlaybook(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "playbook not found: " + target}, http.StatusNotFound
@@ -308,7 +308,7 @@ func (s *Server) updatePlaybook(req actionRequest) (actionResponse, int) {
 	if pb.Name == name {
 		return actionResponse{OK: true, Message: "playbook name unchanged"}, http.StatusOK
 	}
-	if _, err := s.cfg.DB.Exec(`UPDATE playbooks SET name = ?, updated_at = ? WHERE slug = ?`, name, flowdb.NowISO(), pb.Slug); err != nil {
+	if _, err := s.cfg.DB.Exec(`UPDATE playbooks SET name = ?, updated_at = ? WHERE slug = ?`, name, productdb.NowISO(), pb.Slug); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	return actionResponse{OK: true, Message: "playbook name updated"}, http.StatusOK
@@ -354,7 +354,7 @@ func (s *Server) editPlaybook(target string) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	pb, err := flowdb.GetPlaybook(s.cfg.DB, target)
+	pb, err := productdb.GetPlaybook(s.cfg.DB, target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return actionResponse{OK: false, Message: "playbook not found: " + target}, http.StatusNotFound

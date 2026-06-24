@@ -12,6 +12,7 @@ import (
 
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // stubActionIO swaps the shell-out vars and records calls.
@@ -20,7 +21,7 @@ type tellRec struct{ slug, msg string }
 type tagRec struct{ slug, tag string }
 type forwardRec struct {
 	slug string
-	item flowdb.FeedItem
+	item productdb.FeedItem
 	msg  string
 }
 
@@ -53,7 +54,7 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 		stubbedTags = append(stubbedTags, tagRec{slug, tag})
 		return nil
 	}
-	taskForwarder = func(_ context.Context, _ *sql.DB, slug string, item flowdb.FeedItem, msg string) error {
+	taskForwarder = func(_ context.Context, _ *sql.DB, slug string, item productdb.FeedItem, msg string) error {
 		stubbedForwards = append(stubbedForwards, forwardRec{slug: slug, item: item, msg: msg})
 		return nil
 	}
@@ -71,12 +72,12 @@ func TestMakeTaskFromFeed(t *testing.T) {
 	defer db.Close()
 	spawns, _ := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "f1", Source: "slack", ThreadKey: "C1:100.1", Summary: "Customer wants rollout date",
 		SuggestedAction: "make_task", SuggestedProject: "goniyo", Reason: "names operator",
 		Draft: "Targeting Friday.", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 
@@ -97,7 +98,7 @@ func TestMakeTaskFromFeed(t *testing.T) {
 		t.Errorf("slug = %q, want att- prefix", got.slug)
 	}
 	// feed row marked acted
-	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("feed item should be 'acted', got %d acted rows", len(items))
 	}
 }
@@ -105,14 +106,14 @@ func TestMakeTaskFromFeed(t *testing.T) {
 func TestFeedTrackingTag(t *testing.T) {
 	cases := []struct {
 		name string
-		item flowdb.FeedItem
+		item productdb.FeedItem
 		want string
 	}{
-		{"slack thread", flowdb.FeedItem{Source: "slack", ThreadKey: "C_eng:1700000000.000100"}, "slack-thread:C_eng:1700000000.000100"},
-		{"github pr composite", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-pr:owner/repo#550"}, "gh-pr:owner/repo#550"},
-		{"github issue composite", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-issue:owner/repo#7"}, "gh-issue:owner/repo#7"},
-		{"github no link tag → empty", flowdb.FeedItem{Source: "github", ThreadKey: "owner/repo:weird"}, ""},
-		{"empty thread key → empty", flowdb.FeedItem{Source: "slack", ThreadKey: ""}, ""},
+		{"slack thread", productdb.FeedItem{Source: "slack", ThreadKey: "C_eng:1700000000.000100"}, "slack-thread:C_eng:1700000000.000100"},
+		{"github pr composite", productdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-pr:owner/repo#550"}, "gh-pr:owner/repo#550"},
+		{"github issue composite", productdb.FeedItem{Source: "github", ThreadKey: "owner/repo:gh-issue:owner/repo#7"}, "gh-issue:owner/repo#7"},
+		{"github no link tag → empty", productdb.FeedItem{Source: "github", ThreadKey: "owner/repo:weird"}, ""},
+		{"empty thread key → empty", productdb.FeedItem{Source: "slack", ThreadKey: ""}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -133,11 +134,11 @@ func TestMakeTaskFromFeedTagsSourceThread(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "tt1", Source: "slack", ThreadKey: "C_eng:1700000000.000100", Summary: "grant access",
 		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
@@ -162,19 +163,19 @@ func TestMakeTaskFromFeedRecordsFeedback(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "fb-make", Source: "slack", ThreadKey: "C_eng:1700000000.000300", Channel: "C_eng",
 		ChannelType: "channel", Author: "U_OWNER", Summary: "create task", SuggestedAction: "make_task",
 		Confidence: 0.88, Draft: "Possible reply text.", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
 		t.Fatalf("MakeTaskFromFeed: %v", err)
 	}
-	got, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID})
+	got, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: item.ID})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -196,19 +197,19 @@ func TestDismissFeedRecordsFeedback(t *testing.T) {
 	}
 	defer db.Close()
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "fb-dismiss", Source: "slack", ThreadKey: "C_noise:1.1", Channel: "C_noise",
 		ChannelType: "channel", Author: "U_BOT", SuggestedAction: "reply",
 		Confidence: 0.82, Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
 	if err := DismissFeed(db, item.ID); err != nil {
 		t.Fatalf("DismissFeed: %v", err)
 	}
-	got, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: item.ID})
+	got, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: item.ID})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -232,12 +233,12 @@ func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
 	defer db.Close()
 	_, tells := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "r1", Source: "slack", ThreadKey: "C_eng:1700000000.000200", Channel: "C_eng",
 		Summary: "rollout date?", SuggestedAction: "send_reply", MatchedTask: "rollout-task",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 
@@ -264,10 +265,10 @@ func TestInjectReplyToTaskRecordsUpdate(t *testing.T) {
 			t.Errorf("update note missing %q:\n%s", want, body)
 		}
 	}
-	if fi, _ := flowdb.GetFeedItem(db, "r1"); fi.Status != "acted" || fi.LinkedTask != "rollout-task" {
+	if fi, _ := productdb.GetFeedItem(db, "r1"); fi.Status != "acted" || fi.LinkedTask != "rollout-task" {
 		t.Errorf("feed row = status %q linked %q, want acted/rollout-task", fi.Status, fi.LinkedTask)
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "r1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "r1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -287,16 +288,16 @@ func TestMakeReplyTaskFromFeedIdempotent(t *testing.T) {
 	defer db.Close()
 	spawns, tells := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "idem1", Source: "slack", ThreadKey: "C_eng:1700000000.000100", Summary: "reply please",
 		SuggestedAction: "send_reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 	// Pre-create the task that FeedTaskSlug would target (simulates a prior action).
 	slug := FeedTaskSlug(item)
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	if _, err := db.Exec(
 		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
 		 VALUES (?, 'existing', 'backlog', 'high', ?, 'default', 'claude', ?, ?, ?)`,
@@ -318,7 +319,7 @@ func TestMakeReplyTaskFromFeedIdempotent(t *testing.T) {
 	if len(*tells) != 1 || (*tells)[0].slug != slug {
 		t.Errorf("must inject the reply via tell into %q, got %+v", slug, *tells)
 	}
-	if fi, _ := flowdb.GetFeedItem(db, "idem1"); fi.Status != "acted" || fi.LinkedTask != slug {
+	if fi, _ := productdb.GetFeedItem(db, "idem1"); fi.Status != "acted" || fi.LinkedTask != slug {
 		t.Errorf("feed row = status %q linked %q, want acted/%s", fi.Status, fi.LinkedTask, slug)
 	}
 }
@@ -331,17 +332,17 @@ func TestMakeTaskFromFeedLinksTask(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "lk1", Source: "slack", ThreadKey: "C1:700.1", Summary: "do a thing",
 		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
 		t.Fatalf("MakeTaskFromFeed: %v", err)
 	}
-	got, err := flowdb.GetFeedItem(db, "lk1")
+	got, err := productdb.GetFeedItem(db, "lk1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -361,14 +362,14 @@ func TestForwardFeedLinksMatchedTask(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{ID: "fl1", Source: "slack", ThreadKey: "C1:800.1", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "fl1", Source: "slack", ThreadKey: "C1:800.1", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := ForwardFeed(context.Background(), db, item); err != nil {
 		t.Fatalf("ForwardFeed: %v", err)
 	}
-	got, err := flowdb.GetFeedItem(db, "fl1")
+	got, err := productdb.GetFeedItem(db, "fl1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -385,8 +386,8 @@ func TestForwardFeed(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{ID: "f2", Source: "slack", ThreadKey: "C1:200.1", Summary: "rel q", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "f2", Source: "slack", ThreadKey: "C1:200.1", Summary: "rel q", MatchedTask: "kong-split", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := ForwardFeed(context.Background(), db, item); err != nil {
@@ -403,7 +404,7 @@ func TestForwardFeed(t *testing.T) {
 	if !strings.Contains(stubbedForwards[0].msg, "capture it to the KB") {
 		t.Errorf("forward message should prompt durable-fact KB capture: %q", stubbedForwards[0].msg)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
 	}
 }
@@ -416,7 +417,7 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID:              "fctx",
 		Source:          "slack",
 		ThreadKey:       "D1:200.1",
@@ -431,7 +432,7 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 		Status:    "new",
 		CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := ForwardFeed(context.Background(), db, item); err != nil {
@@ -455,7 +456,7 @@ func TestForwardFeedIncludesContextPack(t *testing.T) {
 
 func TestFeedForwardInboxEventPreservesSourceAttribution(t *testing.T) {
 	at := time.Date(2026, 6, 8, 17, 30, 0, 0, time.UTC)
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID:          "src1",
 		Source:      "slack",
 		ThreadKey:   "D03LH2RCZMG:1780916901.021529",
@@ -503,7 +504,7 @@ func TestForwardFeedWritesSourceAttributedInboxEvent(t *testing.T) {
 	); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID:              "fw-src",
 		Source:          "slack",
 		ThreadKey:       "D03LH2RCZMG:1780916901.021529",
@@ -517,7 +518,7 @@ func TestForwardFeedWritesSourceAttributedInboxEvent(t *testing.T) {
 		Status:          "new",
 		CreatedAt:       now,
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 
@@ -553,12 +554,12 @@ func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
 	defer db.Close()
 	_, tells := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "hr1", Source: "slack", ThreadKey: "C1:handoff", Summary: "Is this part of your rollout task?",
 		SuggestedAction: "forward", MatchedTask: "rollout-task", Reason: "same customer thread",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 
@@ -577,7 +578,7 @@ func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
 			t.Errorf("handoff request missing %q:\n%s", want, (*tells)[0].msg)
 		}
 	}
-	got, _ := flowdb.GetFeedItem(db, "hr1")
+	got, _ := productdb.GetFeedItem(db, "hr1")
 	if got.Status != "new" || got.LinkedTask != "" {
 		t.Fatalf("request must leave feed item open, got %+v", got)
 	}
@@ -594,22 +595,22 @@ func TestRequestHandoffDeliveryFailureRemovesPendingHandoff(t *testing.T) {
 		return errors.New("tell failed")
 	}
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "hf1", Source: "slack", ThreadKey: "C1:handoff-fail", Summary: "needs owner confirmation",
 		SuggestedAction: "forward", MatchedTask: "rollout-task", Status: "new",
 		CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 
 	if _, err := RequestHandoff(context.Background(), db, item, "attention-router"); err == nil {
 		t.Fatal("RequestHandoff should report delivery failure")
 	}
-	if _, ok, err := flowdb.LatestAttentionHandoffForFeed(db, item.ID); err != nil || ok {
+	if _, ok, err := productdb.LatestAttentionHandoffForFeed(db, item.ID); err != nil || ok {
 		t.Fatalf("failed delivery should remove pending handoff, ok=%v err=%v", ok, err)
 	}
-	got, _ := flowdb.GetFeedItem(db, item.ID)
+	got, _ := productdb.GetFeedItem(db, item.ID)
 	if got.Status != "new" || got.LinkedTask != "" {
 		t.Fatalf("failed delivery must leave feed retryable, got %+v", got)
 	}
@@ -623,12 +624,12 @@ func TestRespondHandoffAcceptMarksFeedActed(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "ha1", Source: "slack", ThreadKey: "C1:accept", Summary: "belongs here",
 		SuggestedAction: "forward", MatchedTask: "owner-task", Status: "new",
 		CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 	h, err := RequestHandoff(context.Background(), db, item, "attention-router")
@@ -643,11 +644,11 @@ func TestRespondHandoffAcceptMarksFeedActed(t *testing.T) {
 	if got.Status != "accepted" || got.Reason != "this is our deployment thread" {
 		t.Fatalf("accepted handoff = %+v", got)
 	}
-	feed, _ := flowdb.GetFeedItem(db, "ha1")
+	feed, _ := productdb.GetFeedItem(db, "ha1")
 	if feed.Status != "acted" || feed.LinkedTask != "owner-task" {
 		t.Fatalf("accepted handoff should mark feed acted/linked, got %+v", feed)
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "ha1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "ha1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -664,12 +665,12 @@ func TestRespondHandoffDeclineLeavesFeedNew(t *testing.T) {
 	defer db.Close()
 	stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "hd1", Source: "slack", ThreadKey: "C1:decline", Summary: "probably not ours",
 		SuggestedAction: "forward", MatchedTask: "owner-task", Status: "new",
 		CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed feed: %v", err)
 	}
 	h, err := RequestHandoff(context.Background(), db, item, "attention-router")
@@ -684,11 +685,11 @@ func TestRespondHandoffDeclineLeavesFeedNew(t *testing.T) {
 	if got.Status != "declined" || got.Reason != "this belongs to support-triage" {
 		t.Fatalf("declined handoff = %+v", got)
 	}
-	feed, _ := flowdb.GetFeedItem(db, "hd1")
+	feed, _ := productdb.GetFeedItem(db, "hd1")
 	if feed.Status != "new" || feed.LinkedTask != "" {
 		t.Fatalf("declined handoff should leave feed open, got %+v", feed)
 	}
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "hd1"})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{FeedItemID: "hd1"})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -704,8 +705,8 @@ func TestForwardRequiresMatchedTask(t *testing.T) {
 	}
 	defer db.Close()
 	stubActionIO(t)
-	item := flowdb.FeedItem{ID: "f3", Source: "slack", ThreadKey: "C1:300.1", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "f3", Source: "slack", ThreadKey: "C1:300.1", SuggestedAction: "forward", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := ForwardFeed(context.Background(), db, item); err == nil {
@@ -719,14 +720,14 @@ func TestDismissFeed(t *testing.T) {
 		t.Fatalf("OpenDB: %v", err)
 	}
 	defer db.Close()
-	item := flowdb.FeedItem{ID: "f4", Source: "slack", ThreadKey: "C1:400.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "f4", Source: "slack", ThreadKey: "C1:400.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := DismissFeed(db, "f4"); err != nil {
 		t.Fatalf("DismissFeed: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("item should be dismissed")
 	}
 }
@@ -739,8 +740,8 @@ func TestApplyActionManualBypassesGate(t *testing.T) {
 	defer db.Close()
 	spawns, _ := stubActionIO(t)
 
-	item := flowdb.FeedItem{ID: "g1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.1, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "g1", Source: "slack", ThreadKey: "C1:1.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.1, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// manual=true, even with all-off DefaultAutonomy and low confidence → executes.
@@ -760,8 +761,8 @@ func TestApplyActionAutonomousDenied(t *testing.T) {
 	defer db.Close()
 	spawns, _ := stubActionIO(t)
 
-	item := flowdb.FeedItem{ID: "g2", Source: "slack", ThreadKey: "C1:2.1", SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "g2", Source: "slack", ThreadKey: "C1:2.1", SuggestedAction: "make_task", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// manual=false + DefaultAutonomy (all disabled) → denied, no execution.
@@ -772,7 +773,7 @@ func TestApplyActionAutonomousDenied(t *testing.T) {
 	if len(*spawns) != 0 {
 		t.Errorf("denied action must NOT execute, spawns=%d", len(*spawns))
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 1 {
 		t.Errorf("denied action must leave the feed row untouched ('new')")
 	}
 }
@@ -785,8 +786,8 @@ func TestApplyActionAutonomousAllowed(t *testing.T) {
 	defer db.Close()
 	spawns, _ := stubActionIO(t)
 
-	item := flowdb.FeedItem{ID: "g3", Source: "slack", ThreadKey: "C1:3.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.95, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "g3", Source: "slack", ThreadKey: "C1:3.1", Summary: "s", SuggestedAction: "make_task", Confidence: 0.95, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	policy := AutonomyPolicy{ActionMakeTask: {Enabled: true, Threshold: 0.80}}
@@ -806,15 +807,15 @@ func TestApplyActionAutoCaptureKBSkipsOperatorFeedback(t *testing.T) {
 	defer db.Close()
 	stubCaptureKBRunner(t, func(string) (string, error) { return "CAPTURED kb/org.md", nil })
 
-	item := flowdb.FeedItem{ID: "kb1", Source: "slack", ThreadKey: "C1:1.1", Summary: "durable org fact", SuggestedAction: "capture_kb", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "kb1", Source: "slack", ThreadKey: "C1:1.1", Summary: "durable org fact", SuggestedAction: "capture_kb", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	pol := AutonomyPolicy{ActionCaptureKB: {Enabled: true, Threshold: 0.75}}
 	if err := ApplyActionAuto(context.Background(), db, item, ActionCaptureKB, t.TempDir(), pol, 0.90); err != nil {
 		t.Fatalf("ApplyActionAuto capture_kb: %v", err)
 	}
-	got, err := flowdb.GetFeedItem(db, "kb1")
+	got, err := productdb.GetFeedItem(db, "kb1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -824,7 +825,7 @@ func TestApplyActionAutoCaptureKBSkipsOperatorFeedback(t *testing.T) {
 	// The invariant: an autonomous outcome must NEVER write an attention_feedback
 	// row, or the ConfidenceCalibrator would learn from the steerer agreeing with
 	// itself and inflate the very confidence that gated the action.
-	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{})
+	fb, err := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{})
 	if err != nil {
 		t.Fatalf("ListAttentionFeedback: %v", err)
 	}
@@ -840,18 +841,18 @@ func TestApplyActionAutoDismissDigestOnly(t *testing.T) {
 	}
 	defer db.Close()
 
-	item := flowdb.FeedItem{ID: "fy1", Source: "slack", ThreadKey: "C1:2.1", Summary: "fyi", SuggestedAction: "digest_only", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "fy1", Source: "slack", ThreadKey: "C1:2.1", Summary: "fyi", SuggestedAction: "digest_only", Confidence: 0.90, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	pol := AutonomyPolicy{ActionDigestOnly: {Enabled: true, Threshold: 0.85}}
 	if err := ApplyActionAuto(context.Background(), db, item, ActionDigestOnly, "", pol, 0.90); err != nil {
 		t.Fatalf("ApplyActionAuto digest_only: %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "dismissed"); len(items) != 1 {
 		t.Errorf("auto-dismiss should resolve the FYI card to 'dismissed'")
 	}
-	fb, _ := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{})
+	fb, _ := productdb.ListAttentionFeedback(db, productdb.AttentionFeedbackFilter{})
 	if len(fb) != 0 {
 		t.Errorf("autonomous dismiss wrote %d feedback rows, want 0", len(fb))
 	}
@@ -864,15 +865,15 @@ func TestApplyActionAutoDeniedLeavesCardUntouched(t *testing.T) {
 	}
 	defer db.Close()
 
-	item := flowdb.FeedItem{ID: "d1", Source: "slack", ThreadKey: "C1:3.1", SuggestedAction: "capture_kb", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "d1", Source: "slack", ThreadKey: "C1:3.1", SuggestedAction: "capture_kb", Confidence: 0.99, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// DefaultAutonomy is all-off — even a 0.99 gate confidence is denied.
 	if err := ApplyActionAuto(context.Background(), db, item, ActionCaptureKB, t.TempDir(), DefaultAutonomy(), 0.99); err != ErrAutonomyDenied {
 		t.Fatalf("auto capture under default policy should be ErrAutonomyDenied, got %v", err)
 	}
-	if items, _ := flowdb.ListFeedItems(db, "new"); len(items) != 1 {
+	if items, _ := productdb.ListFeedItems(db, "new"); len(items) != 1 {
 		t.Errorf("denied auto-act must leave the card 'new'")
 	}
 }
@@ -885,12 +886,12 @@ func TestInjectReplyToTask(t *testing.T) {
 	defer db.Close()
 	_, tells := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "r1", Source: "slack", ThreadKey: "C1:900.1", Summary: "wants ETA",
 		SuggestedAction: "send_reply", MatchedTask: "gh-task", Draft: "soon",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -906,7 +907,7 @@ func TestInjectReplyToTask(t *testing.T) {
 	if !strings.Contains((*tells)[0].msg, "make it warmer") {
 		t.Errorf("inject message should embed operator instructions: %q", (*tells)[0].msg)
 	}
-	got, err := flowdb.GetFeedItem(db, "r1")
+	got, err := productdb.GetFeedItem(db, "r1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -923,12 +924,12 @@ func TestMakeReplyTaskFromFeed(t *testing.T) {
 	defer db.Close()
 	spawns, _ := stubActionIO(t)
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "r2", Source: "slack", ThreadKey: "C1:950.1", Summary: "needs reply",
 		SuggestedAction: "send_reply", SuggestedProject: "goniyo", Channel: "C1",
 		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -952,7 +953,7 @@ func TestMakeReplyTaskFromFeed(t *testing.T) {
 	if !strings.Contains(got.brief, "Post the reply") {
 		t.Errorf("brief should instruct to post the reply:\n%s", got.brief)
 	}
-	row, err := flowdb.GetFeedItem(db, "r2")
+	row, err := productdb.GetFeedItem(db, "r2")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -968,8 +969,8 @@ func TestApplyActionUnsupported(t *testing.T) {
 	}
 	defer db.Close()
 	stubActionIO(t)
-	item := flowdb.FeedItem{ID: "g4", Source: "slack", ThreadKey: "C1:4.1", SuggestedAction: "reply", Confidence: 0.9, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "g4", Source: "slack", ThreadKey: "C1:4.1", SuggestedAction: "reply", Confidence: 0.9, Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	// reply/afk_reply are outward sends — not implemented until P2. Manual or not, ApplyAction errors.

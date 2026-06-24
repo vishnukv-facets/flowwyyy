@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 
 	_ "modernc.org/sqlite"
 )
@@ -15,7 +16,16 @@ func TestMaybeRegisterDMThread(t *testing.T) {
 		t.Fatalf("OpenDB: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	now := flowdb.NowISO()
+
+	// Bucket-O tag writes route through `flow update task --tag` (no flow binary
+	// in this unit test). Stub the writer to perform the same DB effect so the
+	// persistence assertion below still exercises the real tag derivation.
+	srv := New(Config{DB: db})
+	orig := taskTagWriter
+	t.Cleanup(func() { taskTagWriter = orig })
+	taskTagWriter = func(_ *Server, slug, tag string) error { return flowdb.AddTaskTag(db, slug, tag) }
+
+	now := productdb.NowISO()
 	if _, err := db.Exec(
 		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
 		 VALUES ('coinswitch','coinswitch','backlog','high',?, 'default','claude',?,?,?)`,
@@ -26,7 +36,7 @@ func TestMaybeRegisterDMThread(t *testing.T) {
 
 	// An agent DM send (thread-scoped) registers a slack-thread tag on the DM
 	// channel + thread root — reusing the thread model so routing/backfill work.
-	tag, ok := maybeRegisterDMThread(db, "PostToolUse", "coinswitch", map[string]any{
+	tag, ok := srv.maybeRegisterDMThread("PostToolUse", "coinswitch", map[string]any{
 		"tool_name":  "mcp__claude_ai_Slack__slack_send_message",
 		"tool_input": map[string]any{"channel": "D03LH2RCZMG", "thread_ts": "1780480392.819809", "text": "hi"},
 	})
@@ -36,7 +46,7 @@ func TestMaybeRegisterDMThread(t *testing.T) {
 	if tag != "slack-thread:d03lh2rczmg:1780480392.819809" {
 		t.Fatalf("tag = %q, want slack-thread:d03lh2rczmg:1780480392.819809", tag)
 	}
-	tags, err := flowdb.GetTaskTags(db, "coinswitch")
+	tags, err := productdb.GetTaskTags(db, "coinswitch")
 	if err != nil {
 		t.Fatalf("GetTaskTags: %v", err)
 	}
@@ -52,7 +62,7 @@ func TestMaybeRegisterDMThread(t *testing.T) {
 
 	// A send to a normal channel must NOT auto-register (origin thread is
 	// already monitored; other channels are out of scope).
-	if _, ok := maybeRegisterDMThread(db, "PostToolUse", "coinswitch", map[string]any{
+	if _, ok := srv.maybeRegisterDMThread("PostToolUse", "coinswitch", map[string]any{
 		"tool_name":  "mcp__claude_ai_Slack__slack_send_message",
 		"tool_input": map[string]any{"channel": "C0B3L0D8QG1", "thread_ts": "1779359538.629579"},
 	}); ok {

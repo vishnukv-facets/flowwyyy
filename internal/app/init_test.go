@@ -75,6 +75,26 @@ func TestCmdInitCreatesDBQueryable(t *testing.T) {
 	}
 }
 
+func TestCmdInitRunsInitHooks(t *testing.T) {
+	initTempFlowRoot(t)
+	oldHooks := initHooks
+	t.Cleanup(func() { initHooks = oldHooks })
+	ran := false
+	initHooks = []func() error{
+		func() error {
+			ran = true
+			return nil
+		},
+	}
+
+	if rc := cmdInit(nil); rc != 0 {
+		t.Fatalf("cmdInit rc=%d", rc)
+	}
+	if !ran {
+		t.Fatal("init hook did not run")
+	}
+}
+
 func TestCmdInitIdempotent(t *testing.T) {
 	root := initTempFlowRoot(t)
 	if rc := cmdInit(nil); rc != 0 {

@@ -15,6 +15,9 @@ import (
 // DefaultPermissionMode is used when callers do not explicitly choose one.
 const DefaultPermissionMode = "auto"
 
+// SchemaVersion is the compatibility floor exposed by `flow version --json`.
+const SchemaVersion = 1
+
 // (idx_tasks_session_id is a partial UNIQUE index that requires a
 // dedupe pass against existing data — a flat CREATE UNIQUE INDEX
 // would fail on any DB that has two tasks sharing a session_id.
@@ -667,13 +670,23 @@ func OpenDB(path string) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("enable foreign_keys: %w", err)
 	}
-	if _, err := db.Exec(schemaDDL); err != nil {
+	if _, err := db.Exec(coreSchemaDDL); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 	if err := runMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	// Apply any product (non-core) migration sets registered via
+	// RegisterMigrations. Core tables (incl. tasks) already exist, so a set
+	// may reference them. A binary that never imports a product package
+	// registers nothing here and gets a core-only DB.
+	for _, s := range registeredSets {
+		if err := s.Apply(db); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("apply migration set %s: %w", s.Domain, err)
+		}
 	}
 	return db, nil
 }

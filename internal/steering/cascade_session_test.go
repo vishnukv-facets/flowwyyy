@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"flow/internal/flowdb"
 	"flow/internal/monitor"
+	"flow/internal/productdb"
 )
 
 // fakeSessionSink records deliveries and can be told to fail (to exercise fail-open).
@@ -41,7 +41,7 @@ func newSessionTestCascade(t *testing.T, sink SteererSessionSink) *Cascade {
 	c.SessionSink = sink
 	c.classifierBudget = newBudgetGuard(0)
 	c.budget = newBudgetGuard(0)
-	c.trace = func(flowdb.SteeringTrace) {} // swallow traces
+	c.trace = func(productdb.SteeringTrace) {} // swallow traces
 	return c
 }
 
@@ -63,7 +63,7 @@ func TestObserveDeliversSurvivorToSink(t *testing.T) {
 		t.Fatalf("bad delivery: %+v", sink.calls[0])
 	}
 	// No card surfaced by the cascade — the session surfaces later via the tool.
-	items, _ := flowdb.ListFeedItems(c.DB, "new")
+	items, _ := productdb.ListFeedItems(c.DB, "new")
 	if len(items) != 0 {
 		t.Fatalf("cascade must not write a card on the session path, got %d", len(items))
 	}
@@ -106,7 +106,7 @@ func TestObserveOperatorSelfFeedsContextOnly(t *testing.T) {
 	if len(sink.calls) != 1 || !sink.calls[0].p.ContextOnly {
 		t.Fatalf("operator-self must feed context_only once, got %+v", sink.calls)
 	}
-	items, _ := flowdb.ListFeedItems(c.DB, "new")
+	items, _ := productdb.ListFeedItems(c.DB, "new")
 	if len(items) != 0 {
 		t.Fatalf("context_only must not surface a card, got %d", len(items))
 	}
@@ -142,7 +142,7 @@ func TestObserveBatchDeliversSurvivorToSink(t *testing.T) {
 	if sink.calls[0].key != "C1" || sink.calls[0].p.ContextOnly {
 		t.Fatalf("bad delivery: %+v", sink.calls[0])
 	}
-	items, _ := flowdb.ListFeedItems(c.DB, "new")
+	items, _ := productdb.ListFeedItems(c.DB, "new")
 	if len(items) != 0 {
 		t.Fatalf("backfill must not surface a digest_only card on the session path, got %d", len(items))
 	}
@@ -185,7 +185,7 @@ func TestObserveFailOpenFallsThrough(t *testing.T) {
 		t.Fatalf("sink attempted once then fell through, got %d calls", len(sink.calls))
 	}
 	// Fell through to the cold path; with budget 0 it drops without surfacing.
-	items, _ := flowdb.ListFeedItems(c.DB, "new")
+	items, _ := productdb.ListFeedItems(c.DB, "new")
 	if len(items) != 0 {
 		t.Fatalf("cold fallback with budget 0 must not surface, got %d", len(items))
 	}

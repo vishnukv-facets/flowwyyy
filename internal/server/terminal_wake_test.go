@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // sessionBooted gates the wake paste on the resumed/woken session having gone
@@ -55,12 +56,12 @@ func TestWakeTaskBuffersWhileAwaitingHumanInput(t *testing.T) {
 	if _, err := db.Exec(
 		`INSERT INTO tasks (slug, name, status, priority, work_dir, session_provider, session_id, created_at, updated_at)
 		 VALUES (?, ?, 'in-progress', 'medium', ?, 'claude', ?, ?, ?)`,
-		slug, "Demo", root, sid, flowdb.NowISO(), flowdb.NowISO(),
+		slug, "Demo", root, sid, productdb.NowISO(), productdb.NowISO(),
 	); err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
 	// Record that the session is blocked on an AskUserQuestion (elicitation).
-	if err := flowdb.UpsertAgentRuntimeState(db, flowdb.AgentRuntimeStateInput{
+	if err := productdb.UpsertAgentRuntimeState(db, productdb.AgentRuntimeStateInput{
 		Provider: "claude", SessionID: sid, TaskSlug: slug,
 		Status: "waiting", EventKind: "elicitation",
 	}); err != nil {
@@ -81,7 +82,7 @@ func TestWakeTaskBuffersWhileAwaitingHumanInput(t *testing.T) {
 	}
 
 	// Leaving the human-input wait re-opens the gate (flushWakes can deliver).
-	if err := flowdb.UpsertAgentRuntimeState(db, flowdb.AgentRuntimeStateInput{
+	if err := productdb.UpsertAgentRuntimeState(db, productdb.AgentRuntimeStateInput{
 		Provider: "claude", SessionID: sid, TaskSlug: slug,
 		Status: "running", EventKind: "post_tool_use",
 	}); err != nil {

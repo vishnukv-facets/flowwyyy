@@ -3,9 +3,8 @@ package steering
 import (
 	"database/sql"
 	"errors"
+	"flow/internal/productdb"
 	"testing"
-
-	"flow/internal/flowdb"
 )
 
 func TestRetrievalTermsORExpression(t *testing.T) {
@@ -26,16 +25,16 @@ func TestRetrieveHistoryBoundsAndDegrades(t *testing.T) {
 	c, _ := cascadeFixture(t)
 	in := ClassifyInput{Source: "slack", Text: "did we ship the oauth migration"}
 	pack := ThreadContext{Parent: &ContextMessage{Text: "release planning"}}
-	t.Cleanup(func() { retrievalSearch = flowdb.SearchDocsMatch })
+	t.Cleanup(func() { retrievalSearch = productdb.SearchDocsMatch })
 
 	// Caps fan-out at the retrieval limit even when the index returns more.
 	t.Setenv("FLOW_STEERING_RETRIEVAL_LIMIT", "3")
 	var gotExpr string
-	retrievalSearch = func(_ *sql.DB, expr string, _ []flowdb.SearchScope, limit int) ([]flowdb.SearchResult, error) {
+	retrievalSearch = func(_ *sql.DB, expr string, _ []productdb.SearchScope, limit int) ([]productdb.SearchResult, error) {
 		gotExpr = expr
-		rows := make([]flowdb.SearchResult, 0, limit)
+		rows := make([]productdb.SearchResult, 0, limit)
 		for i := 0; i < limit; i++ {
-			rows = append(rows, flowdb.SearchResult{Type: "memory", Slug: "kb", Snippet: "x"})
+			rows = append(rows, productdb.SearchResult{Type: "memory", Slug: "kb", Snippet: "x"})
 		}
 		return rows, nil
 	}
@@ -48,7 +47,7 @@ func TestRetrieveHistoryBoundsAndDegrades(t *testing.T) {
 	}
 
 	// A search error degrades to nil — triage proceeds on thread + memory.
-	retrievalSearch = func(*sql.DB, string, []flowdb.SearchScope, int) ([]flowdb.SearchResult, error) {
+	retrievalSearch = func(*sql.DB, string, []productdb.SearchScope, int) ([]productdb.SearchResult, error) {
 		return nil, errors.New("boom")
 	}
 	if got := c.retrieveHistory(in, pack); got != nil {
@@ -57,7 +56,7 @@ func TestRetrieveHistoryBoundsAndDegrades(t *testing.T) {
 
 	// Empty/stopword-only query never reaches the index.
 	called := false
-	retrievalSearch = func(*sql.DB, string, []flowdb.SearchScope, int) ([]flowdb.SearchResult, error) {
+	retrievalSearch = func(*sql.DB, string, []productdb.SearchScope, int) ([]productdb.SearchResult, error) {
 		called = true
 		return nil, nil
 	}

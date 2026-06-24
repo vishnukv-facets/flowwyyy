@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 // kbDistiller periodically captures durable knowledge from LIVE agent sessions
@@ -134,7 +134,7 @@ type kbCandidate struct {
 	slug      string
 	kind      string // "task" | "chat"
 	sessionID string
-	task      *flowdb.Task // synthetic or real; carries the fields resolveSessionJSONLPath needs
+	task      *productdb.Task // synthetic or real; carries the fields resolveSessionJSONLPath needs
 }
 
 func (d *kbDistiller) tick(ctx context.Context) {
@@ -160,7 +160,7 @@ func (d *kbDistiller) candidates() []kbCandidate {
 	db := d.srv.cfg.DB
 	var out []kbCandidate
 
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Status: "in-progress"})
+	tasks, err := productdb.ListTasks(db, productdb.TaskFilter{Status: "in-progress"})
 	if err == nil {
 		for _, t := range tasks {
 			if t == nil || !t.SessionID.Valid || strings.TrimSpace(t.SessionID.String) == "" {
@@ -173,7 +173,7 @@ func (d *kbDistiller) candidates() []kbCandidate {
 	// Chats: include archived-but-not-deleted (an archived chat whose session is
 	// still alive should keep getting checkpoints — that subsumes the
 	// "capture on archive" case continuously).
-	chats, err := flowdb.ListChats(db, flowdb.ChatFilter{IncludeArchived: true})
+	chats, err := productdb.ListChats(db, productdb.ChatFilter{IncludeArchived: true})
 	if err == nil {
 		root := strings.TrimSpace(d.srv.cfg.FlowRoot)
 		absRoot, aerr := filepath.Abs(root)
@@ -181,13 +181,13 @@ func (d *kbDistiller) candidates() []kbCandidate {
 			if ch == nil || !ch.SessionID.Valid || strings.TrimSpace(ch.SessionID.String) == "" || aerr != nil {
 				continue
 			}
-			provider, perr := flowdb.NormalizeSessionProvider(ch.Provider)
+			provider, perr := productdb.NormalizeSessionProvider(ch.Provider)
 			if perr != nil {
 				continue
 			}
 			out = append(out, kbCandidate{
 				slug: ch.Slug, kind: "chat", sessionID: strings.TrimSpace(ch.SessionID.String),
-				task: &flowdb.Task{
+				task: &productdb.Task{
 					Slug: ch.Slug, WorkDir: absRoot, SessionProvider: provider,
 					SessionID: sql.NullString{String: strings.TrimSpace(ch.SessionID.String), Valid: true},
 				},
@@ -213,7 +213,7 @@ func (d *kbDistiller) sweepOne(c kbCandidate, now time.Time) {
 	if err != nil {
 		return
 	}
-	cur, _, _ := flowdb.GetKBCaptureCursor(d.srv.cfg.DB, c.sessionID)
+	cur, _, _ := productdb.GetKBCaptureCursor(d.srv.cfg.DB, c.sessionID)
 	capturedAt := parseRFC3339OrZero(cur.CapturedAt)
 	genuineOffset := latestGenuineUserOffset(entry.entries)
 	if !kbShouldWake(now, entry.mtime, capturedAt, cur.Cursor, genuineOffset, kbDistillIdle(), kbDistillCooldown()) {
@@ -228,7 +228,7 @@ func (d *kbDistiller) sweepOne(c kbCandidate, now time.Time) {
 	// (the prompt holds kbCheckpointMarker; the reply is an assistant turn), so
 	// they cannot move genuineOffset past this point — the checkpoint cannot
 	// re-trigger itself. The next checkpoint fires only when the user speaks again.
-	if err := flowdb.UpsertKBCaptureCursor(d.srv.cfg.DB, flowdb.KBCaptureCursor{
+	if err := productdb.UpsertKBCaptureCursor(d.srv.cfg.DB, productdb.KBCaptureCursor{
 		SessionID:  c.sessionID,
 		Slug:       c.slug,
 		Kind:       c.kind,

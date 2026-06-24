@@ -3,7 +3,7 @@ package server
 import (
 	"database/sql"
 	"errors"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"fmt"
 	"net/http"
 	"os"
@@ -28,7 +28,7 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	if priority == "" {
 		priority = "medium"
 	}
-	permissionMode, err := flowdb.NormalizePermissionMode(req.PermissionMode)
+	permissionMode, err := productdb.NormalizePermissionMode(req.PermissionMode)
 	if err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
@@ -47,7 +47,7 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	}
 	workDir := strings.TrimSpace(req.WorkDir)
 
-	existing, err := flowdb.GetTask(s.cfg.DB, slug)
+	existing, err := productdb.GetTask(s.cfg.DB, slug)
 	if err == nil {
 		return s.createFlowFromExisting(req, existing, provider, permissionMode, priority, project, workDir)
 	}
@@ -60,7 +60,7 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	// so always pass the resolved provider — claude included.
 	args := []string{"add", "task", name, "--slug", slug, "--priority", priority, "--agent", provider}
 	args = append(args, "--permission-mode", permissionMode)
-	if model := flowdb.NormalizeModel(req.Model); model != "" {
+	if model := productdb.NormalizeModel(req.Model); model != "" {
 		args = append(args, "--model", model)
 	}
 	if project != "" {
@@ -94,12 +94,12 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	return actionResponse{OK: true, Message: "created " + slug + "; opening browser terminal", Output: out, Agent: agent, Bridge: true}, http.StatusOK
 }
 
-func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, provider, permissionMode, priority, project, workDir string) (actionResponse, int) {
+func (s *Server) createFlowFromExisting(req actionRequest, task *productdb.Task, provider, permissionMode, priority, project, workDir string) (actionResponse, int) {
 	if task == nil {
 		return actionResponse{OK: false, Message: "task not found"}, http.StatusInternalServerError
 	}
 	if !task.ArchivedAt.Valid && !task.DeletedAt.Valid && task.Status != "done" {
-		if err := flowdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
+		if err := productdb.EnsureTaskStartable(s.cfg.DB, task); err != nil {
 			return actionResponse{OK: false, Message: err.Error()}, taskStartErrorStatus(err)
 		}
 		if req.NoOpen {
@@ -124,7 +124,7 @@ func (s *Server) createFlowFromExisting(req actionRequest, task *flowdb.Task, pr
 	if workDir == "" {
 		return actionResponse{OK: false, Message: "work_dir is required to reactivate " + task.Slug}, http.StatusBadRequest
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	var projectValue any
 	if project != "" {
 		projectValue = project
@@ -233,7 +233,7 @@ func (s *Server) createProject(req actionRequest) (actionResponse, int) {
 		priority = "medium"
 	}
 
-	if _, err := flowdb.GetProject(s.cfg.DB, slug); err == nil {
+	if _, err := productdb.GetProject(s.cfg.DB, slug); err == nil {
 		return actionResponse{OK: false, Message: "project " + slug + " already exists"}, http.StatusConflict
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
@@ -268,7 +268,7 @@ func (s *Server) createPlaybook(req actionRequest) (actionResponse, int) {
 	if workDir == "" {
 		return actionResponse{OK: false, Message: "work_dir is required"}, http.StatusBadRequest
 	}
-	if _, err := flowdb.GetPlaybook(s.cfg.DB, slug); err == nil {
+	if _, err := productdb.GetPlaybook(s.cfg.DB, slug); err == nil {
 		return actionResponse{OK: false, Message: "playbook " + slug + " already exists"}, http.StatusConflict
 	} else if !errors.Is(err, sql.ErrNoRows) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
@@ -335,7 +335,7 @@ func (s *Server) createKB(req actionRequest) (actionResponse, int) {
 	return actionResponse{OK: true, Message: "created KB document " + filename}, http.StatusOK
 }
 
-func (s *Server) createPlaybookRunTask(pb *flowdb.Playbook, provider, permissionMode string) (string, error) {
+func (s *Server) createPlaybookRunTask(pb *productdb.Playbook, provider, permissionMode string) (string, error) {
 	root := strings.TrimSpace(s.cfg.FlowRoot)
 	if root == "" {
 		return "", errors.New("flow root is not configured")
@@ -349,7 +349,7 @@ func (s *Server) createPlaybookRunTask(pb *flowdb.Playbook, provider, permission
 	if err != nil {
 		return "", err
 	}
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	_, err = s.cfg.DB.Exec(
 		`INSERT INTO tasks (
 				slug, name, project_slug, status, kind, playbook_slug, priority,
@@ -429,7 +429,7 @@ func (s *Server) availableTaskSlug(base string) string {
 		if err := validateSlug(slug); err != nil {
 			return base
 		}
-		_, err := flowdb.GetTask(s.cfg.DB, slug)
+		_, err := productdb.GetTask(s.cfg.DB, slug)
 		if errors.Is(err, sql.ErrNoRows) {
 			return slug
 		}
@@ -501,12 +501,12 @@ func (s *Server) overviewChat(req actionRequest) (actionResponse, int) {
 	// started, so a DB hiccup must not fail the launch — log and continue,
 	// mirroring the best-effort style of persistFloatingLocked.
 	if s.cfg.DB != nil {
-		now := flowdb.NowISO()
+		now := productdb.NowISO()
 		var sid sql.NullString
 		if launch.SessionID != "" {
 			sid = sql.NullString{String: launch.SessionID, Valid: true}
 		}
-		if err := flowdb.InsertChat(s.cfg.DB, flowdb.Chat{
+		if err := productdb.InsertChat(s.cfg.DB, productdb.Chat{
 			Slug:           launch.Slug,
 			Title:          deriveChatTitle(prompt),
 			Provider:       launch.Provider,

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func surfaceTestDB(t *testing.T) *sql.DB {
@@ -38,7 +39,7 @@ func TestSurfaceCardRejectsForeignThreadKey(t *testing.T) {
 	if !surfaced || id == "" {
 		t.Fatalf("want a surfaced card, got surfaced=%v id=%q", surfaced, id)
 	}
-	got, err := flowdb.GetFeedItem(db, id)
+	got, err := productdb.GetFeedItem(db, id)
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -49,7 +50,7 @@ func TestSurfaceCardRejectsForeignThreadKey(t *testing.T) {
 
 func TestSurfaceCardMergesIntoOpenCard(t *testing.T) {
 	db := surfaceTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID:              "a1",
 		Source:          "slack",
 		ThreadKey:       "C1:50.0",
@@ -60,7 +61,7 @@ func TestSurfaceCardMergesIntoOpenCard(t *testing.T) {
 		Author:          "U1",
 		TS:              "50.0",
 		Status:          "new",
-		CreatedAt:       flowdb.NowISO(),
+		CreatedAt:       productdb.NowISO(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestSurfaceCardContextOnlyDoesNotSurface(t *testing.T) {
 	if surfaced || id != "" {
 		t.Errorf("context_only must not surface, got surfaced=%v id=%q", surfaced, id)
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		t.Fatalf("ListFeedItems: %v", err)
 	}
@@ -115,7 +116,7 @@ func TestSurfaceCardContextOnlyDoesNotSurface(t *testing.T) {
 
 func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
 	db := surfaceTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID:              "a1",
 		Source:          "slack",
 		ThreadKey:       "C1:50.0",
@@ -127,7 +128,7 @@ func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
 		Author:          "U1",
 		TS:              "50.0",
 		Status:          "new",
-		CreatedAt:       flowdb.NowISO(),
+		CreatedAt:       productdb.NowISO(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
 	if !surfaced || id != "a1" {
 		t.Fatalf("context_only should refresh existing card a1, got surfaced=%v id=%q", surfaced, id)
 	}
-	got, err := flowdb.GetFeedItem(db, "a1")
+	got, err := productdb.GetFeedItem(db, "a1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
 	if surfaced || id != "" {
 		t.Fatalf("missing context_only card must no-op, got surfaced=%v id=%q", surfaced, id)
 	}
-	items, err := flowdb.ListFeedItems(db, "new")
+	items, err := productdb.ListFeedItems(db, "new")
 	if err != nil {
 		t.Fatalf("ListFeedItems: %v", err)
 	}
@@ -186,7 +187,7 @@ func TestSurfaceCardContextOnlyRefreshesExistingCardOnly(t *testing.T) {
 
 func TestSurfaceCardContextOnlyDropResolvesExistingCard(t *testing.T) {
 	db := surfaceTestDB(t)
-	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+	if _, err := productdb.UpsertFeedItem(db, productdb.FeedItem{
 		ID:              "a1",
 		Source:          "slack",
 		ThreadKey:       "C1:50.0",
@@ -197,7 +198,7 @@ func TestSurfaceCardContextOnlyDropResolvesExistingCard(t *testing.T) {
 		Author:          "U1",
 		TS:              "50.0",
 		Status:          "new",
-		CreatedAt:       flowdb.NowISO(),
+		CreatedAt:       productdb.NowISO(),
 	}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
@@ -218,7 +219,7 @@ func TestSurfaceCardContextOnlyDropResolvesExistingCard(t *testing.T) {
 	if surfaced || id != "a1" {
 		t.Fatalf("drop should resolve existing card a1 without surfacing, got surfaced=%v id=%q", surfaced, id)
 	}
-	got, err := flowdb.GetFeedItem(db, "a1")
+	got, err := productdb.GetFeedItem(db, "a1")
 	if err != nil {
 		t.Fatalf("GetFeedItem: %v", err)
 	}

@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"flow/internal/inbox"
 	"os"
 	"strings"
 )
@@ -99,12 +100,7 @@ func SelfUserIDs() []string {
 // The corresponding flow task tag is "slack-thread:<key>" — see the
 // integration layer for the tag-vs-lookup helpers.
 func ThreadKey(channel, threadTS string) string {
-	channel = strings.TrimSpace(channel)
-	threadTS = strings.TrimSpace(threadTS)
-	if channel == "" || threadTS == "" {
-		return ""
-	}
-	return channel + ":" + threadTS
+	return inbox.ThreadKey(channel, threadTS)
 }
 
 // ReactionDecision is the output of DecideReaction: a small struct the

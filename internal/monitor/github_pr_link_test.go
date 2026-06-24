@@ -29,6 +29,15 @@ func TestLinkInProgressTaskPRsTagsWorktreePR(t *testing.T) {
 		return "", errors.New("no pr")
 	}
 
+	// Tagging now routes through `flow update task --tag` exec (core table).
+	// Stub it to perform the real tag insert so the tag assertion still holds.
+	origTag := tagFlowTask
+	defer func() { tagFlowTask = origTag }()
+	tagFlowTask = func(_ context.Context, slug, tag string) error {
+		_, err := db.Exec(`INSERT OR IGNORE INTO task_tags (task_slug, tag, created_at) VALUES (?,?,?)`, slug, flowdb.NormalizeTag(tag), flowdb.NowISO())
+		return err
+	}
+
 	linkInProgressTaskPRs(context.Background(), db)
 
 	tags, err := flowdb.GetTaskTags(db, "wt-task")
@@ -63,6 +72,15 @@ func TestLinkInProgressIssuePRsTagsLinkedPRs(t *testing.T) {
 	ghOpenPRsForIssue = func(_ context.Context, owner, repo string, number int, _ []string) ([]int, error) {
 		gotOwner, gotRepo, gotNumber = owner, repo, number
 		return []int{156, 158}, nil // one issue, several PRs
+	}
+
+	// Tagging routes through `flow update task --tag` exec; stub it to perform
+	// the real tag insert so the per-PR tag assertions below still hold.
+	origTag := tagFlowTask
+	defer func() { tagFlowTask = origTag }()
+	tagFlowTask = func(_ context.Context, slug, tag string) error {
+		_, err := db.Exec(`INSERT OR IGNORE INTO task_tags (task_slug, tag, created_at) VALUES (?,?,?)`, slug, flowdb.NormalizeTag(tag), flowdb.NowISO())
+		return err
 	}
 
 	linkInProgressIssuePRs(context.Background(), db, []string{"vishnukv-facets"})

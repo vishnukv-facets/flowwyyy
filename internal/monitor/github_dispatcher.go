@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/ghref"
-	"flow/internal/workdirreg"
+	"flow/internal/gitremote"
 )
 
 // resolveProjectForRepo returns the slug of the single active (non-archived)
@@ -23,7 +23,7 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 	if db == nil || repoKey == "" {
 		return "", false
 	}
-	projects, err := flowdb.ListProjects(db, flowdb.ProjectFilter{IncludeArchived: false})
+	projects, err := productdb.ListProjects(db, productdb.ProjectFilter{IncludeArchived: false})
 	if err != nil {
 		return "", false
 	}
@@ -33,7 +33,7 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 		if p == nil || strings.TrimSpace(p.WorkDir) == "" {
 			continue
 		}
-		slug, ok := ghref.RepoFromRemote(workdirreg.DetectGitRemote(p.WorkDir))
+		slug, ok := ghref.RepoFromRemote(gitremote.DetectGitRemote(p.WorkDir))
 		if !ok || slug != repoKey {
 			continue
 		}
@@ -79,7 +79,7 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 		return nil
 	}
 	if key := ev.EventKeyValue(); key != "" {
-		seen, err := flowdb.HasGitHubEvent(d.DB, key)
+		seen, err := productdb.HasGitHubEvent(d.DB, key)
 		if err != nil {
 			return err
 		}
@@ -299,14 +299,14 @@ func (d *GitHubDispatcher) dispatchGitHubClosed(ev GitHubEvent) error {
 }
 
 func (d *GitHubDispatcher) findTaskByGitHubTag(tag string) (string, bool, error) {
-	tag = flowdb.NormalizeTag(tag)
+	tag = productdb.NormalizeTag(tag)
 	if tag == "" {
 		return "", false, nil
 	}
 	// IncludeArchived: route new GitHub activity to the existing (possibly
 	// archived) task for this PR/issue rather than spawning a duplicate.
 	// Archiving declutters the active list; it doesn't stop tracking the thread.
-	tasks, err := flowdb.ListTasks(d.DB, flowdb.TaskFilter{Tag: tag, IncludeArchived: true})
+	tasks, err := productdb.ListTasks(d.DB, productdb.TaskFilter{Tag: tag, IncludeArchived: true})
 	if err != nil {
 		return "", false, err
 	}
@@ -342,7 +342,7 @@ func (d *GitHubDispatcher) findTaskByGitHubTag(tag string) (string, bool, error)
 // agent session outranks an in-progress task, which outranks any other open
 // task, which outranks a done one. Same shape as the inbox "Open session"
 // expectation — the session the operator opened the PR from.
-func githubTaskRoutingScore(t *flowdb.Task) int {
+func githubTaskRoutingScore(t *productdb.Task) int {
 	if t.Status == "done" {
 		return 0 // tracked but finished — still beats nothing, never a stub
 	}
@@ -400,11 +400,11 @@ func (d *GitHubDispatcher) recordEvent(ev GitHubEvent, slug string) error {
 	}
 	taskSlug := strings.TrimSpace(slug)
 	if taskSlug != "" {
-		if _, err := flowdb.GetTask(d.DB, taskSlug); err != nil {
+		if _, err := productdb.GetTask(d.DB, taskSlug); err != nil {
 			taskSlug = ""
 		}
 	}
-	_, err := flowdb.RecordGitHubEvent(d.DB, flowdb.GitHubEventLogEntry{
+	_, err := productdb.RecordGitHubEvent(d.DB, productdb.GitHubEventLogEntry{
 		EventKey:  key,
 		EventKind: string(ev.Kind),
 		TaskSlug:  taskSlug,
@@ -425,7 +425,7 @@ func (d *GitHubDispatcher) recordHeadSHASeen(ev GitHubEvent, slug string) error 
 }
 
 func (d *GitHubDispatcher) reopenTaskForGitHubReview(slug string) error {
-	now := flowdb.NowISO()
+	now := productdb.NowISO()
 	res, err := d.DB.Exec(
 		`UPDATE tasks
 		 SET status = CASE WHEN status = 'done' THEN 'backlog' ELSE status END,
@@ -543,7 +543,7 @@ func renderGitHubProjectPicker(slug string, projects []projectChoice) string {
 	b.WriteString("   flow update task " + slug + " --clear-project\n")
 	b.WriteString("   ```\n\n")
 	if len(projects) == 0 {
-		b.WriteString("_No active projects found in flowdb. Ask the operator whether to leave this task as adhoc._\n")
+		b.WriteString("_No active projects found in productdb. Ask the operator whether to leave this task as adhoc._\n")
 		return b.String()
 	}
 	b.WriteString("**Available projects** (active, non-archived):\n\n")

@@ -3,11 +3,12 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
-	"flow/internal/briefing"
+	"flow/internal/productbriefing"
 	"net/http"
 	"sync"
 	"time"
 
+	"flow/internal/flowclient"
 	"flow/internal/monitor"
 	"flow/internal/steering"
 )
@@ -17,7 +18,13 @@ type Config struct {
 	FlowRoot    string
 	Version     string
 	CommandPath string
-	HookURL     string
+	// Flow is the resolved core `flow` binary the server execs for every
+	// mutation/launch (the decoupling seam: writes go through `flow`, reads
+	// stay in-process). Set by cmd/flowwyyy from flowclient.Resolve(); in the
+	// single composed binary / tests it equals CommandPath. runFlowCommand
+	// prefers Flow.Bin and falls back to CommandPath when unset.
+	Flow    flowclient.Client
+	HookURL string
 	// DisableQuote turns off the anime quote beside the Mission Control
 	// greeting (flow ui serve --no-quote). The endpoint then returns an empty
 	// quote, which the UI hides — falling back to the static subtitle.
@@ -34,7 +41,7 @@ type Server struct {
 	pairing *pairingStore
 	// remoteLimiter throttles pairing redemption + failed device-token auth.
 	// Always non-nil after New().
-	remoteLimiter *rateLimiter
+	remoteLimiter  *rateLimiter
 	terminals      *terminalHub
 	events         *eventHub
 	reconcile      *livenessReconciler
@@ -701,13 +708,13 @@ type WorkdirView struct {
 }
 
 type OverviewView struct {
-	LiveSessions        []TaskView        `json:"live_sessions"`
-	InFlight            []TaskView        `json:"in_flight"`
-	HighPriorityBacklog []TaskView        `json:"high_priority_backlog"`
-	Waiting             []TaskView        `json:"waiting"`
-	Stale               []TaskView        `json:"stale"`
-	ActivePlaybooks     []PlaybookView    `json:"active_playbooks"`
-	Briefing            briefing.Briefing `json:"briefing"`
+	LiveSessions        []TaskView               `json:"live_sessions"`
+	InFlight            []TaskView               `json:"in_flight"`
+	HighPriorityBacklog []TaskView               `json:"high_priority_backlog"`
+	Waiting             []TaskView               `json:"waiting"`
+	Stale               []TaskView               `json:"stale"`
+	ActivePlaybooks     []PlaybookView           `json:"active_playbooks"`
+	Briefing            productbriefing.Briefing `json:"briefing"`
 }
 
 type SearchResponse struct {

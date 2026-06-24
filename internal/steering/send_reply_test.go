@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 func TestSendReplyViaAgent(t *testing.T) {
@@ -24,11 +25,11 @@ func TestSendReplyViaAgent(t *testing.T) {
 	}
 	t.Cleanup(func() { sendReplyRunner = old })
 
-	item := flowdb.FeedItem{
+	item := productdb.FeedItem{
 		ID: "sr1", Source: "slack", ThreadKey: "C_eng:1700000000.000100",
 		SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
 	}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -42,7 +43,7 @@ func TestSendReplyViaAgent(t *testing.T) {
 		t.Errorf("prompt should carry operator instructions:\n%s", gotPrompt)
 	}
 	// No task spawned; feed row acted with empty linked_task.
-	got, _ := flowdb.GetFeedItem(db, "sr1")
+	got, _ := productdb.GetFeedItem(db, "sr1")
 	if got.Status != "acted" {
 		t.Errorf("status = %q, want acted", got.Status)
 	}
@@ -64,15 +65,15 @@ func TestSendReplyViaAgentErrorLeavesCard(t *testing.T) {
 	}
 	t.Cleanup(func() { sendReplyRunner = old })
 
-	item := flowdb.FeedItem{ID: "sr2", Source: "slack", ThreadKey: "C:2.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
-	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+	item := productdb.FeedItem{ID: "sr2", Source: "slack", ThreadKey: "C:2.1", SuggestedAction: "reply", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}
+	if _, err := productdb.UpsertFeedItem(db, item); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := SendReplyViaAgent(context.Background(), db, item, "hi", ""); err == nil {
 		t.Fatal("expected an error when the agent reports it could not post")
 	}
 	// Card must remain 'new' so the operator can retry.
-	if got, _ := flowdb.GetFeedItem(db, "sr2"); got.Status != "new" {
+	if got, _ := productdb.GetFeedItem(db, "sr2"); got.Status != "new" {
 		t.Errorf("status = %q, want new (unresolved on failure)", got.Status)
 	}
 }

@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 )
 
 const maxBrainGraphActionBodyBytes = 64 * 1024
@@ -97,7 +97,7 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 	nodeID = strings.TrimSpace(nodeID)
 	if slug, ok := strings.CutPrefix(nodeID, "task:"); ok {
 		slug = strings.TrimSpace(slug)
-		task, err := flowdb.GetTask(db, slug)
+		task, err := productdb.GetTask(db, slug)
 		if err != nil {
 			return brainGraphActionNode{}, err
 		}
@@ -113,7 +113,7 @@ func resolveBrainGraphActionNode(db *sql.DB, nodeID string) (brainGraphActionNod
 	return brainGraphActionNode{}, sql.ErrNoRows
 }
 
-func brainGraphTaskIsActionable(task *flowdb.Task) bool {
+func brainGraphTaskIsActionable(task *productdb.Task) bool {
 	return task != nil && !task.ArchivedAt.Valid && !task.DeletedAt.Valid
 }
 

@@ -1,16 +1,56 @@
 package flowdb
 
-// This file holds the DDL constants for flow.db, split out of db.go.
-// These are raw-string consts and need no imports.
+import "database/sql"
 
-// schemaDDL is the full DDL for flow.db. Each statement is idempotent
-// (CREATE ... IF NOT EXISTS) so OpenDB can run this on every startup.
+// This file holds the DDL constants for flow.db, split out of db.go, plus the
+// migration-set registry that lets the product layer (flowwyyy) layer its own
+// tables onto the shared DB without core ever knowing about them.
+//
+// Core owns coreSchemaDDL (tasks/projects/playbooks/owners/search/etc.). The
+// product layer registers a MigrationSet via RegisterMigrations (from its own
+// package's init()); OpenDB applies coreSchemaDDL + core migrations and then
+// every registered set. A core-only binary that never imports the product
+// package therefore creates a core-only DB — see TestCoreSchemaOmitsProductTables.
+
+// MigrationSet is a self-contained, idempotent schema unit (DDL + ALTERs +
+// legacy drops) for one ownership domain. OpenDB runs each registered set
+// after the core schema + core migrations land, so a set may reference core
+// tables (e.g. a FOREIGN KEY to tasks).
+type MigrationSet struct {
+	Domain string
+	Apply  func(db *sql.DB) error
+}
+
+var registeredSets []MigrationSet
+
+// RegisterMigrations registers a product (non-core) migration set. Intended to
+// be called from a package init() so the set is present before any OpenDB call
+// in that binary. Ordering across multiple sets follows registration order.
+//
+// Registration is idempotent per Domain: a set whose Domain is already
+// registered is ignored. This lets independent product packages (e.g.
+// internal/monitor and internal/steering, which each register the "flowwyyy"
+// set from their own init() during the T13 transition) register safely without
+// applying the same DDL twice at OpenDB.
+func RegisterMigrations(set MigrationSet) {
+	for _, s := range registeredSets {
+		if s.Domain == set.Domain {
+			return
+		}
+	}
+	registeredSets = append(registeredSets, set)
+}
+
+// coreSchemaDDL is the core DDL for flow.db. Each statement is idempotent
+// (CREATE ... IF NOT EXISTS) so OpenDB can run this on every startup. Product
+// tables (attention_*/steering_*/github_*/chats/remote_devices/pending_sends/
+// kb_capture) are NOT here — they live in internal/productdb's registered set.
 //
 // Note on NULL-safe equality: SQLite's `IS` operator treats NULLs as
 // equal (NULL IS NULL → true, 'x' IS 'x' → true). Code that needs
 // optimistic-lock updates against a preSessionID that may be NULL
 // should use `WHERE session_id IS ?` rather than `= ?`.
-const schemaDDL = `
+const coreSchemaDDL = `
 CREATE TABLE IF NOT EXISTS projects (
     slug          TEXT PRIMARY KEY,
     name          TEXT NOT NULL,
@@ -137,30 +177,6 @@ CREATE TABLE IF NOT EXISTS workdirs (
 	    archived_at       TEXT
 	);
 
-	CREATE TABLE IF NOT EXISTS github_event_log (
-    event_key    TEXT PRIMARY KEY,
-    event_kind   TEXT NOT NULL,
-    task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
-    raw_json     TEXT,
-    processed_at TEXT NOT NULL
-);
-
--- github_webhook_deliveries is the raw delivery audit/idempotency log keyed on
--- X-GitHub-Delivery. It sits in front of github_event_log: delivery_id guards
--- against GitHub redelivering the same payload, while github_event_log dedupes
--- at the normalized-event level (and across the polling transport).
-CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
-    delivery_id  TEXT PRIMARY KEY,
-    event_type   TEXT NOT NULL,
-    action       TEXT,
-    status       TEXT NOT NULL,
-    error        TEXT,
-    task_slug    TEXT,
-    event_count  INTEGER NOT NULL DEFAULT 0,
-    received_at  TEXT NOT NULL,
-    processed_at TEXT
-);
-
 CREATE TABLE IF NOT EXISTS agent_runtime_states (
     provider     TEXT NOT NULL CHECK (provider IN ('claude','codex')),
     session_id   TEXT NOT NULL,
@@ -186,29 +202,6 @@ CREATE TABLE IF NOT EXISTS pending_wakes (
     prompt     TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
-
--- Outbound Slack sends to channels OUTSIDE the operator's org (Slack Connect /
--- cross-workspace) are parked here for the operator's explicit approval instead
--- of going out directly — the external-channel send gate. Every path (manual
--- CLI, agent session, auto-permit, steerer) routes through the server send
--- handler, which enqueues an external send as 'pending'; only the operator's
--- inbox approval actually posts it. See internal/server/slack_send.go.
-CREATE TABLE IF NOT EXISTS pending_sends (
-    id            TEXT PRIMARY KEY,
-    channel       TEXT NOT NULL,
-    channel_label TEXT,
-    thread_ts     TEXT,
-    text          TEXT NOT NULL,
-    identity      TEXT,
-    file_path     TEXT,
-    post_at       INTEGER NOT NULL DEFAULT 0,
-    reason        TEXT,
-    origin        TEXT,
-    status        TEXT NOT NULL DEFAULT 'pending',
-    created_at    TEXT NOT NULL,
-    decided_at    TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_pending_sends_status ON pending_sends(status, created_at);
 
 -- Many-to-many task dependencies. A child can depend on N parents;
 -- the start-blocker logic requires all non-deleted parents to be done.
@@ -248,142 +241,6 @@ CREATE TABLE IF NOT EXISTS search_docs (
     source_mtime  TEXT NOT NULL,
     content       TEXT NOT NULL,
     updated_at    TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS attention_feed (
-    id                 TEXT PRIMARY KEY,
-    source             TEXT NOT NULL,
-    thread_key         TEXT NOT NULL,
-    summary            TEXT NOT NULL DEFAULT '',
-    suggested_action   TEXT NOT NULL,
-    matched_task       TEXT,
-    suggested_project  TEXT,
-    suggested_priority TEXT,
-    urgency            TEXT,
-    is_vip             INTEGER NOT NULL DEFAULT 0,
-    confidence         REAL NOT NULL DEFAULT 0,
-    draft              TEXT,
-    reason             TEXT,
-    context_json       TEXT,
-    channel            TEXT,
-    channel_type       TEXT,
-    author             TEXT,
-    ts                 TEXT,
-    team_id            TEXT,
-    url                TEXT,
-    status             TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','acted','dismissed','snoozed','deferred')),
-    snooze_until       TEXT,
-    linked_task        TEXT,
-    retriaging_at      TEXT,
-    created_at         TEXT NOT NULL,
-    acted_at           TEXT
-);
-
-CREATE TABLE IF NOT EXISTS attention_feedback (
-    id                 TEXT PRIMARY KEY,
-    feed_item_id       TEXT NOT NULL,
-    source             TEXT NOT NULL,
-    channel            TEXT,
-    author             TEXT,
-    thread_type        TEXT,
-    thread_key         TEXT NOT NULL,
-    suggested_action   TEXT NOT NULL,
-    final_action       TEXT NOT NULL,
-    outcome            TEXT NOT NULL,
-    confidence         REAL NOT NULL DEFAULT 0,
-    confidence_band    TEXT NOT NULL,
-    draft_before       TEXT,
-    draft_after        TEXT,
-    draft_edit_delta   TEXT,
-    created_at         TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS attention_handoffs (
-    id                 TEXT PRIMARY KEY,
-    feed_item_id       TEXT NOT NULL,
-    sender             TEXT NOT NULL,
-    receiver           TEXT NOT NULL,
-    context            TEXT NOT NULL,
-    requested_verdict  TEXT NOT NULL,
-    status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','accepted','declined','timeout')),
-    reason             TEXT,
-    requested_at       TEXT NOT NULL,
-    expires_at         TEXT NOT NULL,
-    responded_at       TEXT
-);
-
--- Persistent per-thread "running understanding" for the attention router
--- (task steerer-thread-memory). Unlike attention_feed — whose coalescing upsert
--- overwrites every verdict field per event — this row ACCUMULATES across events
--- for one thread_key: the current decision, a rolling summary, the operator
--- actions taken on the thread, the operator's own replies seen, and the
--- last-seen source ts. It lives in its own table so it outlives any single card
--- and dismissal/re-surface cycles; the feed's coalescing behavior is unchanged.
--- PK on thread_key covers every lookup.
-CREATE TABLE IF NOT EXISTS attention_thread_state (
-    thread_key         TEXT PRIMARY KEY,
-    source             TEXT NOT NULL DEFAULT '',
-    current_action     TEXT,
-    current_confidence REAL NOT NULL DEFAULT 0,
-    current_reason     TEXT,
-    summary            TEXT NOT NULL DEFAULT '',
-    operator_actions   TEXT NOT NULL DEFAULT '[]',
-    operator_replies   TEXT NOT NULL DEFAULT '[]',
-    operator_corrections TEXT NOT NULL DEFAULT '[]',
-    event_count        INTEGER NOT NULL DEFAULT 0,
-    last_seen_ts       TEXT,
-    first_seen_at      TEXT NOT NULL,
-    updated_at         TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS steering_trace (
-    id                TEXT PRIMARY KEY,
-    created_at        TEXT NOT NULL,
-    origin            TEXT NOT NULL DEFAULT 'live',
-    source            TEXT NOT NULL DEFAULT '',
-    channel           TEXT,
-    channel_type      TEXT,
-    author            TEXT,
-    thread_key        TEXT,
-    text_preview      TEXT,
-    disposition       TEXT NOT NULL,
-    stage_reached     TEXT NOT NULL,
-    drop_reason       TEXT,
-    stage1_relevant   INTEGER,
-    stage1_reason     TEXT,
-    stage2_action     TEXT,
-    stage2_confidence REAL,
-    stage3_action     TEXT,
-    stage3_confidence REAL,
-    final_action      TEXT,
-    final_confidence  REAL,
-    feed_item_id      TEXT,
-    error             TEXT,
-    autonomy_action   TEXT,
-    autonomy_decision TEXT,
-    autonomy_reason   TEXT,
-    latency_ms        INTEGER NOT NULL DEFAULT 0,
-    model             TEXT,
-    ts                TEXT,
-    team_id           TEXT,
-    url               TEXT
-);
-
--- Operator-set permanent suppressions for the attention router. scope is
--- 'channel' (Slack channel id / owner/repo), 'author' (Slack user id / GitHub
--- login), or 'thread' (a thread key). Stage 0 drops any event matching a row
--- here, so "perma drop" from a feed card takes effect on the next event.
-CREATE TABLE IF NOT EXISTS steering_mutes (
-    scope      TEXT NOT NULL,
-    value      TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    PRIMARY KEY (scope, value)
-);
-
-CREATE TABLE IF NOT EXISTS steering_watermark (
-    channel    TEXT PRIMARY KEY,
-    last_ts    TEXT NOT NULL,
-    updated_at TEXT NOT NULL
 );
 
 -- Two FTS indexes over search_docs, partitioned by scope. Transcripts are
@@ -439,7 +296,6 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_tags_tag    ON task_tags(tag);
-CREATE INDEX IF NOT EXISTS idx_github_event_log_task ON github_event_log(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);
@@ -449,64 +305,12 @@ CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_slug);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_family_started ON brain_runs(family_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_task_started ON brain_runs(task_slug, started_at DESC, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_brain_runs_status_updated ON brain_runs(status, updated_at DESC);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_feed ON steering_trace(feed_item_id);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_created ON steering_trace(created_at);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_created_id ON steering_trace(created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering_trace(disposition, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
-CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
-CREATE INDEX IF NOT EXISTS idx_attention_feed_thread ON attention_feed(thread_key);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_feed ON attention_feedback(feed_item_id);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_created ON attention_feedback(created_at);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_channel ON attention_feedback(channel);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_author ON attention_feedback(author);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_action ON attention_feedback(suggested_action);
-CREATE INDEX IF NOT EXISTS idx_attention_feedback_band ON attention_feedback(confidence_band);
-CREATE INDEX IF NOT EXISTS idx_attention_handoffs_feed ON attention_handoffs(feed_item_id);
-CREATE INDEX IF NOT EXISTS idx_attention_handoffs_receiver ON attention_handoffs(receiver);
-CREATE INDEX IF NOT EXISTS idx_attention_handoffs_status ON attention_handoffs(status);
-CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
-
-CREATE TABLE IF NOT EXISTS chats (
-    slug             TEXT PRIMARY KEY,
-    title            TEXT NOT NULL,
-    provider         TEXT NOT NULL,
-    origin           TEXT NOT NULL,
-    session_id       TEXT,
-    created_at       TEXT NOT NULL,
-    last_activity_at TEXT NOT NULL,
-    archived_at      TEXT,
-    deleted_at       TEXT,
-    muted_at         TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_chats_last_activity ON chats(last_activity_at DESC);
-
-CREATE TABLE IF NOT EXISTS kb_capture (
-    session_id   TEXT PRIMARY KEY,
-    slug         TEXT NOT NULL,
-    kind         TEXT NOT NULL,
-    cursor       INTEGER NOT NULL DEFAULT 0,
-    captured_at  TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS remote_devices (
-    id            TEXT PRIMARY KEY,
-    label         TEXT NOT NULL,
-    token_hash    TEXT NOT NULL UNIQUE,
-    created_at    TEXT NOT NULL,
-    expires_at    TEXT NOT NULL,
-    last_seen_at  TEXT,
-    revoked_at    TEXT
-);
 	`
 
 // indexesPostMigrate are indexes that depend on columns added by
-// runMigrations. Running them in schemaDDL before migrations would fail
+// runMigrations. Running them in coreSchemaDDL before migrations would fail
 // against an existing pre-migration DB ("no such column"), so they live
 // here and run AFTER migrations land.
 const indexesPostMigrate = `
