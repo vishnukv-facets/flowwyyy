@@ -188,7 +188,11 @@ func cmdSkill(args []string) int {
 			fmt.Fprintln(os.Stderr, "error: skill print takes no arguments")
 			return 2
 		}
-		_, err := os.Stdout.Write(embeddedCoreSkill)
+		// embeddedSkill is the core-only fragment in the core binary, and the
+		// composed core+product skill in the flowwyyy binary (set via
+		// SetEmbeddedSkill). So `flow skill print` stays core-only while
+		// `flowwyyy skill print` emits the full composed skill.
+		_, err := os.Stdout.Write(embeddedSkill)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: write skill: %v\n", err)
 			return 1
