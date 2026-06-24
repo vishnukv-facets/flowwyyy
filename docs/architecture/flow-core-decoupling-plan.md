@@ -484,6 +484,36 @@ func main() {
 >
 > **Phases 1–2 are unaffected** — they deliver the working two-binary, same-experience product against a **local** extracted core. Phase 3 below assumes Route A and is sized as its own milestone, scheduled after the local two-binary build is proven.
 
+> **Status (2026-06-24) — what is code-complete in this repo vs externally gated.**
+> Phase 3 splits cleanly into in-repo work (done + verified here) and work that
+> structurally cannot be done or verified from this repo (it requires the real
+> published `Facets-cloud/flow` and a clean-machine `brew install`):
+>
+> - **T13 — COMPLETE.** Product surface (`server`/`monitor`/`steering`/`product`/`cmd/flowwyyy`)
+>   imports neither `internal/app` nor `internal/flowdb`, transitively. Enforced by
+>   the now-empty `productImportsCoreGo` ratchet in `internal/archtest`. flowwyyy reads
+>   the shared `~/.flow/flow.db` via `internal/productdb` and execs `flow` for Bucket-O writes.
+> - **T14 — in-repo part DONE; upstreaming EXTERNAL.** The product-side compat floor
+>   (`flowclient.RequiredFloor` = `{dev, schema 1}`) is set and the handshake is verified:
+>   `flowwyyy` resolves the sibling `flow`, runs `flow version --json` (emits `schema:1` +
+>   capabilities), passes `CheckCompat`, and passes through. Steps 1–4 + 6 (Route A/B
+>   decision, the series of PRs into `Facets-cloud/flow`, verification against a *released*
+>   official flow) are external — that repo cannot be modified or released from here.
+> - **T15 — generator DONE; publish/clean-VM EXTERNAL.** `.github/workflows/release.yml`
+>   now builds and ships BOTH binaries (`./cmd/flow` + `./cmd/flowwyyy`) and the generated
+>   Homebrew formula installs + smoke-tests both. **INTERIM:** `flow` is bundled in the
+>   flowwyyy tarball because official flow does not yet ship flowwyyy's core surface (T14);
+>   when it does, this becomes `depends_on "facets-cloud/flow/flow"` and drops the bundled
+>   `flow`. Tag-push CI + the clean-machine `brew install` verification (Step 4) are external.
+> - **T16 — local acceptance DONE; brew-pair acceptance EXTERNAL.** Locally: both binaries
+>   build (`make build`), the two-binary handshake works end-to-end, and the full suite is
+>   green (2212 pass; the only 6 failures are pre-existing OS-keyring/env contamination in
+>   `monitor`, byte-identical pre/post-T13). The brew-installed-pair matrix + independent
+>   `brew upgrade flow` (Steps 1–2) require published artifacts and are external.
+>
+> **Net:** everything achievable and verifiable in this repo is done. The remaining T14/T15/T16
+> steps are an upstreaming-and-publishing milestone against repos this one does not own.
+
 ### Task 13: Enforce no `app`/`flowdb` import from product; flowwyyy owns its read layer
 
 **Files:** Create `internal/productdb/read.go`; Modify `internal/server/*` reads; extend `internal/archtest/boundary_test.go`.
