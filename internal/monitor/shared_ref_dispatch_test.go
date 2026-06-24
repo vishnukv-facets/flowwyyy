@@ -16,6 +16,15 @@ func TestDispatcher_ForwardedMessageRoutesViaSharedRef(t *testing.T) {
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
 	defer restore()
+	// waiting_on clears via `flow update task --clear-waiting` exec (Bucket-O
+	// write, seam §11); with no `flow` on PATH (e.g. CI) that exec fails. Stub it
+	// to clear directly in the test DB, mirroring waiting_resolve_test.go.
+	origClear := clearFlowTaskWaiting
+	defer func() { clearFlowTaskWaiting = origClear }()
+	clearFlowTaskWaiting = func(slug string) error {
+		_, err := db.Exec(`UPDATE tasks SET waiting_on=NULL, updated_at=? WHERE slug=?`, flowdb.NowISO(), slug)
+		return err
+	}
 
 	// Task is anchored on the engineering-team thread and is blocked.
 	seedSlackTask(t, db, "eng-task", "C_eng:1700000000.000100")

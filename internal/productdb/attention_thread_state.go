@@ -72,8 +72,6 @@ type ThreadDecision struct {
 	At         string // RFC3339
 }
 
-// GetThreadState loads the running understanding for a thread. The bool is false
-// (with a zero ThreadState and nil error) when no row exists yet.
 // ThreadCursor is the minimal (thread_key, last_seen_ts) pair the steerer backfill
 // needs to gap-recover a watched thread that has no slack-reply task. last_seen_ts
 // is the newest message ts the steerer recorded for the thread — the floor to
@@ -111,6 +109,8 @@ func ListRecentSlackThreadCursors(db *sql.DB, limit int) ([]ThreadCursor, error)
 	return out, rows.Err()
 }
 
+// GetThreadState loads the running understanding for a thread. The bool is false
+// (with a zero ThreadState and nil error) when no row exists yet.
 func GetThreadState(db *sql.DB, threadKey string) (ThreadState, bool, error) {
 	var s ThreadState
 	var action, reason, lastSeen sql.NullString
