@@ -445,6 +445,22 @@ func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
 	}
 }
 
+func TestSkillDocumentsSlackReadFallback(t *testing.T) {
+	got := string(embeddedSkill)
+	for _, want := range []string{
+		"standalone read fallback",
+		"flow slack history",
+		"flow slack thread",
+		"flow slack search-users",
+		"flow slack search <query>",
+		"search:read",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("skill missing Slack read fallback guidance %q", want)
+		}
+	}
+}
+
 func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
 	got := string(embeddedSkill)
 	for _, bad := range []string{

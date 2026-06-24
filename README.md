@@ -725,6 +725,8 @@ oauth_config:
       - channels:read
       - groups:read
       - users:read
+      - users:read.email     # exact email lookup for flow slack user/search-users
+      - search:read          # message search via flow slack search
       - files:read
       - chat:write           # post AS you (only if you enable writes)
       - files:write

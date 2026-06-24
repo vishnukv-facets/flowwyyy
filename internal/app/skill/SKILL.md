@@ -2795,6 +2795,15 @@ under the `tags:` line), follow this bootstrap:
    use the Slack MCP tools — primarily
    `mcp__claude_ai_Slack__slack_read_thread` against the channel +
    thread_ts in your brief.
+   If the Slack MCP connector is unavailable or stale, use Flow's
+   standalone read fallback instead: `flow slack history --channel <c>`,
+   `flow slack thread --channel <c> --ts <thread_ts>`,
+   `flow slack search-users <query>`, `flow slack user --id <U...>`,
+   `flow slack list-channels`, `flow slack members --channel <c>`,
+   `flow slack reactions --channel <c> --ts <ts>`, and
+   `flow slack search <query>`. These commands hydrate Slack tokens from
+   the OS keyring and support `--format json` for agent-readable output.
+   `flow slack search` requires a user token with `search:read`.
 6. **Reply.** Post into the originating thread (`channel` + `thread_ts`
    from your brief). Posts go as the user (User Token), not a bot, so
    write in their voice and avoid claims you can't back up. For Slack

@@ -64,7 +64,7 @@ func TestSlackAppManifest(t *testing.T) {
 	}
 	// DM following is the whole point of the user token — regression-pin it.
 	// chat:write/files:write let `--as user` post + upload as the operator.
-	for _, want := range []string{"im:history", "mpim:history", "files:read", "chat:write", "files:write"} {
+	for _, want := range []string{"im:history", "mpim:history", "users:read.email", "search:read", "files:read", "chat:write", "files:write"} {
 		if !containsString(user, want) {
 			t.Fatalf("user scopes missing %q: %v", want, user)
 		}

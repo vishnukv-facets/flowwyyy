@@ -178,6 +178,13 @@ func loadSlackSecretsFromKeyring() {
 	loadKeyringSecrets(slackKeyringService, slackSecretAccounts)
 }
 
+// HydrateSlackSecretsFromKeyring loads Slack tokens from the OS keyring into
+// the process env. Standalone CLI Slack reads call this because they may run in
+// a fresh process with stale inherited env, while the keyring is authoritative.
+func HydrateSlackSecretsFromKeyring() {
+	loadSlackSecretsFromKeyring()
+}
+
 // The offsite backup token (a personal GitHub PAT used to provision + push the
 // private flow-backup repo) is stored at rest in the OS keyring, matching the
 // GitHub App / Slack secret handling. It is the user's own credential — distinct
