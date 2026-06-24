@@ -123,9 +123,10 @@ var productGoPkgs = []string{
 var productImportsCoreGo = map[string]bool{
 	"flow/cmd/flowwyyy":      true, // app.Version + transitive flowdb via product/server
 	"flow/internal/server":   true, // reads/writes via flowdb directly (51 non-test files)
-	"flow/internal/monitor":  true, // task/project reads + github/slack writes via flowdb
 	"flow/internal/steering": true, // attention_feed/steering_trace reads+writes via flowdb
 	"flow/internal/product":  true, // attention.go/ui.go read via flowdb
+	// monitor: CLEARED (T13) — reads via productdb, connector tables via productdb,
+	// core writes via flow exec, git detection via the flowdb-free gitremote pkg.
 }
 
 // TestProductDoesNotImportCoreGo enforces the Phase-3 boundary: the flowwyyy

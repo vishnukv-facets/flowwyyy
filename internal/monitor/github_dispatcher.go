@@ -9,7 +9,7 @@ import (
 
 	"flow/internal/productdb"
 	"flow/internal/ghref"
-	"flow/internal/workdirreg"
+	"flow/internal/gitremote"
 )
 
 // resolveProjectForRepo returns the slug of the single active (non-archived)
@@ -33,7 +33,7 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 		if p == nil || strings.TrimSpace(p.WorkDir) == "" {
 			continue
 		}
-		slug, ok := ghref.RepoFromRemote(workdirreg.DetectGitRemote(p.WorkDir))
+		slug, ok := ghref.RepoFromRemote(gitremote.DetectGitRemote(p.WorkDir))
 		if !ok || slug != repoKey {
 			continue
 		}
