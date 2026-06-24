@@ -1,14 +1,11 @@
 package product
 
-import (
-	// Registers the flowwyyy product migration set on the shared DB so the
-	// product tables (attention_*, steering_*, github_*, chats, …) are created/
-	// migrated when the flowwyyy binary opens flow.db. productdb is flowdb-free
-	// and no longer self-registers (seam §11), so registration lives in
-	// productdbreg. (Also pulled transitively via server→monitor/steering;
-	// productdbreg's registration is idempotent per domain.)
-	_ "flow/internal/productdbreg"
-)
+// product no longer blank-imports productdbreg: the flowwyyy runtime opens the
+// DB via productdb.Open (in cmdUIServe / openAttentionDB), which creates the
+// Bucket-F product tables directly — so the transitional flowdb.OpenDB
+// registration shim is no longer on the product binary's path. This severs
+// product's last transitive flowdb import (seam §11, T13). Test binaries that
+// still open via flowdb.OpenDB blank-import productdbreg themselves.
 
 // FlowBin is the resolved core `flow` binary, set by RunWithPassthrough in the
 // flowwyyy main. Product commands (ui serve) use it for the server's flowclient

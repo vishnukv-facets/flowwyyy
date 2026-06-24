@@ -131,19 +131,21 @@ var productGoPkgs = []string{
 // onto productdb and removes it here; the list ends empty when flowwyyy owns its
 // read layer end to end. Like knownViolations, the test fails in both
 // directions — on a new violation and when a ratcheted package becomes clean.
-var productImportsCoreGo = map[string]bool{
-	"flow/cmd/flowwyyy":     true, // app.Version + transitive flowdb via product
-	"flow/internal/product": true, // attention.go/ui.go still open the DB via flowdb.OpenDB (T13 step 4)
-	// monitor: CLEARED (T13) — reads via productdb, connector tables via productdb,
-	//   core writes via flow exec, git detection via the flowdb-free gitremote pkg.
-	// steering: CLEARED (T13) — attention/steering tables via productdb, tag write
-	//   via the taskTagger flow-exec helper; product-table registration is test-only.
-	// server: CLEARED (T13) — own flowdb use removed (reads→productdb, Bucket-O
-	//   writes→flow exec) AND all 4 transitively-flowdb-bound deps decoupled:
-	//   agents made flowdb-free, workdirreg replaced by `flow workdir` exec,
-	//   workevents reclassified onto productdb, briefing replaced by the
-	//   productdb-backed productbriefing, flowclient's compat floor inlined.
-}
+// EMPTY — T13 COMPLETE (2026-06-24). Every flowwyyy product package reads the
+// shared DB via productdb and execs `flow` for Bucket-O writes; none imports
+// flow/internal/app or flow/internal/flowdb, directly or transitively:
+//   - monitor:  productdb reads/connector tables; flow-exec writes; gitremote detection.
+//   - steering: attention/steering tables via productdb; tag write via taskTagger exec.
+//   - server:   reads→productdb, Bucket-O writes→flow exec; its 4 flowdb-bound core
+//     deps decoupled (agents flowdb-free, workdirreg→`flow workdir` exec,
+//     workevents→productdb, briefing→productbriefing, flowclient floor inlined).
+//   - product:  app shed in 4 tiers (helpers→cli, Version→product, skill→coreskill+
+//     skillinstall, init-hook→lazy ui-serve seed); DB via productdb.Open;
+//     SyncGitRemotes→productdb+gitremote+flow-exec; productdbreg test-only.
+//   - cmd/flowwyyy: sets product.Version; no app/flowdb import.
+//
+// The list is empty; the test now fails on ANY new product→core-Go import.
+var productImportsCoreGo = map[string]bool{}
 
 // TestProductDoesNotImportCoreGo enforces the Phase-3 boundary: the flowwyyy
 // product surface reads via productdb and execs `flow` for writes, never

@@ -6,9 +6,8 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/cli"
 	"flow/internal/flowclient"
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 	"flow/internal/server"
-	"flow/internal/workdirreg"
 	"fmt"
 	"net"
 	"os"
@@ -160,15 +159,15 @@ func serveUI(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	db, err := flowdb.OpenDB(dbPath)
+	// flowwyyy opens the shared flow.db via its OWN entry point (productdb.Open):
+	// core tables come from `flow init`, and Open layers the flowwyyy-owned
+	// Bucket-F tables (seam §11). No flowdb import.
+	db, err := productdb.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: open db: %v\n", err)
 		return 1
 	}
 	defer db.Close()
-	if _, err := workdirreg.SyncGitRemotes(db); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
-	}
 	// Seed the steerer persona lazily on serve (idempotent). In the two-binary
 	// world `flow init` runs core-side and can't reach this product hook, so
 	// flowwyyy ensures the persona here instead (seam §11.3.1, Tier D).
@@ -189,6 +188,13 @@ func serveUI(host string, port int, noQuote bool) int {
 	commandPath := FlowBin
 	if commandPath == "" {
 		commandPath = cli.PreferredUIFlowBinary(exe)
+	}
+	// Refresh workdir git remotes (best-effort) now that the flow binary is
+	// resolved — the product-side twin of workdirreg.SyncGitRemotes: read via
+	// productdb, detect via the flowdb-free gitremote pkg, and route the
+	// Bucket-O write through `flow workdir add` exec (seam §11).
+	if _, err := syncWorkdirGitRemotes(db, commandPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
 	}
 	hookHost := host
 	if hookHost == "0.0.0.0" || hookHost == "::" {

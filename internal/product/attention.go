@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"flow/internal/cli"
-	"flow/internal/flowdb"
 	"flow/internal/productdb"
 	"flow/internal/steering"
 )
@@ -399,9 +398,9 @@ func openAttentionDB() (*sql.DB, int) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return nil, 1
 	}
-	// product still opens the shared DB via flowdb.OpenDB (it keeps a flowdb
-	// import for this — product is the last package to shed flowdb, T13 step 4).
-	db, err := flowdb.OpenDB(dbPath)
+	// flowwyyy opens the shared DB via its own productdb.Open (seam §11): core
+	// tables from `flow init`, Bucket-F tables layered by Open. No flowdb import.
+	db, err := productdb.Open(dbPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return nil, 1
