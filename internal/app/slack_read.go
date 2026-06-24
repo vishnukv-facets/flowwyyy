@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/mail"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -67,14 +68,14 @@ func slackReadToken(as string, requireUser bool) (string, error) {
 		if as == "bot" {
 			return "", errSlackNoUserToken
 		}
-		if tok := strings.TrimSpace(monitor.SlackUserToken()); tok != "" {
+		if tok := slackActualUserToken(); tok != "" {
 			return tok, nil
 		}
 		return "", errSlackNoUserToken
 	}
 	switch as {
 	case "user":
-		if tok := strings.TrimSpace(monitor.SlackUserToken()); tok != "" {
+		if tok := slackActualUserToken(); tok != "" {
 			return tok, nil
 		}
 	case "bot":
@@ -82,7 +83,7 @@ func slackReadToken(as string, requireUser bool) (string, error) {
 			return tok, nil
 		}
 	default:
-		if tok := strings.TrimSpace(monitor.SlackUserToken()); tok != "" {
+		if tok := slackActualUserToken(); tok != "" {
 			return tok, nil
 		}
 		if tok := strings.TrimSpace(monitor.SlackBotToken()); tok != "" {
@@ -90,6 +91,34 @@ func slackReadToken(as string, requireUser bool) (string, error) {
 		}
 	}
 	return "", errSlackNoToken
+}
+
+func slackActualUserToken() string {
+	for _, key := range []string{"FLOW_SLACK_USER_TOKEN", "SLACK_USER_TOKEN"} {
+		if tok := strings.TrimSpace(os.Getenv(key)); tok != "" && !slackLooksBotToken(tok) {
+			return tok
+		}
+	}
+	if tok := strings.TrimSpace(monitor.SlackUserToken()); slackLooksUserToken(tok) {
+		return tok
+	}
+	return ""
+}
+
+func slackLooksUserToken(token string) bool {
+	token = strings.TrimSpace(token)
+	return strings.HasPrefix(token, "xoxp-") || strings.HasPrefix(token, "xoxe.xoxp-")
+}
+
+func slackLooksBotToken(token string) bool {
+	token = strings.TrimSpace(token)
+	return strings.HasPrefix(token, "xoxb-") || strings.HasPrefix(token, "xoxe.xoxb-")
+}
+
+func slackEmailQuery(query string) bool {
+	query = strings.TrimSpace(query)
+	addr, err := mail.ParseAddress(query)
+	return err == nil && addr.Address == query && strings.Contains(addr.Address, "@")
 }
 
 func validSlackFormat(format string) bool {
@@ -169,7 +198,7 @@ func cmdSlackSearchUsers(args []string) int {
 	}
 	query := strings.TrimSpace(rest[0])
 	var users []monitor.SlackUser
-	if strings.Contains(query, "@") {
+	if slackEmailQuery(query) {
 		u, err := slackLookupUserByEmailFn(token, query)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -507,7 +536,7 @@ func slackEffectiveIdentity(as, token string) string {
 	if as == "user" || as == "bot" {
 		return as
 	}
-	if userTok := strings.TrimSpace(monitor.SlackUserToken()); userTok != "" && strings.TrimSpace(token) == userTok {
+	if userTok := slackActualUserToken(); userTok != "" && strings.TrimSpace(token) == userTok {
 		return "user"
 	}
 	return "bot"

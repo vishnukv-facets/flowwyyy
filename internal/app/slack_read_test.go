@@ -59,14 +59,22 @@ func TestSlackReadTokenPrefersUserThenBot(t *testing.T) {
 }
 
 func TestSlackReadTokenRequireUserRejectsBot(t *testing.T) {
-	stubSlackHydrate(t)
-	withSlackEnv(t, map[string]string{"SLACK_BOT_TOKEN": "xoxb-bot"})
+	for name, env := range map[string]map[string]string{
+		"bot flag":        {"SLACK_BOT_TOKEN": "xoxb-bot"},
+		"flow token bot":  {"FLOW_SLACK_TOKEN": "xoxb-bot"},
+		"slack token bot": {"SLACK_TOKEN": "xoxb-bot"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stubSlackHydrate(t)
+			withSlackEnv(t, env)
 
-	if _, err := slackReadToken("bot", true); err == nil {
-		t.Fatal("require-user with --as bot should error")
-	}
-	if _, err := slackReadToken("", true); err == nil {
-		t.Fatal("require-user with no user token should error")
+			if _, err := slackReadToken("bot", true); err == nil {
+				t.Fatal("require-user with --as bot should error")
+			}
+			if _, err := slackReadToken("", true); err == nil {
+				t.Fatal("require-user without a real user token should error")
+			}
+		})
 	}
 }
 
@@ -120,6 +128,68 @@ func TestSlackSearchUsersJSON(t *testing.T) {
 	}
 	if !strings.Contains(out, `"id": "U1"`) {
 		t.Fatalf("json output missing user: %s", out)
+	}
+}
+
+func TestSlackSearchUsersAtHandleUsesDirectorySearch(t *testing.T) {
+	stubSlackHydrate(t)
+	withSlackEnv(t, map[string]string{"FLOW_SLACK_USER_TOKEN": "xoxp-user"})
+	oldSearch, oldLookup := slackSearchUsersFn, slackLookupUserByEmailFn
+	t.Cleanup(func() {
+		slackSearchUsersFn = oldSearch
+		slackLookupUserByEmailFn = oldLookup
+	})
+	var gotToken, gotQuery string
+	slackSearchUsersFn = func(token string, query string) ([]monitor.SlackUser, error) {
+		gotToken, gotQuery = token, query
+		return []monitor.SlackUser{{ID: "U3", Name: "alice", RealName: "Alice Smith"}}, nil
+	}
+	slackLookupUserByEmailFn = func(_ string, email string) (monitor.SlackUser, error) {
+		t.Fatalf("lookupByEmail called for handle query %q", email)
+		return monitor.SlackUser{}, nil
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdSlack([]string{"search-users", "@alice"}); rc != 0 {
+			t.Fatalf("rc = %d, want 0", rc)
+		}
+	})
+	if gotToken != "xoxp-user" || gotQuery != "@alice" {
+		t.Fatalf("search called with token/query = %q/%q", gotToken, gotQuery)
+	}
+	if !strings.Contains(out, "Alice Smith") {
+		t.Fatalf("table output missing user: %s", out)
+	}
+}
+
+func TestSlackSearchUsersEmailUsesLookup(t *testing.T) {
+	stubSlackHydrate(t)
+	withSlackEnv(t, map[string]string{"FLOW_SLACK_USER_TOKEN": "xoxp-user"})
+	oldSearch, oldLookup := slackSearchUsersFn, slackLookupUserByEmailFn
+	t.Cleanup(func() {
+		slackSearchUsersFn = oldSearch
+		slackLookupUserByEmailFn = oldLookup
+	})
+	var gotEmail string
+	slackSearchUsersFn = func(_ string, query string) ([]monitor.SlackUser, error) {
+		t.Fatalf("directory search called for email query %q", query)
+		return nil, nil
+	}
+	slackLookupUserByEmailFn = func(_ string, email string) (monitor.SlackUser, error) {
+		gotEmail = email
+		return monitor.SlackUser{ID: "U4", Name: "alice", RealName: "Alice Smith"}, nil
+	}
+
+	out := captureStdout(t, func() {
+		if rc := cmdSlack([]string{"search-users", "alice@example.com"}); rc != 0 {
+			t.Fatalf("rc = %d, want 0", rc)
+		}
+	})
+	if gotEmail != "alice@example.com" {
+		t.Fatalf("email = %q", gotEmail)
+	}
+	if !strings.Contains(out, "Alice Smith") {
+		t.Fatalf("table output missing user: %s", out)
 	}
 }
 
