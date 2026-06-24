@@ -86,6 +86,16 @@ func TestGitHubListener_LinkTickTagsIssueTaskWithPR(t *testing.T) {
 	ghPRURLForWorktree = func(_ context.Context, _ string) (string, error) {
 		return "", nil // no branch PR
 	}
+	// The linker tags via `flow update task --tag` exec (Bucket-O write, seam
+	// §11). With no `flow` on PATH (e.g. CI) that exec fails and the tag never
+	// lands; stub it to write directly to the test DB, mirroring
+	// github_pr_link_test.go.
+	origTag := tagFlowTask
+	defer func() { tagFlowTask = origTag }()
+	tagFlowTask = func(_ context.Context, slug, tag string) error {
+		_, err := db.Exec(`INSERT OR IGNORE INTO task_tags (task_slug, tag, created_at) VALUES (?,?,?)`, slug, flowdb.NormalizeTag(tag), flowdb.NowISO())
+		return err
+	}
 
 	l := NewGitHubListener(NewGitHubDispatcher(db, nil))
 	l.linkInterval = 10 * time.Millisecond

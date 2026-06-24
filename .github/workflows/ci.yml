@@ -19,16 +19,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # needed for only-new-issues to diff against the base branch
+          fetch-depth: 0 # full history so --new-from-merge-base can diff against base
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # Ensure the PR's base branch is a local remote-tracking ref so
+      # golangci-lint can compute the merge base for new-issue detection.
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "+refs/heads/${{ github.base_ref }}:refs/remotes/origin/${{ github.base_ref }}"
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.11.4
-          # Gate on NEW findings only: a PR can't add lint debt, while the
-          # pre-existing backlog is burned down separately. See .golangci.yml.
-          only-new-issues: true
+          # Gate on NEW findings only (a PR can't add lint debt; the pre-existing
+          # backlog is burned down separately — see .golangci.yml), computed via
+          # LOCAL GIT (merge-base with the base branch) rather than the GitHub diff
+          # API. The API path (only-new-issues) 406s on diffs over 20000 lines,
+          # which the two-binary-split PR exceeds; --new-from-merge-base has no
+          # such cap and gives identical semantics.
+          args: --new-from-merge-base=origin/${{ github.base_ref }}
 
   test:
     runs-on: ubuntu-latest
