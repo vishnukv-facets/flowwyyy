@@ -31,6 +31,16 @@ func NormalizeTag(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
 
+// NullIfEmpty returns nil for an empty string (so it binds as SQL NULL) and the
+// string otherwise — twin of flowdb.NullIfEmpty. Shared by the productdb
+// connector/attention write helpers.
+func NullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
 // ---------- models (mirror the shared schema) ----------
 
 // Project mirrors the projects table (twin of flowdb.Project).
