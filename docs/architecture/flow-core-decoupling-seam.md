@@ -169,15 +169,15 @@ Product packages must shed **both** fenced core packages: `flowdb` (→ `product
 ### 11.3 T13 burndown (each step a reviewable commit; second ratchet shrinks per step; `make test` green throughout)
 
 1. ✅ **Guard test + second ratchet** — `archtest.TestProductDoesNotImportCoreGo` asserts `cmd/flowwyyy` + `server`/`monitor`/`steering`/`product` don't transitively import `app`/`flowdb`. Ratchet pre-populated to current reality (5 pkgs); RED→GREEN verified.
-2. **Keystone — `productdb` self-contained** (own `Open`/`Ensure`/types/read-queries/Bucket-F writes; sever `flowdb.RegisterMigrations`; relocate `app` helpers to a neutral pkg; wire `cmd/flowwyyy` → `productdb.Open`).
-3. Cut `product` over to `productdb` (2 files) → remove from ratchet.
-4. Cut `monitor` over (5 files) → remove from ratchet.
-5. Cut `steering` over (16 files) → remove from ratchet.
-6. Cut `server` over (51 files) → remove from ratchet.
+2. ◐ **`productdb` flowdb-free + grown read/Bucket-F layer** — `productdb` no longer imports `flowdb` and no longer self-registers (`productdbreg` is the transitional registrar; `internal/product` blank-imports it at runtime, test binaries blank-import it in `_test.go`). It now mirrors, with flowdb parity tests: core reads (tasks/projects/playbooks/owners/workdirs/tags + `TaskBySessionID`, blocker, normalizers, `model`) and full Bucket-F CRUD (attention/steering/chats/brain_runs/pending_*/remote_devices/kb_capture/search). **Not yet done:** its own `Open`/full-schema `Ensure` of the 6 core-gap tables — deferred to step 4 (product still calls `flowdb.OpenDB` at runtime, so the live DB keeps full schema).
+3. ✅ **`monitor` CLEARED** — reads via productdb, connector tables via productdb, core writes via `flow` exec, git detection via the flowdb-free `gitremote` pkg.
+4. ✅ **`steering` CLEARED** — attention/steering tables via productdb; the thread-tag backfill writes task_tags via the `taskTagger` flow-exec helper.
+5. ◐ **`server` — own flowdb use CLEARED, NOT yet ratchet-clear.** Reads moved to productdb; Bucket-O writes (task_tags / tasks.waiting_on / owners) route through `flow` exec (`runFlowCommand`; tag write behind the overridable `taskTagWriter`). **Newly-isolated blocker:** `go list -deps ./internal/server` still pulls `flowdb` transitively via **4 flowdb-bound CORE packages server consumes** — `briefing` (`Build` for the overview/standup), `workevents` (`Build` read model, used heavily by Ask Flow), `workdirreg` (`Register`/`Touch` — 2 write sites), `agents` (provider consts + `FindCodexSessionForTask` + `CaptureCodexSessionForTaskSince`; `agents` imports flowdb only for the session-capture tasks-UPDATE). Clearing server = decouple those: standup via `flow standup` exec (or port), a productdb workevents reader, workdir writes via `flow workdir` exec, and splitting `agents` (neutral provider consts + capture via exec/productdb).
+6. **`product`** — `attention.go` cut to productdb; `ui.go`/`attention.go` still `flowdb.OpenDB` (needs `productdb.Open` from step 2's deferred half) + `product` imports `app`.
 7. `cmd/flowwyyy`: product-side version (drop `app`) → ratchet empty.
 8. `make test` + Mission Control read/write parity spot-check; revise this doc to "Phase 3 / T13 complete."
 
-**Measured surface (2026-06-24):** 180 distinct `flowdb` symbols across 75 non-test files (server 51, steering 16, monitor 5, product 2, productdb 1). T13 is a sub-milestone; the brief sanctions splitting it into finer tasks.
+**Ratchet state (2026-06-24):** was 5 → now **3** remaining (`server`, `product`, `cmd/flowwyyy`); `monitor` + `steering` cleared. **Measured surface (start):** 180 distinct `flowdb` symbols across 75 non-test files (server 51, steering 16, monitor 5, product 2, productdb 1). T13 is a sub-milestone; the brief sanctions splitting it into finer tasks.
 
 ### 11.4 What this changes vs. `flow-core-upstream-delta.md`
 
