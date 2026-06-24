@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 
 	"flow/internal/app"
+	"flow/internal/cli"
 	"flow/internal/steering"
 )
 
 func seedSteererPersona() error {
-	root, err := app.FlowRoot()
+	root, err := cli.FlowRoot()
 	if err != nil {
 		return err
 	}

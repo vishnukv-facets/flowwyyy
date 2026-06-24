@@ -4,7 +4,7 @@ import (
 	"errors"
 	"flag"
 	"flow/internal/agenthooks"
-	"flow/internal/app"
+	"flow/internal/cli"
 	"flow/internal/flowclient"
 	"flow/internal/flowdb"
 	"flow/internal/server"
@@ -48,7 +48,7 @@ Serve the local Mission Control UI backed by the current flow database.`)
 }
 
 func cmdUIServe(args []string) int {
-	fs := app.FlagSet("ui serve")
+	fs := cli.FlagSet("ui serve")
 	host := fs.String("host", "127.0.0.1", "host to bind")
 	port := fs.Int("port", 8787, "TCP port to bind")
 	bg := fs.Bool("bg", false, "run the UI server in the background")
@@ -150,12 +150,12 @@ func waitPortFree(port int, timeout time.Duration) bool {
 }
 
 func serveUI(host string, port int, noQuote bool) int {
-	root, err := app.FlowRoot()
+	root, err := cli.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
-	dbPath, err := app.FlowDBPath()
+	dbPath, err := cli.FlowDBPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -182,7 +182,7 @@ func serveUI(host string, port int, noQuote bool) int {
 	// executable, which is itself a flow-capable binary.
 	commandPath := FlowBin
 	if commandPath == "" {
-		commandPath = app.PreferredUIFlowBinary(exe)
+		commandPath = cli.PreferredUIFlowBinary(exe)
 	}
 	hookHost := host
 	if hookHost == "0.0.0.0" || hookHost == "::" {
@@ -200,7 +200,7 @@ func serveUI(host string, port int, noQuote bool) int {
 	srv := server.New(server.Config{
 		DB:           db,
 		FlowRoot:     root,
-		Version:      app.Version,
+		Version:      Version,
 		CommandPath:  commandPath,
 		Flow:         flowclient.Client{Bin: commandPath},
 		HookURL:      hookURL,
@@ -218,7 +218,7 @@ func serveUI(host string, port int, noQuote bool) int {
 }
 
 func startUIBackground(host string, port int, noQuote bool) int {
-	root, err := app.FlowRoot()
+	root, err := cli.FlowRoot()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -228,7 +228,7 @@ func startUIBackground(host string, port int, noQuote bool) int {
 		fmt.Fprintf(os.Stderr, "error: find executable: %v\n", err)
 		return 1
 	}
-	exe = app.PreferredUIFlowBinary(exe)
+	exe = cli.PreferredUIFlowBinary(exe)
 	logDir := filepath.Join(root, "logs")
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "error: create log dir: %v\n", err)

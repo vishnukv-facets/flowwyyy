@@ -15,3 +15,10 @@ import (
 // (mutations + launch prep). Empty when the product package is used outside the
 // flowwyyy main (tests), where cmdUIServe falls back to the running executable.
 var FlowBin string
+
+// Version is the flowwyyy build version, stamped by the flowwyyy main
+// (-ldflags -X main.version). Mission Control's version display reads it. It is
+// the product binary's OWN version, independent of the core `flow` binary's
+// (which flowwyyy execs and version-checks separately) — so it lives here rather
+// than reaching into internal/app (Phase-3 decoupling, seam §11.3.1, Tier B).
+var Version = "dev"

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/app"
+	"flow/internal/cli"
 	"flow/internal/flowdb"
 	"flow/internal/productdb"
 	"flow/internal/steering"
@@ -18,7 +18,7 @@ import (
 // cmdAttention implements `flow attention <list|act>` — the terminal surface
 // for the attention router's feed (the Mission Control feed panel is P1.4).
 func cmdAttention(args []string) int {
-	if app.LeadingHelpArg(args) || len(args) == 0 {
+	if cli.LeadingHelpArg(args) || len(args) == 0 {
 		printAttentionUsage()
 		return 0
 	}
@@ -62,9 +62,9 @@ func printAttentionUsage() {
 }
 
 func cmdAttentionList(args []string) int {
-	fs := app.FlagSet("attention list")
+	fs := cli.FlagSet("attention list")
 	status := fs.String("status", "new", "filter: new|acted|dismissed|snoozed|all")
-	if handled, rc := app.ParseFlagSet(fs, args); handled {
+	if handled, rc := cli.ParseFlagSet(fs, args); handled {
 		return rc
 	}
 	db, rc := openAttentionDB()
@@ -91,7 +91,7 @@ func cmdAttentionList(args []string) int {
 }
 
 func cmdAttentionSurface(args []string) int {
-	fs := app.FlagSet("attention surface")
+	fs := cli.FlagSet("attention surface")
 	source := fs.String("source", "slack", "event source: slack|github")
 	channel := fs.String("channel", "", "channel/DM/PR id")
 	channelType := fs.String("channel-type", "", "channel|im|mpim|github")
@@ -106,7 +106,7 @@ func cmdAttentionSurface(args []string) int {
 	reason := fs.String("reason", "", "why")
 	confidence := fs.Float64("confidence", 0, "0..1")
 	contextOnly := fs.Bool("context-only", false, "memory-only: never surface a card")
-	if handled, rc := app.ParseFlagSet(fs, args); handled {
+	if handled, rc := cli.ParseFlagSet(fs, args); handled {
 		return rc
 	}
 	if strings.TrimSpace(*channel) == "" || strings.TrimSpace(*ts) == "" {
@@ -169,7 +169,7 @@ func requestAttentionAutoActBestEffort(id string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := app.UISessionToken(); tok != "" {
+	if tok := cli.UISessionToken(); tok != "" {
 		req.Header.Set("X-Flow-Session-Token", tok)
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -180,7 +180,7 @@ func requestAttentionAutoActBestEffort(id string) {
 }
 
 func cmdAttentionAct(args []string) int {
-	if app.LeadingHelpArg(args) {
+	if cli.LeadingHelpArg(args) {
 		printAttentionUsage()
 		return 0
 	}
@@ -229,7 +229,7 @@ func cmdAttentionAct(args []string) int {
 }
 
 func cmdAttentionHandoff(args []string) int {
-	if app.LeadingHelpArg(args) || len(args) == 0 {
+	if cli.LeadingHelpArg(args) || len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: flow attention handoff <accept|decline|respond> <correlation-id> [verdict] --reason <why>")
 		return 2
 	}
@@ -254,9 +254,9 @@ func cmdAttentionHandoff(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: unknown handoff verdict %q (want accept|decline)\n", verdict)
 		return 2
 	}
-	fs := app.FlagSet("attention handoff")
+	fs := cli.FlagSet("attention handoff")
 	reason := fs.String("reason", "", "reason for accepting or declining")
-	if handled, rc := app.ParseFlagSet(fs, rest); handled {
+	if handled, rc := cli.ParseFlagSet(fs, rest); handled {
 		return rc
 	}
 	if strings.TrimSpace(*reason) == "" {
@@ -287,14 +287,14 @@ func cmdAttentionHandoff(args []string) int {
 // HTTP to the running `flow ui serve`), so a successful send auto-tidies while a
 // failure leaves the window open and the card 'new'.
 func cmdAttentionSent(args []string) int {
-	if app.LeadingHelpArg(args) || len(args) == 0 {
+	if cli.LeadingHelpArg(args) || len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: flow attention sent <id> [--close-floating <floating-id>]")
 		return 2
 	}
 	id := args[0]
-	fs := app.FlagSet("attention sent")
+	fs := cli.FlagSet("attention sent")
 	closeFloating := fs.String("close-floating", "", "floating terminal id to close after marking sent")
-	if handled, rc := app.ParseFlagSet(fs, args[1:]); handled {
+	if handled, rc := cli.ParseFlagSet(fs, args[1:]); handled {
 		return rc
 	}
 
@@ -361,7 +361,7 @@ func closeFloatingTerminalBestEffort(id string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if tok := app.UISessionToken(); tok != "" {
+	if tok := cli.UISessionToken(); tok != "" {
 		req.Header.Set("X-Flow-Session-Token", tok)
 	}
 	resp, err := http.DefaultClient.Do(req)
@@ -394,7 +394,7 @@ func runAttentionAction(db *sql.DB, item productdb.FeedItem, action steering.Act
 }
 
 func openAttentionDB() (*sql.DB, int) {
-	dbPath, err := app.FlowDBPath()
+	dbPath, err := cli.FlowDBPath()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return nil, 1
@@ -445,11 +445,11 @@ func orDash(s string) string {
 }
 
 func cmdAttentionTrace(args []string) int {
-	fs := app.FlagSet("attention trace")
+	fs := cli.FlagSet("attention trace")
 	since := fs.String("since", "24h", "how far back (Go duration, e.g. 1h, 24h)")
 	disposition := fs.String("disposition", "all", "filter: dropped|surfaced|error|all")
 	limit := fs.Int("limit", 50, "max rows")
-	if handled, rc := app.ParseFlagSet(fs, args); handled {
+	if handled, rc := cli.ParseFlagSet(fs, args); handled {
 		return rc
 	}
 	sinceTS, err := sinceToRFC3339(*since)
@@ -482,9 +482,9 @@ func cmdAttentionTrace(args []string) int {
 }
 
 func cmdAttentionFeedback(args []string) int {
-	fs := app.FlagSet("attention feedback")
+	fs := cli.FlagSet("attention feedback")
 	group := fs.String("group", "suggested-action", "group: source|channel|author|thread-type|suggested-action|confidence-band")
-	if handled, rc := app.ParseFlagSet(fs, args); handled {
+	if handled, rc := cli.ParseFlagSet(fs, args); handled {
 		return rc
 	}
 	groupKey, err := attentionFeedbackGroupKey(*group)
@@ -543,7 +543,7 @@ func percent(v float64) string {
 // have meant. GROUNDED=no marks bands with too few samples to trust (the live
 // path keeps the raw number there).
 func cmdAttentionCalibration(args []string) int {
-	if handled, rc := app.ParseFlagSet(app.FlagSet("attention calibration"), args); handled {
+	if handled, rc := cli.ParseFlagSet(cli.FlagSet("attention calibration"), args); handled {
 		return rc
 	}
 	db, rc := openAttentionDB()
