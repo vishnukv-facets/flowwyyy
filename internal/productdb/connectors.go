@@ -126,6 +126,39 @@ func FinishGitHubDelivery(db *sql.DB, deliveryID, status, errMsg string, eventCo
 	return nil
 }
 
+// GitHubWebhookHealthInfo summarizes the delivery log for the connector status
+// surface: how many deliveries have ever arrived and the state of the latest.
+// Twin of flowdb.GitHubWebhookHealthInfo.
+type GitHubWebhookHealthInfo struct {
+	Total          int
+	LastReceivedAt string
+	LastStatus     string
+	LastError      string
+}
+
+// GitHubWebhookHealth reads delivery-log state for Mission Control's GitHub
+// connector card. A zero Total with empty LastReceivedAt means "configured but
+// not yet receiving". Twin of flowdb.GitHubWebhookHealth.
+func GitHubWebhookHealth(db *sql.DB) (GitHubWebhookHealthInfo, error) {
+	var h GitHubWebhookHealthInfo
+	if err := db.QueryRow(`SELECT COUNT(*) FROM github_webhook_deliveries`).Scan(&h.Total); err != nil {
+		return h, fmt.Errorf("github webhook health count: %w", err)
+	}
+	if h.Total == 0 {
+		return h, nil
+	}
+	err := db.QueryRow(
+		`SELECT received_at, status, COALESCE(error, '')
+		   FROM github_webhook_deliveries
+		  ORDER BY received_at DESC, rowid DESC
+		  LIMIT 1`,
+	).Scan(&h.LastReceivedAt, &h.LastStatus, &h.LastError)
+	if err != nil {
+		return h, fmt.Errorf("github webhook health latest: %w", err)
+	}
+	return h, nil
+}
+
 // ---------- steering_watermark ----------
 
 // GetSteeringWatermark returns the last processed Slack ts for a channel, or ""

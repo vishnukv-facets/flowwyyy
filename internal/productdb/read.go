@@ -118,38 +118,19 @@ type ProjectFilter struct {
 	DeletedOnly     bool
 }
 
-// ---------- harness/provider normalization (twins of the flowdb helpers) ----------
+// ---------- harness/provider normalization ----------
 
-func normalizeSessionProvider(provider string) (string, error) {
-	switch strings.TrimSpace(strings.ToLower(provider)) {
-	case "", "claude", "claude-code", "claudecode":
-		return "claude", nil
-	case "codex", "codex-cli":
-		return "codex", nil
-	default:
-		return "", fmt.Errorf("session provider must be claude|codex, got %q", provider)
-	}
-}
-
-func normalizeHarnessName(harness string) (string, error) {
-	switch strings.TrimSpace(strings.ToLower(harness)) {
-	case "", "claude", "claude-code", "claudecode":
-		return "claude", nil
-	case "codex", "codex-cli":
-		return "codex", nil
-	default:
-		return "", fmt.Errorf("harness must be claude|codex, got %q", harness)
-	}
-}
-
+// harnessForScan resolves the runtime harness for a scanned task row, falling
+// back to the session provider (then "claude") — twin of flowdb.harnessForScan.
+// The exported normalizers it relies on live in normalize.go.
 func harnessForScan(sessionProvider string, harness sql.NullString) string {
 	if harness.Valid && strings.TrimSpace(harness.String) != "" {
-		if normalized, err := normalizeHarnessName(harness.String); err == nil {
+		if normalized, err := NormalizeHarnessName(harness.String); err == nil {
 			return normalized
 		}
 		return strings.TrimSpace(strings.ToLower(harness.String))
 	}
-	normalized, err := normalizeSessionProvider(sessionProvider)
+	normalized, err := NormalizeSessionProvider(sessionProvider)
 	if err != nil {
 		return "claude"
 	}
@@ -233,6 +214,17 @@ func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 
 func GetTask(db *sql.DB, slug string) (*Task, error) {
 	row := db.QueryRow("SELECT "+TaskCols+" FROM tasks WHERE slug = ?", slug)
+	return ScanTask(row)
+}
+
+// TaskBySessionID returns the task bound to the given session UUID, or
+// sql.ErrNoRows if none. Empty sid returns ErrNoRows without hitting the DB.
+// Twin of flowdb.TaskBySessionID.
+func TaskBySessionID(db *sql.DB, sid string) (*Task, error) {
+	if sid == "" {
+		return nil, sql.ErrNoRows
+	}
+	row := db.QueryRow("SELECT "+TaskCols+" FROM tasks WHERE session_id = ? AND deleted_at IS NULL LIMIT 1", sid)
 	return ScanTask(row)
 }
 
