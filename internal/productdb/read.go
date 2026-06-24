@@ -318,3 +318,31 @@ func GetTaskTags(db *sql.DB, slug string) ([]string, error) {
 	}
 	return out, rows.Err()
 }
+
+// GetTaskTagsBatch returns tags for many tasks in one query, keyed by task slug
+// — twin of flowdb.GetTaskTagsBatch (avoids N+1).
+func GetTaskTagsBatch(db *sql.DB, slugs []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(slugs))
+	if len(slugs) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(slugs)-1) + "?"
+	args := make([]any, 0, len(slugs))
+	for _, s := range slugs {
+		args = append(args, s)
+	}
+	q := `SELECT task_slug, tag FROM task_tags WHERE task_slug IN (` + placeholders + `) ORDER BY task_slug, tag`
+	rows, err := db.Query(q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get tags: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var slug, tag string
+		if err := rows.Scan(&slug, &tag); err != nil {
+			return nil, err
+		}
+		out[slug] = append(out[slug], tag)
+	}
+	return out, rows.Err()
+}
