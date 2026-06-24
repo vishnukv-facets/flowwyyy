@@ -1,28 +1,29 @@
 // Package productdb owns the flowwyyy product layer's tables on the shared
 // flow.db. These are the connector / Attention Router / steering / chat /
 // remote-device tables — everything that the core `flow` engine has no concept
-// of. It registers a flowdb.MigrationSet (via init) so that any binary which
-// imports productdb gets the product schema created additively after the core
-// schema; a core-only binary that never imports it creates a core-only DB.
+// of.
 //
-// Scope note: only the product *DDL + migrations* live here. The product
-// CRUD/query code still lives in flowdb for now (it moves to productdb in a
-// later task), so this package intentionally has no read/write helpers yet.
+// This package is flowwyyy's OWN shared-DB layer and imports NO core Go (no
+// flow/internal/flowdb, no flow/internal/app): official Facets-cloud/flow keeps
+// those under internal/, unreachable to flowwyyy. See the Phase-3 ownership
+// model in docs/architecture/flow-core-decoupling-seam.md §11.
+//
+// Registration: Ensure is wired into flowdb.OpenDB by transitional shims in the
+// packages that still open the DB via flowdb (internal/monitor,
+// internal/steering — see productdb_register.go in each), so the product schema
+// is created additively after the core schema during the T13 transition. Those
+// shims own the flowdb coupling; this package does not. When every consumer
+// opens via productdb.Open (plan T13 complete), the shims are removed.
+//
+// Scope note: the product DDL + migrations live here; product CRUD/query code
+// migrates here package-by-package during T13 (it currently still lives in
+// flowdb for consumers not yet cut over).
 package productdb
 
 import (
 	"database/sql"
 	"fmt"
-
-	"flow/internal/flowdb"
 )
-
-// init registers the product migration set with flowdb. flowdb.OpenDB applies
-// it after the core schema + core migrations, so Ensure may reference core
-// tables (e.g. github_event_log.task_slug REFERENCES tasks).
-func init() {
-	flowdb.RegisterMigrations(flowdb.MigrationSet{Domain: "flowwyyy", Apply: Ensure})
-}
 
 // Ensure creates and migrates the product tables on db. It is idempotent and
 // safe to run on every OpenDB: CREATE ... IF NOT EXISTS for fresh DBs, gated
@@ -92,7 +93,7 @@ func Ensure(db *sql.DB) error {
 		// operator_actions/replies.
 		{"attention_thread_state", "operator_corrections", `ALTER TABLE attention_thread_state ADD COLUMN operator_corrections TEXT NOT NULL DEFAULT '[]'`},
 	} {
-		has, err := flowdb.ColumnExists(db, m.table, m.column)
+		has, err := columnExists(db, m.table, m.column)
 		if err != nil {
 			return err
 		}
@@ -104,6 +105,31 @@ func Ensure(db *sql.DB) error {
 	}
 
 	return nil
+}
+
+// columnExists reports whether table has a column named column. It is the
+// flowdb-free twin of flowdb.columnExists: productdb owns its own copy so it
+// imports no core Go (seam §11). PRAGMA table_info column order is
+// (cid, name, type, notnull, dflt_value, pk).
+func columnExists(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return false, fmt.Errorf("pragma table_info(%s): %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // productSchemaDDL is the full DDL for the product tables, mirroring the

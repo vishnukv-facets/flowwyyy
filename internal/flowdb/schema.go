@@ -24,10 +24,22 @@ type MigrationSet struct {
 var registeredSets []MigrationSet
 
 // RegisterMigrations registers a product (non-core) migration set. Intended to
-// be called from a package init() (e.g. internal/productdb) so the set is
-// present before any OpenDB call in that binary. Ordering across multiple sets
-// follows registration order.
-func RegisterMigrations(set MigrationSet) { registeredSets = append(registeredSets, set) }
+// be called from a package init() so the set is present before any OpenDB call
+// in that binary. Ordering across multiple sets follows registration order.
+//
+// Registration is idempotent per Domain: a set whose Domain is already
+// registered is ignored. This lets independent product packages (e.g.
+// internal/monitor and internal/steering, which each register the "flowwyyy"
+// set from their own init() during the T13 transition) register safely without
+// applying the same DDL twice at OpenDB.
+func RegisterMigrations(set MigrationSet) {
+	for _, s := range registeredSets {
+		if s.Domain == set.Domain {
+			return
+		}
+	}
+	registeredSets = append(registeredSets, set)
+}
 
 // coreSchemaDDL is the core DDL for flow.db. Each statement is idempotent
 // (CREATE ... IF NOT EXISTS) so OpenDB can run this on every startup. Product

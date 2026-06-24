@@ -1,11 +1,11 @@
 package steering
 
-// Transitional: pull in the product DB schema so flowdb.OpenDB creates the
-// attention/steering/connector tables this package relies on. The blank import
-// runs productdb's init(), which registers the product migration set.
+// Transitional (plan T13): ensure flowdb.OpenDB creates the attention / steering
+// / connector product tables this package relies on. productdb is flowdb-free
+// and no longer self-registers, so registration lives in productdbreg; this
+// blank import triggers it. steering is on the common import path for both
+// DB-opening product entrypoints (server→steering and attention→steering), so
+// this covers them; productdbreg dedupes, so overlapping triggers are safe.
 //
-// This package imports flowdb (core) and productdb (product); productdb does
-// not import steering, so there is no cycle. When the two-binary split lands
-// (plan T9–T10), cmd/flowwyyy / internal/product owns this registration and
-// this file should be removed.
-import _ "flow/internal/productdb"
+// Removed when every consumer opens the DB via productdb.Open (T13 complete).
+import _ "flow/internal/productdbreg"

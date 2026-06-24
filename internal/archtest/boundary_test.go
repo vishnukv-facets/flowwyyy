@@ -90,3 +90,66 @@ func TestCoreDoesNotImportProduct(t *testing.T) {
 		t.Errorf("clean now — remove from knownViolations: %v", clean)
 	}
 }
+
+// coreGoPkgs are the core engine's Go packages. By Phase 3, official
+// Facets-cloud/flow keeps these under internal/, so the flowwyyy product binary
+// can never import them: it must read the shared ~/.flow DB through its OWN
+// layer (internal/productdb) and exec the `flow` binary for core mutations.
+var coreGoPkgs = map[string]bool{
+	"flow/internal/app":    true,
+	"flow/internal/flowdb": true,
+}
+
+// productGoPkgs are the flowwyyy-product packages + the product binary that must
+// not transitively import core Go (coreGoPkgs). productdb is included because it
+// is flowwyyy's OWN shared-DB layer: if it imports flowdb, every consumer that
+// reaches the DB through it also transitively pulls flowdb. Checked
+// transitively, so making productdb flowdb-free is a prerequisite for cutting
+// any consumer over to it.
+var productGoPkgs = []string{
+	"flow/cmd/flowwyyy",
+	"flow/internal/server",
+	"flow/internal/monitor",
+	"flow/internal/steering",
+	"flow/internal/product",
+	"flow/internal/productdb",
+}
+
+// productImportsCoreGo is the SECOND ratchet (plan T13): product packages that
+// still import core Go (app/flowdb). Each burndown step ports a package's reads
+// onto productdb and removes it here; the list ends empty when flowwyyy owns its
+// read layer end to end. Like knownViolations, the test fails in both
+// directions — on a new violation and when a ratcheted package becomes clean.
+var productImportsCoreGo = map[string]bool{
+	"flow/cmd/flowwyyy":      true, // app.Version + transitive flowdb via product/server
+	"flow/internal/server":   true, // reads/writes via flowdb directly (51 non-test files)
+	"flow/internal/monitor":  true, // task/project reads + github/slack writes via flowdb
+	"flow/internal/steering": true, // attention_feed/steering_trace reads+writes via flowdb
+	"flow/internal/product":  true, // attention.go/ui.go read via flowdb
+}
+
+// TestProductDoesNotImportCoreGo enforces the Phase-3 boundary: the flowwyyy
+// product surface reads via productdb and execs `flow` for writes, never
+// importing flow/internal/app or flow/internal/flowdb.
+func TestProductDoesNotImportCoreGo(t *testing.T) {
+	var clean []string
+	for _, pkg := range productGoPkgs {
+		bad := false
+		for _, d := range deps(t, pkg) {
+			if coreGoPkgs[d] {
+				bad = true
+				break
+			}
+		}
+		switch {
+		case bad && !productImportsCoreGo[pkg]:
+			t.Errorf("REGRESSION: product package %s imports core Go (app/flowdb) — it must read via productdb and exec flow for writes", pkg)
+		case !bad && productImportsCoreGo[pkg]:
+			clean = append(clean, pkg)
+		}
+	}
+	if len(clean) > 0 {
+		sort.Strings(clean)
+		t.Errorf("clean now — remove from productImportsCoreGo ratchet: %v", clean)
+	}
+}
