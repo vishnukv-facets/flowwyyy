@@ -169,6 +169,12 @@ func serveUI(host string, port int, noQuote bool) int {
 	if _, err := workdirreg.SyncGitRemotes(db); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: sync workdir remotes: %v\n", err)
 	}
+	// Seed the steerer persona lazily on serve (idempotent). In the two-binary
+	// world `flow init` runs core-side and can't reach this product hook, so
+	// flowwyyy ensures the persona here instead (seam §11.3.1, Tier D).
+	if err := seedSteererPersona(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: seed steerer persona: %v\n", err)
+	}
 
 	exe, err := os.Executable()
 	if err != nil {
