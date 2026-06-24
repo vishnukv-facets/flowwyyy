@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-
-	"flow/internal/flowdb"
 )
 
 type Version struct {
@@ -15,7 +13,14 @@ type Version struct {
 	Schema  int
 }
 
-var RequiredFloor = Version{Version: "dev", Schema: flowdb.SchemaVersion}
+// requiredSchemaFloor is the minimum flow.db schema version flowwyyy requires of
+// the (official) `flow` binary it execs. It is flowwyyy's OWN requirement in the
+// two-binary model, so it lives product-side rather than reaching into the core
+// flowdb package. Bump it when flowwyyy starts depending on a newer core schema.
+// (Mirrors the value of flowdb.SchemaVersion at the time of decoupling.)
+const requiredSchemaFloor = 1
+
+var RequiredFloor = Version{Version: "dev", Schema: requiredSchemaFloor}
 
 func CheckCompat(ctx context.Context, bin string, floor Version) error {
 	stdout, stderr, code, err := (Client{Bin: bin}).Run(ctx, "version", "--json")

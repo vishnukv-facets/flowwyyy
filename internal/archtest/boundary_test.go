@@ -117,6 +117,13 @@ var productGoPkgs = []string{
 	// does not pull it), reads product tables (attention_feed/steering_trace), so
 	// it was reclassified from core to product and cut onto productdb (T13).
 	"flow/internal/workevents",
+	// productbriefing is the product-side standup/overview aggregation — a
+	// productdb-backed port of core's briefing (which stays flowdb for `flow
+	// standup`); server reads it instead of importing the core package (T13).
+	"flow/internal/productbriefing",
+	// flowclient is the product-side exec wrapper for the `flow` binary; its
+	// compat floor was inlined so it no longer reaches into flowdb (T13).
+	"flow/internal/flowclient",
 }
 
 // productImportsCoreGo is the SECOND ratchet (plan T13): product packages that
@@ -125,17 +132,17 @@ var productGoPkgs = []string{
 // read layer end to end. Like knownViolations, the test fails in both
 // directions — on a new violation and when a ratcheted package becomes clean.
 var productImportsCoreGo = map[string]bool{
-	"flow/cmd/flowwyyy":    true, // app.Version + transitive flowdb via product/server
-	"flow/internal/server": true, // own flowdb use CLEARED; still transitively pulls flowdb
-	//   via 4 flowdb-bound CORE packages it consumes: briefing (standup),
-	//   workevents (activity log), workdirreg (workdir registry), agents (session
-	//   discovery). Clearing server needs those reads moved onto productdb /
-	//   flow-exec — the next burndown step.
+	"flow/cmd/flowwyyy":     true, // app.Version + transitive flowdb via product
 	"flow/internal/product": true, // attention.go/ui.go still open the DB via flowdb.OpenDB (T13 step 4)
 	// monitor: CLEARED (T13) — reads via productdb, connector tables via productdb,
 	//   core writes via flow exec, git detection via the flowdb-free gitremote pkg.
 	// steering: CLEARED (T13) — attention/steering tables via productdb, tag write
 	//   via the taskTagger flow-exec helper; product-table registration is test-only.
+	// server: CLEARED (T13) — own flowdb use removed (reads→productdb, Bucket-O
+	//   writes→flow exec) AND all 4 transitively-flowdb-bound deps decoupled:
+	//   agents made flowdb-free, workdirreg replaced by `flow workdir` exec,
+	//   workevents reclassified onto productdb, briefing replaced by the
+	//   productdb-backed productbriefing, flowclient's compat floor inlined.
 }
 
 // TestProductDoesNotImportCoreGo enforces the Phase-3 boundary: the flowwyyy

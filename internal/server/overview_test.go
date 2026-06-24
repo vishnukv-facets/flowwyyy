@@ -53,7 +53,7 @@ func TestHandleOverviewIncludesBriefing(t *testing.T) {
 	}
 	items, ok := raw["needs_you"].([]any)
 	if !ok || len(items) == 0 {
-		t.Fatalf("briefing.needs_you empty or missing: %+v", raw)
+		t.Fatalf("productbriefing.needs_you empty or missing: %+v", raw)
 	}
 	first, _ := items[0].(map[string]any)
 	if first["kind"] != "attention" || first["ref"] != "overview-feed" {

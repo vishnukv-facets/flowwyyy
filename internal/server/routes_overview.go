@@ -1,7 +1,7 @@
 package server
 
 import (
-	"flow/internal/briefing"
+	"flow/internal/productbriefing"
 	"flow/internal/productdb"
 	"fmt"
 	"net/http"
@@ -69,7 +69,7 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	now := time.Now()
-	brief, err := briefing.Build(s.cfg.DB, s.cfg.FlowRoot, briefing.Options{
+	brief, err := productbriefing.Build(s.cfg.DB, s.cfg.FlowRoot, productbriefing.Options{
 		Now:             now,
 		Since:           time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()),
 		Limit:           20,
@@ -88,12 +88,12 @@ func (s *Server) handleOverview(w http.ResponseWriter, r *http.Request) {
 // briefing's "Needs you" tier and the Live-sessions panel never disagree about
 // what is waiting. Returns nil on any snapshot error — the briefing degrades to
 // its DB-derived rows rather than failing the whole overview.
-func (s *Server) waitingSessionsForBriefing() []briefing.WaitingSession {
+func (s *Server) waitingSessionsForBriefing() []productbriefing.WaitingSession {
 	data, err := s.cachedUIData()
 	if err != nil {
 		return nil
 	}
-	var out []briefing.WaitingSession
+	var out []productbriefing.WaitingSession
 	for _, a := range data.Agents {
 		if a.Status != "waiting" {
 			continue
@@ -102,7 +102,7 @@ func (s *Server) waitingSessionsForBriefing() []briefing.WaitingSession {
 		if a.Project != nil {
 			project = *a.Project
 		}
-		out = append(out, briefing.WaitingSession{
+		out = append(out, productbriefing.WaitingSession{
 			TaskSlug: a.Slug,
 			Name:     a.Name,
 			Project:  project,
