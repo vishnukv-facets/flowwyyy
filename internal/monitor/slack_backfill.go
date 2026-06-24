@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"flow/internal/flowdb"
+	"flow/internal/productdb"
 
 	"github.com/slack-go/slack"
 )
@@ -151,7 +151,7 @@ func (b *SlackBackfill) Run(ctx context.Context) {
 func (b *SlackBackfill) runOnce(ctx context.Context) {
 	// Only non-done Slack-reply tasks: finished threads don't need waking, and
 	// the tag is the authoritative source of (channel, thread_ts).
-	tasks, err := flowdb.ListTasks(b.db, flowdb.TaskFilter{Tag: "slack-reply", ExcludeDone: true})
+	tasks, err := productdb.ListTasks(b.db, productdb.TaskFilter{Tag: "slack-reply", ExcludeDone: true})
 	if err != nil {
 		b.logFn("slack backfill: list tasks: %v", err)
 		return
@@ -165,7 +165,7 @@ func (b *SlackBackfill) runOnce(ctx context.Context) {
 			return
 		default:
 		}
-		tags, err := flowdb.GetTaskTags(b.db, task.Slug)
+		tags, err := productdb.GetTaskTags(b.db, task.Slug)
 		if err != nil {
 			continue
 		}
@@ -227,7 +227,7 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 	watermarkKey := ""
 	if steererOwned {
 		watermarkKey = slackThreadSteeringWatermarkKey(slug, channel, threadTS)
-		if wm, err := flowdb.GetSteeringWatermark(b.db, watermarkKey); err != nil {
+		if wm, err := productdb.GetSteeringWatermark(b.db, watermarkKey); err != nil {
 			return 0, err
 		} else if strings.TrimSpace(wm) != "" {
 			cursor = wm
@@ -307,7 +307,7 @@ func (b *SlackBackfill) reconcile(ctx context.Context, slug, channel, threadTS s
 		delivered++
 	}
 	if steererOwned && newMax != cursor {
-		if err := flowdb.SetSteeringWatermark(b.db, watermarkKey, newMax, flowdb.NowISO()); err != nil {
+		if err := productdb.SetSteeringWatermark(b.db, watermarkKey, newMax, productdb.NowISO()); err != nil {
 			return delivered, err
 		}
 	}
@@ -349,7 +349,7 @@ func (b *SlackBackfill) reconcileSteererThreadsOnce(ctx context.Context) {
 	if !b.steererOwnsRouting() {
 		return
 	}
-	cursors, err := flowdb.ListRecentSlackThreadCursors(b.db, steererBackfillThreadLimit)
+	cursors, err := productdb.ListRecentSlackThreadCursors(b.db, steererBackfillThreadLimit)
 	if err != nil {
 		b.logFn("slack backfill (steerer threads): list: %v", err)
 		return
@@ -394,7 +394,7 @@ func (b *SlackBackfill) reconcileSteererThread(ctx context.Context, channel, thr
 	}
 	wmKey := slackThreadSteeringWatermarkKey("steerer", channel, threadTS)
 	cursor := strings.TrimSpace(floorTS)
-	if wm, err := flowdb.GetSteeringWatermark(b.db, wmKey); err == nil && wm != "" && slackTSLess(cursor, wm) {
+	if wm, err := productdb.GetSteeringWatermark(b.db, wmKey); err == nil && wm != "" && slackTSLess(cursor, wm) {
 		cursor = wm
 	}
 	if cursor == "" {
@@ -450,7 +450,7 @@ func (b *SlackBackfill) reconcileSteererThread(ctx context.Context, channel, thr
 		delivered++
 	}
 	if newMax != cursor {
-		if err := flowdb.SetSteeringWatermark(b.db, wmKey, newMax, flowdb.NowISO()); err != nil {
+		if err := productdb.SetSteeringWatermark(b.db, wmKey, newMax, productdb.NowISO()); err != nil {
 			return delivered, err
 		}
 	}
