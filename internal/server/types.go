@@ -34,18 +34,20 @@ type Server struct {
 	pairing *pairingStore
 	// remoteLimiter throttles pairing redemption + failed device-token auth.
 	// Always non-nil after New().
-	remoteLimiter *rateLimiter
-	terminals      *terminalHub
-	events         *eventHub
-	reconcile      *livenessReconciler
-	kbDistiller    *kbDistiller
-	steererCompact *steererCompactWorker
-	kbDreamer      *kbDreamer
-	kbWatcher      *kbWatcher
-	transcripts    *transcriptCache
-	caches         *uiCaches
-	slackListener  *monitor.SlackListener
-	githubListener *monitor.GitHubListener
+	remoteLimiter    *rateLimiter
+	terminals        *terminalHub
+	events           *eventHub
+	reconcile        *livenessReconciler
+	kbDistiller      *kbDistiller
+	steererCompact   *steererCompactWorker
+	kbDreamer        *kbDreamer
+	kbWatcher        *kbWatcher
+	transcripts      *transcriptCache
+	caches           *uiCaches
+	slackListener    *monitor.SlackListener
+	githubListener   *monitor.GitHubListener
+	slackDispatcher  *monitor.Dispatcher
+	githubDispatcher *monitor.GitHubDispatcher
 	// cascade is the steering (attention-router) triage brain the dispatcher
 	// routes untracked messages into. Held on the server so the steerer
 	// backfill (ListenAndServe) can replay catch-up messages through the SAME
@@ -89,6 +91,11 @@ type Server struct {
 	backupSched *backupScheduler
 	// respawn debounces agent respawns triggered by inbox events.
 	respawn *respawnGate
+
+	rateLimitQueueMu    sync.Mutex
+	rateLimitQueueAt    time.Time
+	rateLimitQueueTimer *time.Timer
+	rateLimitDrainMu    sync.Mutex
 
 	powerAssertionMu sync.Mutex
 	powerAssertion   *powerAssertion
@@ -286,6 +293,7 @@ type TaskView struct {
 	Assignee            *string       `json:"assignee"`
 	PermissionMode      string        `json:"permission_mode"`
 	Model               string        `json:"model"`
+	Effort              string        `json:"effort"`
 	Tags                []string      `json:"tags"`
 	SessionID           *string       `json:"session_id"`
 	SessionProvider     *string       `json:"session_provider"`

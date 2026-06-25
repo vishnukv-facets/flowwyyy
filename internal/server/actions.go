@@ -35,6 +35,7 @@ type actionRequest struct {
 	Provider       string `json:"provider"`
 	PermissionMode string `json:"permission_mode"`
 	Model          string `json:"model"`
+	Effort         string `json:"effort"`
 	Mkdir          bool   `json:"mkdir"`
 
 	// Schedule is the recurring-schedule phrase ("every 6 hours",
@@ -156,6 +157,7 @@ func (s *Server) multipartActionRequest(w http.ResponseWriter, r *http.Request) 
 		Provider:       strings.TrimSpace(r.FormValue("provider")),
 		PermissionMode: strings.TrimSpace(r.FormValue("permission_mode")),
 		Model:          strings.TrimSpace(r.FormValue("model")),
+		Effort:         strings.TrimSpace(r.FormValue("effort")),
 	}
 	if req.Kind == "" {
 		return actionRequest{}, errors.New("kind is required")
@@ -290,6 +292,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.updateProvider(req)
 	case "update-model":
 		return s.updateModel(req)
+	case "update-effort":
+		return s.updateEffort(req)
 	case "update-task-name":
 		return s.updateTaskName(req)
 	case "update-project":
@@ -330,6 +334,8 @@ func (s *Server) runAction(req actionRequest) (actionResponse, int) {
 		return s.revealWebhookSecret()
 	case "compact-db":
 		return s.compactFlowDB()
+	case "recheck-provider-limits":
+		return s.recheckProviderLimits()
 	case "attention-act":
 		return s.attentionAct(req)
 	case "attention-autoact":

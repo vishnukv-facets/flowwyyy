@@ -27,6 +27,13 @@ const hookMatcher = "startup|resume"
 // hookCommand: changing this string would orphan existing installs.
 const userPromptSubmitHookCommand = "flow hook user-prompt-submit"
 
+// claudeStatusLineCommand captures Claude Code's official statusLine stdin
+// payload into Flow-owned provider usage state. It must stay stable for
+// install/uninstall idempotency.
+const claudeStatusLineCommand = "flow hook claude-statusline"
+
+const claudeStatusLinePreviousKey = "flowStatusLinePrevious"
+
 // skillInstallPath returns the Claude skill installation path. It remains the
 // primary path for version tracking and Claude hooks.
 func skillInstallPath() (string, error) {
@@ -160,6 +167,7 @@ func maybeAutoUpgradeSkill() {
 	}
 	_ = writeSkillVersion(Version)
 	_, _ = installSessionStartHook()
+	_, _ = installClaudeStatusLine()
 	// UserPromptSubmit hook was removed in v0.1.0-alpha.7 — the
 	// per-prompt token cost wasn't worth the marginal value. Actively
 	// uninstall any stale entry left behind by older binaries.
@@ -190,7 +198,7 @@ func cmdSkill(args []string) int {
 func skillInstall(args []string, forceDefault bool) int {
 	fs := flagSet("skill install")
 	force := fs.Bool("force", forceDefault, "overwrite an existing installation")
-	skipHook := fs.Bool("skip-hook", false, "don't auto-install the SessionStart hook in ~/.claude/settings.json")
+	skipHook := fs.Bool("skip-hook", false, "don't auto-install Flow's Claude settings entries in ~/.claude/settings.json")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -239,6 +247,12 @@ func skillInstall(args []string, forceDefault bool) int {
 		fmt.Printf("installed SessionStart hook in %s (fires on startup + resume)\n", settings)
 	} else {
 		fmt.Println("SessionStart hook already installed — leaving as is")
+	}
+	if added, err := installClaudeStatusLine(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not install Claude statusLine capture: %v\n", err)
+	} else if added {
+		settings, _ := userSettingsPath()
+		fmt.Printf("installed Claude statusLine capture in %s\n", settings)
 	}
 	// UserPromptSubmit hook was removed in v0.1.0-alpha.7. Actively
 	// uninstall any stale entry left behind by older binaries so a
@@ -303,6 +317,13 @@ func skillUninstall(args []string) int {
 		settings, _ := userSettingsPath()
 		fmt.Printf("removed UserPromptSubmit hook from %s\n", settings)
 	}
+	if removed, err := uninstallClaudeStatusLine(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not remove Claude statusLine capture: %v\n", err)
+		return 0
+	} else if removed {
+		settings, _ := userSettingsPath()
+		fmt.Printf("removed Claude statusLine capture from %s\n", settings)
+	}
 	return 0
 }
 
@@ -327,6 +348,73 @@ func uninstallUserPromptSubmitHook() (bool, error) {
 	return uninstallClaudeHook("UserPromptSubmit", userPromptSubmitHookCommand)
 }
 
+func installClaudeStatusLine() (bool, error) {
+	path, err := userSettingsPath()
+	if err != nil {
+		return false, err
+	}
+	settings, err := readClaudeSettings(path)
+	if err != nil {
+		return false, err
+	}
+	current, _ := settings["statusLine"].(map[string]any)
+	if current != nil {
+		if cmd, _ := current["command"].(string); strings.TrimSpace(cmd) == claudeStatusLineCommand {
+			return false, nil
+		}
+		settings[claudeStatusLinePreviousKey] = copyJSONMap(current)
+	}
+
+	next := map[string]any{"type": "command", "command": claudeStatusLineCommand}
+	for k, v := range current {
+		if k == "type" || k == "command" {
+			continue
+		}
+		next[k] = v
+	}
+	settings["statusLine"] = next
+	if err := writeClaudeSettings(path, settings); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func uninstallClaudeStatusLine() (bool, error) {
+	path, err := userSettingsPath()
+	if err != nil {
+		return false, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", path, err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return false, fmt.Errorf("parse %s: %w", path, err)
+	}
+	current, _ := settings["statusLine"].(map[string]any)
+	if current == nil {
+		return false, nil
+	}
+	cmd, _ := current["command"].(string)
+	if strings.TrimSpace(cmd) != claudeStatusLineCommand {
+		return false, nil
+	}
+	if prev, _ := settings[claudeStatusLinePreviousKey].(map[string]any); prev != nil {
+		settings["statusLine"] = prev
+	} else {
+		delete(settings, "statusLine")
+	}
+	delete(settings, claudeStatusLinePreviousKey)
+	if err := writeClaudeSettings(path, settings); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // installClaudeHook idempotently adds a hook entry for the given
 // Claude Code event to ~/.claude/settings.json. matcher may be empty —
 // some events (UserPromptSubmit, Notification) don't use a matcher and
@@ -342,22 +430,9 @@ func installClaudeHook(event, matcher, command string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	raw, err := os.ReadFile(path)
+	settings, err := readClaudeSettings(path)
 	if err != nil {
-		if !os.IsNotExist(err) {
-			return false, fmt.Errorf("read %s: %w", path, err)
-		}
-		raw = []byte("{}")
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return false, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
-		}
-	}
-	var settings map[string]any
-	if err := json.Unmarshal(raw, &settings); err != nil {
-		return false, fmt.Errorf("parse %s: %w", path, err)
-	}
-	if settings == nil {
-		settings = map[string]any{}
+		return false, err
 	}
 
 	hooks, _ := settings["hooks"].(map[string]any)
@@ -398,15 +473,7 @@ func installClaudeHook(event, matcher, command string) (bool, error) {
 	hooks[event] = entries
 	settings["hooks"] = hooks
 
-	out, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		return false, fmt.Errorf("marshal settings: %w", err)
-	}
-	out = append(out, '\n')
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return false, fmt.Errorf("write %s: %w", path, err)
-	}
-	return true, nil
+	return true, writeClaudeSettings(path, settings)
 }
 
 // uninstallClaudeHook removes any entry under hooks.<event> whose
@@ -482,13 +549,49 @@ func uninstallClaudeHook(event, command string) (bool, error) {
 		settings["hooks"] = hooks
 	}
 
+	if err := writeClaudeSettings(path, settings); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func readClaudeSettings(path string) (map[string]any, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("read %s: %w", path, err)
+		}
+		raw = []byte("{}")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("mkdir %s: %w", filepath.Dir(path), err)
+		}
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return nil, fmt.Errorf("parse %s: %w", path, err)
+	}
+	if settings == nil {
+		settings = map[string]any{}
+	}
+	return settings, nil
+}
+
+func writeClaudeSettings(path string, settings map[string]any) error {
 	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		return false, fmt.Errorf("marshal settings: %w", err)
+		return fmt.Errorf("marshal settings: %w", err)
 	}
 	out = append(out, '\n')
 	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return false, fmt.Errorf("write %s: %w", path, err)
+		return fmt.Errorf("write %s: %w", path, err)
 	}
-	return true, nil
+	return nil
+}
+
+func copyJSONMap(src map[string]any) map[string]any {
+	out := make(map[string]any, len(src))
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
 }

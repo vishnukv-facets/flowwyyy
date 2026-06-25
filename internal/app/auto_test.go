@@ -372,7 +372,7 @@ func TestAutoChildEnvStripsSessionID(t *testing.T) {
 }
 
 func TestCodexExecCLIArgsUseSandboxedNoApproval(t *testing.T) {
-	args := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4-mini")
+	args := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4-mini", "xhigh")
 	want := []string{
 		"--ask-for-approval", "never",
 		"--sandbox", "workspace-write",
@@ -381,6 +381,7 @@ func TestCodexExecCLIArgsUseSandboxedNoApproval(t *testing.T) {
 		"--cd", "/tmp/work",
 		"--add-dir", "/tmp/flow-root",
 		"--model", "gpt-5.4-mini",
+		"-c", "model_reasoning_effort=xhigh",
 		"-",
 	}
 	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
@@ -400,14 +401,14 @@ func TestCodexExecCLIArgsAddsGitCommonDirForLinkedWorktree(t *testing.T) {
 		t.Fatalf("git common dir: %v", err)
 	}
 
-	args := codexExecCLIArgs(wt, t.TempDir(), "auto", "gpt-5.4-mini")
+	args := codexExecCLIArgs(wt, t.TempDir(), "auto", "gpt-5.4-mini", "")
 	if !testContainsString(args, "--add-dir") || !testContainsString(args, strings.TrimSpace(string(commonDir))) {
 		t.Fatalf("codex exec args missing linked-worktree git common dir %q: %#v", strings.TrimSpace(string(commonDir)), args)
 	}
 }
 
 func TestCodexExecCLIArgsBypassIsExplicit(t *testing.T) {
-	args := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "bypass", "")
+	args := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "bypass", "", "")
 	if !testContainsString(args, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Fatalf("bypass args missing dangerous bypass flag: %#v", args)
 	}
@@ -468,6 +469,7 @@ func TestAutoRunnerCodexExecCommand(t *testing.T) {
 		FlowRoot:       "/tmp/flow-root",
 		PermissionMode: "auto",
 		Model:          "gpt-5.4-mini",
+		Effort:         "xhigh",
 	}
 	if err := autoRunner(req); err != nil {
 		t.Fatalf("autoRunner codex: %v", err)
@@ -484,7 +486,7 @@ func TestAutoRunnerCodexExecCommand(t *testing.T) {
 	if cap.Name != "codex" {
 		t.Fatalf("command name = %q, want codex", cap.Name)
 	}
-	wantArgs := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4-mini")
+	wantArgs := codexExecCLIArgs("/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4-mini", "xhigh")
 	if strings.Join(cap.Args, "\x00") != strings.Join(wantArgs, "\x00") {
 		t.Fatalf("command args = %#v, want %#v", cap.Args, wantArgs)
 	}

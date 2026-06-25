@@ -50,8 +50,9 @@ var resolveProjectForRepo = func(db *sql.DB, repoKey string) (string, bool) {
 // mirrors Dispatcher for Slack but keeps GitHub-specific tags, briefs, and
 // idempotency isolated.
 type GitHubDispatcher struct {
-	DB     *sql.DB
-	Opener TaskOpener
+	DB       *sql.DB
+	Opener   TaskOpener
+	HoldGate ConnectorHoldGate
 	// Steerer routes GitHub events into the steering cascade. By default this is
 	// trace/feed parallel to the legacy task pipeline; when SteererOwnsRouting
 	// returns true, the steerer becomes the owner and the legacy pipeline is
@@ -77,6 +78,12 @@ func (d *GitHubDispatcher) Dispatch(ctx context.Context, ev GitHubEvent) error {
 	}
 	if ev.LinkTag() == "" {
 		return nil
+	}
+	if d.HoldGate != nil && !connectorHoldBypassed(ctx) {
+		held, err := d.HoldGate.HoldGitHubEvent(ctx, ev)
+		if held || err != nil {
+			return err
+		}
 	}
 	if key := ev.EventKeyValue(); key != "" {
 		seen, err := flowdb.HasGitHubEvent(d.DB, key)

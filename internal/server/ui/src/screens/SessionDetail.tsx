@@ -65,7 +65,7 @@ import { TaskTerminal } from '../components/Terminal'
 import { Md } from '../components/Markdown'
 import { Transcript } from '../components/Transcript'
 import { Modal } from '../components/Modal'
-import { AgentPicker, ModelPicker, PermissionPicker } from '../components/pickers'
+import { AgentPicker, EffortPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
 import { compact, compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
@@ -376,6 +376,13 @@ export function SessionDetail({ slug }: { slug: string }) {
                 provider={task.session_provider || 'claude'}
                 value={task.model || ''}
                 onChange={(v) => run('update-model', { model: v })}
+              />
+            )}
+            {canChooseAgent && (
+              <EffortPicker
+                provider={task.session_provider || 'claude'}
+                value={task.effort || ''}
+                onChange={(v) => run('update-effort', { effort: v })}
               />
             )}
             <PermissionPicker

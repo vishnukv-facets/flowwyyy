@@ -1049,6 +1049,63 @@ func TestUpdateTaskModelBacklogOnly(t *testing.T) {
 	}
 }
 
+func TestUpdateTaskEffortBacklogOnly(t *testing.T) {
+	setupFlowRoot(t)
+	repo := t.TempDir()
+	if rc := cmdAdd([]string{"task", "Effort Switch", "--slug", "effort-switch", "--work-dir", repo, "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	db := openFlowDB(t)
+
+	if rc := cmdUpdate([]string{"task", "effort-switch", "--effort", "xhigh"}); rc != 0 {
+		t.Fatalf("set effort rc=%d", rc)
+	}
+	task, err := flowdb.GetTask(db, "effort-switch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.Effort.Valid || task.Effort.String != "xhigh" {
+		t.Fatalf("effort = %+v, want xhigh", task.Effort)
+	}
+
+	if rc := cmdUpdate([]string{"task", "effort-switch", "--clear-effort"}); rc != 0 {
+		t.Fatalf("clear effort rc=%d", rc)
+	}
+	if task, err = flowdb.GetTask(db, "effort-switch"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Effort.Valid && task.Effort.String != "" {
+		t.Fatalf("effort after clear = %+v, want NULL", task.Effort)
+	}
+
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_started=?, status='in-progress' WHERE slug=?`,
+		"33333333-3333-4333-8333-333333333333", now, "effort-switch",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if rc := cmdUpdate([]string{"task", "effort-switch", "--effort", "high"}); rc != 1 {
+		t.Fatalf("set effort on started task rc=%d, want 1 (locked)", rc)
+	}
+	if task, err = flowdb.GetTask(db, "effort-switch"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Effort.Valid {
+		t.Fatalf("effort after rejected set = %+v, want NULL (unchanged)", task.Effort)
+	}
+}
+
+func TestUpdateTaskEffortMutuallyExclusive(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Mx effort", "--slug", "mx-effort", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	if rc := cmdUpdate([]string{"task", "mx-effort", "--effort", "high", "--clear-effort"}); rc != 2 {
+		t.Fatalf("rc=%d, want 2 (mutually exclusive)", rc)
+	}
+}
+
 func TestUpdateTaskModelMutuallyExclusive(t *testing.T) {
 	setupFlowRoot(t)
 	if rc := cmdAdd([]string{"task", "Mx", "--slug", "mx-model", "--agent", "claude"}); rc != 0 {

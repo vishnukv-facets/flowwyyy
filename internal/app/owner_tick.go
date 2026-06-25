@@ -24,7 +24,7 @@ var ownerTickRunner = func(provider, workDir, flowRootPath, prompt string) error
 		provider = sessionProviderClaude
 	}
 	if provider == sessionProviderCodex {
-		cmd := commandRunner("codex", codexExecCLIArgs(workDir, flowRootPath, "bypass", "")...)
+		cmd := commandRunner("codex", codexExecCLIArgs(workDir, flowRootPath, "bypass", "", "")...)
 		cmd.Stdin = strings.NewReader(prompt)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr

@@ -150,6 +150,36 @@ func TestCmdDoPassesExplicitModelToClaude(t *testing.T) {
 	}
 }
 
+func TestCmdDoPassesExplicitEffortToClaude(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Explicit effort", "--slug", "explicit-effort", "--effort", "xhigh", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"explicit-effort"}); rc != 0 {
+		t.Fatalf("do rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--effort xhigh") {
+		t.Errorf("explicit effort should pass --effort xhigh, got:\n%s", script)
+	}
+}
+
+func TestCmdDoDefaultsEffortXHighForClaudeOpus(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Opus default effort", "--slug", "opus-default-effort", "--model", "opus", "--agent", "claude"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"opus-default-effort"}); rc != 0 {
+		t.Fatalf("do rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--effort xhigh") {
+		t.Errorf("opus launch should default to --effort xhigh, got:\n%s", script)
+	}
+}
+
 func TestCmdDoDefaultsToMediumModelTier(t *testing.T) {
 	setupFlowRoot(t)
 	t.Setenv("FLOW_MODEL_TIER", "")
@@ -744,6 +774,22 @@ func TestCmdDoCodexFreshUsesInteractiveWrapper(t *testing.T) {
 	}
 }
 
+func TestCmdDoDefaultsEffortXHighForCodexFiveFive(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Codex 5.5 effort", "--slug", "codex-five-five-effort", "--model", "gpt-5.5", "--agent", "codex"}); rc != 0 {
+		t.Fatalf("add rc=%d", rc)
+	}
+
+	_, getScript := stubITerm(t)
+	if rc := cmdDo([]string{"codex-five-five-effort"}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	script := readWrapper(t, getScript())
+	if !strings.Contains(script, "--effort 'xhigh'") {
+		t.Fatalf("codex gpt-5.5 wrapper should default --effort xhigh:\n%s", script)
+	}
+}
+
 func TestCmdDoBackgroundStoresCapturedHarnessSession(t *testing.T) {
 	setupFlowRoot(t)
 	seedTask(t, "bg-task")
@@ -802,7 +848,7 @@ func TestCmdDoBackgroundStoresCapturedHarnessSession(t *testing.T) {
 }
 
 func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
-	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "bypass", "")
+	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "bypass", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -815,7 +861,7 @@ func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
 		}
 	}
 
-	resume, err := codexCLIArgs(codexModeResume, "abc-session", "", "/tmp/work", "/tmp/flow-root", "auto", "")
+	resume, err := codexCLIArgs(codexModeResume, "abc-session", "", "/tmp/work", "/tmp/flow-root", "auto", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -824,7 +870,7 @@ func TestCodexCLIArgsUseInteractiveCodex(t *testing.T) {
 		t.Fatalf("resume args = %#v, want %#v", resume, wantResume)
 	}
 
-	defaultFresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "default", "")
+	defaultFresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "default", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +892,7 @@ func TestCodexCLIArgsIncludesModel(t *testing.T) {
 		return false
 	}
 
-	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4")
+	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +900,7 @@ func TestCodexCLIArgsIncludesModel(t *testing.T) {
 		t.Errorf("fresh codex args missing --model gpt-5.4: %#v", fresh)
 	}
 
-	resume, err := codexCLIArgs(codexModeResume, "abc", "", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.5")
+	resume, err := codexCLIArgs(codexModeResume, "abc", "", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.5", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -863,12 +909,48 @@ func TestCodexCLIArgsIncludesModel(t *testing.T) {
 	}
 
 	// No model resolved -> no --model flag at all.
-	none, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "")
+	none, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if testContainsString(none, "--model") {
 		t.Errorf("empty model should omit --model: %#v", none)
+	}
+}
+
+func TestCodexCLIArgsIncludesEffort(t *testing.T) {
+	containsEffort := func(args []string, val string) bool {
+		want := "model_reasoning_effort=" + val
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "-c" && args[i+1] == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	fresh, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "gpt-5.4", "xhigh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEffort(fresh, "xhigh") {
+		t.Errorf("fresh codex args missing model_reasoning_effort=xhigh: %#v", fresh)
+	}
+
+	resume, err := codexCLIArgs(codexModeResume, "abc", "", "/tmp/work", "/tmp/flow-root", "auto", "", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsEffort(resume, "high") {
+		t.Errorf("resume codex args missing model_reasoning_effort=high: %#v", resume)
+	}
+
+	none, err := codexCLIArgs(codexModeFresh, "", "bootstrap", "/tmp/work", "/tmp/flow-root", "auto", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if testContainsString(none, "model_reasoning_effort=") {
+		t.Errorf("empty effort should omit model_reasoning_effort: %#v", none)
 	}
 }
 
@@ -881,7 +963,7 @@ func TestCodexCLIArgsAddsGitCommonDirForLinkedWorktree(t *testing.T) {
 		t.Fatalf("git common dir: %v", err)
 	}
 
-	args, err := codexCLIArgs(codexModeFresh, "", "bootstrap", wt, t.TempDir(), "auto", "")
+	args, err := codexCLIArgs(codexModeFresh, "", "bootstrap", wt, t.TempDir(), "auto", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

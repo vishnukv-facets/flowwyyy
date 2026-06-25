@@ -1643,17 +1643,20 @@ func TestPrepareTerminalLaunchAllocatesBrowserSession(t *testing.T) {
 	// Bootstrap resolves the session model like `flow do`: no explicit pin →
 	// baseline medium tier, upshifted one rung to large for this high-priority
 	// task → opus. --model is threaded into the launch.
-	if len(launch.Args) != 7 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
+	if len(launch.Args) != 9 || launch.Args[0] != "--session-id" || launch.Args[1] != launch.SessionID {
 		t.Fatalf("args = %#v", launch.Args)
 	}
 	if launch.Args[2] != "--model" || launch.Args[3] != "opus" {
 		t.Fatalf("default model args = %#v", launch.Args)
 	}
-	if launch.Args[4] != "--permission-mode" || launch.Args[5] != "auto" {
+	if launch.Args[4] != "--effort" || launch.Args[5] != "xhigh" {
+		t.Fatalf("default effort args = %#v", launch.Args)
+	}
+	if launch.Args[6] != "--permission-mode" || launch.Args[7] != "auto" {
 		t.Fatalf("default permission args = %#v", launch.Args)
 	}
-	if !strings.Contains(launch.Args[6], "flow task build-ui") {
-		t.Fatalf("bootstrap prompt = %q", launch.Args[6])
+	if !strings.Contains(launch.Args[8], "flow task build-ui") {
+		t.Fatalf("bootstrap prompt = %q", launch.Args[8])
 	}
 	task, err := flowdb.GetTask(db, "build-ui")
 	if err != nil {
@@ -1900,6 +1903,56 @@ func TestUpdateModelActionPinsBacklogThenLocks(t *testing.T) {
 	}
 }
 
+func TestUpdateEffortActionPinsBacklogThenLocks(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root) // build-ui: backlog, no session, effort NULL
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	resp, status := srv.runAction(actionRequest{Kind: "update-effort", Slug: "build-ui", Effort: "xhigh"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("pin xhigh: status=%d resp=%+v", status, resp)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !task.Effort.Valid || task.Effort.String != "xhigh" {
+		t.Fatalf("effort = %+v, want xhigh", task.Effort)
+	}
+
+	resp, status = srv.runAction(actionRequest{Kind: "update-effort", Slug: "build-ui", Effort: ""})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("clear effort: status=%d resp=%+v", status, resp)
+	}
+	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Effort.Valid && strings.TrimSpace(task.Effort.String) != "" {
+		t.Fatalf("effort after clear = %+v, want NULL/empty", task.Effort)
+	}
+
+	if _, status := srv.runAction(actionRequest{Kind: "update-effort", Slug: "build-ui", Effort: "high"}); status != http.StatusOK {
+		t.Fatalf("re-pin high: status=%d", status)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET session_started = ? WHERE slug = ?`, flowdb.NowISO(), "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	resp, status = srv.runAction(actionRequest{Kind: "update-effort", Slug: "build-ui", Effort: "low"})
+	if status != http.StatusBadRequest || resp.OK || !strings.Contains(resp.Message, "before a session starts") {
+		t.Fatalf("locked change: status=%d resp=%+v", status, resp)
+	}
+	if task, err = flowdb.GetTask(db, "build-ui"); err != nil {
+		t.Fatal(err)
+	}
+	if task.Effort.String != "high" {
+		t.Fatalf("effort after rejected change = %q, want high (unchanged)", task.Effort.String)
+	}
+
+	if resp, status := srv.runAction(actionRequest{Kind: "update-effort", Slug: "nope", Effort: "xhigh"}); status != http.StatusNotFound || resp.OK {
+		t.Fatalf("unknown slug: status=%d resp=%+v", status, resp)
+	}
+}
+
 func TestWorkdirActionsAddRenameRemove(t *testing.T) {
 	root, db := testRootDB(t)
 	workDir := t.TempDir()
@@ -2082,7 +2135,7 @@ func TestPrepareTerminalLaunchCodexStartsPendingCapture(t *testing.T) {
 	// --model is threaded after the writable-root and before the permission
 	// flags, mirroring `flow do`'s codex arg order. Baseline medium upshifts one
 	// rung to large for this high-priority task → gpt-5.5.
-	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--model", "gpt-5.5", "--ask-for-approval", "never", "--sandbox", "workspace-write"}
+	wantPrefix := []string{"--no-alt-screen", "-C", workDir, "--add-dir", root, "--model", "gpt-5.5", "-c", "model_reasoning_effort=xhigh", "--ask-for-approval", "never", "--sandbox", "workspace-write"}
 	if len(launch.Args) < len(wantPrefix)+1 {
 		t.Fatalf("codex args too short: %#v", launch.Args)
 	}

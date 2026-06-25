@@ -147,6 +147,8 @@ func cmdUpdateTask(args []string) int {
 	claudeAgent := fs.Bool("claude", false, "shortcut for --agent claude")
 	modelFlag := fs.String("model", "", "set session model override (e.g. opus|sonnet|haiku, gpt-5.4-mini|gpt-5.4|gpt-5.5; backlog tasks only)")
 	clearModel := fs.Bool("clear-model", false, "clear the model override (back to launch-time auto-resolution)")
+	effortFlag := fs.String("effort", "", "set reasoning effort override (backlog tasks only)")
+	clearEffort := fs.Bool("clear-effort", false, "clear the effort override (back to provider/model default)")
 	briefStatus := fs.String("brief-status", "", "refresh the brief's \"Current state\" snapshot (terse 1–3 lines; pass \"-\" to read the body from stdin)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
@@ -166,9 +168,9 @@ func cmdUpdateTask(args []string) int {
 		*waiting != "" || *clearWaiting ||
 		*project != "" || *clearProject ||
 		len(addTags) > 0 || len(removeTags) > 0 || *clearTags ||
-		agentRequested || *modelFlag != "" || *clearModel || *briefStatus != ""
+		agentRequested || *modelFlag != "" || *clearModel || *effortFlag != "" || *clearEffort || *briefStatus != ""
 	if !anyField {
-		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --model, --clear-model, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags, --brief-status")
+		fmt.Fprintln(os.Stderr, "error: give at least one of --slug, --name, --work-dir, --status, --priority, --agent, --model, --clear-model, --effort, --clear-effort, --assignee, --clear-assignee, --due-date, --clear-due, --depends-on, --remove-dep, --clear-deps, --subtask-of, --unparent, --parent, --remove-parent, --clear-parent, --waiting, --clear-waiting, --project, --clear-project, --tag, --remove-tag, --clear-tags, --brief-status")
 		return 2
 	}
 
@@ -215,6 +217,10 @@ func cmdUpdateTask(args []string) int {
 	}
 	if *clearModel && *modelFlag != "" {
 		fmt.Fprintln(os.Stderr, "error: --model and --clear-model are mutually exclusive")
+		return 2
+	}
+	if *clearEffort && *effortFlag != "" {
+		fmt.Fprintln(os.Stderr, "error: --effort and --clear-effort are mutually exclusive")
 		return 2
 	}
 	if *clearParent && (len(addParents) > 0 || len(removeParents) > 0) {
@@ -282,6 +288,19 @@ func cmdUpdateTask(args []string) int {
 		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
+	}
+	effortRequested := *effortFlag != "" || *clearEffort
+	effortForUpdate := ""
+	if effortRequested && !*clearEffort {
+		provider := task.SessionProvider
+		if newProvider != "" {
+			provider = newProvider
+		}
+		effortForUpdate, err = flowdb.NormalizeEffort(provider, *effortFlag)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 2
+		}
 	}
 
 	// Rename first so subsequent field updates operate on the new slug.
@@ -419,6 +438,31 @@ func cmdUpdateTask(args []string) int {
 			fmt.Println("model cleared (auto-resolved at launch)")
 		} else {
 			fmt.Printf("model → %s\n", flowdb.NormalizeModel(*modelFlag))
+		}
+	}
+	if effortRequested {
+		if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
+			fmt.Fprintf(os.Stderr,
+				"error: the effort can only be changed while a task is in backlog (before its session starts); %s is %s\n",
+				task.Slug, task.Status)
+			return 1
+		}
+		var effortVal any = nil
+		if !*clearEffort && effortForUpdate != "" {
+			effortVal = effortForUpdate
+		}
+		if _, err := db.Exec(
+			`UPDATE tasks SET effort=?, updated_at=?
+			 WHERE slug=? AND status='backlog' AND session_id IS NULL AND session_started IS NULL`,
+			effortVal, now, task.Slug,
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: update effort: %v\n", err)
+			return 1
+		}
+		if *clearEffort {
+			fmt.Println("effort cleared (provider/model default)")
+		} else {
+			fmt.Printf("effort → %s\n", effortForUpdate)
 		}
 	}
 	for _, p := range dependsOn {

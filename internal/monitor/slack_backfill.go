@@ -101,6 +101,7 @@ type SlackBackfill struct {
 	SteererSessionsEnabled func() bool
 	interval               time.Duration
 	limit                  int
+	HoldUntil              func() (time.Time, bool)
 	logFn                  func(string, ...any)
 }
 
@@ -135,6 +136,9 @@ func (b *SlackBackfill) Run(ctx context.Context) {
 	if b == nil || b.db == nil || b.client == nil {
 		return
 	}
+	if !b.waitUntilUnheld(ctx) {
+		return
+	}
 	b.runOnce(ctx)
 	t := time.NewTicker(b.interval)
 	defer t.Stop()
@@ -143,7 +147,30 @@ func (b *SlackBackfill) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !b.waitUntilUnheld(ctx) {
+				return
+			}
 			b.runOnce(ctx)
+		}
+	}
+}
+
+func (b *SlackBackfill) waitUntilUnheld(ctx context.Context) bool {
+	if b.HoldUntil == nil {
+		return true
+	}
+	for {
+		until, held := b.HoldUntil()
+		if !held || !until.After(time.Now()) {
+			return true
+		}
+		b.logFn("slack backfill: provider rate limit hold until %s", until.UTC().Format(time.RFC3339))
+		timer := time.NewTimer(time.Until(until) + 250*time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }

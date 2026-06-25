@@ -122,6 +122,30 @@ func TestBackfillColdStartLookback(t *testing.T) {
 	}
 }
 
+func TestBackfillRunWaitsDuringProviderHold(t *testing.T) {
+	db := backfillTestDB(t)
+	fake := &fakeHistory{byChannel: map[string][]monitor.SlackMessage{
+		"C1": {{TS: "200.000000", User: "U1", Text: "newer"}},
+	}}
+	observe := func(ctx context.Context, evs []monitor.InboundEvent) error { return nil }
+	bf := NewSteeringBackfill(db, observe, fake, nil, nil, watchOne("C1"), 5*time.Millisecond, time.Hour, 50)
+	bf.HoldUntil = func() (time.Time, bool) { return time.Now().Add(time.Hour), true }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		bf.Run(ctx)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	<-done
+
+	if len(fake.calls) != 0 {
+		t.Fatalf("History calls = %d, want 0 while provider hold is active", len(fake.calls))
+	}
+}
+
 func TestBackfillWarmOnlyNewer(t *testing.T) {
 	db := backfillTestDB(t)
 	if err := flowdb.SetSteeringWatermark(db, "C1", "150.000000", fixedNow.Format(time.RFC3339)); err != nil {

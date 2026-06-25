@@ -90,7 +90,9 @@
   font-weight: 500;
   font-size: 13.5px;
   position: relative;
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .rail-item:hover {
   background: var(--surface-hover);
@@ -101,7 +103,7 @@
   color: var(--accent-hi);
 }
 .rail-item.active::before {
-  content: '';
+  content: "";
   position: absolute;
   left: -12px;
   top: 8px;
@@ -821,7 +823,8 @@
   color: var(--text);
   cursor: pointer;
   min-width: 0; /* shrink with its grid track; wrap content instead of overflowing */
-  transition: border-color var(--dur-1, 0.15s) var(--ease, ease),
+  transition:
+    border-color var(--dur-1, 0.15s) var(--ease, ease),
     transform var(--dur-1, 0.15s) var(--ease, ease),
     box-shadow var(--dur-1, 0.15s) var(--ease, ease);
 }
@@ -1128,7 +1131,9 @@
   gap: 8px;
   padding: 12px 14px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), transform var(--dur-2) var(--ease),
+  transition:
+    border-color var(--dur-1) var(--ease),
+    transform var(--dur-2) var(--ease),
     box-shadow var(--dur-2) var(--ease);
 }
 .acard:hover {
@@ -1547,8 +1552,8 @@ select.input {
   border-radius: var(--r-sm);
 }
 /* provider shortcodes (:claude:/:codex:) rendered inline as brand logos */
-.md img[alt='claude'],
-.md img[alt='codex'] {
+.md img[alt="claude"],
+.md img[alt="codex"] {
   display: inline-block;
   width: auto;
   height: 1.15em;
@@ -1610,7 +1615,9 @@ select.input {
   color: var(--text-2);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .backlink-chip:hover {
   border-color: var(--accent-line);
@@ -1708,7 +1715,9 @@ select.input {
   background: #0f1015;
   border: 1px solid color-mix(in srgb, var(--accent-line) 68%, #111);
   border-radius: 8px;
-  box-shadow: 0 22px 60px -22px rgba(8, 10, 18, 0.58), 0 6px 18px -10px rgba(8, 10, 18, 0.55);
+  box-shadow:
+    0 22px 60px -22px rgba(8, 10, 18, 0.58),
+    0 6px 18px -10px rgba(8, 10, 18, 0.55);
   overflow: hidden;
 }
 .floating-terminal.minimized {
@@ -1853,8 +1862,10 @@ select.input {
   height: 14px;
   z-index: 3;
   cursor: nwse-resize;
-  border-right: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
-  border-bottom: 2px solid color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-right: 2px solid
+    color-mix(in srgb, var(--accent-line) 80%, transparent);
+  border-bottom: 2px solid
+    color-mix(in srgb, var(--accent-line) 80%, transparent);
   border-bottom-right-radius: 6px;
   opacity: 0.5;
   touch-action: none;
@@ -1892,7 +1903,9 @@ select.input {
   box-shadow: 0 12px 30px -16px rgba(8, 10, 18, 0.6);
   color: #8e95a8;
   cursor: pointer;
-  transition: border-color 140ms ease, color 140ms ease;
+  transition:
+    border-color 140ms ease,
+    color 140ms ease;
 }
 .adhoc-tray-toggle:hover {
   border-color: color-mix(in srgb, var(--accent) 50%, #111);
@@ -2158,7 +2171,10 @@ select.input {
   color: var(--text-2);
   font-size: 11.5px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .palette-chip:hover {
   border-color: var(--accent-line);
@@ -2438,7 +2454,9 @@ select.input {
   font-size: 12.5px;
   color: var(--text-2);
   font-weight: 500;
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
   white-space: nowrap;
 }
 .segmented button:hover {
@@ -3064,10 +3082,18 @@ select.input {
   background: var(--bg-3);
   border: 1px solid var(--border-faint);
 }
-.heat.l1 { background: var(--accent-soft); }
-.heat.l2 { background: color-mix(in srgb, var(--accent) 45%, transparent); }
-.heat.l3 { background: color-mix(in srgb, var(--accent) 70%, transparent); }
-.heat.l4 { background: var(--accent); }
+.heat.l1 {
+  background: var(--accent-soft);
+}
+.heat.l2 {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.heat.l3 {
+  background: color-mix(in srgb, var(--accent) 70%, transparent);
+}
+.heat.l4 {
+  background: var(--accent);
+}
 
 /* integration chips */
 .intgrid {
@@ -3182,11 +3208,26 @@ select.input {
   background: var(--bg-3);
   border: 1px solid var(--border-faint);
 }
-.cal-cell.future { background: transparent; border-color: transparent; }
-.cal-cell.l1 { background: var(--accent-soft); border-color: transparent; }
-.cal-cell.l2 { background: color-mix(in srgb, var(--accent) 45%, transparent); border-color: transparent; }
-.cal-cell.l3 { background: color-mix(in srgb, var(--accent) 72%, transparent); border-color: transparent; }
-.cal-cell.l4 { background: var(--accent); border-color: transparent; }
+.cal-cell.future {
+  background: transparent;
+  border-color: transparent;
+}
+.cal-cell.l1 {
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+.cal-cell.l2 {
+  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-color: transparent;
+}
+.cal-cell.l3 {
+  background: color-mix(in srgb, var(--accent) 72%, transparent);
+  border-color: transparent;
+}
+.cal-cell.l4 {
+  background: var(--accent);
+  border-color: transparent;
+}
 
 /* ----------------------- session: collapse + fullscreen ----------------- */
 .session.no-side {
@@ -3347,7 +3388,7 @@ select.input {
   border: 1px solid var(--border-strong);
   box-shadow: var(--shadow-pop);
   color: var(--text);
-  pointer-events: none;
+  pointer-events: auto;
   animation: ftip-in var(--dur-1) var(--ease-out);
 }
 .float-tip.below {
@@ -3370,7 +3411,7 @@ select.input {
 }
 /* caret — left tracks --caret-dx so it stays over the anchor after clamping */
 .float-tip::after {
-  content: '';
+  content: "";
   position: absolute;
   left: calc(50% + var(--caret-dx, 0px));
   bottom: -5px;
@@ -3405,6 +3446,9 @@ select.input {
   color: var(--text-3);
   white-space: nowrap;
 }
+.ftip-date.warn {
+  color: var(--danger);
+}
 .ftip-tasks {
   display: flex;
   flex-direction: column;
@@ -3419,7 +3463,7 @@ select.input {
   max-width: 100%;
 }
 .ftip-task::before {
-  content: '';
+  content: "";
   display: inline-block;
   width: 5px;
   height: 5px;
@@ -3432,6 +3476,91 @@ select.input {
   font-size: 10.5px;
   color: var(--text-3);
   margin-top: 1px;
+}
+.usage-tip {
+  min-width: 230px;
+}
+.usage-windows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 9px;
+}
+.usage-window-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.usage-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+}
+.usage-bar span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-reset {
+  min-height: 12px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-3);
+}
+.usage-hold {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-faint);
+}
+.usage-hold > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.usage-hold strong {
+  color: var(--text-2);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.usage-hold.limited strong {
+  color: var(--danger);
+}
+.usage-recheck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  height: 26px;
+  min-width: 84px;
+  padding: 0 9px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border-faint);
+  background: var(--bg-2);
+  color: var(--text-2);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.usage-recheck:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-3);
+  color: var(--text);
+}
+.usage-recheck:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 /* per-task token row in the activity bar tooltip: bulleted name on the left
    (clips when long), token count pinned right. The bullet comes from the
@@ -3466,7 +3595,9 @@ select.input {
   background: var(--text-3);
   opacity: 0.85;
   cursor: default;
-  transition: transform var(--dur-1) var(--ease), opacity var(--dur-1) var(--ease);
+  transition:
+    transform var(--dur-1) var(--ease),
+    opacity var(--dur-1) var(--ease);
 }
 .pbspark .pbrun:hover {
   opacity: 1;
@@ -3566,7 +3697,9 @@ select.input {
   align-items: center;
   gap: 7px;
 }
-.palette-section .spacer { flex: 1; }
+.palette-section .spacer {
+  flex: 1;
+}
 .palette-item-meta {
   margin-left: auto;
   font-family: var(--font-mono);
@@ -3602,7 +3735,7 @@ select.input {
   display: none;
 }
 .menu > summary::marker {
-  content: '';
+  content: "";
 }
 .menu-pop {
   position: absolute;
@@ -3717,7 +3850,9 @@ select.input {
   height: 24px;
   border-radius: var(--r-xs);
   color: var(--text-3);
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .iconseg-btn:hover {
   color: var(--text);
@@ -3743,10 +3878,18 @@ select.input {
   box-shadow: var(--shadow-card);
   min-width: 0;
 }
-.bento-tile.span2 { grid-column: span 2; }
-.bento-tile.span3 { grid-column: span 3; }
-.bento-tile.span6 { grid-column: 1 / -1; }
-.bento-tile.tall { height: 322px; }
+.bento-tile.span2 {
+  grid-column: span 2;
+}
+.bento-tile.span3 {
+  grid-column: span 3;
+}
+.bento-tile.span6 {
+  grid-column: 1 / -1;
+}
+.bento-tile.tall {
+  height: 322px;
+}
 .bento-tile.bare {
   background: transparent;
   border: none;
@@ -3791,13 +3934,29 @@ select.input {
   padding: 14px 18px;
   border-right: 1px solid var(--border);
 }
-.pulse-cell:last-child { border-right: none; }
-.pulse-val { font-size: 23px; font-weight: 600; }
-.pulse-label { margin-top: 4px; }
+.pulse-cell:last-child {
+  border-right: none;
+}
+.pulse-val {
+  font-size: 23px;
+  font-weight: 600;
+}
+.pulse-label {
+  margin-top: 4px;
+}
 
 /* Mission Control "Streak & tokens" analytics panel (Activity rail card) */
-.stats-cap { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
-.stats-streaks { display: flex; gap: 8px; margin-bottom: 14px; }
+.stats-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.stats-streaks {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
 .stats-blk {
   flex: 1;
   text-align: center;
@@ -3806,8 +3965,15 @@ select.input {
   border: 1px solid var(--border);
   border-radius: 9px;
 }
-.stats-num { font-size: 22px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
-.stats-streaks .stats-blk:first-child .stats-num { color: var(--accent-2); }
+.stats-num {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.stats-streaks .stats-blk:first-child .stats-num {
+  color: var(--accent-2);
+}
 .stats-sub {
   margin-top: 6px;
   font-size: 9.5px;
@@ -3822,9 +3988,19 @@ select.input {
   color: var(--text-3);
   margin-bottom: 4px;
 }
-.stats-tokens { display: flex; flex-direction: column; }
-.stats-tok-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; }
-.stats-tok-row + .stats-tok-row { border-top: 1px solid var(--border-faint); }
+.stats-tokens {
+  display: flex;
+  flex-direction: column;
+}
+.stats-tok-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 2px;
+}
+.stats-tok-row + .stats-tok-row {
+  border-top: 1px solid var(--border-faint);
+}
 .stats-tok-name {
   display: flex;
   align-items: center;
@@ -3833,13 +4009,38 @@ select.input {
   color: var(--text-2);
   font-size: 12.5px;
 }
-.stats-tok-val { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
-.stats-tok-cost { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; min-width: 58px; text-align: right; }
-.stats-tok-sess { font-size: 10.5px; min-width: 50px; text-align: right; }
-.stats-tok-total { margin-top: 2px; border-top: 1px solid var(--border); }
-.stats-tok-total .stats-tok-name { color: var(--text); font-weight: 600; }
-.stats-tok-total .stats-tok-val { font-weight: 600; }
-.stats-tok-total .stats-tok-cost { font-weight: 600; color: var(--text); }
+.stats-tok-val {
+  font-size: 13px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.stats-tok-cost {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  min-width: 58px;
+  text-align: right;
+}
+.stats-tok-sess {
+  font-size: 10.5px;
+  min-width: 50px;
+  text-align: right;
+}
+.stats-tok-total {
+  margin-top: 2px;
+  border-top: 1px solid var(--border);
+}
+.stats-tok-total .stats-tok-name {
+  color: var(--text);
+  font-weight: 600;
+}
+.stats-tok-total .stats-tok-val {
+  font-weight: 600;
+}
+.stats-tok-total .stats-tok-cost {
+  font-weight: 600;
+  color: var(--text);
+}
 
 /* feed rows (inbox / backlog / playbooks) */
 .feed-row {
@@ -3851,8 +4052,13 @@ select.input {
   cursor: pointer;
   transition: background var(--dur-1) var(--ease);
 }
-.feed-row:hover { background: var(--surface-hover); }
-.feed-title { font-size: 12.5px; font-weight: 500; }
+.feed-row:hover {
+  background: var(--surface-hover);
+}
+.feed-title {
+  font-size: 12.5px;
+  font-weight: 500;
+}
 .feed-sub {
   font-size: 11.5px;
   color: var(--text-3);
@@ -3867,21 +4073,41 @@ select.input {
   padding: 9px 8px;
   border-bottom: 1px solid var(--border-faint);
 }
-.env-row:last-child { border-bottom: none; }
-.env-label { flex: 1; font-size: 13px; }
+.env-row:last-child {
+  border-bottom: none;
+}
+.env-label {
+  flex: 1;
+  font-size: 13px;
+}
 
 @media (max-width: 1240px) {
-  .bento-tile.span2 { grid-column: span 3; }
-  .bento-tile.span3 { grid-column: span 3; }
+  .bento-tile.span2 {
+    grid-column: span 3;
+  }
+  .bento-tile.span3 {
+    grid-column: span 3;
+  }
 }
 @media (max-width: 820px) {
-  .bento-board { grid-template-columns: minmax(0, 1fr); }
+  .bento-board {
+    grid-template-columns: minmax(0, 1fr);
+  }
   .bento-tile.span2,
   .bento-tile.span3,
-  .bento-tile.span6 { grid-column: 1 / -1; }
-  .bento-tile.tall { height: auto; max-height: 320px; }
-  .pulse { flex-wrap: wrap; }
-  .pulse-cell { flex: 1 1 30%; }
+  .bento-tile.span6 {
+    grid-column: 1 / -1;
+  }
+  .bento-tile.tall {
+    height: auto;
+    max-height: 320px;
+  }
+  .pulse {
+    flex-wrap: wrap;
+  }
+  .pulse-cell {
+    flex: 1 1 30%;
+  }
 }
 
 /* ===================== mission control: main + right rail =============== */
@@ -4125,13 +4351,18 @@ select.input {
 .actbars.pb-runbars i {
   border-radius: 3px 3px 0 0;
   cursor: default;
-  transition: height var(--dur-2) var(--ease), background var(--dur-1) var(--ease);
+  transition:
+    height var(--dur-2) var(--ease),
+    background var(--dur-1) var(--ease);
 }
 .actbars.pb-runbars i:hover {
   background: var(--accent-hi);
 }
 
-.card.pulse, .pulse { display: flex; }
+.card.pulse,
+.pulse {
+  display: flex;
+}
 
 /* ----------------------- notifications bell ----------------------------- */
 .notif-trigger {
@@ -4568,7 +4799,9 @@ select.input {
 .row-action {
   opacity: 0.5; /* always visible, not hover-gated */
   flex: none;
-  transition: opacity var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    opacity var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .tbl tbody tr:hover .row-action,
 .acard:hover .row-action {
@@ -4730,7 +4963,7 @@ summary.detail-branch.as-button:hover {
 
 /* The GitHub mark SVG is white (built for dark surfaces) — invert it in light
    mode so it's visible on light backgrounds. */
-[data-theme='light'] .gh-mark {
+[data-theme="light"] .gh-mark {
   filter: invert(1);
 }
 
@@ -4806,7 +5039,9 @@ summary.detail-branch.as-button:hover {
   border: none;
   border-radius: var(--r-sm);
   cursor: pointer;
-  transition: background 0.12s ease, opacity 0.12s ease;
+  transition:
+    background 0.12s ease,
+    opacity 0.12s ease;
 }
 .nudge-send:hover:not(:disabled) {
   background: var(--accent-hi);
@@ -4908,6 +5143,9 @@ summary.detail-branch.as-button:hover {
   padding: 0 30px 0 11px;
   font-size: 12.5px;
 }
+.effort-select {
+  max-width: 130px;
+}
 
 /* recent-workdir quick-pick pills (New task form) */
 .wd-pills {
@@ -4928,7 +5166,9 @@ summary.detail-branch.as-button:hover {
   color: var(--text-2);
   font-size: 12px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
 }
 .wd-pill:hover {
   border-color: var(--accent-line);
@@ -5072,18 +5312,27 @@ summary.detail-branch.as-button:hover {
 .tg-rail::before,
 .tg-elbow::before,
 .tg-desc::before {
-  content: '';
+  content: "";
   position: absolute;
   left: 11px;
   border-left: 1px solid var(--border-strong);
 }
-.tg-rail::before { top: 0; bottom: 0; }
+.tg-rail::before {
+  top: 0;
+  bottom: 0;
+}
 /* elbow: vertical down to the centre (last child) or all the way (middle), plus
  * a short horizontal tick that meets the task name / caret */
-.tg-elbow::before { top: 0; bottom: 0; }
-.tg-elbow.last::before { bottom: auto; height: 50%; }
+.tg-elbow::before {
+  top: 0;
+  bottom: 0;
+}
+.tg-elbow.last::before {
+  bottom: auto;
+  height: 50%;
+}
 .tg-elbow::after {
-  content: '';
+  content: "";
   position: absolute;
   left: 11px;
   width: 11px;
@@ -5092,7 +5341,10 @@ summary.detail-branch.as-button:hover {
 }
 /* descender: an expanded parent drops a line from its centre to its first
  * child, landing under the caret */
-.tg-desc::before { top: 50%; bottom: 0; }
+.tg-desc::before {
+  top: 50%;
+  bottom: 0;
+}
 /* caret occupies exactly one rail column (no flex gap), so its centre sits on
  * the rail and the task name lines up with its leaf siblings */
 .tree-caret {
@@ -5104,7 +5356,9 @@ summary.detail-branch.as-button:hover {
   border-radius: var(--r-xs);
   color: var(--text-3);
   flex: none;
-  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  transition:
+    color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
 }
 .tree-caret:hover {
   color: var(--text);
@@ -5546,7 +5800,9 @@ a.orch-pr:hover {
   color: var(--text-2);
   font-size: 12.5px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+  transition:
+    border-color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease);
 }
 .dropzone:hover {
   border-color: var(--accent-line);
@@ -5636,16 +5892,22 @@ a.orch-pr:hover {
   -webkit-backdrop-filter: blur(9px) saturate(1.4);
   backdrop-filter: blur(9px) saturate(1.4);
   overflow: hidden;
-  transition: transform var(--dur-1) var(--ease), background var(--dur-1) var(--ease),
+  transition:
+    transform var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease),
     border-color var(--dur-1) var(--ease);
   animation: ask-flow-pulse 3.4s var(--ease) infinite;
 }
 /* glossy diagonal sheen — the "liquid glass" highlight */
 .ask-flow-trigger::before {
-  content: '';
+  content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(140deg, color-mix(in srgb, #fff 26%, transparent), transparent 52%);
+  background: linear-gradient(
+    140deg,
+    color-mix(in srgb, #fff 26%, transparent),
+    transparent 52%
+  );
   opacity: 0.65;
   pointer-events: none;
 }
@@ -5669,11 +5931,13 @@ a.orch-pr:hover {
 @keyframes ask-flow-pulse {
   0%,
   100% {
-    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
       0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent);
   }
   50% {
-    box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, #fff 22%, transparent),
       0 0 13px 1px color-mix(in srgb, var(--accent) 45%, transparent);
   }
 }
@@ -5806,6 +6070,18 @@ a.orch-pr:hover {
   color: var(--text-2);
   white-space: nowrap;
 }
+button.env-pill {
+  appearance: none;
+  font: inherit;
+  cursor: default;
+}
+button.env-pill.clickable {
+  cursor: pointer;
+}
+button.env-pill.clickable:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
 .env-pill .dot {
   width: 6px;
   height: 6px;
@@ -5897,7 +6173,10 @@ a.orch-pr:hover {
   text-transform: none;
   white-space: nowrap;
   cursor: pointer;
-  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .chip:hover {
   background: var(--bg-3);
@@ -5953,7 +6232,11 @@ a.orch-pr:hover {
   width: 620px;
   height: 620px;
   border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent) 22%, transparent), transparent 62%);
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--accent) 22%, transparent),
+    transparent 62%
+  );
   filter: blur(14px);
   opacity: 0.7;
 }
@@ -6014,12 +6297,22 @@ a.orch-pr:hover {
   animation: boot-sweep 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
 }
 @keyframes boot-sweep {
-  0% { transform: translateX(-110%); }
-  100% { transform: translateX(330%); }
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(330%);
+  }
 }
 @keyframes boot-rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* Attention feed */
@@ -6041,7 +6334,9 @@ a.orch-pr:hover {
    hover so the affordance reads the same across the two views. */
 .att-card.clickable {
   cursor: pointer;
-  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    border-color var(--dur-1) var(--ease);
 }
 .att-card.clickable:hover,
 .att-card.clickable:focus-visible {
@@ -6435,7 +6730,9 @@ a.orch-pr:hover {
 }
 .trace-row {
   display: grid;
-  grid-template-columns: 132px 148px 100px 72px 48px minmax(120px, 1.1fr) minmax(96px, 0.9fr) minmax(160px, 2.2fr);
+  grid-template-columns:
+    132px 148px 100px 72px 48px minmax(120px, 1.1fr)
+    minmax(96px, 0.9fr) minmax(160px, 2.2fr);
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
@@ -6569,7 +6866,7 @@ a.orch-pr:hover {
 .wc-row.on {
   background: var(--accent-soft);
 }
-.wc-row input[type='checkbox'] {
+.wc-row input[type="checkbox"] {
   accent-color: var(--accent);
 }
 .wc-name {
@@ -6682,7 +6979,7 @@ a.orch-pr:hover {
   cursor: pointer;
   user-select: none;
 }
-.autonomy-toggle input[type='checkbox'] {
+.autonomy-toggle input[type="checkbox"] {
   accent-color: var(--accent);
 }
 .autonomy-name {
@@ -6763,7 +7060,7 @@ a.srun-where:hover .srun-chan {
   color: var(--text-3);
 }
 .srun-from::before {
-  content: '· ';
+  content: "· ";
 }
 .srun-status {
   flex: 0 0 auto;
@@ -6816,7 +7113,9 @@ a.srun-where:hover .srun-chan {
   line-height: 1;
   padding: 4px 8px;
   cursor: pointer;
-  transition: border-color var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .sstage:hover {
   border-color: var(--accent-hi);
@@ -7101,7 +7400,11 @@ a.srun-where:hover .srun-chan {
   border: 1px solid color-mix(in srgb, var(--border-strong) 76%, transparent);
   border-radius: var(--r);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--bg-2) 88%, transparent), color-mix(in srgb, var(--bg) 96%, transparent)),
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--bg-2) 88%, transparent),
+      color-mix(in srgb, var(--bg) 96%, transparent)
+    ),
     var(--bg);
   color: var(--text);
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text) 5%, transparent);
@@ -7109,7 +7412,9 @@ a.srun-where:hover .srun-chan {
 }
 .brain-owner-group.selected {
   border-color: var(--accent-line);
-  box-shadow: 0 0 0 2px var(--accent-soft), inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    inset 0 1px 0 color-mix(in srgb, var(--text) 6%, transparent);
 }
 .brain-owner-group-head {
   display: flex;
@@ -7177,7 +7482,9 @@ a.srun-where:hover .srun-chan {
 }
 .brain-node.selected {
   border-color: var(--accent-line);
-  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-card);
+  box-shadow:
+    0 0 0 2px var(--accent-soft),
+    var(--shadow-card);
 }
 .brain-node-handle {
   width: 7px;
@@ -7313,7 +7620,9 @@ a.srun-where:hover .srun-chan {
   box-shadow: -18px 0 44px -28px rgba(0, 0, 0, 0.7);
   transform: translateX(calc(100% + 28px));
   opacity: 0;
-  transition: transform 0.22s ease, opacity 0.22s ease;
+  transition:
+    transform 0.22s ease,
+    opacity 0.22s ease;
   pointer-events: none;
 }
 .brain-inspector.open {
@@ -8285,7 +8594,9 @@ a.owner-task-item:hover {
   display: grid;
   grid-template-columns: 0fr;
   opacity: 0;
-  transition: grid-template-columns var(--dur-2, 0.26s) var(--ease), opacity var(--dur-1) var(--ease);
+  transition:
+    grid-template-columns var(--dur-2, 0.26s) var(--ease),
+    opacity var(--dur-1) var(--ease);
 }
 .chat-actions-rollout > .chat-actions-secondary {
   overflow: hidden;
@@ -8359,7 +8670,9 @@ a.owner-task-item:hover {
   stroke: var(--ctx-color, var(--accent));
   stroke-width: 2.5;
   stroke-linecap: round;
-  transition: stroke-dasharray var(--dur-2, 0.3s) var(--ease), stroke var(--dur-1) var(--ease);
+  transition:
+    stroke-dasharray var(--dur-2, 0.3s) var(--ease),
+    stroke var(--dur-1) var(--ease);
 }
 .ctx-dial-label {
   font-size: 11px;
@@ -8397,7 +8710,9 @@ a.owner-task-item:hover {
   padding: 5px 13px;
   border-radius: var(--r-pill);
   cursor: pointer;
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .range-pills .pill:hover {
   color: var(--text);
@@ -8424,7 +8739,7 @@ a.owner-task-item:hover {
   width: 220px;
   box-shadow: var(--shadow-pop);
 }
-.range-pop input[type='date'] {
+.range-pop input[type="date"] {
   width: 100%;
   padding: 6px 8px;
   background: var(--bg-1);
@@ -8453,8 +8768,15 @@ a.owner-task-item:hover {
   animation: live-pulse 1.4s var(--ease) infinite;
 }
 @keyframes live-pulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 var(--ok-soft); }
-  50% { opacity: 0.6; box-shadow: 0 0 0 5px transparent; }
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 var(--ok-soft);
+  }
+  50% {
+    opacity: 0.6;
+    box-shadow: 0 0 0 5px transparent;
+  }
 }
 
 /* KPI row ----------------------------------------------------------------- */
@@ -9279,7 +9601,7 @@ a.owner-task-item:hover {
 }
 /* Active pip above the icon */
 .mobile-nav-tab.active::before {
-  content: '';
+  content: "";
   position: absolute;
   top: 0;
   left: 50%;
@@ -9328,8 +9650,12 @@ a.owner-task-item:hover {
   animation: mobile-nav-fade-in var(--dur-2) var(--ease) both;
 }
 @keyframes mobile-nav-fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .mobile-nav-backdrop {
@@ -9355,8 +9681,12 @@ a.owner-task-item:hover {
   animation: mobile-nav-slide-up var(--dur-2) var(--ease) both;
 }
 @keyframes mobile-nav-slide-up {
-  from { transform: translateY(100%); }
-  to   { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .mobile-nav-drawer {
@@ -9399,7 +9729,9 @@ a.owner-task-item:hover {
   font-weight: 500;
   font-size: 14px;
   text-decoration: none;
-  transition: background var(--dur-1) var(--ease), color var(--dur-1) var(--ease);
+  transition:
+    background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
 }
 .mobile-nav-drawer-item:hover,
 .mobile-nav-drawer-item:active {

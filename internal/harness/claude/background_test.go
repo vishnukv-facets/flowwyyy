@@ -42,14 +42,26 @@ func TestSpawnBackgroundCapturesSessionID(t *testing.T) {
 		if workDir != "/repo" {
 			t.Fatalf("workDir = %q, want /repo", workDir)
 		}
+		if !containsArgPair(args, "--effort", "xhigh") {
+			t.Fatalf("spawn args missing --effort xhigh: %#v", args)
+		}
 		return []byte("backgrounded · 1a2b3c4d · task\n"), nil
 	}
 
-	agent, err := New().(harness.BackgroundLauncher).SpawnBackground("/repo", "task", "prompt", harness.LaunchOpts{PermissionMode: "bypass"})
+	agent, err := New().(harness.BackgroundLauncher).SpawnBackground("/repo", "task", "prompt", harness.LaunchOpts{PermissionMode: "bypass", Effort: "xhigh"})
 	if err != nil {
 		t.Fatalf("SpawnBackground: %v", err)
 	}
 	if agent.SessionID != "11111111-1111-4111-8111-111111111111" || agent.ShortID != "1a2b3c4d" {
 		t.Fatalf("unexpected captured agent: %+v", agent)
 	}
+}
+
+func containsArgPair(args []string, key, val string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == key && args[i+1] == val {
+			return true
+		}
+	}
+	return false
 }

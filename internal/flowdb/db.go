@@ -54,6 +54,7 @@ type Task struct {
 	Assignee           sql.NullString
 	PermissionMode     string
 	Model              sql.NullString // explicit per-task model; empty = resolve at launch
+	Effort             sql.NullString // explicit per-task reasoning effort; empty = provider/default resolution
 	StatusChangedAt    sql.NullString
 	SessionProvider    string
 	Harness            string // runtime harness pin; empty DB values read as SessionProvider/claude
@@ -734,7 +735,7 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, effort, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
@@ -742,7 +743,7 @@ func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	err := row.Scan(
 		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
 		&t.Priority, &t.WorkDir,
-		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.StatusChangedAt, &t.SessionProvider, &harness, &t.SessionID,
+		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.Effort, &t.StatusChangedAt, &t.SessionProvider, &harness, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
 		&t.AutoRunStatus, &t.AutoRunPID, &t.AutoRunStarted, &t.AutoRunFinished, &t.AutoRunLog,
 	)

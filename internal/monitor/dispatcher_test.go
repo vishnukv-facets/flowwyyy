@@ -39,6 +39,23 @@ func (f *fakeMessageObserver) Observe(_ context.Context, ev InboundEvent) error 
 	return f.err
 }
 
+type fakeConnectorHoldGate struct {
+	holdSlack  bool
+	holdGitHub bool
+	slack      []InboundEvent
+	github     []GitHubEvent
+}
+
+func (f *fakeConnectorHoldGate) HoldSlackEvent(_ context.Context, ev InboundEvent) (bool, error) {
+	f.slack = append(f.slack, ev)
+	return f.holdSlack, nil
+}
+
+func (f *fakeConnectorHoldGate) HoldGitHubEvent(_ context.Context, ev GitHubEvent) (bool, error) {
+	f.github = append(f.github, ev)
+	return f.holdGitHub, nil
+}
+
 // fakeSelfObserver implements MessageObserver + SelfAuthoredObserver so the
 // dispatcher can route self-authored events into the per-channel session.
 type fakeSelfObserver struct {
@@ -74,6 +91,54 @@ func TestDispatchSelfAuthoredRoutesToSessionWhenActive(t *testing.T) {
 	}
 	if len(obs.observed) != 0 {
 		t.Fatalf("self-authored must NOT go through normal Observe, got %d", len(obs.observed))
+	}
+}
+
+func TestDispatcherHoldGateQueuesBeforeSlackSideEffects(t *testing.T) {
+	db := dispatcherTestDB(t)
+	spawns, tags, opens, cleanup := stubDispatcherIO(t)
+	defer cleanup()
+	gate := &fakeConnectorHoldGate{holdSlack: true}
+	d := NewDispatcher(db, nil)
+	d.HoldGate = gate
+
+	ev := InboundEvent{
+		Kind: "reaction_added", Channel: "C1", TS: "1.1", ThreadTS: "1.0",
+		UserID: "U1", Reaction: "claude", ItemChannel: "C1", ItemTS: "1.0",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(gate.slack) != 1 {
+		t.Fatalf("hold gate saw %d slack event(s), want 1", len(gate.slack))
+	}
+	if len(*spawns) != 0 || len(*tags) != 0 || len(*opens) != 0 {
+		t.Fatalf("held dispatch should have no side effects: spawns=%d tags=%d opens=%d", len(*spawns), len(*tags), len(*opens))
+	}
+}
+
+func TestGitHubDispatcherHoldGateQueuesBeforeSideEffects(t *testing.T) {
+	db := dispatcherTestDB(t)
+	gate := &fakeConnectorHoldGate{holdGitHub: true}
+	d := NewGitHubDispatcher(db, nil)
+	d.HoldGate = gate
+
+	ev := GitHubEvent{
+		Kind: GitHubEventPRReviewRequested, Owner: "owner", Repo: "repo", Number: 7,
+		Title: "review me", EventKey: "delivery:7",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(gate.github) != 1 {
+		t.Fatalf("hold gate saw %d github event(s), want 1", len(gate.github))
+	}
+	var events int
+	if err := db.QueryRow(`SELECT COUNT(1) FROM github_event_log`).Scan(&events); err != nil {
+		t.Fatalf("count github_event_log: %v", err)
+	}
+	if events != 0 {
+		t.Fatalf("held dispatch should not record github event, got %d", events)
 	}
 }
 

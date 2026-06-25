@@ -116,6 +116,7 @@ func (c *claude) SpawnBackground(workDir, name, prompt string, opts harness.Laun
 	}
 	args := []string{"--bg", "--name", name}
 	args = append(args, claudeModelArgs(opts.Model)...)
+	args = append(args, claudeEffortArgs(opts.Effort)...)
 	args = append(args, claudePermissionArgs(opts.PermissionMode)...)
 	args = append(args, prompt)
 	return c.launchAndCapture(workDir, args, "spawn")
@@ -124,6 +125,7 @@ func (c *claude) SpawnBackground(workDir, name, prompt string, opts harness.Laun
 func (c *claude) ResumeBackground(workDir, sessionID string, opts harness.LaunchOpts) (harness.BackgroundAgent, error) {
 	args := []string{"--bg", "--resume", sessionID}
 	args = append(args, claudeModelArgs(opts.Model)...)
+	args = append(args, claudeEffortArgs(opts.Effort)...)
 	args = append(args, claudePermissionArgs(opts.PermissionMode)...)
 	if opts.Inject != "" {
 		args = append(args, harness.InjectionMarker+"\n"+opts.Inject)
@@ -136,6 +138,13 @@ func claudeModelArgs(model string) []string {
 		return nil
 	}
 	return []string{"--model", model}
+}
+
+func claudeEffortArgs(effort string) []string {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	return []string{"--effort", strings.TrimSpace(effort)}
 }
 
 func claudePermissionArgs(mode string) []string {

@@ -102,6 +102,7 @@ func New(cfg Config) *Server {
 	// instead of an iTerm tab.
 	if cfg.DB != nil {
 		dispatcher := monitor.NewDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		dispatcher.HoldGate = s
 		// Attach the steering cascade so untracked messages get triaged into the
 		// Attention feed (surface-only in P1). Stage 0 inside the cascade is the
 		// real scope gate, so handing it every untracked message is cheap.
@@ -158,12 +159,14 @@ func New(cfg Config) *Server {
 		// per-message payload on each resume). No-op when
 		// FLOW_STEERING_SESSION_REUSE=0.
 		steering.EnableClassifierSessions()
+		s.slackDispatcher = dispatcher
 		slackListener := monitor.NewSlackListener(dispatcher)
 		slackListener.SetChangeNotifier(func(kind string) {
 			s.publishUIChange(kind)
 		})
 		s.slackListener = slackListener
 		ghDispatcher := monitor.NewGitHubDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		ghDispatcher.HoldGate = s
 		// Route every GitHub event through the SAME cascade so it surfaces in
 		// the steering trace + attention feed. In surface-only mode this remains
 		// additive; when autonomy is enabled, the dispatcher lets the steerer own
@@ -173,6 +176,7 @@ func New(cfg Config) *Server {
 			ghDispatcher.SteererOwnsRouting = steering.SteererSessionsEnabled
 			ghDispatcher.SessionsEnabled = steering.SteererSessionsEnabled
 		}
+		s.githubDispatcher = ghDispatcher
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
 	}
 	return s
@@ -191,6 +195,7 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/actions", s.handleAction)
 	mux.HandleFunc("/api/hooks/agent", s.handleAgentHook)
 	mux.HandleFunc("/api/overview", s.handleOverview)
+	mux.HandleFunc("/api/provider-usage", s.handleProviderUsage)
 	mux.HandleFunc("/api/work-events", s.handleWorkEvents)
 	mux.HandleFunc("/api/analytics", s.handleAnalytics)
 	mux.HandleFunc("/api/fs/entries", s.handleFSEntries)
@@ -438,6 +443,7 @@ func (s *Server) ListenAndServe(addr string) int {
 		// never recovers, even though the operator's token could read it.
 		if rc := monitor.NewSlackChannelRepliesClient(); rc != nil {
 			backfill := monitor.NewSlackBackfill(s.cfg.DB, rc, 0)
+			backfill.HoldUntil = s.providerBackfillHoldUntil
 			if s.cascade != nil {
 				backfill.Observer = s.cascade
 				backfill.SteererOwnsRouting = steering.SteererSessionsEnabled
@@ -473,6 +479,7 @@ func (s *Server) ListenAndServe(addr string) int {
 		ims := monitor.NewSlackUserIMLister()
 		if ch != nil || (dm != nil && ims != nil) {
 			sbf := steering.NewSteeringBackfill(s.cfg.DB, s.cascade.ObserveBatch, ch, dm, ims, steering.WatchConfigFromEnv, 0, 0, 0)
+			sbf.HoldUntil = s.providerBackfillHoldUntil
 			// Follow active threads so replies that landed in a watched channel /
 			// DM while the socket was down (e.g. the laptop slept) are recovered —
 			// a top-level history sweep alone never returns thread replies. Channel
@@ -547,6 +554,7 @@ func (s *Server) ListenAndServe(addr string) int {
 	if s.terminals != nil {
 		go s.terminals.resumeBufferedWakes()
 	}
+	go s.scheduleNextRateLimitQueueDrain()
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- httpSrv.ListenAndServe()

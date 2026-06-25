@@ -258,7 +258,7 @@ func TestSlackBackfill_DMRecoveryTypedAsIM(t *testing.T) {
 	}
 	user := &fakeHistory{repliesByRoot: map[string][]SlackMessage{
 		root: {
-			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},    // seen
+			{TS: "1780489629.079919", ThreadTS: root, User: "U_me", Text: "stepping out"},     // seen
 			{TS: "1780491705.662279", ThreadTS: root, User: "U_ishaan", Text: "PR is merged"}, // missed
 		},
 	}}
@@ -358,6 +358,42 @@ func TestSlackBackfill_RunOnceReconcilesAllThreadTags(t *testing.T) {
 	}
 	if !gotDM {
 		t.Errorf("DM-thread reply not recovered (multi-tag reconcile failed)")
+	}
+}
+
+func TestSlackBackfillRunWaitsDuringProviderHold(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir())
+	db := dispatcherTestDB(t)
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, status_changed_at, created_at, updated_at)
+		 VALUES ('t','t','backlog','high',?, 'default','claude',?,?,?)`,
+		t.TempDir(), now, now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"slack-reply", "slack-thread:C_ORIGIN:50.000000"} {
+		if err := flowdb.AddTaskTag(db, "t", tag); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedInbox(t, "t", "C_ORIGIN", "50.000000", "100.000000", "origin baseline")
+	fake := &fakeReplies{msgs: []SlackMessage{{TS: "120.000000", User: "U2", Text: "origin newer"}}}
+	bf := NewSlackBackfill(db, fake, 5*time.Millisecond)
+	bf.HoldUntil = func() (time.Time, bool) { return time.Now().Add(time.Hour), true }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		bf.Run(ctx)
+	}()
+	time.Sleep(25 * time.Millisecond)
+	cancel()
+	<-done
+
+	if fake.calls != 0 {
+		t.Fatalf("Slack calls = %d, want 0 while provider hold is active", fake.calls)
 	}
 }
 

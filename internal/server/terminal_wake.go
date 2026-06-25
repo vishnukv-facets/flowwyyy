@@ -238,6 +238,31 @@ func (h *terminalHub) submitAfterSharedPaste(name string) {
 // settles before the next (submitAfterPaste's own grace + second-Enter is ~2s).
 const wakeFlushGap = 2500 * time.Millisecond
 
+func pendingWakeReady(pw flowdb.PendingWake, now time.Time) (bool, time.Time) {
+	if strings.TrimSpace(pw.NotBefore) == "" {
+		return true, time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, strings.TrimSpace(pw.NotBefore))
+	if err != nil {
+		return true, time.Time{}
+	}
+	return !t.After(now), t
+}
+
+func (h *terminalHub) scheduleWakeFlush(slug string, at time.Time) {
+	if at.IsZero() {
+		go h.flushWakes(slug)
+		return
+	}
+	delay := time.Until(at)
+	if delay < 0 {
+		delay = 0
+	}
+	time.AfterFunc(delay+250*time.Millisecond, func() {
+		h.flushWakes(slug)
+	})
+}
+
 // awaitingHumanInput reports whether slug's agent session is currently blocked
 // on the operator's input — a question it asked (elicitation) or a permission
 // prompt — per the recorded agent runtime state. Fail-open: an unknown/missing
@@ -305,6 +330,10 @@ func (h *terminalHub) flushWakes(slug string) {
 			}
 			pw, ok := h.wakes.peek(slug)
 			if !ok {
+				return
+			}
+			if ready, at := pendingWakeReady(pw, time.Now()); !ready {
+				h.scheduleWakeFlush(slug, at)
 				return
 			}
 			if h.awaitingHumanInput(slug) {

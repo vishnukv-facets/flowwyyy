@@ -519,6 +519,11 @@ func cmdDo(args []string) int {
 	// heuristic — the session keeps the model it bootstrapped with — so we pass
 	// only an explicit override (mid-session model switching is out of scope).
 	sessionModel := resolveLaunchModel(provider, task, needsBootstrap)
+	sessionEffort, err := resolveLaunchEffort(provider, task, sessionModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
 
 	if *auto {
 		root, err := flowRoot()
@@ -582,10 +587,12 @@ func cmdDo(args []string) int {
 	if provider == sessionProviderClaude {
 		if needsBootstrap {
 			args := append([]string{"--session-id", sessionID}, claudeModelArgs(sessionModel)...)
+			args = append(args, claudeEffortArgs(sessionEffort)...)
 			args = append(args, claudePermissionArgs(permissionMode)...)
 			command = agentShellCommand("claude", append(args, prompt))
 		} else {
 			args := append([]string{"--resume", sessionID}, claudeModelArgs(sessionModel)...)
+			args = append(args, claudeEffortArgs(sessionEffort)...)
 			command = agentShellCommand("claude", append(args, claudePermissionArgs(permissionMode)...))
 		}
 	} else {
@@ -593,7 +600,7 @@ func cmdDo(args []string) int {
 		if !needsBootstrap {
 			mode = codexModeResume
 		}
-		command, codexPromptFile, err = buildCodexRunCommand(task.Slug, mode, sessionID, prompt, permissionMode, sessionModel)
+		command, codexPromptFile, err = buildCodexRunCommand(task.Slug, mode, sessionID, prompt, permissionMode, sessionModel, sessionEffort)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: build codex command: %v\n", err)
 			return 1
@@ -819,9 +826,15 @@ func cmdDoBackground(db *sql.DB, task *flowdb.Task, provider string, fresh, forc
 	}
 	needsBootstrap := fresh || !hasSessionID(task.SessionID)
 	sessionModel := resolveLaunchModel(provider, task, needsBootstrap)
+	sessionEffort, err := resolveLaunchEffort(provider, task, sessionModel)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
 	opts := harness.LaunchOpts{
 		PermissionMode: permissionMode,
 		Model:          sessionModel,
+		Effort:         sessionEffort,
 		Inject:         injectionText,
 	}
 
@@ -947,6 +960,14 @@ func resolveLaunchModel(provider string, task *flowdb.Task, needsBootstrap bool)
 		fmt.Fprintf(os.Stderr, "flow: session model %s (default %s tier)\n", r.Model, r.Tier)
 	}
 	return r.Model
+}
+
+func resolveLaunchEffort(provider string, task *flowdb.Task, sessionModel string) (string, error) {
+	explicit := ""
+	if task != nil && task.Effort.Valid {
+		explicit = task.Effort.String
+	}
+	return flowdb.ResolveSessionEffort(provider, sessionModel, explicit)
 }
 
 // buildBootstrapPromptForKindV2 is the kind-aware dispatcher with first-

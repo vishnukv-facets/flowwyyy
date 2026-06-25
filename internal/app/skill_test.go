@@ -195,6 +195,10 @@ func TestSkillInstallWritesSessionStartHook(t *testing.T) {
 	if !hookEventReferencesCommand(hooks, "SessionStart", "flow hook session-start") {
 		t.Errorf("SessionStart hook missing or wrong command: %#v", hooks["SessionStart"])
 	}
+	statusLine, _ := settings["statusLine"].(map[string]any)
+	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
+		t.Errorf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	}
 	// UserPromptSubmit must not be installed by fresh install.
 	if hookEventReferencesCommand(hooks, "UserPromptSubmit", "flow hook user-prompt-submit") {
 		t.Errorf("install should NOT add UserPromptSubmit hook; got %#v", hooks["UserPromptSubmit"])
@@ -217,6 +221,59 @@ func TestSkillInstallIsIdempotent(t *testing.T) {
 	entries, _ := hooks["SessionStart"].([]any)
 	if got := countMatchingHookEntries(entries, expectedCommand("SessionStart")); got != 1 {
 		t.Errorf("SessionStart: got %d matching entries, want 1", got)
+	}
+	statusLine, _ := settings["statusLine"].(map[string]any)
+	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
+		t.Errorf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	}
+	if _, ok := settings[claudeStatusLinePreviousKey]; ok {
+		t.Errorf("second install should not store Flow's own statusLine as previous: %#v", settings[claudeStatusLinePreviousKey])
+	}
+}
+
+func TestSkillInstallPreservesExistingStatusLine(t *testing.T) {
+	home := withTempHome(t)
+	settingsPath := filepath.Join(home, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	existing := `{
+  "statusLine": {"type": "command", "command": "custom-status --fast", "padding": 2},
+  "someUnrelatedKey": "preserve-me"
+}`
+	if err := os.WriteFile(settingsPath, []byte(existing), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if rc := cmdSkill([]string{"install"}); rc != 0 {
+		t.Fatalf("install rc=%d", rc)
+	}
+	settings := readSettings(t, settingsPath)
+	statusLine, _ := settings["statusLine"].(map[string]any)
+	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
+		t.Fatalf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	}
+	if padding, _ := statusLine["padding"].(float64); padding != 2 {
+		t.Fatalf("statusLine padding = %v, want preserved 2", statusLine["padding"])
+	}
+	prev, _ := settings[claudeStatusLinePreviousKey].(map[string]any)
+	if cmd, _ := prev["command"].(string); cmd != "custom-status --fast" {
+		t.Fatalf("previous statusLine command = %q, want preserved custom command", cmd)
+	}
+	if v, _ := settings["someUnrelatedKey"].(string); v != "preserve-me" {
+		t.Fatalf("unrelated key = %q, want preserved", v)
+	}
+
+	if rc := cmdSkill([]string{"uninstall"}); rc != 0 {
+		t.Fatalf("uninstall rc=%d", rc)
+	}
+	settings = readSettings(t, settingsPath)
+	restored, _ := settings["statusLine"].(map[string]any)
+	if cmd, _ := restored["command"].(string); cmd != "custom-status --fast" {
+		t.Fatalf("restored statusLine command = %q, want custom-status --fast", cmd)
+	}
+	if _, ok := settings[claudeStatusLinePreviousKey]; ok {
+		t.Fatalf("previous statusLine key should be removed after restore")
 	}
 }
 

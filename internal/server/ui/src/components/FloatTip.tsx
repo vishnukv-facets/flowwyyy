@@ -4,7 +4,7 @@
 // hovered element's bounding box: it flips below when too close to the top,
 // and is clamped horizontally to the viewport (with the caret kept pointing at
 // the anchor) so edge cells don't push it off-screen.
-import { useCallback, useState, type CSSProperties, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 type TipState = { x: number; y: number; caret: number; below: boolean; content: ReactNode } | null
@@ -14,6 +14,7 @@ const MARGIN = 10
 
 export function useFloatTip() {
   const [tip, setTip] = useState<TipState>(null)
+  const tipRef = useRef<HTMLDivElement | null>(null)
 
   const show = useCallback((el: HTMLElement, content: ReactNode) => {
     const r = el.getBoundingClientRect()
@@ -37,9 +38,28 @@ export function useFloatTip() {
 
   const hide = useCallback(() => setTip(null), [])
 
+  useEffect(() => {
+    if (!tip) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (target instanceof Node && tipRef.current?.contains(target)) return
+      setTip(null)
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTip(null)
+    }
+    document.addEventListener('pointerdown', onPointerDown, true)
+    document.addEventListener('keydown', onKeyDown, true)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true)
+      document.removeEventListener('keydown', onKeyDown, true)
+    }
+  }, [tip])
+
   const portal = tip
     ? createPortal(
         <div
+          ref={tipRef}
           className={`float-tip${tip.below ? ' below' : ''}`}
           style={{ left: tip.x, top: tip.y, '--caret-dx': `${tip.caret}px` } as CSSProperties}
           role="tooltip"

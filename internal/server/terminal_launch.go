@@ -221,7 +221,12 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		if task.Slug == overviewTaskSlug {
 			prompt = overviewInitialPrompt(s.cfg.FlowRoot, task)
 		}
-		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode, s.resolveTaskLaunchModel(task, provider, true))
+		model := s.resolveTaskLaunchModel(task, provider, true)
+		effort, err := s.resolveTaskLaunchEffort(task, provider, model)
+		if err != nil {
+			return terminalLaunch{}, err
+		}
+		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode, model, effort)
 		return terminalLaunch{
 			Slug:           task.Slug,
 			SessionID:      sessionID,
@@ -234,7 +239,12 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			StartedAt:      time.Now().Add(-2 * time.Second),
 		}, nil
 	}
-	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode, s.resolveTaskLaunchModel(task, provider, false))
+	model := s.resolveTaskLaunchModel(task, provider, false)
+	effort, err := s.resolveTaskLaunchEffort(task, provider, model)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode, model, effort)
 	return terminalLaunch{
 		Slug:           task.Slug,
 		SessionID:      sessionID,
@@ -268,7 +278,7 @@ func (s *Server) prepareOverviewFloatingLaunch(req actionRequest) (terminalLaunc
 		return terminalLaunch{}, err
 	}
 	sessionID := uuid.NewString()
-	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode, "")
+	args := agentTerminalArgs(provider, true, sessionID, absRoot, absRoot, overviewBrief(prompt), permissionMode, "", "")
 	return terminalLaunch{
 		Slug:           "overview-" + uuid.NewString(),
 		SessionID:      sessionID,
@@ -359,11 +369,12 @@ func (s *terminalSession) captureCodexSession(started time.Time) {
 	}
 }
 
-func agentTerminalArgs(provider string, fresh bool, sessionID, workDir, flowRootPath, prompt, permissionMode, model string) []string {
+func agentTerminalArgs(provider string, fresh bool, sessionID, workDir, flowRootPath, prompt, permissionMode, model, effort string) []string {
 	if provider == agents.ProviderCodex {
 		args := []string{"--no-alt-screen", "-C", workDir}
 		args = appendCodexWritableRoot(args, workDir, flowRootPath)
 		args = append(args, modelTerminalArgs(model)...)
+		args = append(args, codexEffortArgs(effort)...)
 		args = append(args, codexPermissionArgs(permissionMode)...)
 		if fresh {
 			return append(args, prompt)
@@ -371,17 +382,20 @@ func agentTerminalArgs(provider string, fresh bool, sessionID, workDir, flowRoot
 		resume := []string{"resume", "--include-non-interactive", "--no-alt-screen", "-C", workDir}
 		resume = appendCodexWritableRoot(resume, workDir, flowRootPath)
 		resume = append(resume, modelTerminalArgs(model)...)
+		resume = append(resume, codexEffortArgs(effort)...)
 		resume = append(resume, codexPermissionArgs(permissionMode)...)
 		return append(resume, sessionID)
 	}
 	if fresh {
 		args := []string{"--session-id", sessionID}
 		args = append(args, modelTerminalArgs(model)...)
+		args = append(args, claudeEffortArgs(effort)...)
 		args = append(args, claudePermissionArgs(permissionMode)...)
 		return append(args, prompt)
 	}
 	args := []string{"--resume", sessionID}
 	args = append(args, modelTerminalArgs(model)...)
+	args = append(args, claudeEffortArgs(effort)...)
 	return append(args, claudePermissionArgs(permissionMode)...)
 }
 
@@ -397,6 +411,20 @@ func modelTerminalArgs(model string) []string {
 		return nil
 	}
 	return []string{"--model", strings.TrimSpace(model)}
+}
+
+func claudeEffortArgs(effort string) []string {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	return []string{"--effort", strings.TrimSpace(effort)}
+}
+
+func codexEffortArgs(effort string) []string {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	return []string{"-c", "model_reasoning_effort=" + strings.TrimSpace(effort)}
 }
 
 // resolveTaskLaunchModel mirrors app.resolveLaunchModel for the server's
@@ -423,6 +451,14 @@ func (s *Server) resolveTaskLaunchModel(task *flowdb.Task, provider string, fres
 		}
 	}
 	return flowdb.ResolveSessionModel(provider, explicit, briefText, task.Priority).Model
+}
+
+func (s *Server) resolveTaskLaunchEffort(task *flowdb.Task, provider, model string) (string, error) {
+	explicit := ""
+	if task != nil && task.Effort.Valid {
+		explicit = task.Effort.String
+	}
+	return flowdb.ResolveSessionEffort(provider, model, explicit)
 }
 
 func reconcileAutoRunBeforeTerminalLaunch(tx *sql.Tx, task *flowdb.Task) error {

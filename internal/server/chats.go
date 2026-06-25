@@ -374,7 +374,7 @@ func (s *Server) reopenChat(slug string) (actionResponse, int) {
 	// mirrors that. The chat row does not persist a permission mode, so use the
 	// normalized default. fresh=false → RESUME args; empty prompt (resume carries none).
 	permissionMode, _ := flowdb.NormalizePermissionMode("")
-	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "")
+	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "", "")
 	launch := terminalLaunch{
 		Slug:           chat.Slug,
 		SessionID:      sessionID,

@@ -35,7 +35,7 @@ var agentHookPost = postAgentHook
 //     printing stdout or blocking the agent when the UI is unavailable.
 func cmdHook(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "error: hook requires a subcommand (session-start|user-prompt-submit|agent-event)")
+		fmt.Fprintln(os.Stderr, "error: hook requires a subcommand (session-start|user-prompt-submit|claude-statusline|agent-event)")
 		return 2
 	}
 	sub, rest := args[0], args[1:]
@@ -44,6 +44,8 @@ func cmdHook(args []string) int {
 		return cmdHookSessionStart(rest)
 	case "user-prompt-submit":
 		return cmdHookUserPromptSubmit(rest)
+	case "claude-statusline":
+		return cmdHookClaudeStatusLine(rest)
 	case "codex-run":
 		return cmdHookCodexRun(rest)
 	case "agent-event":
