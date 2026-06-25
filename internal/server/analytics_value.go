@@ -92,8 +92,13 @@ type transcriptLookupEvent struct {
 }
 
 type lookupRollup struct {
-	LookupsByDay       map[string]map[string]int
-	ContextTokensByDay map[string]int64
+	Events []lookupValueEvent
+}
+
+type lookupValueEvent struct {
+	Timestamp    string
+	Kind         string
+	ContextBytes int64
 }
 
 func accumulateTranscriptLookupEvents(stats *transcriptUsageStats, rec transcriptUsageRecord) {
@@ -204,28 +209,16 @@ func mentionsFlowContextPath(s string) bool {
 }
 
 func lookupRollupForTask(events []transcriptLookupEvent, ownSlug, flowRoot string) lookupRollup {
-	out := lookupRollup{
-		LookupsByDay:       map[string]map[string]int{},
-		ContextTokensByDay: map[string]int64{},
-	}
-	bytesByDay := map[string]int64{}
+	var out lookupRollup
 	for _, ev := range events {
-		day := localDay(ev.Timestamp)
-		if day == "" {
+		if parseLocal(ev.Timestamp).IsZero() {
 			continue
 		}
 		kind, contextBytes, ok := classifyLookupEvent(ev, ownSlug, flowRoot)
 		if !ok {
 			continue
 		}
-		if out.LookupsByDay[day] == nil {
-			out.LookupsByDay[day] = map[string]int{}
-		}
-		out.LookupsByDay[day][kind]++
-		bytesByDay[day] += contextBytes
-	}
-	for day, bytes := range bytesByDay {
-		out.ContextTokensByDay[day] = bytes / 4
+		out.Events = append(out.Events, lookupValueEvent{Timestamp: ev.Timestamp, Kind: kind, ContextBytes: contextBytes})
 	}
 	return out
 }
@@ -317,28 +310,23 @@ func computeValueStats(usages []taskTokenUsage, runs []*flowdb.BrainRun, g bucke
 	linesByKind := map[string][]float64{}
 	var contextTokens float64
 	var lookupsTotal float64
+	var contextBytes int64
 	for _, u := range usages {
-		for day, counts := range u.LookupsByDay {
-			i := g.indexOf(parseDayLocal(day))
+		for _, ev := range u.Lookups {
+			if ev.Kind == "" {
+				continue
+			}
+			i := g.indexOf(parseLocal(ev.Timestamp))
 			if i < 0 {
 				continue
 			}
-			for kind, n := range counts {
-				if n <= 0 {
-					continue
-				}
-				v := float64(n)
-				byKind[kind] += v
-				lookupsTotal += v
-				ensureLine(linesByKind, kind, g.Len())[i] += v
-			}
-		}
-		for day, tok := range u.ContextTokensByDay {
-			if g.indexOf(parseDayLocal(day)) >= 0 {
-				contextTokens += float64(tok)
-			}
+			byKind[ev.Kind]++
+			lookupsTotal++
+			ensureLine(linesByKind, ev.Kind, g.Len())[i]++
+			contextBytes += ev.ContextBytes
 		}
 	}
+	contextTokens = float64(contextBytes / 4)
 	var automationRuns float64
 	for _, r := range runs {
 		if s := brainRunStarted(r); !s.IsZero() && g.indexOf(s) >= 0 {

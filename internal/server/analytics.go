@@ -587,13 +587,12 @@ func (s *Server) resolveTokenUsage(tasks []*flowdb.Task) []taskTokenUsage {
 		}
 		roll := lookupRollupForTask(entry.usage.LookupEvents, t.Slug, s.cfg.FlowRoot)
 		usages = append(usages, taskTokenUsage{
-			Provider:           provider,
-			Model:              strings.TrimSpace(entry.usage.Model),
-			ProjectSlug:        t.ProjectSlug.String,
-			TokensByDay:        entry.usage.TokensByDay,
-			CostByDay:          entry.usage.CostByDay,
-			LookupsByDay:       roll.LookupsByDay,
-			ContextTokensByDay: roll.ContextTokensByDay,
+			Provider:    provider,
+			Model:       strings.TrimSpace(entry.usage.Model),
+			ProjectSlug: t.ProjectSlug.String,
+			TokensByDay: entry.usage.TokensByDay,
+			CostByDay:   entry.usage.CostByDay,
+			Lookups:     roll.Events,
 		})
 	}
 	return usages
@@ -618,13 +617,12 @@ type Segment struct {
 // taskTokenUsage is the per-task transcript usage the token domain needs, lifted
 // out of the transcript cache so the bucketing below stays pure and testable.
 type taskTokenUsage struct {
-	Provider           string             // claude | codex (task.SessionProvider)
-	Model              string             // session model (transcriptUsageStats.Model)
-	ProjectSlug        string             // owning project ("" = floating) — for project effort
-	TokensByDay        map[string]int     // YYYY-MM-DD -> fresh tokens
-	CostByDay          map[string]float64 // YYYY-MM-DD -> billed USD
-	LookupsByDay       map[string]map[string]int
-	ContextTokensByDay map[string]int64
+	Provider    string             // claude | codex (task.SessionProvider)
+	Model       string             // session model (transcriptUsageStats.Model)
+	ProjectSlug string             // owning project ("" = floating) — for project effort
+	TokensByDay map[string]int     // YYYY-MM-DD -> fresh tokens
+	CostByDay   map[string]float64 // YYYY-MM-DD -> billed USD
+	Lookups     []lookupValueEvent
 }
 
 // tokenAgg is the accumulated token/cost view for a window: per-provider

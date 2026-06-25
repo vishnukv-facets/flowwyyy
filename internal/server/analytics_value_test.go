@@ -34,15 +34,38 @@ func TestLookupRollupForTaskClassifiesContextReads(t *testing.T) {
 	}
 
 	roll := lookupRollupForTask(stats.LookupEvents, "mine", root)
-	day := roll.LookupsByDay["2026-06-01"]
+	counts := map[string]int{}
+	var contextBytes int64
+	for _, ev := range roll.Events {
+		if localDay(ev.Timestamp) != "2026-06-01" {
+			continue
+		}
+		counts[ev.Kind]++
+		contextBytes += ev.ContextBytes
+	}
+	day := counts
 	if day[lookupResume] != 1 || day[lookupReference] != 1 || day[lookupCrossTask] != 2 || day[lookupKB] != 1 {
 		t.Fatalf("lookup counts = %+v, want resume1 reference1 cross_task2 kb1", day)
 	}
 	// Context bytes: resume own brief+updates (12) + reference own brief (8)
 	// + transcript cross-task proxy own brief (8) + actual sibling read (12)
 	// + actual KB read (16) = 56 bytes ~= 14 tokens.
-	if got := roll.ContextTokensByDay["2026-06-01"]; got != 14 {
+	if got := contextBytes / 4; got != 14 {
 		t.Fatalf("context tokens = %d, want 14", got)
+	}
+}
+
+func TestLookupEventsDeduplicateClaudeSnapshots(t *testing.T) {
+	var stats transcriptUsageStats
+	line := `{"type":"assistant","timestamp":"2026-06-01T10:00:01Z","requestId":"req-1","message":{"id":"msg-1","role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"flow show task mine"}}],"usage":{"input_tokens":10,"output_tokens":2}}}`
+	accumulateTranscriptUsage(&stats, []byte(line))
+	accumulateTranscriptUsage(&stats, []byte(line))
+
+	if got := len(stats.LookupEvents); got != 1 {
+		t.Fatalf("lookup events = %d, want 1", got)
+	}
+	if got := stats.TokensSession; got != 12 {
+		t.Fatalf("tokens session = %d, want 12", got)
 	}
 }
 
@@ -51,11 +74,14 @@ func TestBuildAnalyticsPayloadValueStats(t *testing.T) {
 	q, _ := parseAnalyticsRange(nil, now)
 	in := analyticsInputs{
 		usages: []taskTokenUsage{{
-			LookupsByDay: map[string]map[string]int{
-				"2026-06-14": {lookupResume: 2, lookupReference: 1, lookupCrossTask: 1, lookupKB: 1},
-				"2026-06-01": {lookupResume: 9},
+			Lookups: []lookupValueEvent{
+				{Timestamp: "2026-06-14T10:00:00Z", Kind: lookupResume, ContextBytes: 4000},
+				{Timestamp: "2026-06-14T10:01:00Z", Kind: lookupResume, ContextBytes: 400},
+				{Timestamp: "2026-06-14T10:02:00Z", Kind: lookupReference, ContextBytes: 400},
+				{Timestamp: "2026-06-14T10:03:00Z", Kind: lookupCrossTask, ContextBytes: 0},
+				{Timestamp: "2026-06-14T10:04:00Z", Kind: lookupKB, ContextBytes: 0},
+				{Timestamp: "2026-06-01T10:00:00Z", Kind: lookupResume, ContextBytes: 9999 * 4},
 			},
-			ContextTokensByDay: map[string]int64{"2026-06-14": 1200, "2026-06-01": 9999},
 		}},
 		runs: []*flowdb.BrainRun{
 			mkRun("r1", "completed", "2026-06-14T10:00:00Z", "2026-06-14T10:05:00Z"),
@@ -92,6 +118,45 @@ func TestBuildAnalyticsPayloadValueStats(t *testing.T) {
 	}
 	if len(p.Value.Breakdowns) != 1 || p.Value.Breakdowns[0].Key != "lookup_kind" {
 		t.Fatalf("value breakdowns = %+v, want lookup_kind", p.Value.Breakdowns)
+	}
+}
+
+func TestBuildAnalyticsPayloadValueStatsBucketsHourlyLookups(t *testing.T) {
+	now := time.Date(2026, 6, 20, 10, 0, 0, 0, time.Local)
+	q, _ := parseAnalyticsRange(map[string][]string{"range": {"1d"}}, now)
+	previousDayInWindow := now.Add(-11 * time.Hour)
+	currentDayInWindow := now.Add(-30 * time.Minute)
+	in := analyticsInputs{
+		usages: []taskTokenUsage{{
+			Lookups: []lookupValueEvent{
+				{Timestamp: previousDayInWindow.Format(time.RFC3339), Kind: lookupResume, ContextBytes: 40},
+				{Timestamp: currentDayInWindow.Format(time.RFC3339), Kind: lookupReference, ContextBytes: 80},
+				{Timestamp: now.Add(-25 * time.Hour).Format(time.RFC3339), Kind: lookupResume, ContextBytes: 400},
+			},
+		}},
+		valueConstants: defaultValueConstants(),
+	}
+
+	p := buildAnalyticsPayload(in, q, now)
+	if p.Value == nil {
+		t.Fatal("expected value stats")
+	}
+	if p.Value.LookupsTotal != 2 {
+		t.Fatalf("lookups total = %v, want 2", p.Value.LookupsTotal)
+	}
+	if p.Value.ContextTokens != 30 {
+		t.Fatalf("context tokens = %v, want 30", p.Value.ContextTokens)
+	}
+	var nonZero int
+	for _, line := range p.Value.Series[0].Lines {
+		for _, pt := range line.Points {
+			if pt.V > 0 {
+				nonZero++
+			}
+		}
+	}
+	if nonZero != 2 {
+		t.Fatalf("nonzero hourly lookup points = %d, want 2", nonZero)
 	}
 }
 
