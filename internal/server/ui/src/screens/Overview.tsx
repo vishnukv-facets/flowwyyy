@@ -174,7 +174,7 @@ function fmtReset(iso?: string): string {
   if (!iso) return "";
   const ts = Date.parse(iso);
   if (!Number.isFinite(ts)) return "";
-  return new Intl.DateTimeFormat("en-US", {
+  const exact = new Intl.DateTimeFormat("en-US", {
     weekday: "short",
     month: "short",
     day: "numeric",
@@ -184,6 +184,20 @@ function fmtReset(iso?: string): string {
   })
     .format(new Date(ts))
     .replace(/\b(AM|PM)\b/g, (s) => s.toLowerCase());
+  const remaining = fmtRemaining(ts - Date.now());
+  return remaining ? `${exact} · ${remaining}` : exact;
+}
+
+function fmtRemaining(ms: number): string {
+  if (ms <= 0) return "now";
+  const mins = Math.ceil(ms / 60000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  if (hours < 24) return remMins ? `${hours}h ${remMins}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  const remHours = hours % 24;
+  return remHours ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function ProviderUsageTip({ provider }: { provider: string }) {
