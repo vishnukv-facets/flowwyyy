@@ -13,14 +13,22 @@ type PendingWake struct {
 	ID        int64
 	Slug      string
 	Prompt    string
+	NotBefore string
 	CreatedAt string
 }
 
 // EnqueuePendingWake appends a buffered wake for slug and returns its row id.
 func EnqueuePendingWake(db *sql.DB, slug, prompt string) (int64, error) {
+	return EnqueuePendingWakeAfter(db, slug, prompt, "")
+}
+
+// EnqueuePendingWakeAfter appends a buffered wake that must not be delivered
+// before notBefore. An empty notBefore preserves the existing "ready now"
+// behavior used when a session is only waiting on operator input.
+func EnqueuePendingWakeAfter(db *sql.DB, slug, prompt, notBefore string) (int64, error) {
 	res, err := db.Exec(
-		`INSERT INTO pending_wakes (slug, prompt, created_at) VALUES (?, ?, ?)`,
-		strings.TrimSpace(slug), prompt, NowISO(),
+		`INSERT INTO pending_wakes (slug, prompt, not_before, created_at) VALUES (?, ?, ?, ?)`,
+		strings.TrimSpace(slug), prompt, strings.TrimSpace(notBefore), NowISO(),
 	)
 	if err != nil {
 		return 0, err
@@ -34,12 +42,12 @@ func EnqueuePendingWake(db *sql.DB, slug, prompt string) (int64, error) {
 // removed only by AckPendingWake after a confirmed inject.
 func PeekPendingWake(db *sql.DB, slug string) (PendingWake, bool, error) {
 	row := db.QueryRow(
-		`SELECT id, slug, prompt, created_at FROM pending_wakes
+		`SELECT id, slug, prompt, COALESCE(not_before, ''), created_at FROM pending_wakes
 		 WHERE slug = ? ORDER BY id ASC LIMIT 1`,
 		strings.TrimSpace(slug),
 	)
 	var pw PendingWake
-	switch err := row.Scan(&pw.ID, &pw.Slug, &pw.Prompt, &pw.CreatedAt); err {
+	switch err := row.Scan(&pw.ID, &pw.Slug, &pw.Prompt, &pw.NotBefore, &pw.CreatedAt); err {
 	case nil:
 		return pw, true, nil
 	case sql.ErrNoRows:

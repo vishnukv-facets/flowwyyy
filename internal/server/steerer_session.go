@@ -473,7 +473,7 @@ func (s *Server) startNewSteererChat(slot *steererSlot, slug, turn, title, provi
 	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
 	sessionID := uuid.NewString()
 	prompt := steererSessionBrief() + "\n\n---\n\n" + turn
-	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "" /*no --model*/)
+	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "" /*no --model*/, "")
 	launch := terminalLaunch{
 		Slug:           slug,
 		SessionID:      sessionID,
@@ -529,7 +529,7 @@ func (s *Server) resumeSteererChat(slot *steererSlot, chat *flowdb.Chat, turn st
 		return fmt.Errorf("steerer session: %w", err)
 	}
 	permissionMode, _ := flowdb.NormalizePermissionMode(steererChatPermissionMode)
-	args := agentTerminalArgs(provider, false /*resume*/, sessionID, absRoot, absRoot, "", permissionMode, "")
+	args := agentTerminalArgs(provider, false /*resume*/, sessionID, absRoot, absRoot, "", permissionMode, "", "")
 	launch := terminalLaunch{
 		Slug: slug, SessionID: sessionID, Provider: provider, PermissionMode: permissionMode,
 		WorkDir: absRoot, Args: args, FreeAgent: true, Created: true, NeedsCapture: provider == "codex",
@@ -690,7 +690,7 @@ func (s *Server) switchSteererProvider(slug, target string) error {
 		sessionID = uuid.NewString()
 	}
 	prompt := steererSessionBrief() + handoff
-	args := agentTerminalArgs(target, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "")
+	args := agentTerminalArgs(target, true /*fresh*/, sessionID, absRoot, absRoot, prompt, permissionMode, "", "")
 	launch := terminalLaunch{
 		Slug: slug, SessionID: sessionID, Provider: target, PermissionMode: permissionMode,
 		WorkDir: absRoot, Args: args, FreeAgent: true, Created: true,

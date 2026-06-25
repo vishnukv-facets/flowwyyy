@@ -32,6 +32,7 @@ import type {
   OwnerView,
   OwnerDetailView,
   OverviewView,
+  ProviderUsage,
   PlaybookView,
   ProjectView,
   QuoteView,
@@ -210,6 +211,16 @@ export function useIngressStatus() {
 }
 export function useOverview() {
   return useQuery({ queryKey: ['overview'], queryFn: () => apiGet<OverviewView>('/api/overview') })
+}
+
+export function useProviderUsage(provider: string) {
+  return useQuery({
+    queryKey: ['provider-usage', provider],
+    queryFn: () => apiGet<ProviderUsage>(`/api/provider-usage?provider=${encodeURIComponent(provider)}`),
+    enabled: provider === 'claude' || provider === 'codex',
+    staleTime: 0,
+    refetchInterval: 2000,
+  })
 }
 
 export interface AnalyticsParams {

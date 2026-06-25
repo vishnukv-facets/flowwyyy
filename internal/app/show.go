@@ -352,6 +352,11 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 			briefText = string(b)
 		}
 		rm := flowdb.ResolveSessionModel(t.SessionProvider, explicitModel, briefText, t.Priority)
+		explicitEffort := ""
+		if t.Effort.Valid {
+			explicitEffort = t.Effort.String
+		}
+		effort, effortErr := flowdb.ResolveSessionEffort(t.SessionProvider, rm.Model, explicitEffort)
 		switch {
 		case rm.Explicit:
 			fmt.Printf("model:         %s  [explicit]\n", rm.Model)
@@ -361,6 +366,15 @@ func printTaskMetadata(db *sql.DB, t *flowdb.Task, root string) {
 			fmt.Printf("model:         %s  [auto: %s tier — descriptive brief]\n", rm.Model, rm.Tier)
 		default:
 			fmt.Printf("model:         %s  [auto: %s tier]\n", rm.Model, rm.Tier)
+		}
+		if effortErr != nil {
+			fmt.Printf("effort:        invalid (%v)\n", effortErr)
+		} else if explicitEffort != "" {
+			fmt.Printf("effort:        %s  [explicit]\n", effort)
+		} else if effort != "" {
+			fmt.Printf("effort:        %s  [auto: large model]\n", effort)
+		} else {
+			fmt.Printf("effort:        provider default\n")
 		}
 	}
 

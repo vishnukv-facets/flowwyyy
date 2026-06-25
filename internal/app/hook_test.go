@@ -5,6 +5,7 @@ import (
 	"flow/internal/flowdb"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +141,95 @@ func TestHookUserPromptSubmitIsNoOp(t *testing.T) {
 		if strings.TrimSpace(out) != "" {
 			t.Errorf("CLAUDE_CODE_SESSION_ID=%q: expected empty stdout, got:\n%s", sid, out)
 		}
+	}
+}
+
+func TestHookClaudeStatusLineCapturesUsageAndDelegates(t *testing.T) {
+	root := setupFlowRoot(t)
+	settingsPath, err := userSettingsPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := readSettings(t, settingsPath)
+	settings[claudeStatusLinePreviousKey] = map[string]any{
+		"type":    "command",
+		"command": "printf delegated-status",
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, append(out, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	input := `{
+  "session_id": "abc123",
+  "version": "2.1.90",
+  "model": {"id": "claude-opus-4-8", "display_name": "Opus"},
+  "effort": {"level": "xhigh"},
+  "rate_limits": {
+    "five_hour": {"used_percentage": 37, "resets_at": 1782397800},
+    "seven_day": {"used_percentage": 67, "resets_at": 1782752400}
+  },
+  "workspace": {"current_dir": "/tmp/project"},
+  "cost": {"total_cost_usd": 123.45}
+}`
+	stdout := withStdin(t, input, func() string {
+		return captureStdout(t, func() {
+			if rc := cmdHookClaudeStatusLine(nil); rc != 0 {
+				t.Fatalf("rc=%d", rc)
+			}
+		})
+	})
+	if strings.TrimSpace(stdout) != "delegated-status" {
+		t.Fatalf("stdout = %q, want delegated statusline output", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "provider_usage", "claude.json"))
+	if err != nil {
+		t.Fatalf("read capture: %v", err)
+	}
+	var captured map[string]any
+	if err := json.Unmarshal(raw, &captured); err != nil {
+		t.Fatalf("parse capture: %v\n%s", err, raw)
+	}
+	rl, _ := captured["rate_limits"].(map[string]any)
+	five, _ := rl["five_hour"].(map[string]any)
+	if used, _ := five["used_percentage"].(float64); used != 37 {
+		t.Fatalf("five_hour.used_percentage = %v, want 37", five["used_percentage"])
+	}
+	if _, ok := captured["cost"]; ok {
+		t.Fatalf("capture should not persist raw cost payload: %#v", captured["cost"])
+	}
+	if _, ok := captured["workspace"]; ok {
+		t.Fatalf("capture should not persist raw workspace payload: %#v", captured["workspace"])
+	}
+}
+
+func TestHookClaudeStatusLineDoesNotClobberWithoutRateLimits(t *testing.T) {
+	root := setupFlowRoot(t)
+	path := filepath.Join(root, "provider_usage", "claude.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	original := []byte(`{"rate_limits":{"five_hour":{"used_percentage":22,"resets_at":1782397800}}}`)
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = withStdin(t, `{"model":{"id":"claude-opus-4-8"}}`, func() string {
+		return captureStdout(t, func() {
+			if rc := cmdHookClaudeStatusLine(nil); rc != 0 {
+				t.Fatalf("rc=%d", rc)
+			}
+		})
+	})
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(original) {
+		t.Fatalf("capture was clobbered by no-rate-limits payload:\n%s", got)
 	}
 }
 

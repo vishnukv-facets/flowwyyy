@@ -297,6 +297,26 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	has, err = columnExists(db, "tasks", "effort")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE tasks ADD COLUMN effort TEXT`); err != nil {
+			return fmt.Errorf("add tasks.effort: %w", err)
+		}
+	}
+
+	has, err = columnExists(db, "pending_wakes", "not_before")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE pending_wakes ADD COLUMN not_before TEXT`); err != nil {
+			return fmt.Errorf("add pending_wakes.not_before: %w", err)
+		}
+	}
+
 	has, err = columnExists(db, "tasks", "session_provider")
 	if err != nil {
 		return err
@@ -939,6 +959,7 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 			assignee              TEXT,
 			permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
 				model                 TEXT,
+				effort                TEXT,
 				status_changed_at     TEXT,
 				session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
 				harness               TEXT,
@@ -960,13 +981,13 @@ func migrateTasksSessionInvariant(db *sql.DB) error {
 	if _, err := tx.Exec(`
 			INSERT INTO tasks_new (
 				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, effort, status_changed_at,
 				session_provider, harness, session_id, session_started, session_last_resumed,
 				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
 			)
 			SELECT
 				slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority,
-				work_dir, waiting_on, due_date, assignee, permission_mode, model, status_changed_at,
+				work_dir, waiting_on, due_date, assignee, permission_mode, model, effort, status_changed_at,
 				COALESCE(NULLIF(session_provider, ''), 'claude'), harness, session_id, session_started, session_last_resumed,
 				session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at
 			FROM tasks`); err != nil {

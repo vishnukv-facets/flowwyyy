@@ -43,6 +43,7 @@ type autoRunRequest struct {
 	FlowRoot       string
 	PermissionMode string
 	Model          string
+	Effort         string
 }
 
 // autoLauncher starts a detached `flow __auto-exec <slug>` process with its
@@ -119,10 +120,11 @@ var autoRunner = func(req autoRunRequest) error {
 	}
 	var cmd *exec.Cmd
 	if provider == sessionProviderCodex {
-		cmd = commandRunner("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model)...)
+		cmd = commandRunner("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model, req.Effort)...)
 		cmd.Stdin = strings.NewReader(req.Prompt)
 	} else {
 		argv := append([]string{"--session-id", req.SessionID}, claudeModelArgs(req.Model)...)
+		argv = append(argv, claudeEffortArgs(req.Effort)...)
 		argv = append(argv, "-p", req.Prompt)
 		argv = append(argv, claudePermissionArgs(req.PermissionMode)...)
 		cmd = exec.Command("claude", argv...)
@@ -309,6 +311,11 @@ func cmdAutoExec(args []string) int {
 		}
 	}
 	model := flowdb.NormalizeModel(*modelFlag)
+	effort, err := resolveLaunchEffort(provider, task, model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
+	}
 	if provider != sessionProviderCodex && (!task.SessionID.Valid || task.SessionID.String == "") {
 		now := flowdb.NowISO()
 		familySlug := task.Slug
@@ -417,6 +424,7 @@ func cmdAutoExec(args []string) int {
 		FlowRoot:       root,
 		PermissionMode: permissionMode,
 		Model:          model,
+		Effort:         effort,
 	}
 	if provider == sessionProviderCodex {
 		printCodexAutoHeader(req)
@@ -459,7 +467,7 @@ func cmdAutoExec(args []string) int {
 
 func printCodexAutoHeader(req autoRunRequest) {
 	fmt.Printf("codex version: %s\n", codexExecVersion())
-	fmt.Printf("codex command: %s\n", agentShellCommand("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model)))
+	fmt.Printf("codex command: %s\n", agentShellCommand("codex", codexExecCLIArgs(req.WorkDir, req.FlowRoot, req.PermissionMode, req.Model, req.Effort)))
 	fmt.Printf("prompt: stdin (%d bytes)\n\n", len(req.Prompt))
 }
 
@@ -509,7 +517,7 @@ func isAmbientAgentContextEnv(name string) bool {
 	}
 }
 
-func codexExecCLIArgs(cwd, flowRootPath, permissionMode, model string) []string {
+func codexExecCLIArgs(cwd, flowRootPath, permissionMode, model, effort string) []string {
 	args := append([]string{}, codexPermissionArgs(permissionMode)...)
 	args = append(args, "exec", "--color", "never")
 	if cwd != "" {
@@ -517,6 +525,7 @@ func codexExecCLIArgs(cwd, flowRootPath, permissionMode, model string) []string 
 	}
 	args = appendCodexWritableRoots(args, cwd, flowRootPath)
 	args = append(args, codexModelArgs(model)...)
+	args = append(args, codexEffortArgs(effort)...)
 	return append(args, "-")
 }
 

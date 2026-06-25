@@ -63,6 +63,11 @@ func (s *Server) createFlow(req actionRequest) (actionResponse, int) {
 	if model := flowdb.NormalizeModel(req.Model); model != "" {
 		args = append(args, "--model", model)
 	}
+	if effort, err := flowdb.NormalizeEffort(provider, req.Effort); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	} else if effort != "" {
+		args = append(args, "--effort", effort)
+	}
 	if project != "" {
 		args = append(args, "--project", project)
 	}

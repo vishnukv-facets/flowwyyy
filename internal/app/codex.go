@@ -59,7 +59,7 @@ func hasSessionID(v sql.NullString) bool {
 	return v.Valid && strings.TrimSpace(v.String) != ""
 }
 
-func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode, model string) (string, string, error) {
+func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode, model, effort string) (string, string, error) {
 	var promptFile string
 	if mode == codexModeFresh {
 		var err error
@@ -76,6 +76,9 @@ func buildCodexRunCommand(taskSlug, mode, sessionID, prompt, permissionMode, mod
 	}
 	if strings.TrimSpace(model) != "" {
 		parts = append(parts, "--model "+spawner.ShellQuote(model))
+	}
+	if strings.TrimSpace(effort) != "" {
+		parts = append(parts, "--effort "+spawner.ShellQuote(effort))
 	}
 	if promptFile != "" {
 		parts = append(parts, "--prompt-file "+spawner.ShellQuote(promptFile))
@@ -182,6 +185,13 @@ func claudeModelArgs(model string) []string {
 	return []string{"--model", model}
 }
 
+func claudeEffortArgs(effort string) []string {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	return []string{"--effort", strings.TrimSpace(effort)}
+}
+
 func claudePermissionArgs(mode string) []string {
 	switch strings.TrimSpace(mode) {
 	case "auto":
@@ -223,6 +233,7 @@ func cmdHookCodexRun(args []string) int {
 	promptFile := fs.String("prompt-file", "", "path to bootstrap prompt file")
 	permissionModeFlag := fs.String("permission-mode", flowdb.DefaultPermissionMode, "agent permission mode: default|auto|bypass")
 	modelFlag := fs.String("model", "", "codex model to launch with (empty = codex default)")
+	effortFlag := fs.String("effort", "", "codex reasoning effort (minimal|low|medium|high|xhigh)")
 	dangerSkip := fs.Bool("dangerously-skip-permissions", false, "pass --dangerously-bypass-approvals-and-sandbox to codex")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -234,6 +245,11 @@ func cmdHookCodexRun(args []string) int {
 	}
 	if *dangerSkip {
 		permissionMode = "bypass"
+	}
+	effort, err := flowdb.NormalizeEffort(sessionProviderCodex, *effortFlag)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 2
 	}
 	if *taskSlug == "" {
 		fmt.Fprintln(os.Stderr, "error: hook codex-run requires --task")
@@ -272,7 +288,7 @@ func cmdHookCodexRun(args []string) int {
 		return 1
 	}
 	started := time.Now().Add(-2 * time.Second)
-	codexArgs, err := codexCLIArgs(*mode, *sessionID, *prompt, cwd, root, permissionMode, *modelFlag)
+	codexArgs, err := codexCLIArgs(*mode, *sessionID, *prompt, cwd, root, permissionMode, *modelFlag, effort)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -312,7 +328,7 @@ func cmdHookCodexRun(args []string) int {
 	return 0
 }
 
-func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode, model string) ([]string, error) {
+func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode, model, effort string) ([]string, error) {
 	if mode == codexModeFresh {
 		args := []string{"--no-alt-screen"}
 		if cwd != "" {
@@ -320,6 +336,7 @@ func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode, mo
 		}
 		args = appendCodexWritableRoots(args, cwd, flowRootPath)
 		args = append(args, codexModelArgs(model)...)
+		args = append(args, codexEffortArgs(effort)...)
 		args = append(args, codexPermissionArgs(permissionMode)...)
 		return append(args, prompt), nil
 	}
@@ -332,6 +349,7 @@ func codexCLIArgs(mode, sessionID, prompt, cwd, flowRootPath, permissionMode, mo
 	}
 	args = appendCodexWritableRoots(args, cwd, flowRootPath)
 	args = append(args, codexModelArgs(model)...)
+	args = append(args, codexEffortArgs(effort)...)
 	args = append(args, codexPermissionArgs(permissionMode)...)
 	return append(args, sessionID), nil
 }
@@ -343,6 +361,13 @@ func codexModelArgs(model string) []string {
 		return nil
 	}
 	return []string{"--model", model}
+}
+
+func codexEffortArgs(effort string) []string {
+	if strings.TrimSpace(effort) == "" {
+		return nil
+	}
+	return []string{"-c", "model_reasoning_effort=" + strings.TrimSpace(effort)}
 }
 
 func appendCodexWritableRoots(args []string, cwd, flowRootPath string) []string {

@@ -25,6 +25,7 @@ func BuildTaskView(db *sql.DB, root string, t *flowdb.Task, live map[string]bool
 		WorkDir:        t.WorkDir,
 		PermissionMode: t.PermissionMode,
 		Model:          t.Model.String,
+		Effort:         t.Effort.String,
 		Live:           false,
 		DaysInStatus:   daysInStatus(t, now),
 		CreatedAt:      t.CreatedAt,

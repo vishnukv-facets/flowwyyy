@@ -42,6 +42,7 @@ type BackgroundLauncher interface {
 type LaunchOpts struct {
 	PermissionMode string
 	Model          string
+	Effort         string
 	Inject         string
 }
 

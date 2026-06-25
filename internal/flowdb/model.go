@@ -39,6 +39,51 @@ func NormalizeModel(model string) string {
 	return strings.TrimSpace(model)
 }
 
+// NormalizeEffort canonicalizes an explicit reasoning effort for a provider.
+// Empty means "no explicit choice"; launch code may still derive a default from
+// the resolved model. Validation is intentionally stricter than model names
+// because both CLIs publish small fixed effort enums.
+func NormalizeEffort(provider, effort string) (string, error) {
+	e := strings.TrimSpace(strings.ToLower(effort))
+	if e == "" {
+		return "", nil
+	}
+	switch strings.TrimSpace(strings.ToLower(provider)) {
+	case "codex":
+		switch e {
+		case "minimal", "low", "medium", "high", "xhigh":
+			return e, nil
+		}
+		return "", fmt.Errorf("codex effort must be minimal|low|medium|high|xhigh, got %q", effort)
+	default:
+		switch e {
+		case "low", "medium", "high", "xhigh", "max":
+			return e, nil
+		}
+		return "", fmt.Errorf("claude effort must be low|medium|high|xhigh|max, got %q", effort)
+	}
+}
+
+// ResolveSessionEffort returns the effort flag to pass at launch. Explicit
+// values win; otherwise large model choices default to xhigh per operator
+// policy. Empty return means "pass no effort flag".
+func ResolveSessionEffort(provider, model, explicitEffort string) (string, error) {
+	if e, err := NormalizeEffort(provider, explicitEffort); err != nil || e != "" {
+		return e, err
+	}
+	m := strings.ToLower(strings.TrimSpace(model))
+	if strings.TrimSpace(strings.ToLower(provider)) == "codex" {
+		if m == "gpt-5.5" {
+			return "xhigh", nil
+		}
+		return "", nil
+	}
+	if m == "opus" || strings.Contains(m, "opus") {
+		return "xhigh", nil
+	}
+	return "", nil
+}
+
 // NormalizeModelTier canonicalizes a tier name. Empty maps to the default.
 func NormalizeModelTier(tier string) (string, error) {
 	switch strings.TrimSpace(strings.ToLower(tier)) {
@@ -198,11 +243,11 @@ type ResolvedModel struct {
 //     it's honored verbatim.
 //   - Otherwise the baseline tier (FLOW_MODEL_TIER, default medium) is the
 //     starting point, then nudged by the task's nature:
-//       - high priority upshifts one rung — important autonomous work gets the
-//         stronger model even when the creator didn't pin one — and is never
-//         downshifted;
-//       - for non-high priority, a descriptive brief downshifts one rung when
-//         auto-downshift is enabled (a well-specified routine task runs cheaply).
+//   - high priority upshifts one rung — important autonomous work gets the
+//     stronger model even when the creator didn't pin one — and is never
+//     downshifted;
+//   - for non-high priority, a descriptive brief downshifts one rung when
+//     auto-downshift is enabled (a well-specified routine task runs cheaply).
 //     The resulting tier is mapped to a provider model (Claude or Codex).
 func ResolveSessionModel(provider, explicitModel, briefText, priority string) ResolvedModel {
 	if m := NormalizeModel(explicitModel); m != "" {

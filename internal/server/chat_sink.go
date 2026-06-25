@@ -85,7 +85,7 @@ func (s *Server) openNewSlackChat(slug, channel, text string) error {
 	permissionMode, _ := flowdb.NormalizePermissionMode(slackChatPermissionMode)
 	sessionID := uuid.NewString()
 	brief := overviewBrief(text) + slackReplyInstructions(channel)
-	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, brief, permissionMode, "")
+	args := agentTerminalArgs(provider, true /*fresh*/, sessionID, absRoot, absRoot, brief, permissionMode, "", "")
 	launch := terminalLaunch{
 		Slug:           slug,
 		SessionID:      sessionID,
@@ -149,7 +149,7 @@ func (s *Server) resumeSlackChat(chat *flowdb.Chat, channel, text string) error 
 	permissionMode, _ := flowdb.NormalizePermissionMode(slackChatPermissionMode)
 	// fresh=false → RESUME args; empty prompt (resume carries none — the command
 	// is delivered as a separate nudge once the session is live).
-	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "")
+	args := agentTerminalArgs(provider, false, sessionID, absRoot, absRoot, "", permissionMode, "", "")
 	launch := terminalLaunch{
 		Slug:           slug,
 		SessionID:      sessionID,

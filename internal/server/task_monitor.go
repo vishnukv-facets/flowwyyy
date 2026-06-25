@@ -302,8 +302,25 @@ func withholdUnattendedRespawn(task *flowdb.Task, entries []monitor.InboxEntry) 
 // transient inject failures on the live path so it retries; the respawn/native
 // paths return nil to avoid hot loops (events remain in inbox.jsonl regardless).
 func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) error {
+	prompt := s.inboxWakePrompt(slug, entries)
+	if hold, ok := s.taskProviderRateLimitHold(slug); ok {
+		if err := s.queueWakeAfterRateLimit(slug, prompt, hold); err != nil {
+			return err
+		}
+		live := s.terminals != nil && (s.terminals.running(slug) || s.terminals.sharedRunning(slug))
+		if !live {
+			if task, err := flowdb.GetTask(s.cfg.DB, slug); err == nil && task != nil &&
+				(task.Status == "backlog" || task.Status == "in-progress") && !s.taskAgentProcessLive(task) {
+				if err := s.enqueueOpenTaskAfter(slug, hold); err != nil {
+					return err
+				}
+			}
+		}
+		log.Printf("flow monitor: held wake for %s until %s because %s is rate-limited", slug, hold.Until.Format(time.RFC3339), hold.Provider)
+		return nil
+	}
 	if s.terminals != nil && s.terminals.running(slug) {
-		return s.terminals.wakeTask(slug, s.inboxWakePrompt(slug, entries))
+		return s.terminals.wakeTask(slug, prompt)
 	}
 	// No browser PTY is attached in this server process, but the agent may still
 	// be alive in its detached tmux session — the common case right after a
@@ -312,7 +329,7 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	// Without this, a still-live flow session is indistinguishable from a native
 	// (user-owned) one below and the wake is silently dropped while the cursor
 	// advances past the event.
-	if s.terminals != nil && s.terminals.wakeSharedTask(slug, s.inboxWakePrompt(slug, entries)) {
+	if s.terminals != nil && s.terminals.wakeSharedTask(slug, prompt) {
 		return nil
 	}
 	task, err := flowdb.GetTask(s.cfg.DB, slug)

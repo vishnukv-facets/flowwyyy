@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, FolderGit2, ImagePlus, Loader2, Plus, X } f
 import { Modal } from './Modal'
 import { Field } from './ui'
 import { Select } from './Select'
-import { AgentPicker, ModelPicker, PermissionPicker, PriorityPicker } from './pickers'
+import { AgentPicker, EffortPicker, ModelPicker, PermissionPicker, PriorityPicker } from './pickers'
 import { WorkdirPicker } from './WorkdirPicker'
 import { apiAction, apiActionForm, fileToRpcFile } from '../lib/api'
 import { pushToast } from '../lib/toast'
@@ -59,6 +59,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
   const [workDir, setWorkDir] = useState('')
   const [provider, setProvider] = useState('claude')
   const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
 
   // If the chosen provider isn't installed, fall back to whichever is.
   useEffect(() => {
@@ -121,6 +122,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
     setWorkDir('')
     setPriority('medium')
     setModel('')
+    setEffort('')
     setFiles([])
     setBusy(false)
   }
@@ -149,6 +151,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
         provider,
         permission_mode: permission,
         model,
+        effort,
         priority,
         prompt,
         no_open: !openSession,
@@ -165,6 +168,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
             provider,
             permission_mode: permission,
             model,
+            effort,
             priority,
             prompt,
             no_open: String(!openSession),
@@ -305,12 +309,16 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
               onChange={(v) => {
                 setProvider(v)
                 setModel('') // concrete model ids are provider-specific; reset to Auto on switch
+                setEffort('')
               }}
               providers={providers}
             />
           </Field>
           <Field label="Model">
             <ModelPicker provider={provider} value={model} onChange={setModel} />
+          </Field>
+          <Field label="Effort">
+            <EffortPicker provider={provider} value={effort} onChange={setEffort} />
           </Field>
         </div>
         <Field

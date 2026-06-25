@@ -13,14 +13,25 @@ func TestMigrationAddsModelColumn(t *testing.T) {
 	}
 }
 
+func TestMigrationAddsEffortColumn(t *testing.T) {
+	db := openTempDB(t)
+	has, err := columnExists(db, "tasks", "effort")
+	if err != nil {
+		t.Fatalf("columnExists(effort): %v", err)
+	}
+	if !has {
+		t.Error("tasks.effort column should exist after migration")
+	}
+}
+
 func TestTaskModelRoundTrip(t *testing.T) {
 	db := openTempDB(t)
 	now := NowISO()
 
 	if _, err := db.Exec(
-		`INSERT INTO tasks (slug, name, status, priority, work_dir, model, session_provider, created_at, updated_at)
-		 VALUES (?, ?, 'backlog', 'medium', ?, ?, 'claude', ?, ?)`,
-		"with-model", "Has a model", t.TempDir(), "opus", now, now,
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, model, effort, session_provider, created_at, updated_at)
+		 VALUES (?, ?, 'backlog', 'medium', ?, ?, ?, 'claude', ?, ?)`,
+		"with-model", "Has a model", t.TempDir(), "opus", "xhigh", now, now,
 	); err != nil {
 		t.Fatalf("insert with-model: %v", err)
 	}
@@ -30,6 +41,9 @@ func TestTaskModelRoundTrip(t *testing.T) {
 	}
 	if !got.Model.Valid || got.Model.String != "opus" {
 		t.Errorf("Model = %+v, want valid opus", got.Model)
+	}
+	if !got.Effort.Valid || got.Effort.String != "xhigh" {
+		t.Errorf("Effort = %+v, want valid xhigh", got.Effort)
 	}
 
 	// A task with no explicit model stores NULL (resolution happens at launch).
@@ -46,6 +60,9 @@ func TestTaskModelRoundTrip(t *testing.T) {
 	}
 	if got2.Model.Valid && got2.Model.String != "" {
 		t.Errorf("Model = %+v, want NULL/empty for a task with no explicit model", got2.Model)
+	}
+	if got2.Effort.Valid && got2.Effort.String != "" {
+		t.Errorf("Effort = %+v, want NULL/empty for a task with no explicit effort", got2.Effort)
 	}
 }
 
@@ -64,6 +81,61 @@ func TestNormalizeModel(t *testing.T) {
 	for _, c := range cases {
 		if got := NormalizeModel(c.in); got != c.want {
 			t.Errorf("NormalizeModel(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestNormalizeEffort(t *testing.T) {
+	ok := []struct {
+		provider string
+		in       string
+		want     string
+	}{
+		{"claude", "", ""},
+		{"claude", " XHIGH ", "xhigh"},
+		{"claude", "max", "max"},
+		{"codex", "minimal", "minimal"},
+		{"codex", "xhigh", "xhigh"},
+	}
+	for _, c := range ok {
+		got, err := NormalizeEffort(c.provider, c.in)
+		if err != nil {
+			t.Errorf("NormalizeEffort(%q, %q) unexpected error: %v", c.provider, c.in, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("NormalizeEffort(%q, %q) = %q, want %q", c.provider, c.in, got, c.want)
+		}
+	}
+	if _, err := NormalizeEffort("claude", "minimal"); err == nil {
+		t.Error("claude minimal effort should be rejected")
+	}
+	if _, err := NormalizeEffort("codex", "max"); err == nil {
+		t.Error("codex max effort should be rejected")
+	}
+}
+
+func TestResolveSessionEffortDefaultsLargeModelsToXHigh(t *testing.T) {
+	cases := []struct {
+		provider string
+		model    string
+		explicit string
+		want     string
+	}{
+		{"claude", "opus", "", "xhigh"},
+		{"claude", "claude-opus-4-8", "", "xhigh"},
+		{"codex", "gpt-5.5", "", "xhigh"},
+		{"codex", "gpt-5.4", "", ""},
+		{"claude", "opus", "high", "high"},
+	}
+	for _, c := range cases {
+		got, err := ResolveSessionEffort(c.provider, c.model, c.explicit)
+		if err != nil {
+			t.Errorf("ResolveSessionEffort(%q, %q, %q) unexpected error: %v", c.provider, c.model, c.explicit, err)
+			continue
+		}
+		if got != c.want {
+			t.Errorf("ResolveSessionEffort(%q, %q, %q) = %q, want %q", c.provider, c.model, c.explicit, got, c.want)
 		}
 	}
 }

@@ -226,6 +226,23 @@ func TestCmdAddTaskWithModel(t *testing.T) {
 	}
 }
 
+func TestCmdAddTaskWithEffort(t *testing.T) {
+	setupFlowRoot(t)
+
+	rc := cmdAdd([]string{"task", "Hard task", "--effort", "xhigh", "--agent", "claude"})
+	if rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+	db := openFlowDB(t)
+	task, err := flowdb.GetTask(db, "hard-task")
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if !task.Effort.Valid || task.Effort.String != "xhigh" {
+		t.Fatalf("effort = %+v, want valid xhigh", task.Effort)
+	}
+}
+
 func TestCmdAddTaskNoModelLeavesNull(t *testing.T) {
 	setupFlowRoot(t)
 
@@ -240,6 +257,9 @@ func TestCmdAddTaskNoModelLeavesNull(t *testing.T) {
 	}
 	if task.Model.Valid && task.Model.String != "" {
 		t.Fatalf("model = %+v, want NULL (resolved at launch)", task.Model)
+	}
+	if task.Effort.Valid && task.Effort.String != "" {
+		t.Fatalf("effort = %+v, want NULL (provider default)", task.Effort)
 	}
 }
 

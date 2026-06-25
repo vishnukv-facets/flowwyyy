@@ -43,6 +43,15 @@ func TestWakeQueuePersistentRoundTrip(t *testing.T) {
 	if q.has("a") {
 		t.Fatal("drained queue should not report has")
 	}
+
+	notBefore := "2026-06-25T12:00:00Z"
+	if err := q.pushAfter("a", "later", notBefore); err != nil {
+		t.Fatalf("pushAfter: %v", err)
+	}
+	pw, ok = q.peek("a")
+	if !ok || pw.NotBefore != notBefore {
+		t.Fatalf("pushAfter peek = %+v,%v; want not_before %q", pw, ok, notBefore)
+	}
 }
 
 // beginFlush is a per-slug mutex gate: only one flush goroutine drains a slug at

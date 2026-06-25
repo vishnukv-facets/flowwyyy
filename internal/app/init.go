@@ -153,6 +153,12 @@ func cmdInit(args []string) int {
 		settings, _ := userSettingsPath()
 		fmt.Printf("installed SessionStart hook in %s\n", settings)
 	}
+	if added, err := installClaudeStatusLine(); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not install Claude statusLine capture: %v\n", err)
+	} else if added {
+		settings, _ := userSettingsPath()
+		fmt.Printf("installed Claude statusLine capture in %s\n", settings)
+	}
 
 	// Initialize the backup safety net: a self-managed git repo over the flow
 	// root that versions curated markdown (kb + briefs/updates), plus a baseline
@@ -247,7 +253,6 @@ type kbSeed struct {
 	filename string
 	stub     string
 }
-
 
 // kbSeeds returns the five canonical KB files. Kept as a function (not a
 // package-level var) so tests can call it directly without sharing state.

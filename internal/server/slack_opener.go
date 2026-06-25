@@ -25,6 +25,16 @@ func (o *slackTaskOpener) OpenInUI(slug string) error {
 	if o == nil || o.server == nil {
 		return fmt.Errorf("slack opener: server not wired")
 	}
+	if hold, ok := o.server.taskProviderRateLimitHold(slug); ok {
+		return o.server.enqueueOpenTaskAfter(slug, hold)
+	}
+	return o.openInUIWithoutRateLimitCheck(slug)
+}
+
+func (o *slackTaskOpener) openInUIWithoutRateLimitCheck(slug string) error {
+	if o == nil || o.server == nil {
+		return fmt.Errorf("slack opener: server not wired")
+	}
 	// openBrowserTerminalBridge validates the task and
 	// returns the "bridge ready" actionResponse. We discard the response
 	// because there's no UI request to answer — the user will pick it up

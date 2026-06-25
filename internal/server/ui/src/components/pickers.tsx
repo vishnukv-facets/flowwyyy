@@ -73,6 +73,52 @@ export function ModelPicker({
   )
 }
 
+const EFFORTS: Record<string, { v: string; label: string; title: string }[]> = {
+  claude: [
+    { v: '', label: 'Auto', title: 'Provider default; xhigh when model resolves to Opus' },
+    { v: 'low', label: 'low', title: 'claude --effort low' },
+    { v: 'medium', label: 'medium', title: 'claude --effort medium' },
+    { v: 'high', label: 'high', title: 'claude --effort high' },
+    { v: 'xhigh', label: 'xhigh', title: 'claude --effort xhigh' },
+    { v: 'max', label: 'max', title: 'claude --effort max' },
+  ],
+  codex: [
+    { v: '', label: 'Auto', title: 'Provider default; xhigh when model resolves to gpt-5.5' },
+    { v: 'minimal', label: 'minimal', title: 'model_reasoning_effort=minimal' },
+    { v: 'low', label: 'low', title: 'model_reasoning_effort=low' },
+    { v: 'medium', label: 'medium', title: 'model_reasoning_effort=medium' },
+    { v: 'high', label: 'high', title: 'model_reasoning_effort=high' },
+    { v: 'xhigh', label: 'xhigh', title: 'model_reasoning_effort=xhigh' },
+  ],
+}
+
+export function EffortPicker({
+  provider,
+  value,
+  onChange,
+}: {
+  provider: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const opts = EFFORTS[provider] ?? EFFORTS.claude
+  return (
+    <select
+      className="input model-select effort-select"
+      value={value || ''}
+      onChange={(e) => onChange(e.target.value)}
+      title="Reasoning effort — set before the session starts"
+      aria-label="Reasoning effort"
+    >
+      {opts.map((o) => (
+        <option key={o.v || 'auto'} value={o.v} title={o.title}>
+          {o.v ? o.label : 'Effort: Auto'}
+        </option>
+      ))}
+    </select>
+  )
+}
+
 const PRIOS = [
   { v: 'low', label: 'low' },
   { v: 'medium', label: 'medium' },

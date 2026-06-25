@@ -118,6 +118,31 @@ func (s *Server) updateModel(req actionRequest) (actionResponse, int) {
 	return actionResponse{OK: true, Message: "model cleared (auto — resolved at launch)"}, http.StatusOK
 }
 
+func (s *Server) updateEffort(req actionRequest) (actionResponse, int) {
+	target := firstNonEmpty(req.Target, req.Slug)
+	if err := validateSlug(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, target)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	effort, err := flowdb.NormalizeEffort(task.SessionProvider, req.Effort)
+	if err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	if err := s.applyBacklogEffortChoice(task, effort); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
+	}
+	if effort != "" {
+		return actionResponse{OK: true, Message: "effort set to " + effort}, http.StatusOK
+	}
+	return actionResponse{OK: true, Message: "effort cleared (provider/model default)"}, http.StatusOK
+}
+
 // applyBacklogModelChoice persists tasks.model for a backlog task, mirroring
 // applyBacklogProviderChoice. An empty model clears the column (NULL → auto).
 // The same "only before a session starts" guard applies; a no-op change on an
@@ -150,6 +175,32 @@ func (s *Server) applyBacklogModelChoice(target, rawModel string) error {
 	return err
 }
 
+func (s *Server) applyBacklogEffortChoice(task *flowdb.Task, effort string) error {
+	if task == nil {
+		return sql.ErrNoRows
+	}
+	current := ""
+	if task.Effort.Valid {
+		current = strings.TrimSpace(task.Effort.String)
+	}
+	if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
+		if current == effort {
+			return nil
+		}
+		return fmt.Errorf("effort can only be changed before a session starts")
+	}
+	var effortArg any
+	if effort != "" {
+		effortArg = effort
+	}
+	_, err := s.cfg.DB.Exec(
+		`UPDATE tasks SET effort = ?, updated_at = ?
+		 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
+		effortArg, flowdb.NowISO(), task.Slug,
+	)
+	return err
+}
+
 func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 	if strings.TrimSpace(rawProvider) == "" {
 		return nil
@@ -173,10 +224,17 @@ func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 		return fmt.Errorf("provider can only be changed before a session starts")
 	}
 	now := flowdb.NowISO()
+	effortArg := any(nil)
+	if task.Effort.Valid {
+		effort := strings.TrimSpace(task.Effort.String)
+		if normalized, err := flowdb.NormalizeEffort(provider, effort); err == nil && normalized != "" {
+			effortArg = normalized
+		}
+	}
 	_, err = s.cfg.DB.Exec(
-		`UPDATE tasks SET session_provider = ?, harness = ?, updated_at = ?
-			 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
-		provider, provider, now, target,
+		`UPDATE tasks SET session_provider = ?, harness = ?, effort = ?, updated_at = ?
+				 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
+		provider, provider, effortArg, now, target,
 	)
 	return err
 }

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignee              TEXT,
     permission_mode       TEXT NOT NULL DEFAULT 'auto' CHECK (permission_mode IN ('default','auto','bypass')),
 	    model                 TEXT,
+	    effort                TEXT,
 	    status_changed_at     TEXT,
 	    session_provider      TEXT NOT NULL DEFAULT 'claude' CHECK (session_provider IN ('claude','codex')),
 	    harness               TEXT,
@@ -184,8 +185,27 @@ CREATE TABLE IF NOT EXISTS pending_wakes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     slug       TEXT NOT NULL,
     prompt     TEXT NOT NULL,
+    not_before TEXT,
     created_at TEXT NOT NULL
 );
+
+-- Provider rate-limit hold queue. When Claude/Codex is out of tokens, automatic
+-- connector ingestion and automatic task opens are persisted here instead of
+-- dispatching immediately. The server drains ready rows after the provider
+-- reset time and replays them through the normal dispatch/open paths.
+CREATE TABLE IF NOT EXISTS rate_limit_queue (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind         TEXT NOT NULL CHECK (kind IN ('slack_event','github_event','open_task')),
+    provider     TEXT NOT NULL DEFAULT '',
+    payload_json TEXT NOT NULL,
+    run_after    TEXT NOT NULL,
+    status       TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','done','error')),
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rate_limit_queue_ready ON rate_limit_queue(status, run_after, id);
 
 -- Outbound Slack sends to channels OUTSIDE the operator's org (Slack Connect /
 -- cross-workspace) are parked here for the operator's explicit approval instead

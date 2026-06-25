@@ -36,6 +36,28 @@ type TaskOpener interface {
 	OpenInUI(slug string) error
 }
 
+// ConnectorHoldGate lets the server persist connector events when an agent
+// provider is rate-limited. Dispatchers call it before any task/inbox/steerer
+// side effects. Replays use WithConnectorHoldBypass so queued events can drain
+// through the normal path after reset.
+type ConnectorHoldGate interface {
+	HoldSlackEvent(ctx context.Context, ev InboundEvent) (held bool, err error)
+	HoldGitHubEvent(ctx context.Context, ev GitHubEvent) (held bool, err error)
+}
+
+type connectorHoldBypassKey struct{}
+
+// WithConnectorHoldBypass marks a context as replaying an already persisted
+// rate-limit queue row, so dispatchers do not enqueue it again recursively.
+func WithConnectorHoldBypass(ctx context.Context) context.Context {
+	return context.WithValue(ctx, connectorHoldBypassKey{}, true)
+}
+
+func connectorHoldBypassed(ctx context.Context) bool {
+	v, _ := ctx.Value(connectorHoldBypassKey{}).(bool)
+	return v
+}
+
 // MessageObserver observes messages the reaction pipeline does not own
 // (untracked threads). The steering cascade implements it. It lives in this
 // package — not steering — so Dispatcher can hold one without an import
@@ -83,6 +105,7 @@ type Dispatcher struct {
 	// nil in CLI contexts and when the command channel feature is off — then
 	// command-channel DMs fall through to normal routing.
 	ChatSink ChatCommandSink
+	HoldGate ConnectorHoldGate
 	// SteererSessionsEnabled gates the per-channel session model's self-authored
 	// route. When it returns true (and the Steerer is a SelfAuthoredObserver and
 	// owns routing), self-authored events are fed to the session as context_only
@@ -105,6 +128,12 @@ func NewDispatcher(db *sql.DB, opener TaskOpener) *Dispatcher {
 func (d *Dispatcher) Dispatch(ctx context.Context, ev InboundEvent) error {
 	if d == nil || d.DB == nil {
 		return nil
+	}
+	if d.HoldGate != nil && !connectorHoldBypassed(ctx) {
+		held, err := d.HoldGate.HoldSlackEvent(ctx, ev)
+		if held || err != nil {
+			return err
+		}
 	}
 	// Drop flow's OWN bot messages that Slack echoes back to the listener. flow
 	// posts command-channel acks and agent replies as its bot (SendAsBot); those

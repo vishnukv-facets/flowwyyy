@@ -53,6 +53,7 @@ type SteeringBackfill struct {
 	interval  time.Duration
 	lookback  time.Duration
 	limit     int
+	HoldUntil func() (time.Time, bool)
 	now       func() time.Time
 	logFn     func(string, ...any)
 	skipTill  map[string]time.Time
@@ -112,6 +113,9 @@ func (b *SteeringBackfill) Run(ctx context.Context) {
 		b.logFn("steering backfill: no Slack history client configured; nothing to back-fill")
 		return
 	}
+	if !b.waitUntilUnheld(ctx) {
+		return
+	}
 	b.runOnce(ctx)
 	t := time.NewTicker(b.interval)
 	defer t.Stop()
@@ -120,7 +124,30 @@ func (b *SteeringBackfill) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if !b.waitUntilUnheld(ctx) {
+				return
+			}
 			b.runOnce(ctx)
+		}
+	}
+}
+
+func (b *SteeringBackfill) waitUntilUnheld(ctx context.Context) bool {
+	if b.HoldUntil == nil {
+		return true
+	}
+	for {
+		until, held := b.HoldUntil()
+		if !held || !until.After(time.Now()) {
+			return true
+		}
+		b.logFn("steering backfill: provider rate limit hold until %s", until.UTC().Format(time.RFC3339))
+		timer := time.NewTimer(time.Until(until) + 250*time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
 		}
 	}
 }

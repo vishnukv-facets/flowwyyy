@@ -29,6 +29,12 @@ func (q *wakeQueue) push(slug, prompt string) error {
 	return err
 }
 
+// pushAfter appends a prompt that cannot be flushed until notBefore.
+func (q *wakeQueue) pushAfter(slug, prompt, notBefore string) error {
+	_, err := flowdb.EnqueuePendingWakeAfter(q.db, slug, prompt, notBefore)
+	return err
+}
+
 // peek returns the oldest buffered wake for slug without removing it. ok=false
 // when empty. Non-destructive so a row survives a failed/interrupted delivery
 // and is dropped only by ack after a confirmed inject.
