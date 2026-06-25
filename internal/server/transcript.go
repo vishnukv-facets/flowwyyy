@@ -232,6 +232,10 @@ type transcriptUsageStats struct {
 	// however many models/providers were active that day. Turns whose model has
 	// no published rate contribute 0, so this is a floor, not an invoice.
 	CostByDay map[string]float64
+	// LookupEvents are raw retrieval-like tool calls found while scanning the
+	// transcript. They stay raw here because own-task bootstrap reads can only
+	// be filtered once the caller knows which task slug owns this session path.
+	LookupEvents []transcriptLookupEvent
 	// claudeSeen dedups Claude usage by (message.id, requestId). Claude Code
 	// appends intermediate AND final usage snapshots for the SAME request to the
 	// jsonl (identical token counts), so summing every line double-counts work
@@ -259,9 +263,10 @@ type transcriptUsageRecord struct {
 	RequestID string          `json:"requestId"`
 	Payload   json.RawMessage `json:"payload"`
 	Message   struct {
-		ID    string               `json:"id"`
-		Model string               `json:"model"`
-		Usage transcriptTokenUsage `json:"usage"`
+		ID      string               `json:"id"`
+		Model   string               `json:"model"`
+		Usage   transcriptTokenUsage `json:"usage"`
+		Content json.RawMessage      `json:"content"`
 	} `json:"message"`
 }
 

@@ -43,6 +43,10 @@ const KEY_TONE: Record<string, string> = {
   p50: 'var(--warn)',
   claude: 'var(--accent)',
   codex: 'var(--accent-2)',
+  resume: 'var(--accent)',
+  reference: 'var(--info)',
+  cross_task: 'var(--warn)',
+  kb: 'var(--accent-2)',
   unknown: 'var(--text-3)',
 }
 const PALETTE = ['var(--accent)', 'var(--accent-2)', 'var(--info)', 'var(--warn)', 'var(--ok)', 'var(--danger)']
@@ -65,6 +69,8 @@ export function formatValue(v: number, unit: string): string {
       return v >= 1000 ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}ms`
     case 'days':
       return `${v.toFixed(v < 10 ? 1 : 0)}d`
+    case 'hours':
+      return `${v.toFixed(v < 10 ? 1 : 0)}h`
     default:
       return compact(v)
   }

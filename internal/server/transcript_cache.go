@@ -193,6 +193,7 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		}
 	}
 	if !dup {
+		accumulateTranscriptLookupEvents(stats, rec)
 		// Session tokens = cumulative input + output + cache CREATION, EXCLUDING
 		// cache reads — the basis Claude Code's /stats uses (see processedTokens).
 		fresh := rec.Message.Usage.processedTokens()

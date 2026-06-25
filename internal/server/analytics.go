@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -283,15 +284,16 @@ func median(vals []float64) float64 {
 // AnalyticsPayload is the response envelope for GET /api/analytics. Adding a
 // metric means a new entry in KPIs/Series, never a new route.
 type AnalyticsPayload struct {
-	Range       string     `json:"range,omitempty"`
-	Bucket      bucketUnit `json:"bucket"`
-	From        string     `json:"from"`
-	To          string     `json:"to"`
-	TZ          string     `json:"tz"`
-	GeneratedAt string     `json:"generated_at"`
-	Partial     bool        `json:"partial_bucket"`
+	Range       string             `json:"range,omitempty"`
+	Bucket      bucketUnit         `json:"bucket"`
+	From        string             `json:"from"`
+	To          string             `json:"to"`
+	TZ          string             `json:"tz"`
+	GeneratedAt string             `json:"generated_at"`
+	Partial     bool               `json:"partial_bucket"`
 	KPIs        []Kpi              `json:"kpis"`
 	Series      []Series           `json:"series"`
+	Value       *ValueStats        `json:"value,omitempty"`
 	Breakdowns  []Breakdown        `json:"breakdowns,omitempty"`
 	Funnel      *Funnel            `json:"funnel,omitempty"`
 	Conversions []SourceConversion `json:"conversions,omitempty"`
@@ -310,12 +312,13 @@ type SourceConversion struct {
 // them keeps buildAnalyticsPayload's signature stable as domains are added and
 // avoids a long run of same-typed slice arguments at the call sites.
 type analyticsInputs struct {
-	tasks        []*flowdb.Task
-	usages       []taskTokenUsage
-	runs         []*flowdb.BrainRun
-	traces       []flowdb.SteeringTraceLite
-	tags         map[string][]string // task slug -> tags (for task-origin breakdown)
-	projectNames map[string]string   // project slug -> display name
+	tasks          []*flowdb.Task
+	usages         []taskTokenUsage
+	runs           []*flowdb.BrainRun
+	traces         []flowdb.SteeringTraceLite
+	tags           map[string][]string // task slug -> tags (for task-origin breakdown)
+	projectNames   map[string]string   // project slug -> display name
+	valueConstants valueConstants
 }
 
 // Kpi is one headline number with a period-over-period delta. DeltaPct is nil
@@ -399,6 +402,7 @@ func buildAnalyticsPayload(in analyticsInputs, q analyticsQuery, now time.Time) 
 
 	tok := aggregateTokens(usages, g)
 	prevTok := aggregateTokens(usages, prevG)
+	value := computeValueStats(usages, runs, g, in.valueConstants)
 
 	kpis := []Kpi{
 		{Key: "tasks_done", Label: "Completed", Value: doneCur, Unit: "count", DeltaPct: deltaPct(doneCur, donePrev)},
@@ -482,6 +486,7 @@ func buildAnalyticsPayload(in analyticsInputs, q analyticsQuery, now time.Time) 
 		Partial:     g.Partial,
 		KPIs:        kpis,
 		Series:      series,
+		Value:       value,
 		Breakdowns:  breakdowns,
 		Funnel:      funnel,
 		Conversions: conversions,
@@ -547,12 +552,13 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, buildAnalyticsPayload(analyticsInputs{
-		tasks:        tasks,
-		usages:       s.resolveTokenUsage(tasks),
-		runs:         runs,
-		traces:       traces,
-		tags:         tags,
-		projectNames: projectNames,
+		tasks:          tasks,
+		usages:         s.resolveTokenUsage(tasks),
+		runs:           runs,
+		traces:         traces,
+		tags:           tags,
+		projectNames:   projectNames,
+		valueConstants: loadValueConstants(filepath.Join(s.cfg.FlowRoot, "stats.json")),
 	}, q, now))
 }
 
@@ -579,12 +585,14 @@ func (s *Server) resolveTokenUsage(tasks []*flowdb.Task) []taskTokenUsage {
 		if provider == "" {
 			provider = "claude"
 		}
+		roll := lookupRollupForTask(entry.usage.LookupEvents, t.Slug, s.cfg.FlowRoot)
 		usages = append(usages, taskTokenUsage{
 			Provider:    provider,
 			Model:       strings.TrimSpace(entry.usage.Model),
 			ProjectSlug: t.ProjectSlug.String,
 			TokensByDay: entry.usage.TokensByDay,
 			CostByDay:   entry.usage.CostByDay,
+			Lookups:     roll.Events,
 		})
 	}
 	return usages
@@ -614,6 +622,7 @@ type taskTokenUsage struct {
 	ProjectSlug string             // owning project ("" = floating) — for project effort
 	TokensByDay map[string]int     // YYYY-MM-DD -> fresh tokens
 	CostByDay   map[string]float64 // YYYY-MM-DD -> billed USD
+	Lookups     []lookupValueEvent
 }
 
 // tokenAgg is the accumulated token/cost view for a window: per-provider
