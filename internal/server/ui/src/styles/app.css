@@ -8612,6 +8612,46 @@ a.owner-task-item:hover {
   font-weight: 600;
 }
 
+/* value / ROI estimate panel --------------------------------------------- */
+.value-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  gap: 10px;
+  padding-top: 4px;
+}
+.value-metric {
+  min-width: 0;
+  padding: 11px 12px;
+  border: 1px solid var(--border-faint);
+  border-left: 3px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--bg-2) 82%, var(--accent-soft));
+}
+.value-metric .eyebrow {
+  display: block;
+  margin-bottom: 7px;
+  color: var(--text-3);
+}
+.value-metric .num {
+  display: block;
+  font-size: 21px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+.value-metric .faint {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+}
+.value-note {
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-faint);
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 /* pie / donut composition ------------------------------------------------- */
 .pie {
   display: flex;

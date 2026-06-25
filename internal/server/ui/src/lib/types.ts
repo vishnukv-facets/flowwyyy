@@ -1445,6 +1445,27 @@ export interface AnalyticsSourceConversion {
   tasks: number
 }
 
+export interface AnalyticsValueConstants {
+  minutes_per_unattended_run: number
+  minutes_per_context_switch: number
+  dollar_per_hour: number
+}
+
+export interface AnalyticsValueStats {
+  constants: AnalyticsValueConstants
+  lookups_total: number
+  context_tokens: number
+  automation_runs: number
+  automation_hours: number
+  context_switch_hours: number
+  addressable_count: number
+  total_hours: number
+  total_dollars: number
+  kpis?: AnalyticsKpi[]
+  series?: AnalyticsSeries[]
+  breakdowns?: AnalyticsBreakdown[]
+}
+
 export interface AnalyticsPayload {
   range?: string
   bucket: string // hour | day | week
@@ -1455,6 +1476,7 @@ export interface AnalyticsPayload {
   partial_bucket: boolean
   kpis: AnalyticsKpi[]
   series: AnalyticsSeries[]
+  value?: AnalyticsValueStats | null
   breakdowns?: AnalyticsBreakdown[]
   funnel?: AnalyticsFunnel | null
   conversions?: AnalyticsSourceConversion[]

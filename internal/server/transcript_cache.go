@@ -166,6 +166,7 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		return
 	}
 	stats.LastTimestamp = laterTimestamp(stats.LastTimestamp, rec.Timestamp)
+	accumulateTranscriptLookupEvents(stats, rec)
 	// Keep the last REAL model. Claude Code emits trailing "<synthetic>" records
 	// (session-limit / interrupt notices) carrying a placeholder model and zero
 	// usage; letting those win collapses contextWindowForModel to the 200k default

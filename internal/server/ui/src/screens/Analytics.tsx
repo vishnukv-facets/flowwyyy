@@ -5,7 +5,7 @@ import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { EmptyState, ErrorNote } from '../components/ui'
 import { BarList, ConversionFunnel, LineChart, PieChart, StackedAreaChart, formatValue } from '../components/charts'
 import { compact, dateTime } from '../lib/format'
-import type { AnalyticsFunnel, AnalyticsKpi, AnalyticsPayload, AnalyticsSegment, AnalyticsSeries } from '../lib/types'
+import type { AnalyticsFunnel, AnalyticsKpi, AnalyticsPayload, AnalyticsSegment, AnalyticsSeries, AnalyticsValueStats } from '../lib/types'
 
 // Range pills, in display order. 'custom' opens the from/to popover instead of
 // setting ?range=.
@@ -92,9 +92,11 @@ function AnalyticsBody({ data }: { data: AnalyticsPayload }) {
   const hasUsage = seriesBy('tokens') || seriesBy('cost') || breakdownBy('model_mix') || breakdownBy('project_effort')
   const hasConnectors =
     (data.conversions?.length ?? 0) > 0 || !!data.funnel || !!seriesBy('steering') || !!breakdownBy('task_source')
+  const hasValue = !!data.value
 
   const allZero =
     data.kpis.every((k) => k.value === 0) &&
+    !hasValue &&
     !data.funnel &&
     (data.breakdowns?.length ?? 0) === 0 &&
     (data.conversions?.length ?? 0) === 0
@@ -115,6 +117,8 @@ function AnalyticsBody({ data }: { data: AnalyticsPayload }) {
       <Section title="Activity">
         {seriesBy('throughput') && <SeriesCard series={seriesBy('throughput')!} bucket={bucket} />}
       </Section>
+
+      {data.value && <ValueSection value={data.value} bucket={bucket} />}
 
       {hasUsage && (
         <Section title="Usage & cost">
@@ -168,6 +172,49 @@ function AnalyticsBody({ data }: { data: AnalyticsPayload }) {
         </Section>
       )}
     </>
+  )
+}
+
+function ValueSection({ value, bucket }: { value: AnalyticsValueStats; bucket: string }) {
+  const lookupBreakdown = value.breakdowns?.find((b) => b.key === 'lookup_kind')
+  const lookupSeries = value.series?.find((s) => s.key === 'value_lookups')
+  const showAutomation = value.automation_runs > 0
+  return (
+    <Section title="Value">
+      <Card title="Memory-led value" wide>
+        <div className="value-panel">
+          <ValueMetric label="Context recalls" value={value.lookups_total} unit="count" />
+          <ValueMetric label="Context re-established" value={value.context_tokens} unit="tokens" />
+          {showAutomation && <ValueMetric label="Automation saved" value={value.automation_hours} unit="hours" hint={`${compact(value.automation_runs)} runs`} />}
+          {value.total_hours > 0 && <ValueMetric label="Time saved" value={value.total_hours} unit="hours" hint="est." />}
+          {value.total_dollars > 0 && <ValueMetric label="Counterfactual saved" value={value.total_dollars} unit="usd" hint="est." />}
+        </div>
+        <div className="value-note">
+          Estimates use {value.constants.minutes_per_context_switch}m per context switch
+          {showAutomation ? `, ${value.constants.minutes_per_unattended_run}m per unattended run` : ''}, and {formatValue(value.constants.dollar_per_hour, 'usd')}/hr.
+          Tune <span className="mono">stats.json</span>.
+        </div>
+      </Card>
+      {lookupBreakdown && (
+        <Card title="Recalls by kind">
+          <PieChart
+            segments={lookupBreakdown.segments}
+            centerLabel={<PieCenter value={value.lookups_total} label="recalls" />}
+          />
+        </Card>
+      )}
+      {lookupSeries && <SeriesCard series={lookupSeries} bucket={bucket} />}
+    </Section>
+  )
+}
+
+function ValueMetric({ label, value, unit, hint }: { label: string; value: number; unit: string; hint?: string }) {
+  return (
+    <div className="value-metric">
+      <span className="eyebrow">{label}</span>
+      <b className="num">{formatValue(value, unit)}</b>
+      {hint && <span className="faint">{hint}</span>}
+    </div>
   )
 }
 
