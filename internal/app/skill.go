@@ -353,19 +353,30 @@ func installClaudeStatusLine() (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	command, err := claudeStatusLineInstallCommand()
+	if err != nil {
+		return false, err
+	}
 	settings, err := readClaudeSettings(path)
 	if err != nil {
 		return false, err
 	}
 	current, _ := settings["statusLine"].(map[string]any)
 	if current != nil {
-		if cmd, _ := current["command"].(string); strings.TrimSpace(cmd) == claudeStatusLineCommand {
-			return false, nil
+		if cmd, _ := current["command"].(string); isClaudeStatusLineCommand(cmd) {
+			if strings.TrimSpace(cmd) == command {
+				return false, nil
+			}
+			current["command"] = command
+			if err := writeClaudeSettings(path, settings); err != nil {
+				return false, err
+			}
+			return true, nil
 		}
 		settings[claudeStatusLinePreviousKey] = copyJSONMap(current)
 	}
 
-	next := map[string]any{"type": "command", "command": claudeStatusLineCommand}
+	next := map[string]any{"type": "command", "command": command}
 	for k, v := range current {
 		if k == "type" || k == "command" {
 			continue
@@ -400,7 +411,7 @@ func uninstallClaudeStatusLine() (bool, error) {
 		return false, nil
 	}
 	cmd, _ := current["command"].(string)
-	if strings.TrimSpace(cmd) != claudeStatusLineCommand {
+	if !isClaudeStatusLineCommand(cmd) {
 		return false, nil
 	}
 	if prev, _ := settings[claudeStatusLinePreviousKey].(map[string]any); prev != nil {
@@ -413,6 +424,27 @@ func uninstallClaudeStatusLine() (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func claudeStatusLineInstallCommand() (string, error) {
+	root, err := flowRoot()
+	if err != nil {
+		return "", err
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	return "FLOW_ROOT=" + shellQuote(root) + " " + claudeStatusLineCommand, nil
+}
+
+func isClaudeStatusLineCommand(cmd string) bool {
+	trimmed := strings.TrimSpace(cmd)
+	return trimmed == claudeStatusLineCommand ||
+		(strings.HasPrefix(trimmed, "FLOW_ROOT=") && strings.HasSuffix(trimmed, " "+claudeStatusLineCommand))
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // installClaudeHook idempotently adds a hook entry for the given

@@ -196,8 +196,12 @@ func TestSkillInstallWritesSessionStartHook(t *testing.T) {
 		t.Errorf("SessionStart hook missing or wrong command: %#v", hooks["SessionStart"])
 	}
 	statusLine, _ := settings["statusLine"].(map[string]any)
-	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
-		t.Errorf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	wantStatusLine, err := claudeStatusLineInstallCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd, _ := statusLine["command"].(string); cmd != wantStatusLine {
+		t.Errorf("statusLine command = %q, want %q", cmd, wantStatusLine)
 	}
 	// UserPromptSubmit must not be installed by fresh install.
 	if hookEventReferencesCommand(hooks, "UserPromptSubmit", "flow hook user-prompt-submit") {
@@ -223,8 +227,12 @@ func TestSkillInstallIsIdempotent(t *testing.T) {
 		t.Errorf("SessionStart: got %d matching entries, want 1", got)
 	}
 	statusLine, _ := settings["statusLine"].(map[string]any)
-	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
-		t.Errorf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	wantStatusLine, err := claudeStatusLineInstallCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd, _ := statusLine["command"].(string); cmd != wantStatusLine {
+		t.Errorf("statusLine command = %q, want %q", cmd, wantStatusLine)
 	}
 	if _, ok := settings[claudeStatusLinePreviousKey]; ok {
 		t.Errorf("second install should not store Flow's own statusLine as previous: %#v", settings[claudeStatusLinePreviousKey])
@@ -250,8 +258,12 @@ func TestSkillInstallPreservesExistingStatusLine(t *testing.T) {
 	}
 	settings := readSettings(t, settingsPath)
 	statusLine, _ := settings["statusLine"].(map[string]any)
-	if cmd, _ := statusLine["command"].(string); cmd != claudeStatusLineCommand {
-		t.Fatalf("statusLine command = %q, want %q", cmd, claudeStatusLineCommand)
+	wantStatusLine, err := claudeStatusLineInstallCommand()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd, _ := statusLine["command"].(string); cmd != wantStatusLine {
+		t.Fatalf("statusLine command = %q, want %q", cmd, wantStatusLine)
 	}
 	if padding, _ := statusLine["padding"].(float64); padding != 2 {
 		t.Fatalf("statusLine padding = %v, want preserved 2", statusLine["padding"])
@@ -274,6 +286,21 @@ func TestSkillInstallPreservesExistingStatusLine(t *testing.T) {
 	}
 	if _, ok := settings[claudeStatusLinePreviousKey]; ok {
 		t.Fatalf("previous statusLine key should be removed after restore")
+	}
+}
+
+func TestSkillInstallStatusLineEmbedsFlowRoot(t *testing.T) {
+	home := withTempHome(t)
+	root := filepath.Join(home, "custom-flow")
+	t.Setenv("FLOW_ROOT", root)
+	if rc := cmdSkill([]string{"install"}); rc != 0 {
+		t.Fatalf("install rc=%d", rc)
+	}
+	settings := readSettings(t, filepath.Join(home, ".claude", "settings.json"))
+	statusLine, _ := settings["statusLine"].(map[string]any)
+	want := "FLOW_ROOT='" + root + "' flow hook claude-statusline"
+	if cmd, _ := statusLine["command"].(string); cmd != want {
+		t.Fatalf("statusLine command = %q, want %q", cmd, want)
 	}
 }
 

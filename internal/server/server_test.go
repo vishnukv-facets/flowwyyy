@@ -1821,6 +1821,9 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	}
 
 	// A not-yet-started backlog task can switch to codex; the choice is sticky.
+	if _, err := db.Exec(`UPDATE tasks SET effort = 'max' WHERE slug = 'build-ui'`); err != nil {
+		t.Fatal(err)
+	}
 	resp, status := srv.runAction(actionRequest{Kind: "update-provider", Slug: "build-ui", Provider: "codex"})
 	if status != http.StatusOK || !resp.OK {
 		t.Fatalf("switch to codex: status=%d resp=%+v", status, resp)
@@ -1831,6 +1834,9 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	}
 	if task.SessionProvider != "codex" {
 		t.Fatalf("session_provider = %q, want codex", task.SessionProvider)
+	}
+	if task.Effort.Valid {
+		t.Fatalf("effort = %+v, want cleared after switching to codex", task.Effort)
 	}
 
 	// Once a session has started, the provider is locked.
@@ -1846,6 +1852,27 @@ func TestUpdateProviderActionSwitchesBacklogThenLocks(t *testing.T) {
 	}
 	if task.SessionProvider != "codex" {
 		t.Fatalf("provider after rejected switch = %q, want codex (unchanged)", task.SessionProvider)
+	}
+}
+
+func TestPrepareTerminalLaunchInvalidEffortDoesNotStartTask(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(`UPDATE tasks SET session_provider = 'codex', effort = 'max' WHERE slug = 'build-ui'`); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	_, err := srv.prepareTerminalLaunch("build-ui")
+	if err == nil || !strings.Contains(err.Error(), "codex effort") {
+		t.Fatalf("prepareTerminalLaunch err = %v, want codex effort validation", err)
+	}
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != "backlog" || task.SessionID.Valid || task.SessionStarted.Valid {
+		t.Fatalf("invalid effort should not start task: %+v", task)
 	}
 }
 

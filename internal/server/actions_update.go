@@ -224,10 +224,17 @@ func (s *Server) applyBacklogProviderChoice(target, rawProvider string) error {
 		return fmt.Errorf("provider can only be changed before a session starts")
 	}
 	now := flowdb.NowISO()
+	effortArg := any(nil)
+	if task.Effort.Valid {
+		effort := strings.TrimSpace(task.Effort.String)
+		if normalized, err := flowdb.NormalizeEffort(provider, effort); err == nil && normalized != "" {
+			effortArg = normalized
+		}
+	}
 	_, err = s.cfg.DB.Exec(
-		`UPDATE tasks SET session_provider = ?, harness = ?, updated_at = ?
-			 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
-		provider, provider, now, target,
+		`UPDATE tasks SET session_provider = ?, harness = ?, effort = ?, updated_at = ?
+				 WHERE slug = ? AND status = 'backlog' AND session_id IS NULL AND session_started IS NULL`,
+		provider, provider, effortArg, now, target,
 	)
 	return err
 }

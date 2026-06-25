@@ -98,6 +98,7 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		task.SessionID = sql.NullString{}
 		task.SessionStarted = sql.NullString{}
 		task.SessionLastResumed = sql.NullString{}
+		task.SessionProvider = agents.ProviderClaude
 	}
 	if strings.TrimSpace(task.WorkDir) == "" {
 		return terminalLaunch{}, fmt.Errorf("task %s has no work_dir", task.Slug)
@@ -123,9 +124,13 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 	if provider == "" {
 		provider = agents.ProviderClaude
 	}
-	created := false
-	if sessionID == "" {
-		created = true
+	created := sessionID == ""
+	model := s.resolveTaskLaunchModel(task, provider, created)
+	effort, err := s.resolveTaskLaunchEffort(task, provider, model)
+	if err != nil {
+		return terminalLaunch{}, err
+	}
+	if created {
 		if provider == agents.ProviderCodex {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET
@@ -221,11 +226,6 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 		if task.Slug == overviewTaskSlug {
 			prompt = overviewInitialPrompt(s.cfg.FlowRoot, task)
 		}
-		model := s.resolveTaskLaunchModel(task, provider, true)
-		effort, err := s.resolveTaskLaunchEffort(task, provider, model)
-		if err != nil {
-			return terminalLaunch{}, err
-		}
 		args := agentTerminalArgs(provider, true, sessionID, task.WorkDir, s.cfg.FlowRoot, prompt, task.PermissionMode, model, effort)
 		return terminalLaunch{
 			Slug:           task.Slug,
@@ -238,11 +238,6 @@ func (s *Server) prepareTerminalLaunch(slug string) (terminalLaunch, error) {
 			NeedsCapture:   provider == agents.ProviderCodex,
 			StartedAt:      time.Now().Add(-2 * time.Second),
 		}, nil
-	}
-	model := s.resolveTaskLaunchModel(task, provider, false)
-	effort, err := s.resolveTaskLaunchEffort(task, provider, model)
-	if err != nil {
-		return terminalLaunch{}, err
 	}
 	args := agentTerminalArgs(provider, false, sessionID, task.WorkDir, s.cfg.FlowRoot, "", task.PermissionMode, model, effort)
 	return terminalLaunch{
