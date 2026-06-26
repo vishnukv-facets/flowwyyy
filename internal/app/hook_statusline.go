@@ -157,7 +157,10 @@ func previousClaudeStatusLineCommand() string {
 	}
 	command, _ := prev["command"].(string)
 	command = strings.TrimSpace(command)
-	if command == "" || command == claudeStatusLineCommand {
+	// Never chain back into flow's own statusLine command — that causes an
+	// unbounded fork cascade. Use isClaudeStatusLineCommand (not a bare
+	// string compare) so the FLOW_ROOT=...-prefixed form is also rejected.
+	if command == "" || isClaudeStatusLineCommand(command) {
 		return ""
 	}
 	return command
