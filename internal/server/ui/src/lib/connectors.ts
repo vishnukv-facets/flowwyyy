@@ -141,8 +141,8 @@ export const CONNECTORS: ConnectorDef[] = [
     id: 'clickup',
     category: 'ticketing',
     label: 'ClickUp',
-    powers: 'Assigned tasks and mentions route to task inboxes.',
-    soon: true,
+    capabilityId: 'clickup',
+    powers: 'Task comments and assignment/status changes route to task inboxes and the attention router.',
   },
   {
     id: 'ingress',

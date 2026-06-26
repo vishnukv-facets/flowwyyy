@@ -57,10 +57,12 @@ type settingSpec struct {
 const (
 	categoryMessaging = "messaging"
 	categoryGit       = "git"
+	categoryTicketing = "ticketing"
 	categoryNetwork   = "network"
 
 	connectorSlack   = "slack"
 	connectorGitHub  = "github"
+	connectorClickUp = "clickup"
 	connectorIngress = "ingress"
 )
 
@@ -110,6 +112,18 @@ var settingsRegistry = []settingSpec{
 	{Key: "FLOW_GH_CLIENT_ID", Label: "GitHub client ID", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
 	{Key: "FLOW_GH_HTML_URL", Label: "GitHub App URL", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
 	{Key: "FLOW_GH_INSTALLATION_IDS", Label: "GitHub installation IDs", Group: "GitHub", Category: categoryGit, Connector: connectorGitHub, Type: settingString, Hidden: true},
+	// ClickUp — ticketing connector
+	{Key: "FLOW_CLICKUP_CLIENT_ID", Label: "OAuth client ID", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingString, Help: "ClickUp OAuth app client_id. Used by the Connect ClickUp flow."},
+	{Key: "FLOW_CLICKUP_TEAM_ID", Label: "Workspace ID", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingString, Help: "ClickUp Workspace/team id to register the webhook against."},
+	{Key: "FLOW_CLICKUP_TEAM_NAME", Label: "Workspace name", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingString, Help: "Optional display name for the connected ClickUp Workspace."},
+	{Key: "FLOW_CLICKUP_LIST_ID", Label: "List filter", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingString, Help: "Optional ClickUp List ID. When set, the webhook subscribes only to this list."},
+	{Key: "FLOW_CLICKUP_AUTOOPEN", Label: "Auto-open on event", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingBool, Default: "true", Help: "Open a session automatically when a new ClickUp task event creates a Flow task."},
+	// Wizard-managed ClickUp credentials. Stored in the OS keyring and hidden
+	// from /api/settings so tokens and webhook secrets never live in config.json.
+	{Key: "FLOW_CLICKUP_CLIENT_SECRET", Label: "OAuth client secret", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingSecret, Hidden: true},
+	{Key: "FLOW_CLICKUP_ACCESS_TOKEN", Label: "Access token", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingSecret, Hidden: true},
+	{Key: "FLOW_CLICKUP_WEBHOOK_ID", Label: "Webhook ID", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingString, Hidden: true},
+	{Key: "FLOW_CLICKUP_WEBHOOK_SECRET", Label: "Webhook signing secret", Group: "ClickUp", Category: categoryTicketing, Connector: connectorClickUp, Type: settingSecret, Hidden: true},
 	// Steering (attention router)
 	{Key: "FLOW_STEERING_WATCH_CHANNELS", Label: "Watched channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs the attention router watches (in addition to DMs + @mentions)."},
 	{Key: "FLOW_STEERING_MUTED_CHANNELS", Label: "Muted channels", Group: "Steering", Type: settingString, Help: "Comma-separated Slack channel IDs to never surface."},

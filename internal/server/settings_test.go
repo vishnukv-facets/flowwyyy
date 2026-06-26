@@ -191,6 +191,8 @@ func TestSettingsExposeConnectorMetadata(t *testing.T) {
 		"FLOW_SLACK_SELF_USER_IDS": {"messaging", "slack"},
 		"FLOW_GH_ENABLED":          {"git", "github"},
 		"FLOW_GH_SELF_LOGINS":      {"git", "github"},
+		"FLOW_CLICKUP_TEAM_ID":     {"ticketing", "clickup"},
+		"FLOW_CLICKUP_AUTOOPEN":    {"ticketing", "clickup"},
 		"FLOW_INGRESS_PROVIDER":    {"network", "ingress"},
 		"FLOW_UI_KEEP_AWAKE":       {"network", "ingress"},
 	}
@@ -222,6 +224,45 @@ func TestSettingsExposeConnectorMetadata(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "xoxb-should-stay-masked") {
 		t.Fatalf("secret leaked in /api/settings body")
+	}
+}
+
+func TestClickUpSecretsHiddenAndKeyringRouted(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	hidden := []string{
+		"FLOW_CLICKUP_CLIENT_SECRET",
+		"FLOW_CLICKUP_ACCESS_TOKEN",
+		"FLOW_CLICKUP_WEBHOOK_SECRET",
+	}
+	for _, key := range hidden {
+		sp, ok := settingSpecFor(key)
+		if !ok {
+			t.Fatalf("%s not registered", key)
+		}
+		if !sp.Hidden {
+			t.Fatalf("%s should be hidden", key)
+		}
+		if sp.Category != categoryTicketing || sp.Connector != connectorClickUp {
+			t.Fatalf("%s taxonomy = %q/%q, want ticketing/clickup", key, sp.Category, sp.Connector)
+		}
+		if _, _, ok := secretKeyringRouteForEnv(key); !ok {
+			t.Fatalf("%s should route through keyring", key)
+		}
+	}
+
+	t.Setenv("FLOW_CLICKUP_ACCESS_TOKEN", "clickup-token")
+	rec := httptest.NewRecorder()
+	srv.handleSettings(rec, httptest.NewRequest("GET", "/api/settings", nil))
+	body := rec.Body.String()
+	for _, key := range hidden {
+		if strings.Contains(body, key) {
+			t.Fatalf("hidden ClickUp secret %s leaked into /api/settings: %s", key, body)
+		}
+	}
+	if strings.Contains(body, "clickup-token") {
+		t.Fatalf("ClickUp token leaked into /api/settings: %s", body)
 	}
 }
 

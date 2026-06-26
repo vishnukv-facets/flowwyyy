@@ -34,20 +34,21 @@ type Server struct {
 	pairing *pairingStore
 	// remoteLimiter throttles pairing redemption + failed device-token auth.
 	// Always non-nil after New().
-	remoteLimiter    *rateLimiter
-	terminals        *terminalHub
-	events           *eventHub
-	reconcile        *livenessReconciler
-	kbDistiller      *kbDistiller
-	steererCompact   *steererCompactWorker
-	kbDreamer        *kbDreamer
-	kbWatcher        *kbWatcher
-	transcripts      *transcriptCache
-	caches           *uiCaches
-	slackListener    *monitor.SlackListener
-	githubListener   *monitor.GitHubListener
-	slackDispatcher  *monitor.Dispatcher
-	githubDispatcher *monitor.GitHubDispatcher
+	remoteLimiter     *rateLimiter
+	terminals         *terminalHub
+	events            *eventHub
+	reconcile         *livenessReconciler
+	kbDistiller       *kbDistiller
+	steererCompact    *steererCompactWorker
+	kbDreamer         *kbDreamer
+	kbWatcher         *kbWatcher
+	transcripts       *transcriptCache
+	caches            *uiCaches
+	slackListener     *monitor.SlackListener
+	githubListener    *monitor.GitHubListener
+	slackDispatcher   *monitor.Dispatcher
+	githubDispatcher  *monitor.GitHubDispatcher
+	clickupDispatcher *monitor.ClickUpDispatcher
 	// cascade is the steering (attention-router) triage brain the dispatcher
 	// routes untracked messages into. Held on the server so the steerer
 	// backfill (ListenAndServe) can replay catch-up messages through the SAME
@@ -116,6 +117,11 @@ type Server struct {
 	// nil when no setup is in progress.
 	githubSetupMu sync.Mutex
 	githubSetup   *githubManifestPending
+
+	// clickUpOAuth is the in-flight Connect-ClickUp authorization attempt:
+	// state nonce + client credentials needed to exchange the callback code.
+	clickUpSetupMu sync.Mutex
+	clickUpOAuth   *clickUpOAuthPending
 
 	// quote{Mu,Key,Val} cache the Mission Control anime quote per
 	// (date + greeting bucket) so the external animechan API is called at most

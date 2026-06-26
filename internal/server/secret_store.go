@@ -166,6 +166,9 @@ func secretKeyringRouteForEnv(envKey string) (service, account string, ok bool) 
 			return githubKeyringService, acct, true
 		}
 	}
+	if acct, found := clickUpSecretAccountForEnv(envKey); found {
+		return clickUpKeyringService, acct, true
+	}
 	if envKey == backupSecretAccounts[keyringAcctBackupToken] {
 		return backupKeyringService, keyringAcctBackupToken, true
 	}
@@ -183,6 +186,48 @@ func loadSlackSecretsFromKeyring() {
 // a fresh process with stale inherited env, while the keyring is authoritative.
 func HydrateSlackSecretsFromKeyring() {
 	loadSlackSecretsFromKeyring()
+}
+
+// ClickUp OAuth and webhook credentials are keyring-backed for the same reason
+// as Slack/GitHub: access tokens and webhook signing secrets must not be written
+// to config.json.
+const clickUpKeyringService = "flow.clickup"
+
+const (
+	keyringAcctClickUpAccessToken   = "access_token"
+	keyringAcctClickUpClientSecret  = "client_secret"
+	keyringAcctClickUpWebhookSecret = "webhook_secret"
+)
+
+var clickUpSecretAccounts = map[string]string{
+	keyringAcctClickUpAccessToken:   "FLOW_CLICKUP_ACCESS_TOKEN",
+	keyringAcctClickUpClientSecret:  "FLOW_CLICKUP_CLIENT_SECRET",
+	keyringAcctClickUpWebhookSecret: "FLOW_CLICKUP_WEBHOOK_SECRET",
+}
+
+func clickUpSecretAccountForEnv(envKey string) (string, bool) {
+	for account, env := range clickUpSecretAccounts {
+		if env == envKey {
+			return account, true
+		}
+	}
+	return "", false
+}
+
+func getClickUpSecret(account string) (string, error) {
+	return keyringGet(clickUpKeyringService, account)
+}
+
+func setClickUpSecret(account, value string) error {
+	return keyring.Set(clickUpKeyringService, account, value)
+}
+
+func storeClickUpSecret(account, value string) error {
+	return storeKeyringSecret(clickUpKeyringService, account, clickUpSecretAccounts[account], value)
+}
+
+func loadClickUpSecretsFromKeyring() {
+	loadKeyringSecrets(clickUpKeyringService, clickUpSecretAccounts)
 }
 
 // The offsite backup token (a personal GitHub PAT used to provision + push the

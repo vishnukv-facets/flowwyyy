@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftRight, AlertTriangle, Check, CheckCircle2, ChevronRight, Copy, ExternalLink, Globe2, Link2, Loader2, Plug, RotateCw, Save, Terminal, Webhook } from 'lucide-react'
-import { useAction, useGitHubAuth, useGitHubWebhookStatus, useIngressStatus, useSettings, useUiData } from '../lib/query'
+import {
+  useAction,
+  useClickUpSetupStatus,
+  useClickUpWebhookStatus,
+  useGitHubAuth,
+  useGitHubWebhookStatus,
+  useIngressStatus,
+  useSettings,
+  useUiData,
+} from '../lib/query'
 import { apiPost } from '../lib/api'
 import { confirmAction } from '../lib/confirm'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -309,7 +318,194 @@ function ConnectorSetup({ def }: { def: ConnectorDef }) {
       </>
     )
   }
+  if (def.id === 'clickup') {
+    return (
+      <>
+        <ClickUpConnect />
+        <ClickUpWebhookTransport />
+      </>
+    )
+  }
   return null
+}
+
+function ClickUpConnect() {
+  const { data: setup } = useClickUpSetupStatus()
+  const qc = useQueryClient()
+  const [clientId, setClientId] = useState('')
+  const [clientSecret, setClientSecret] = useState('')
+  const [token, setToken] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+
+  const invalidate = async () => {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['clickup-setup'] }),
+      qc.invalidateQueries({ queryKey: ['clickup-webhook-status'] }),
+      qc.invalidateQueries({ queryKey: ['ui-data'] }),
+    ])
+  }
+  const connect = async () => {
+    setBusy('oauth')
+    try {
+      const res = await apiPost<{ authorize_url: string }>('/api/clickup/setup/oauth/start', {
+        client_id: clientId,
+        client_secret: clientSecret,
+      })
+      setClientSecret('')
+      pushToast('ok', 'Opening ClickUp authorization')
+      await invalidate()
+      window.open(res.authorize_url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'ClickUp authorization failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const saveToken = async () => {
+    setBusy('token')
+    try {
+      await apiPost('/api/clickup/setup/token', { token })
+      setToken('')
+      pushToast('ok', 'ClickUp token saved')
+      await invalidate()
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'token save failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const registerWebhook = async () => {
+    setBusy('webhook')
+    try {
+      await apiPost('/api/clickup/setup/register-webhook', {})
+      pushToast('ok', 'ClickUp webhook registered')
+      await invalidate()
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'webhook registration failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+  const disconnect = async () => {
+    const ok = await confirmAction({
+      title: 'Disconnect ClickUp?',
+      body: 'Stored ClickUp tokens and webhook credentials are removed from this machine. Existing Flow tasks and inbox history stay intact.',
+      confirmLabel: 'Disconnect',
+      danger: true,
+    })
+    if (!ok) return
+    setBusy('disconnect')
+    try {
+      await apiPost('/api/clickup/setup/disconnect', {})
+      pushToast('ok', 'ClickUp disconnected')
+      await invalidate()
+    } catch (err) {
+      pushToast('error', err instanceof Error ? err.message : 'disconnect failed')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  if (!setup) {
+    return (
+      <div className="connector-auth">
+        <span className="connector-auth-icon"><Loader2 size={15} className="spin" /></span>
+        <div>Checking ClickUp…</div>
+      </div>
+    )
+  }
+
+  const canRegister = Boolean(setup.access_token_set && setup.team_id && setup.webhook_url && !setup.registered)
+  const canConnect = Boolean((clientId.trim() || setup.client_id_set) && (clientSecret.trim() || setup.client_secret_set) && setup.redirect_url)
+  return (
+    <div className={`connector-auth${setup.registered ? ' ok' : ''}`}>
+      <span className="connector-auth-icon">{setup.access_token_set ? <Check size={15} /> : <Link2 size={15} />}</span>
+      <div className="connector-auth-main">
+        <div>{setup.summary}</div>
+        {setup.team_name && <div className="connector-auth-src">{setup.team_name}</div>}
+        {setup.redirect_url && <div className="connector-auth-path mono">{setup.redirect_url}</div>}
+        <div className="connector-token-row">
+          <input
+            className="input mono"
+            type="text"
+            aria-label="ClickUp OAuth client ID"
+            placeholder={setup.client_id_set ? 'Client ID saved' : 'OAuth client ID'}
+            value={clientId}
+            onChange={(e) => setClientId(e.target.value)}
+            disabled={busy !== null}
+          />
+        </div>
+        <div className="connector-token-row">
+          <input
+            className="input mono"
+            type="password"
+            aria-label="ClickUp OAuth client secret"
+            placeholder={setup.client_secret_set ? 'Client secret saved' : 'OAuth client secret'}
+            value={clientSecret}
+            onChange={(e) => setClientSecret(e.target.value)}
+            disabled={busy !== null}
+          />
+        </div>
+        <div className="connector-token-row">
+          <input
+            className="input mono"
+            type="password"
+            aria-label="ClickUp personal API token"
+            placeholder={setup.access_token_set ? 'Personal token saved' : 'Personal API token'}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            disabled={busy !== null}
+          />
+          <button type="button" className="btn sm" disabled={!token.trim() || busy !== null} onClick={saveToken}>
+            {busy === 'token' ? <Loader2 size={13} className="spin" /> : <Save size={13} />}
+            Save token
+          </button>
+        </div>
+        <div className="ingress-actions">
+          <a className="btn ghost sm" href="https://app.clickup.com/settings/apps" target="_blank" rel="noreferrer">
+            <ExternalLink size={13} />
+            OAuth app
+          </a>
+          <button type="button" className="btn primary sm" disabled={!canConnect || busy !== null} onClick={connect}>
+            {busy === 'oauth' ? <Loader2 size={13} className="spin" /> : <ExternalLink size={13} />}
+            Connect to ClickUp
+          </button>
+          <button type="button" className="btn ghost sm" disabled={!canRegister || busy !== null} onClick={registerWebhook}>
+            {busy === 'webhook' ? <Loader2 size={13} className="spin" /> : <Webhook size={13} />}
+            Register webhook
+          </button>
+          {(setup.access_token_set || setup.registered) && (
+            <button type="button" className="btn ghost sm" disabled={busy !== null} onClick={disconnect}>
+              {busy === 'disconnect' ? <Loader2 size={13} className="spin" /> : <RotateCw size={13} />}
+              Disconnect
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ClickUpWebhookTransport() {
+  const { data: wh } = useClickUpWebhookStatus()
+  if (!wh) return null
+  let tone: 'ok' | 'warn' | 'error' | '' = ''
+  if (!wh.secret_configured || !wh.registered) tone = 'warn'
+  else if (wh.last_status === 'error') tone = 'error'
+  else if (wh.receiving) tone = 'ok'
+  return (
+    <div className={`connector-auth${tone === 'ok' ? ' ok' : ''}`}>
+      <span className="connector-auth-icon">
+        {tone === 'warn' || tone === 'error' ? <AlertTriangle size={15} /> : <Webhook size={15} />}
+      </span>
+      <div className="connector-auth-main">
+        <div>Webhook: <strong>{wh.registered ? 'registered' : 'not registered'}</strong></div>
+        <div className="connector-auth-src">{wh.summary}</div>
+        {wh.webhook_url && <div className="connector-auth-path mono">{wh.webhook_url}</div>}
+        {wh.last_event_type && <div className="connector-auth-src">Last event: {wh.last_event_type}</div>}
+      </div>
+    </div>
+  )
 }
 
 // GitHubWebhookTransport surfaces the live webhook ingress state: which transport

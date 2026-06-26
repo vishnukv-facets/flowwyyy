@@ -1177,6 +1177,38 @@ export interface GitHubWebhookStatus {
   summary: string;
 }
 
+export interface ClickUpSetupStatus {
+  access_token_set: boolean;
+  client_id_set: boolean;
+  client_secret_set: boolean;
+  redirect_url?: string;
+  oauth_active: boolean;
+  team_id?: string;
+  team_name?: string;
+  list_id?: string;
+  webhook_url?: string;
+  webhook_id?: string;
+  webhook_secret_set: boolean;
+  registered: boolean;
+  summary: string;
+}
+
+export interface ClickUpWebhookStatus {
+  secret_configured: boolean;
+  webhook_url?: string;
+  webhook_id?: string;
+  registered: boolean;
+  team_id?: string;
+  team_name?: string;
+  deliveries_total: number;
+  last_received_at?: string;
+  last_status?: string;
+  last_error?: string;
+  last_event_type?: string;
+  receiving: boolean;
+  summary: string;
+}
+
 export interface IngressStatus {
   provider: string;
   // Public base URL, discovered from zrok at runtime (or operator-supplied for

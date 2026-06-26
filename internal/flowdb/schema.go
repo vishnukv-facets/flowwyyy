@@ -162,6 +162,30 @@ CREATE TABLE IF NOT EXISTS github_webhook_deliveries (
     processed_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS clickup_event_log (
+    event_key    TEXT PRIMARY KEY,
+    event_kind   TEXT NOT NULL,
+    task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    raw_json     TEXT,
+    processed_at TEXT NOT NULL
+);
+
+-- clickup_webhook_deliveries is keyed on Flow's normalized delivery id. ClickUp
+-- recommends webhook_id:history_item_id for events with history entries; events
+-- without history use a deterministic webhook:event:task fallback.
+CREATE TABLE IF NOT EXISTS clickup_webhook_deliveries (
+    delivery_id  TEXT PRIMARY KEY,
+    event_type   TEXT NOT NULL,
+    task_id      TEXT,
+    webhook_id   TEXT,
+    status       TEXT NOT NULL,
+    error        TEXT,
+    task_slug    TEXT,
+    event_count  INTEGER NOT NULL DEFAULT 0,
+    received_at  TEXT NOT NULL,
+    processed_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS agent_runtime_states (
     provider     TEXT NOT NULL CHECK (provider IN ('claude','codex')),
     session_id   TEXT NOT NULL,
@@ -460,6 +484,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_tags_tag    ON task_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_github_event_log_task ON github_event_log(task_slug);
+CREATE INDEX IF NOT EXISTS idx_clickup_event_log_task ON clickup_event_log(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_updated ON agent_runtime_states(updated_at);
 CREATE INDEX IF NOT EXISTS idx_task_dependencies_parent ON task_dependencies(parent_slug);

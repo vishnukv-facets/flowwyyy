@@ -174,8 +174,8 @@ func requestCrossOrigin(r *http.Request) bool {
 //   - OAuth/setup callbacks  — GET with their own state-nonce validation.
 func tokenExemptAPIPath(path string) bool {
 	switch path {
-	case "/api/github/webhook", "/api/hooks/agent", "/api/inbox/notify",
-		slackOAuthCallbackPath, githubSetupCallbackPath:
+	case "/api/github/webhook", "/api/clickup/webhook", "/api/hooks/agent", "/api/inbox/notify",
+		slackOAuthCallbackPath, githubSetupCallbackPath, clickUpOAuthCallbackPath:
 		return true
 	}
 	return false

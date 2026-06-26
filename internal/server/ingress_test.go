@@ -549,6 +549,12 @@ func TestIngressMuxRoutes(t *testing.T) {
 		t.Fatalf("GitHub webhook route missing from ingress mux, status %d", rec.Code)
 	}
 
+	rec = httptest.NewRecorder()
+	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", "/api/clickup/webhook", nil))
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("ClickUp webhook route missing from ingress mux, status %d", rec.Code)
+	}
+
 	// A path that is NOT exposed still hits the mux's own 404 (no data-plane leak).
 	rec = httptest.NewRecorder()
 	srv.ingressMux().ServeHTTP(rec, httptest.NewRequest("GET", "/api/health", nil))

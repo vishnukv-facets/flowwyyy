@@ -254,6 +254,84 @@ func TestGitHubEventLogRecordsFirstEventOnly(t *testing.T) {
 	}
 }
 
+func TestClickUpEventLogRecordsFirstEventOnly(t *testing.T) {
+	db := openTempDB(t)
+	insertTask(t, db, "clickup-cu-123", "Handle ClickUp task", "backlog", "high", t.TempDir(), nil)
+
+	recorded, err := RecordClickUpEvent(db, ClickUpEventLogEntry{
+		EventKey:  "wh-1:hist-1",
+		EventKind: "taskCommentPosted",
+		TaskSlug:  "clickup-cu-123",
+		RawJSON:   `{"event":"taskCommentPosted"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordClickUpEvent first: %v", err)
+	}
+	if !recorded {
+		t.Fatal("first ClickUp event should be recorded")
+	}
+
+	seen, err := HasClickUpEvent(db, "wh-1:hist-1")
+	if err != nil {
+		t.Fatalf("HasClickUpEvent: %v", err)
+	}
+	if !seen {
+		t.Fatal("recorded ClickUp event should be seen")
+	}
+
+	recorded, err = RecordClickUpEvent(db, ClickUpEventLogEntry{
+		EventKey:  "wh-1:hist-1",
+		EventKind: "taskCommentPosted",
+		TaskSlug:  "clickup-cu-123",
+		RawJSON:   `{"event":"taskCommentPosted"}`,
+	})
+	if err != nil {
+		t.Fatalf("RecordClickUpEvent duplicate: %v", err)
+	}
+	if recorded {
+		t.Fatal("duplicate ClickUp event should not be recorded")
+	}
+}
+
+func TestClickUpWebhookDeliveryHealth(t *testing.T) {
+	db := openTempDB(t)
+
+	isNew, err := RecordClickUpDelivery(db, ClickUpDeliveryEntry{
+		DeliveryID: "wh-1:hist-1",
+		EventType:  "taskCommentPosted",
+		TaskID:     "cu-123",
+		WebhookID:  "wh-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordClickUpDelivery first: %v", err)
+	}
+	if !isNew {
+		t.Fatal("first ClickUp delivery should be new")
+	}
+	isNew, err = RecordClickUpDelivery(db, ClickUpDeliveryEntry{
+		DeliveryID: "wh-1:hist-1",
+		EventType:  "taskCommentPosted",
+		TaskID:     "cu-123",
+		WebhookID:  "wh-1",
+	})
+	if err != nil {
+		t.Fatalf("RecordClickUpDelivery duplicate: %v", err)
+	}
+	if isNew {
+		t.Fatal("duplicate ClickUp delivery should not be new")
+	}
+	if err := FinishClickUpDelivery(db, "wh-1:hist-1", "processed", "", 1); err != nil {
+		t.Fatalf("FinishClickUpDelivery: %v", err)
+	}
+	health, err := ClickUpWebhookHealth(db)
+	if err != nil {
+		t.Fatalf("ClickUpWebhookHealth: %v", err)
+	}
+	if health.Total != 1 || health.LastStatus != "processed" || health.LastEventType != "taskCommentPosted" {
+		t.Fatalf("health = %+v, want total=1/status=processed/event=taskCommentPosted", health)
+	}
+}
+
 // TestOpenDBConcurrentDoesNotBusy pins that two parallel OpenDB calls
 // on the same path don't race during schema setup. Without busy_timeout
 // applied at open time, the loser hits SQLITE_BUSY on `pragma

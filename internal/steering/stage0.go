@@ -45,9 +45,31 @@ func Stage0(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
 	switch connectorOf(ev) {
 	case "github":
 		return stage0GitHub(ev, cfg)
+	case "clickup":
+		return stage0ClickUp(ev, cfg)
 	default:
 		return stage0Slack(ev, cfg)
 	}
+}
+
+func stage0ClickUp(ev monitor.InboundEvent, cfg WatchConfig) Stage0Result {
+	if strings.TrimSpace(ev.UserID) == "" {
+		return Stage0Result{DropReason: "no author"}
+	}
+	if cfg.MutedAuthors[ev.UserID] {
+		return Stage0Result{DropReason: "muted sender"}
+	}
+	if hasMutedKeyword(ev.Text, cfg.MutedKeywords) {
+		return Stage0Result{DropReason: "muted keyword"}
+	}
+	key := monitor.ThreadKey(ev.Channel, ev.ThreadTS)
+	if key == "" {
+		return Stage0Result{DropReason: "no thread key"}
+	}
+	if cfg.MutedThreads[key] {
+		return Stage0Result{DropReason: "muted thread"}
+	}
+	return Stage0Result{Pass: true, ThreadKey: key}
 }
 
 // stage0GitHub is the Stage 0 policy for the GitHub connector. GitHub events

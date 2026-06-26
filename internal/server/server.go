@@ -53,6 +53,8 @@ func New(cfg Config) *Server {
 	loadGitHubSecretsFromKeyring()
 	// Same for the Slack bot token, operator user token, and OAuth client secret.
 	loadSlackSecretsFromKeyring()
+	// Same for ClickUp OAuth + webhook secrets.
+	loadClickUpSecretsFromKeyring()
 	// And the offsite backup token (personal GitHub PAT for the flow-backup repo).
 	loadBackupSecretsFromKeyring()
 	s.terminals = newTerminalHub(s)
@@ -178,6 +180,12 @@ func New(cfg Config) *Server {
 		}
 		s.githubDispatcher = ghDispatcher
 		s.githubListener = monitor.NewGitHubListener(ghDispatcher)
+		cuDispatcher := monitor.NewClickUpDispatcher(cfg.DB, &slackTaskOpener{server: s})
+		if s.cascade != nil {
+			cuDispatcher.Steerer = s.cascade
+			cuDispatcher.SteererOwnsRouting = steering.SteererSessionsEnabled
+		}
+		s.clickupDispatcher = cuDispatcher
 	}
 	return s
 }
@@ -239,6 +247,14 @@ func (s *Server) registerAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc(slackOAuthCallbackPath, s.handleSlackSetupOAuthCallback)
 	mux.HandleFunc("/api/github/webhook", s.handleGitHubWebhook)
 	mux.HandleFunc("/api/github/webhook/status", s.handleGitHubWebhookStatus)
+	mux.HandleFunc("/api/clickup/webhook", s.handleClickUpWebhook)
+	mux.HandleFunc("/api/clickup/webhook/status", s.handleClickUpWebhookStatus)
+	mux.HandleFunc("/api/clickup/setup/status", s.handleClickUpSetupStatus)
+	mux.HandleFunc("/api/clickup/setup/oauth/start", s.handleClickUpSetupOAuthStart)
+	mux.HandleFunc(clickUpOAuthCallbackPath, s.handleClickUpSetupOAuthCallback)
+	mux.HandleFunc("/api/clickup/setup/token", s.handleClickUpSetupToken)
+	mux.HandleFunc("/api/clickup/setup/register-webhook", s.handleClickUpSetupRegisterWebhook)
+	mux.HandleFunc("/api/clickup/setup/disconnect", s.handleClickUpSetupDisconnect)
 	mux.HandleFunc("/api/ingress/status", s.handleIngressStatus)
 	mux.HandleFunc("/api/attention", s.handleAttention)
 	mux.HandleFunc("/api/attention/trace", s.handleAttentionTrace)
@@ -719,7 +735,7 @@ func (s *Server) publicIngressHandler() http.Handler {
 	app := s.remoteAppMux()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/github/webhook", githubSetupCallbackPath, slackOAuthCallbackPath:
+		case "/api/github/webhook", "/api/clickup/webhook", githubSetupCallbackPath, slackOAuthCallbackPath, clickUpOAuthCallbackPath:
 			ingress.ServeHTTP(w, r)
 			return
 		}

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -171,7 +172,30 @@ func (s *Server) detectIntegrationCapabilities() []uiToolCapability {
 	return []uiToolCapability{
 		detectGitHubIntegration(),
 		s.detectSlackIntegration(),
+		detectClickUpIntegration(),
 	}
+}
+
+func detectClickUpIntegration() uiToolCapability {
+	c := uiToolCapability{ID: "clickup", Label: "ClickUp", Available: false}
+	if strings.TrimSpace(os.Getenv("FLOW_CLICKUP_ACCESS_TOKEN")) == "" {
+		c.Status = "not configured"
+		c.Reason = "connect ClickUp or set FLOW_CLICKUP_ACCESS_TOKEN"
+		return c
+	}
+	if strings.TrimSpace(os.Getenv("FLOW_CLICKUP_TEAM_ID")) == "" {
+		c.Status = "configured"
+		c.Reason = "access token set; choose a ClickUp Workspace"
+		return c
+	}
+	if strings.TrimSpace(os.Getenv("FLOW_CLICKUP_WEBHOOK_ID")) == "" {
+		c.Status = "configured"
+		c.Reason = "workspace connected; register the webhook"
+		return c
+	}
+	c.Available = true
+	c.Status = "connected"
+	return c
 }
 
 func (s *Server) detectSlackIntegration() uiToolCapability {

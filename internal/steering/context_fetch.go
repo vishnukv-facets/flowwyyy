@@ -39,10 +39,14 @@ func NewDefaultContextFetcher(cleanText func(context.Context, string) string, pe
 	}
 	ghFetcher := GitHubContextFetcher{}
 	return func(ctx context.Context, ev monitor.InboundEvent) (ThreadContext, error) {
-		if connectorOf(ev) == "github" {
+		switch connectorOf(ev) {
+		case "github":
 			return ghFetcher.FetchContext(ctx, ev)
+		case "clickup":
+			return fallbackThreadContext(ev, "ok", "", ev.Text), nil
+		default:
+			return slackFetcher.FetchContext(ctx, ev)
 		}
-		return slackFetcher.FetchContext(ctx, ev)
 	}
 }
 

@@ -17,6 +17,8 @@ import type {
   BrainGraphView,
   BrainRunView,
   BrainRunsResponse,
+  ClickUpSetupStatus,
+  ClickUpWebhookStatus,
   GitHubAuthStatus,
   GitHubInstallations,
   GitHubOrgs,
@@ -66,7 +68,18 @@ export const queryClient = new QueryClient({
 // Live events should refresh live work data, not slow/static metadata. Quote,
 // settings, and Slack channel listing have their own refresh cadence; invalidating
 // Slack channels on every message can hammer conversations.list into rate limits.
-const liveInvalidationExclusions = new Set(['quote', 'settings', 'slack-channels', 'slack-setup', 'ingress-status', 'github-auth', 'memory-sources', 'persona'])
+const liveInvalidationExclusions = new Set([
+  'quote',
+  'settings',
+  'slack-channels',
+  'slack-setup',
+  'clickup-setup',
+  'clickup-webhook-status',
+  'ingress-status',
+  'github-auth',
+  'memory-sources',
+  'persona',
+])
 const liveData = { predicate: (q: { queryKey: readonly unknown[] }) => !liveInvalidationExclusions.has(String(q.queryKey[0])) }
 let invalidateTimer: ReturnType<typeof setTimeout> | null = null
 let pendingBroadInvalidate = false
@@ -192,6 +205,24 @@ export function useGitHubSetupStatus() {
       const st = q.state.data
       if (st && (!st.app_created || !st.installed)) return 2500
       return 15000
+    },
+  })
+}
+export function useClickUpSetupStatus() {
+  return useQuery({
+    queryKey: ['clickup-setup'],
+    queryFn: () => apiGet<ClickUpSetupStatus>('/api/clickup/setup/status'),
+    refetchInterval: (q) => (q.state.data?.oauth_active ? 1500 : 15000),
+  })
+}
+export function useClickUpWebhookStatus() {
+  return useQuery({
+    queryKey: ['clickup-webhook-status'],
+    queryFn: () => apiGet<ClickUpWebhookStatus>('/api/clickup/webhook/status'),
+    refetchInterval: (q) => {
+      const st = q.state.data
+      if (st && st.registered && !st.receiving) return 5000
+      return 20000
     },
   })
 }

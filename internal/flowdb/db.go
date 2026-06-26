@@ -1157,6 +1157,57 @@ func RecordGitHubEvent(db *sql.DB, entry GitHubEventLogEntry) (bool, error) {
 	return n > 0, nil
 }
 
+// ClickUpEventLogEntry is one processed ClickUp event recorded for idempotency.
+type ClickUpEventLogEntry struct {
+	EventKey  string
+	EventKind string
+	TaskSlug  string
+	RawJSON   string
+}
+
+// HasClickUpEvent reports whether eventKey has already been processed.
+func HasClickUpEvent(db *sql.DB, eventKey string) (bool, error) {
+	key := strings.TrimSpace(eventKey)
+	if key == "" {
+		return false, fmt.Errorf("clickup event key is empty")
+	}
+	var n int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM clickup_event_log WHERE event_key = ?`, key).Scan(&n); err != nil {
+		return false, fmt.Errorf("check clickup event %s: %w", key, err)
+	}
+	return n > 0, nil
+}
+
+// RecordClickUpEvent records a processed ClickUp event. The returned bool is
+// true only for the first insert; duplicate keys return false with nil error.
+func RecordClickUpEvent(db *sql.DB, entry ClickUpEventLogEntry) (bool, error) {
+	key := strings.TrimSpace(entry.EventKey)
+	if key == "" {
+		return false, fmt.Errorf("clickup event key is empty")
+	}
+	kind := strings.TrimSpace(entry.EventKind)
+	if kind == "" {
+		return false, fmt.Errorf("clickup event kind is empty")
+	}
+	var taskSlug any
+	if slug := strings.TrimSpace(entry.TaskSlug); slug != "" {
+		taskSlug = slug
+	}
+	res, err := db.Exec(
+		`INSERT OR IGNORE INTO clickup_event_log (event_key, event_kind, task_slug, raw_json, processed_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		key, kind, taskSlug, strings.TrimSpace(entry.RawJSON), NowISO(),
+	)
+	if err != nil {
+		return false, fmt.Errorf("record clickup event %s: %w", key, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("record clickup event %s rows affected: %w", key, err)
+	}
+	return n > 0, nil
+}
+
 // UpsertPlaybook inserts a new playbook or updates an existing row by slug.
 // Updates touch name, project_slug, work_dir, updated_at; archived_at is
 // not touched here (use a dedicated archive command).

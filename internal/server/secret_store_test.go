@@ -135,3 +135,45 @@ func TestNew_HydratesGitHubSecretsFromKeyring(t *testing.T) {
 		t.Errorf("New() did not hydrate webhook secret from keyring: got %q", v)
 	}
 }
+
+func resetClickUpSecretsForTest(t *testing.T) {
+	t.Helper()
+	keyring.MockInit()
+	for _, envKey := range clickUpSecretAccounts {
+		os.Unsetenv(envKey)
+		key := envKey
+		t.Cleanup(func() { os.Unsetenv(key) })
+	}
+}
+
+func TestStoreClickUpSecret_RoundTripsThroughKeyringAndEnv(t *testing.T) {
+	resetClickUpSecretsForTest(t)
+
+	if err := storeClickUpSecret(keyringAcctClickUpAccessToken, "cu-token"); err != nil {
+		t.Fatalf("storeClickUpSecret: %v", err)
+	}
+	got, err := getClickUpSecret(keyringAcctClickUpAccessToken)
+	if err != nil {
+		t.Fatalf("getClickUpSecret: %v", err)
+	}
+	if got != "cu-token" {
+		t.Fatalf("keyring value = %q, want cu-token", got)
+	}
+	if v := os.Getenv("FLOW_CLICKUP_ACCESS_TOKEN"); v != "cu-token" {
+		t.Fatalf("FLOW_CLICKUP_ACCESS_TOKEN = %q, want cu-token", v)
+	}
+}
+
+func TestNew_HydratesClickUpSecretsFromKeyring(t *testing.T) {
+	resetClickUpSecretsForTest(t)
+	root, db := testRootDB(t)
+	if err := setClickUpSecret(keyringAcctClickUpWebhookSecret, "clickup-webhook-secret"); err != nil {
+		t.Fatalf("seed keyring: %v", err)
+	}
+
+	_ = New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+
+	if v := clickUpWebhookSecret(); v != "clickup-webhook-secret" {
+		t.Errorf("New() did not hydrate ClickUp webhook secret from keyring: got %q", v)
+	}
+}

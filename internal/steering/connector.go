@@ -10,5 +10,8 @@ func connectorOf(ev monitor.InboundEvent) string {
 	if ev.ChannelType == "github" {
 		return "github"
 	}
+	if ev.ChannelType == "clickup" {
+		return "clickup"
+	}
 	return "slack"
 }

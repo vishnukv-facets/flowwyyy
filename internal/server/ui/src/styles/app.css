@@ -1052,6 +1052,12 @@
   font-size: 10.5px;
   color: var(--text-3);
 }
+.connector-token-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
 .connector-ingress {
   display: grid;
   gap: 8px;

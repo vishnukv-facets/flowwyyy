@@ -122,11 +122,12 @@ func TestApiRouteNeedsToken(t *testing.T) {
 		{http.MethodPut, "/api/tasks/x/brief", true},
 		{http.MethodDelete, "/api/owners/x", true},
 		{http.MethodGet, "/api/tasks", false},
-		{http.MethodGet, "/api/fs/entries", true},  // sensitive read — gated regardless of method
+		{http.MethodGet, "/api/fs/entries", true}, // sensitive read — gated regardless of method
 		{http.MethodPost, "/api/fs/mkdir", true},
-		{http.MethodPost, "/api/github/webhook", false}, // HMAC-authed, exempt
-		{http.MethodPost, "/api/hooks/agent", false},    // localhost hook, exempt
-		{http.MethodPost, "/api/inbox/notify", false},   // localhost wake poke, exempt
+		{http.MethodPost, "/api/github/webhook", false},  // HMAC-authed, exempt
+		{http.MethodPost, "/api/clickup/webhook", false}, // HMAC-authed, exempt
+		{http.MethodPost, "/api/hooks/agent", false},     // localhost hook, exempt
+		{http.MethodPost, "/api/inbox/notify", false},    // localhost wake poke, exempt
 	}
 	for _, tc := range cases {
 		if got := apiRouteNeedsToken(tc.method, tc.path); got != tc.want {
@@ -203,6 +204,14 @@ func TestDataPlaneAuthMiddleware(t *testing.T) {
 		// May fail HMAC (503/401) but must not be blocked by the session-token gate.
 		if strings.Contains(rec.Body.String(), "session token") {
 			t.Fatalf("webhook should be exempt from the token gate: %s", rec.Body.String())
+		}
+	})
+
+	t.Run("clickup webhook POST is exempt from the token", func(t *testing.T) {
+		r := httptest.NewRequest(http.MethodPost, "/api/clickup/webhook", strings.NewReader("{}"))
+		rec := do(r)
+		if strings.Contains(rec.Body.String(), "session token") {
+			t.Fatalf("ClickUp webhook should be exempt from the token gate: %s", rec.Body.String())
 		}
 	})
 }
