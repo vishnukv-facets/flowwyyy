@@ -253,6 +253,50 @@ export function SessionDetail({ slug }: { slug: string }) {
   const forkProviderOptions = providers.filter((p) => p.id !== provider)
   const forkedFrom = task.forked_from?.name || task.forked_from_slug
 
+  // Stat pills only (tokens/cost + context ring). These are the ones worth
+  // surfacing in the fullscreen terminal bar; monitored/status/auto are redundant
+  // there (the conn dot + "connected" already convey liveness).
+  const sessionStatPills = (
+    <>
+      {agent && agent.tokens_session > 0 && (
+        <span
+          className="tag tok-pill"
+          title={`${agent.tokens_session.toLocaleString()} tokens this session (input + output + cache writes; cache reads excluded)${
+            agent.cost_session ? ` · est. ${fmtUSD(agent.cost_session)} full bill incl. cache` : ''
+          } · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
+        >
+          <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
+          {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
+        </span>
+      )}
+      {agent && agent.tokens_max > 0 && <ContextRing used={agent.tokens_used} max={agent.tokens_max} />}
+    </>
+  )
+  // Full cluster for the page header: stats + monitored + status + auto-run.
+  const sessionPills = (
+    <>
+      {sessionStatPills}
+      {monitored && (
+        <span className="badge mon" title="A background monitor is watching this task's inbox">
+          <Radar size={12} /> monitored
+        </span>
+      )}
+      <StatusBadge status={status} />
+      {agent?.auto_run_status &&
+        (() => {
+          const s = agent.auto_run_status!
+          const tone = s === 'running' ? 'ok' : s === 'completed' ? 'info' : 'danger'
+          const dot = s === 'running' ? 'running' : s === 'completed' ? 'done' : 'stale'
+          return (
+            <span className={`badge ${tone}`} title={s === 'dead' ? 'Autonomous run died — needs eyes' : 'Autonomous run'}>
+              <StatusDot status={dot} />
+              auto: {s}
+            </span>
+          )
+        })()}
+    </>
+  )
+
   return (
     <div className="page flush">
       <div className={`session${side ? '' : ' no-side'}`}>
@@ -306,37 +350,7 @@ export function SessionDetail({ slug }: { slug: string }) {
                 />
               )}
             </div>
-            {agent && agent.tokens_session > 0 && (
-              <span
-                className="tag tok-pill"
-                title={`${agent.tokens_session.toLocaleString()} tokens this session (input + output + cache writes; cache reads excluded)${
-                  agent.cost_session ? ` · est. ${fmtUSD(agent.cost_session)} full bill incl. cache` : ''
-                } · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
-              >
-                <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
-                {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
-              </span>
-            )}
-            {agent && agent.tokens_max > 0 && (
-              <ContextRing used={agent.tokens_used} max={agent.tokens_max} />
-            )}
-            {monitored && (
-              <span className="badge mon" title="A background monitor is watching this task's inbox">
-                <Radar size={12} /> monitored
-              </span>
-            )}
-            <StatusBadge status={status} />
-            {agent?.auto_run_status && (() => {
-              const s = agent.auto_run_status!
-              const tone = s === 'running' ? 'ok' : s === 'completed' ? 'info' : 'danger'
-              const dot = s === 'running' ? 'running' : s === 'completed' ? 'done' : 'stale'
-              return (
-                <span className={`badge ${tone}`} title={s === 'dead' ? 'Autonomous run died — needs eyes' : 'Autonomous run'}>
-                  <StatusDot status={dot} />
-                  auto: {s}
-                </span>
-              )
-            })()}
+            {sessionPills}
           </div>
 
           {(task.forked_from_slug || (task.forks?.length ?? 0) > 0) && (
@@ -590,6 +604,11 @@ export function SessionDetail({ slug }: { slug: string }) {
                 {provider}{harnessName !== provider ? ` / ${harnessName}` : ''} · {agent?.session_id || task.session_id || 'no session'}
               </span>
               <div className="spacer" />
+              {/* In fullscreen the page header (with these pills) is hidden, so
+                  surface the session STATS here next to the connection status.
+                  Monitored/status/auto are intentionally omitted — the conn dot +
+                  "connected" already convey liveness. */}
+              {full && <span className="term-bar-pills">{sessionStatPills}</span>}
               <span className="faint clip" style={{ maxWidth: 280 }}>
                 {/* When open the verbose status just repeats "connected …" + the
                     session id (already shown on the left), so collapse to one

@@ -2861,6 +2861,17 @@ select.input {
   font-size: 11.5px;
   color: var(--text-2);
 }
+/* Session pills surfaced in the terminal bar while fullscreen (the page header
+   that normally carries them is hidden). Keep them on one row, tight, and let
+   them shrink before the connection status / toggle. */
+.term-bar-pills {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  overflow: hidden;
+}
 .term-waiting-note {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
