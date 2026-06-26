@@ -303,7 +303,7 @@ export function CreateTaskModal({ open, onClose }: { open: boolean; onClose: () 
               ]}
             />
           </Field>
-          <Field label="Agent">
+          <Field label="Agent" className="field-auto">
             <AgentPicker
               value={provider}
               onChange={(v) => {

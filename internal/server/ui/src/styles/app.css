@@ -1370,6 +1370,23 @@
   opacity: 0.72;
   font-variant-numeric: tabular-nums;
 }
+/* Circular context gauge that sits next to .tok-pill (uses .tag chrome). */
+.ctx-ring {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding-left: 5px;
+  cursor: default;
+  color: var(--text-2);
+}
+.ctx-ring-svg {
+  display: block;
+  flex: none;
+}
+.ctx-ring-pct {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
 .fork-tag {
   display: inline-flex;
   align-items: center;
@@ -1430,6 +1447,11 @@
   gap: 6px;
   flex: 1;
   min-width: 0;
+}
+/* Shrink-to-content field (e.g. the icon-only Agent picker) so it doesn't
+   claim an equal flex share and leave dead space; width tracks its content. */
+.field.field-auto {
+  flex: 0 0 auto;
 }
 .field-label {
   font-size: 12px;
@@ -1694,6 +1716,51 @@ select.input {
   border-color: rgba(94, 234, 212, 0.54);
   background: rgba(22, 24, 32, 0.96);
   color: #5eead4;
+}
+
+/* Provider usage-limit lock — greys out the terminal (still readable) and
+   captures pointer events so input can't be focused/typed until the limit
+   resets. Sits above .terminal-bottom-jump (z-index 4). */
+.term-lock {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  border-radius: var(--r);
+  background: color-mix(in srgb, var(--term-surface-dark, #0a0b0e) 62%, transparent);
+  backdrop-filter: blur(1.5px);
+  cursor: not-allowed;
+}
+.term-lock-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  max-width: 340px;
+  padding: 16px 20px;
+  text-align: center;
+  background: #0f1015;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, #111);
+  border-radius: 12px;
+  box-shadow:
+    0 18px 46px -20px rgba(8, 10, 18, 0.7),
+    0 0 0 1px color-mix(in srgb, var(--danger) 22%, transparent);
+}
+.term-lock-icon {
+  color: var(--danger);
+}
+.term-lock-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.term-lock-sub {
+  font-size: 12px;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
 }
 .terminal-bottom-jump:active {
   transform: translateY(0);
@@ -6090,6 +6157,59 @@ button.env-pill.clickable:hover {
   opacity: 0.6;
 }
 
+/* Provider env-pill usage ring — green→yellow→orange→red by quota used. The
+   colored ring lives in box-shadow so it survives the hover border swap; the
+   dot stays the "present on this laptop" indicator. */
+.env-pill.usage-ok,
+.env-pill.usage-warn,
+.env-pill.usage-high,
+.env-pill.usage-crit {
+  transition:
+    border-color 220ms var(--ease, ease),
+    box-shadow 220ms var(--ease, ease);
+}
+.env-pill.usage-ok {
+  border-color: color-mix(in srgb, var(--ok) 55%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--ok) 28%, transparent);
+}
+.env-pill.usage-warn {
+  border-color: color-mix(in srgb, var(--usage-warn) 62%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--usage-warn) 38%, transparent),
+    0 0 10px -5px var(--usage-warn);
+}
+.env-pill.usage-high {
+  border-color: color-mix(in srgb, var(--usage-high) 68%, var(--border));
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--usage-high) 46%, transparent),
+    0 0 12px -4px var(--usage-high);
+}
+.env-pill.usage-crit {
+  border-color: var(--danger);
+  animation: env-pill-crit 2.2s var(--ease, ease) infinite;
+}
+@keyframes env-pill-crit {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--danger) 55%, transparent),
+      0 0 14px -4px color-mix(in srgb, var(--danger) 70%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--danger) 78%, transparent),
+      0 0 20px -2px color-mix(in srgb, var(--danger) 95%, transparent);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .env-pill.usage-crit {
+    animation: none;
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--danger) 60%, transparent),
+      0 0 14px -4px var(--danger);
+  }
+}
+
 /* anime quote under the greeting — rotates with the time-of-day bucket */
 .mc-quote {
   display: flex;
@@ -6291,17 +6411,37 @@ button.env-pill.clickable:hover {
 .boot-bar i {
   display: block;
   height: 100%;
-  width: 38%;
+  width: 0;
   border-radius: var(--r-pill);
   background: linear-gradient(90deg, var(--accent), #46d8c0);
-  animation: boot-sweep 2.4s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+  /* width is driven by JS trickle (BootSplash); ease each step smoothly */
+  transition: width 320ms cubic-bezier(0.45, 0, 0.25, 1);
+  position: relative;
+  overflow: hidden;
 }
-@keyframes boot-sweep {
-  0% {
-    transform: translateX(-110%);
+/* Moving sheen so the bar still reads as "working" while the trickle slows
+   near the end of a long boot. */
+.boot-bar i::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.28),
+    transparent
+  );
+  transform: translateX(-100%);
+  animation: boot-sheen 1.5s ease-in-out infinite;
+}
+@keyframes boot-sheen {
+  to {
+    transform: translateX(100%);
   }
-  100% {
-    transform: translateX(330%);
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-bar i::after {
+    animation: none;
   }
 }
 @keyframes boot-rise {

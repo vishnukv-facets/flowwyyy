@@ -200,6 +200,22 @@ function fmtRemaining(ms: number): string {
   return remHours ? `${days}d ${remHours}h` : `${days}d`;
 }
 
+// providerUsageTier maps the worst window's used% (or a hard limit) to an
+// env-pill ring class: <60 ok (green) · 60-85 warn (yellow) · 85-99 high
+// (orange) · 100 or limit reached → crit (red).
+function providerUsageTier(u?: {
+  available?: boolean;
+  limited?: boolean;
+  windows?: { used_percent: number }[];
+}): string {
+  if (!u || !u.available) return "";
+  const max = (u.windows ?? []).reduce((m, w) => Math.max(m, w.used_percent), 0);
+  if (u.limited || max >= 100) return "usage-crit";
+  if (max >= 85) return "usage-high";
+  if (max >= 60) return "usage-warn";
+  return "usage-ok";
+}
+
 function ProviderUsageTip({ provider }: { provider: string }) {
   const { data, isLoading, error } = useProviderUsage(provider);
   const action = useAction();
@@ -1424,6 +1440,18 @@ export function Overview() {
   const { text: greeting, hourKey } = useGreeting();
   const { data: quote } = useQuote(hourKey);
   const usageTip = useFloatTip();
+  // Provider quota drives the env-pill ring tier (green→yellow→orange→red).
+  // Shares React Query's cache with the click-popover, so no extra fetches.
+  const claudeUsage = useProviderUsage("claude");
+  const codexUsage = useProviderUsage("codex");
+  const usageTierFor = (id: string): string =>
+    providerUsageTier(
+      id === "claude"
+        ? claudeUsage.data
+        : id === "codex"
+          ? codexUsage.data
+          : undefined,
+    );
 
   // High-priority backlog, sourced from /api/overview so the rows carry
   // due_info / assignee / stale_days (the UiData BACKLOG bucket drops them).
@@ -1548,6 +1576,7 @@ export function Overview() {
         <div className="mc-env-pills">
           {env.map((c) => {
             const usageCapable = c.id === "claude" || c.id === "codex";
+            const tier = usageCapable ? usageTierFor(c.id) : "";
             const body = (
               <>
                 <span className={`dot ${c.available ? "running" : "idle"}`} />
@@ -1566,7 +1595,7 @@ export function Overview() {
               <button
                 key={c.id}
                 type="button"
-                className={`env-pill clickable${c.available ? "" : " off"}`}
+                className={`env-pill clickable${c.available ? "" : " off"}${tier ? " " + tier : ""}`}
                 title={c.reason || c.status || "usage"}
                 onClick={(e) =>
                   usageTip.show(

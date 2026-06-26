@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Terminal as XTerm, type IDisposable, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
-import { ArrowDownToLine } from 'lucide-react'
+import { ArrowDownToLine, Ban } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
 import { uploadTerminalAttachments } from '../lib/api'
@@ -92,6 +92,11 @@ interface Props {
   // the native tmux model treats every provider the same.
   provider?: string
   onStatus?: (kind: 'status' | 'error' | 'closed' | 'open', message: string) => void
+  // When the session's provider has hit its usage limit, lock the terminal: a
+  // greyed overlay covers it and keystrokes are dropped until the limit resets.
+  locked?: boolean
+  lockedUntil?: string // RFC3339 reset time, drives the countdown
+  lockedReason?: string
 }
 
 function termWsURL(slug: string, cols: number, rows: number, kind: 'task' | 'floating'): string {
@@ -255,7 +260,36 @@ function AccessoryKeyRow({ sendData }: AccessoryKeyRowProps) {
   )
 }
 
-export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: Props) {
+export function TaskTerminal({
+  slug,
+  kind = 'task',
+  restartKey = 0,
+  onStatus,
+  locked = false,
+  lockedUntil,
+  lockedReason,
+}: Props) {
+  // Mirror `locked` into a ref so the long-lived terminal effect (which does
+  // NOT depend on `locked`) can drop keystrokes without being torn down.
+  const lockedRef = useRef(locked)
+  lockedRef.current = locked
+  const [lockNow, setLockNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!locked || !lockedUntil) return
+    const id = setInterval(() => setLockNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [locked, lockedUntil])
+  const lockRemaining = useMemo(() => {
+    if (!lockedUntil) return ''
+    const ms = new Date(lockedUntil).getTime() - lockNow
+    if (ms <= 0) return 'any moment'
+    const totalMin = Math.floor(ms / 60000)
+    const h = Math.floor(totalMin / 60)
+    const m = totalMin % 60
+    const s = Math.floor(ms / 1000) % 60
+    return h > 0 ? `${h}h ${m}m` : m > 0 ? `${m}m ${s}s` : `${s}s`
+  }, [lockedUntil, lockNow])
+
   const hostRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const jumpToBottomRef = useRef<(() => void) | null>(null)
@@ -501,6 +535,8 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
 
     // ---- input → PTY ---------------------------------------------------
     const dataDisposable = term.onData((data) => {
+      // Provider limit reached → swallow all input until it resets.
+      if (lockedRef.current) return
       const input = stripTerminalGeneratedInput(data)
       if (input) send({ type: 'input', data: input })
     })
@@ -794,6 +830,19 @@ export function TaskTerminal({ slug, kind = 'task', restartKey = 0, onStatus }: 
     <div className="flow-term-wrapper" ref={containerRef}>
       <div className="flow-term">
         <div className="xterm-host" ref={hostRef} />
+        {locked && (
+          <div className="term-lock" role="alert" aria-live="assertive">
+            <div className="term-lock-card">
+              <Ban size={22} className="term-lock-icon" />
+              <div className="term-lock-title">{lockedReason || 'Usage limit reached'}</div>
+              <div className="term-lock-sub">
+                {lockRemaining
+                  ? `Input is paused — resets in ${lockRemaining}.`
+                  : 'Input is paused until the limit resets.'}
+              </div>
+            </div>
+          </div>
+        )}
         {showBottomJump ? (
           <button
             type="button"

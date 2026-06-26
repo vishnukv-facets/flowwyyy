@@ -70,6 +70,9 @@
   --ok-soft: rgba(46, 182, 114, 0.15);
   --warn: #f5a623;
   --warn-soft: rgba(245, 166, 35, 0.15);
+  /* env-pill usage-ring intermediate tiers (yellow 60-85, orange 85-99) */
+  --usage-warn: #e8c14a;
+  --usage-high: #ef8a3c;
   --danger: #e25757;
   --danger-soft: rgba(226, 87, 87, 0.15);
   --info: #6ea8e6;
@@ -113,6 +116,9 @@
   --ok-soft: rgba(31, 157, 87, 0.13);
   --warn: #b1771a;
   --warn-soft: rgba(177, 119, 26, 0.14);
+  /* env-pill usage-ring intermediate tiers (yellow 60-85, orange 85-99) */
+  --usage-warn: #c79a1f;
+  --usage-high: #d6722a;
   --danger: #cf4a40;
   --danger-soft: rgba(207, 74, 64, 0.12);
   --info: #2f6da8;

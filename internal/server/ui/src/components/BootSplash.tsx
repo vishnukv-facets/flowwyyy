@@ -31,6 +31,23 @@ export function BootGate({ children }: { children: ReactNode }) {
 }
 
 function BootSplash({ leaving }: { leaving: boolean }) {
+  // Determinate-feeling progress: trickle toward ~92% (fast at first, slowing
+  // asymptotically so it never stalls), then snap to 100% once data is ready
+  // (leaving). We can't know the true % — the wait is the server building the
+  // first ui-data snapshot — so this communicates "working + nearly there"
+  // honestly without faking a measured percentage.
+  const [progress, setProgress] = useState(8)
+  useEffect(() => {
+    if (leaving) {
+      setProgress(100)
+      return
+    }
+    const id = setInterval(() => {
+      setProgress((p) => (p >= 92 ? p : p + Math.max(0.4, (92 - p) * 0.06)))
+    }, 180)
+    return () => clearInterval(id)
+  }, [leaving])
+
   return (
     <div className={`boot${leaving ? ' boot-leaving' : ''}`}>
       <div className="boot-glow" />
@@ -45,8 +62,15 @@ function BootSplash({ leaving }: { leaving: boolean }) {
           <span className="dot running" />
           <span className="mono">booting mission control · reading ~/.flow/flow.db</span>
         </div>
-        <div className="boot-bar">
-          <i />
+        <div
+          className="boot-bar"
+          role="progressbar"
+          aria-label="Loading Mission Control"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(progress)}
+        >
+          <i style={{ width: `${progress}%` }} />
         </div>
       </div>
     </div>

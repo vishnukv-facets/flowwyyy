@@ -85,6 +85,49 @@ export function TokenBar({ used, max }: { used: number; max: number }) {
   )
 }
 
+// Compact circular context gauge — a donut showing how full the model's
+// context window is, sized to sit inline next to the token/cost pill. Hover
+// shows the full breakdown. Tone warms as the window fills (closer to compaction).
+export function ContextRing({ used, max }: { used: number; max: number }) {
+  const p = pct(used, max)
+  const tone =
+    p >= 90
+      ? 'var(--danger)'
+      : p >= 75
+        ? 'var(--usage-high)'
+        : p >= 50
+          ? 'var(--usage-warn)'
+          : 'var(--accent)'
+  const r = 7
+  const circ = 2 * Math.PI * r
+  const dash = (p / 100) * circ
+  return (
+    <span
+      className="tag ctx-ring"
+      title={`Context: ${used.toLocaleString()} / ${max.toLocaleString()} tokens · ${p}% used · ${Math.max(
+        0,
+        max - used,
+      ).toLocaleString()} left`}
+    >
+      <svg className="ctx-ring-svg" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
+        <circle cx="9" cy="9" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.6" />
+        <circle
+          cx="9"
+          cy="9"
+          r={r}
+          fill="none"
+          stroke={tone}
+          strokeWidth="2.6"
+          strokeLinecap="round"
+          strokeDasharray={`${dash} ${circ}`}
+          transform="rotate(-90 9 9)"
+        />
+      </svg>
+      <span className="ctx-ring-pct">{p}% ctx</span>
+    </span>
+  )
+}
+
 // ---- empty / loading / error -------------------------------------------
 export function EmptyState({
   icon,
@@ -130,9 +173,19 @@ export function ErrorNote({ error }: { error: unknown }) {
   )
 }
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
+export function Field({
+  label,
+  children,
+  hint,
+  className,
+}: {
+  label: string
+  children: ReactNode
+  hint?: string
+  className?: string
+}) {
   return (
-    <label className="field">
+    <label className={`field${className ? ` ${className}` : ''}`}>
       <span className="field-label">{label}</span>
       {children}
       {hint && <span className="field-hint">{hint}</span>}

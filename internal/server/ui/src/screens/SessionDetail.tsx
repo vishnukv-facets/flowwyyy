@@ -46,6 +46,7 @@ import {
   useTaskTranscript,
   useTasks,
   useUiData,
+  useProviderUsage,
 } from '../lib/query'
 import { apiAction } from '../lib/api'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
@@ -67,8 +68,8 @@ import { Transcript } from '../components/Transcript'
 import { Modal } from '../components/Modal'
 import { AgentPicker, EffortPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
-import { EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot, TokenBar } from '../components/ui'
-import { compact, compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
+import { ContextRing, EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot } from '../components/ui'
+import { compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
 
 type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'artifacts' | 'tree' | 'auto'
 
@@ -88,6 +89,11 @@ export function SessionDetail({ slug }: { slug: string }) {
   const updateParam = linkParams.get('update') || undefined
   const { data: task, isLoading, error } = useTask(slug)
   const { data: agent, error: agentError } = useTaskBridge(slug)
+  // Quota for THIS session's provider — used to lock the terminal when its
+  // limit is reached. Called before the early returns to keep hook order stable;
+  // provider is read defensively since task/agent may not be loaded yet.
+  const sessionProvider = agent?.provider || task?.session_provider || 'claude'
+  const { data: sessionUsage } = useProviderUsage(sessionProvider)
   useDocumentTitle(task?.name)
   const [open, setOpen] = useState(false)
   const [restartKey, setRestartKey] = useState(0)
@@ -217,6 +223,10 @@ export function SessionDetail({ slug }: { slug: string }) {
   if (!task) return null
 
   const provider = agent?.provider || task.session_provider || 'claude'
+  const providerLabel =
+    provider === 'codex' ? 'Codex' : provider === 'claude' ? 'Claude Code' : provider
+  const providerLimited = !!sessionUsage?.limited
+  const providerLimitReset = sessionUsage?.limit_reset_at
   const harnessName = task.harness || provider
   const status = agent?.status || task.status
   const monitored = !!agent?.monitored
@@ -306,6 +316,9 @@ export function SessionDetail({ slug }: { slug: string }) {
                 <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
                 {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
               </span>
+            )}
+            {agent && agent.tokens_max > 0 && (
+              <ContextRing used={agent.tokens_used} max={agent.tokens_max} />
             )}
             {monitored && (
               <span className="badge mon" title="A background monitor is watching this task's inbox">
@@ -624,6 +637,9 @@ export function SessionDetail({ slug }: { slug: string }) {
                 slug={slug}
                 restartKey={restartKey}
                 provider={provider}
+                locked={providerLimited}
+                lockedUntil={providerLimitReset}
+                lockedReason={`${providerLabel} usage limit reached`}
                 onStatus={(kind, msg) => {
                   setTermStatus(kind === 'error' ? `error: ${msg}` : msg)
                   if (kind === 'open') setTermConn('open')
@@ -1005,14 +1021,6 @@ function SideInfo({ task, agent }: { task: ReturnType<typeof useTask>['data']; a
           <div className="meta-v">{agent ? fromMinutes(agent.started_min) : '—'}</div>
         </div>
       </div>
-      {agent && (
-        <div className="row gap" style={{ gap: 9, marginTop: 12 }}>
-          <TokenBar used={agent.tokens_used} max={agent.tokens_max} />
-          <span className="faint mono" style={{ fontSize: 10.5 }}>
-            {compact(agent.tokens_used)}/{compact(agent.tokens_max)} ctx
-          </span>
-        </div>
-      )}
       {agent && <AgentDiagnostics agent={agent} />}
       {/* inbox.md isn't a generic artifact — it's flow's coordination mirror.
           Surface it as a link to this task's conversation in the Inbox screen

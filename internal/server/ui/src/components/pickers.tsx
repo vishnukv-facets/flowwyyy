@@ -163,13 +163,13 @@ export function AgentPicker({
             type="button"
             role="radio"
             aria-checked={active}
+            aria-label={p.label}
             disabled={disabled}
             className={active ? 'active' : ''}
             title={disabled ? p.reason || `${p.label} is not installed` : p.label}
             onClick={() => !disabled && onChange(p.id)}
           >
-            <ProviderIcon provider={p.id} size={14} />
-            <span className="clip">{p.label}</span>
+            <ProviderIcon provider={p.id} size={18} />
           </button>
         )
       })}
