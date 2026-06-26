@@ -23,6 +23,7 @@ type providerUsageTestResponse struct {
 	LimitResetAt      string `json:"limit_reset_at,omitempty"`
 	Reason            string `json:"reason,omitempty"`
 	Source            string `json:"source,omitempty"`
+	ObservedAt        string `json:"observed_at,omitempty"`
 	QueuedActions     int    `json:"queued_actions"`
 	NextQueueRunAfter string `json:"next_queue_run_after,omitempty"`
 	Windows           []struct {
@@ -129,8 +130,71 @@ func TestProviderUsageIncludesQueuedAutomation(t *testing.T) {
 	}
 }
 
+func clearCodexUsageCache() {
+	codexUsageMu.Lock()
+	codexUsageCacheOK = false
+	codexUsageCache = providerUsageResponse{}
+	codexUsageCacheAt = time.Time{}
+	codexUsageMu.Unlock()
+}
+
+// codexLogOnly forces readCodexProviderUsage down the local-log path: it points
+// the live-endpoint auth at a nonexistent file (no token → no HTTP call) and
+// clears the process-wide live cache, keeping log-path tests offline.
+func codexLogOnly(t *testing.T) {
+	t.Helper()
+	t.Setenv("FLOW_CODEX_AUTH", filepath.Join(t.TempDir(), "noauth.json"))
+	clearCodexUsageCache()
+}
+
+func TestProviderUsageCodexLiveEndpoint(t *testing.T) {
+	root, db := testRootDB(t)
+	clearCodexUsageCache()
+	t.Cleanup(clearCodexUsageCache)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"plan_type":"prolite","rate_limit":{"allowed":false,"limit_reached":true,"primary_window":{"used_percent":100,"limit_window_seconds":18000,"reset_after_seconds":2326,"reset_at":1782408355},"secondary_window":{"used_percent":39,"limit_window_seconds":604800,"reset_after_seconds":505588,"reset_at":1782911618}}}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"tokens":{"access_token":"test-token"}}`), 0o644); err != nil {
+		t.Fatalf("write auth: %v", err)
+	}
+	t.Setenv("FLOW_CODEX_AUTH", authPath)
+	t.Setenv("FLOW_CODEX_USAGE_URL", srv.URL)
+	// A log DB with different numbers — if the live endpoint is preferred, these
+	// log values (7/1) must NOT appear in the response.
+	logDB := filepath.Join(t.TempDir(), "logs_2.sqlite")
+	writeCodexRateLimitLog(t, logDB, `Received message {"type":"codex.rate_limits","rate_limits":{"primary":{"used_percent":7,"window_minutes":300,"reset_at":1782408354},"secondary":{"used_percent":1,"window_minutes":10080,"reset_at":1782911617}}}`)
+	t.Setenv("FLOW_CODEX_LOG_DB", logDB)
+
+	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=codex")
+	if !got.Available || got.Provider != "codex" {
+		t.Fatalf("usage = %+v, want available codex", got)
+	}
+	if !got.Limited {
+		t.Fatalf("want limited=true (limit_reached), got %+v", got)
+	}
+	if len(got.Windows) != 2 || got.Windows[0].UsedPercent != 100 || got.Windows[1].UsedPercent != 39 {
+		t.Fatalf("windows = %+v, want live 100/39 (not log 7/1)", got.Windows)
+	}
+	if got.Windows[0].WindowMinutes != 300 || got.Windows[1].WindowMinutes != 10080 {
+		t.Fatalf("window minutes = %+v, want 300/10080", got.Windows)
+	}
+	if obs, err := time.Parse(time.RFC3339, got.ObservedAt); err != nil || time.Since(obs) > time.Minute {
+		t.Fatalf("observed_at = %q (err %v), want fresh live timestamp", got.ObservedAt, err)
+	}
+}
+
 func TestProviderUsageCodexLogsDB(t *testing.T) {
 	root, db := testRootDB(t)
+	codexLogOnly(t)
 	logDB := filepath.Join(t.TempDir(), "logs_2.sqlite")
 	writeCodexRateLimitLog(t, logDB, `session: websocket event: {"type":"codex.rate_limits","plan_type":"prolite","rate_limits":{"allowed":true,"limit_reached":false,"primary":{"used_percent":7,"window_minutes":300,"reset_at":1782408354},"secondary":{"used_percent":24,"window_minutes":10080,"reset_at":1782911617}}}`)
 	t.Setenv("FLOW_CODEX_LOG_DB", logDB)
@@ -150,8 +214,34 @@ func TestProviderUsageCodexLogsDB(t *testing.T) {
 	}
 }
 
+func TestProviderUsageCodexReceivedMessageFormat(t *testing.T) {
+	// Regression: codex switched its log prefix from "websocket event: {...}"
+	// to "Received message {...}". flow must match on the JSON object, not the
+	// prefix, or the quota silently sticks on the last old-format row.
+	root, db := testRootDB(t)
+	codexLogOnly(t)
+	logDB := filepath.Join(t.TempDir(), "logs_2.sqlite")
+	writeCodexRateLimitLog(t, logDB, `Received message {"type":"codex.rate_limits","plan_type":"prolite","rate_limits":{"allowed":true,"limit_reached":false,"primary":{"used_percent":95,"window_minutes":300,"reset_after_seconds":3939,"reset_at":1782408354},"secondary":{"used_percent":38,"window_minutes":10080,"reset_at":1782911617}}}`)
+	t.Setenv("FLOW_CODEX_LOG_DB", logDB)
+
+	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=codex")
+	if !got.Available || got.Provider != "codex" {
+		t.Fatalf("usage = %+v, want available codex", got)
+	}
+	if len(got.Windows) != 2 {
+		t.Fatalf("windows = %+v, want 2", got.Windows)
+	}
+	if got.Windows[0].ID != "five_hour" || got.Windows[0].UsedPercent != 95 {
+		t.Fatalf("five-hour window = %+v, want used 95", got.Windows[0])
+	}
+	if got.Windows[1].ID != "seven_day" || got.Windows[1].UsedPercent != 38 {
+		t.Fatalf("seven-day window = %+v, want used 38", got.Windows[1])
+	}
+}
+
 func TestProviderUsageCodexSkipsSelfEchoRows(t *testing.T) {
 	root, db := testRootDB(t)
+	codexLogOnly(t)
 	logDB := filepath.Join(t.TempDir(), "logs_2.sqlite")
 	initCodexLogDB(t, logDB)
 	now := time.Now().Unix()

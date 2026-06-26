@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"flow/internal/flowdb"
@@ -151,7 +153,171 @@ func claudeUsageWindows(data []byte) ([]providerUsageWindow, error) {
 	return out, nil
 }
 
+// codexUsageLiveTTL bounds how often flow calls the live ChatGPT usage
+// endpoint. The UI polls /api/provider-usage every 2s; codex itself polls the
+// same endpoint ~every 60s. A short server-side cache keeps flow's quota
+// effectively realtime without hammering chatgpt.com on every UI tick.
+const codexUsageLiveTTL = 20 * time.Second
+
+const codexUsageEndpoint = "https://chatgpt.com/backend-api/wham/usage"
+
+var (
+	codexUsageMu      sync.Mutex
+	codexUsageCache   providerUsageResponse
+	codexUsageCacheAt time.Time
+	codexUsageCacheOK bool
+)
+
+// readCodexProviderUsage returns codex quota, preferring the live ChatGPT
+// usage endpoint (realtime — the source codex's own TUI polls) and falling
+// back to scraping codex's local debug log only when the live call is
+// unavailable (no auth token, offline, etc.). The log is sparse — codex emits
+// rate-limit events rarely (~3/2h observed) — so it must never be primary.
 func readCodexProviderUsage() providerUsageResponse {
+	if out, ok := readCodexUsageLive(); ok {
+		return out
+	}
+	return readCodexProviderUsageFromLog()
+}
+
+func readCodexUsageLive() (providerUsageResponse, bool) {
+	codexUsageMu.Lock()
+	if codexUsageCacheOK && time.Since(codexUsageCacheAt) < codexUsageLiveTTL {
+		out := codexUsageCache
+		codexUsageMu.Unlock()
+		return out, true
+	}
+	codexUsageMu.Unlock()
+
+	out, ok := fetchCodexUsageLive()
+	if !ok {
+		// Serve the last good live reading (with its real observed_at, so
+		// "seen" keeps aging honestly) rather than flipping to the stale log.
+		codexUsageMu.Lock()
+		defer codexUsageMu.Unlock()
+		if codexUsageCacheOK {
+			return codexUsageCache, true
+		}
+		return providerUsageResponse{}, false
+	}
+	codexUsageMu.Lock()
+	codexUsageCache = out
+	codexUsageCacheAt = time.Now()
+	codexUsageCacheOK = true
+	codexUsageMu.Unlock()
+	return out, true
+}
+
+func fetchCodexUsageLive() (providerUsageResponse, bool) {
+	tok := codexAccessToken()
+	if tok == "" {
+		return providerUsageResponse{}, false
+	}
+	req, err := http.NewRequest(http.MethodGet, codexUsageURL(), nil)
+	if err != nil {
+		return providerUsageResponse{}, false
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "codex-cli")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return providerUsageResponse{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return providerUsageResponse{}, false
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return providerUsageResponse{}, false
+	}
+	windows, limited, err := codexLiveUsageWindows(body)
+	if err != nil || len(windows) == 0 {
+		return providerUsageResponse{}, false
+	}
+	out := providerUsageResponse{
+		Provider:   "codex",
+		Available:  true,
+		Limited:    limited,
+		Source:     codexUsageURL(),
+		ObservedAt: time.Now().UTC().Format(time.RFC3339),
+		Windows:    windows,
+	}
+	return annotateUsageLimit(out), true
+}
+
+// codexLiveUsageWindows parses the ChatGPT /wham/usage response
+// (rate_limit.primary_window / secondary_window with used_percent + reset_at).
+// The per-window field names overlap usageWindowFromMap's, and the fallback
+// minutes (300 / 10080) match the endpoint's limit_window_seconds, so the
+// shared window parser is reused.
+func codexLiveUsageWindows(body []byte) ([]providerUsageWindow, bool, error) {
+	var resp struct {
+		RateLimit struct {
+			Allowed         *bool          `json:"allowed"`
+			LimitReached    bool           `json:"limit_reached"`
+			PrimaryWindow   map[string]any `json:"primary_window"`
+			SecondaryWindow map[string]any `json:"secondary_window"`
+		} `json:"rate_limit"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, false, err
+	}
+	limited := resp.RateLimit.LimitReached
+	if resp.RateLimit.Allowed != nil && !*resp.RateLimit.Allowed {
+		limited = true
+	}
+	var out []providerUsageWindow
+	if w, ok := usageWindowFromMap("five_hour", "5h", 300, resp.RateLimit.PrimaryWindow); ok {
+		out = append(out, w)
+	}
+	if w, ok := usageWindowFromMap("seven_day", "7d", 10080, resp.RateLimit.SecondaryWindow); ok {
+		out = append(out, w)
+	}
+	return out, limited, nil
+}
+
+func codexUsageURL() string {
+	if u := strings.TrimSpace(os.Getenv("FLOW_CODEX_USAGE_URL")); u != "" {
+		return u
+	}
+	return codexUsageEndpoint
+}
+
+func codexAuthPath() string {
+	if p := strings.TrimSpace(os.Getenv("FLOW_CODEX_AUTH")); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "auth.json")
+}
+
+func codexAccessToken() string {
+	path := codexAuthPath()
+	if path == "" {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var auth struct {
+		Tokens struct {
+			AccessToken string `json:"access_token"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(data, &auth); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(auth.Tokens.AccessToken)
+}
+
+func readCodexProviderUsageFromLog() providerUsageResponse {
 	path := strings.TrimSpace(os.Getenv("FLOW_CODEX_LOG_DB"))
 	if path == "" {
 		home, err := os.UserHomeDir()
@@ -165,8 +331,15 @@ func readCodexProviderUsage() providerUsageResponse {
 		return unavailableUsage("codex", err.Error())
 	}
 	defer db.Close()
+	// Anchor on the rate-limit JSON object itself, not on the surrounding
+	// codex log prefix: codex has shipped at least two prefixes over time
+	// ("websocket event: {...}" and "Received message {...}"). Matching the
+	// prefix made flow silently fall back to the last old-format row, so the
+	// quota looked stale ("seen Nm ago") even while codex emitted fresh
+	// events. The leading brace + unescaped quotes also keep shell self-echo
+	// rows (which contain escaped `{\"type\"...`) from matching.
 	rows, err := db.Query(`SELECT feedback_log_body, ts FROM logs
-		WHERE feedback_log_body LIKE '%websocket event: {"type":"codex.rate_limits"%'
+		WHERE feedback_log_body LIKE '%{"type":"codex.rate_limits"%'
 		ORDER BY ts DESC, ts_nanos DESC, id DESC LIMIT 200`)
 	if err != nil {
 		return unavailableUsage("codex", err.Error())
@@ -221,15 +394,14 @@ func readCodexProviderUsage() providerUsageResponse {
 var errCodexRateLimitEventNotFound = errors.New("codex rate limit JSON not found")
 
 func codexUsageWindows(body string) ([]providerUsageWindow, bool, error) {
-	idx := strings.Index(body, "websocket event:")
-	if idx < 0 {
+	// Locate the rate-limit event by its JSON object rather than by any log
+	// prefix text (which codex has changed across versions). The unescaped
+	// `{"type":...` anchor also excludes escaped self-echo rows.
+	start := strings.Index(body, `{"type":"codex.rate_limits"`)
+	if start < 0 {
 		return nil, false, errCodexRateLimitEventNotFound
 	}
-	startRel := strings.Index(body[idx:], "{")
-	if startRel < 0 {
-		return nil, false, errCodexRateLimitEventNotFound
-	}
-	raw, ok := balancedJSONObject(body, idx+startRel)
+	raw, ok := balancedJSONObject(body, start)
 	if !ok {
 		return nil, false, errCodexRateLimitEventNotFound
 	}
