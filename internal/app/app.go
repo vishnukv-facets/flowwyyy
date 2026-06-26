@@ -87,6 +87,8 @@ func Run(args []string) int {
 		return cmdTell(rest)
 	case "slack":
 		return cmdSlack(rest)
+	case "voice":
+		return cmdVoice(rest)
 	case "wait":
 		return cmdWait(rest)
 	case "attention":

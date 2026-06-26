@@ -2806,7 +2806,11 @@ under the `tags:` line), follow this bootstrap:
    `flow slack search` requires a user token with `search:read`.
 6. **Reply.** Post into the originating thread (`channel` + `thread_ts`
    from your brief). Posts go as the user (User Token), not a bot, so
-   write in their voice and avoid claims you can't back up. For Slack
+   write in their voice and avoid claims you can't back up. Before drafting,
+   run `flow voice` and match the operator's saved voice it prints (tone,
+   phrasing, greeting/sign-off habits, formality) — `flow slack send` posts
+   your text verbatim and does NOT apply the voice for you, so the voice has
+   to be in what you write. For Slack
    channel/thread replies, use Flow's Slack sender rather than the direct
    Slack MCP send tool: write the final text to a temp file, then run
    `flow slack send --channel <channel> --thread-ts <thread_ts> --as user --text-file <path>`.

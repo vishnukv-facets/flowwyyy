@@ -1,5 +1,7 @@
 package server
 
+import "flow/internal/steering"
+
 // steererSessionBrief is the one-time prime baked into a new per-channel steerer
 // session's launch prompt. The session is a long-running watcher of ONE Slack
 // conversation; it holds the channel's memory and decides routing/grouping/
@@ -103,5 +105,5 @@ open card, just absorb the message into memory. Never reply to a context_only tu
   For context_only, never create a new card; only refresh/resolve an existing card as
   described above.
 - This session is long-lived. Do NOT call ` + "`flow done`" + ` — just wait for the next turn.
-`
+` + steering.OperatorVoiceDirective()
 }
