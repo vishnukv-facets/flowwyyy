@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -32,13 +33,50 @@ func liveAgentSessions() (map[string]bool, error) {
 				}
 			}
 		}
-		if strings.Contains(lower, "codex") && strings.Contains(lower, "resume") {
-			for _, id := range anySessionUUIDs(line) {
-				live[strings.ToLower(id)] = true
+		if strings.Contains(lower, "codex") {
+			// Resumed sessions (`codex resume <id>`) carry the session id.
+			if strings.Contains(lower, "resume") {
+				for _, id := range anySessionUUIDs(line) {
+					live[strings.ToLower(id)] = true
+				}
+			}
+			// FRESH sessions (launched with a prompt) generate their id
+			// internally, so it never appears on the command line — but the
+			// working dir (-C) always does, for both fresh and resumed. Index
+			// it so liveness can match by workdir when the id is absent.
+			for _, dir := range codexWorkdirsInLine(line) {
+				live[codexDirLiveKeyPrefix+dir] = true
 			}
 		}
 	}
 	return live, nil
+}
+
+// codexWorkdirRe captures the working directory codex is launched with
+// (`-C <dir>`). A fresh codex session's session id is internal and never on the
+// command line, so workdir matching is what lets liveness detect it as alive.
+var codexWorkdirRe = regexp.MustCompile(`(?:^|\s)(?:-C|--cd)[ =](\S+)`)
+
+const codexDirLiveKeyPrefix = "codexdir:"
+
+func codexWorkdirsInLine(line string) []string {
+	var out []string
+	for _, m := range codexWorkdirRe.FindAllStringSubmatch(line, -1) {
+		if len(m) >= 2 {
+			out = append(out, filepath.Clean(m[1]))
+		}
+	}
+	return out
+}
+
+// codexDirLiveKey is the map key used to record/look up a live codex working
+// directory in the liveAgentSessions() map.
+func codexDirLiveKey(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	return codexDirLiveKeyPrefix + filepath.Clean(dir)
 }
 
 // cachedLiveAgentSessions wraps liveAgentSessions with a per-server TTL cache.

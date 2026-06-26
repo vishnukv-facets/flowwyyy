@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -119,6 +120,10 @@ func (r *livenessReconciler) tick() {
 type liveSessionSet struct {
 	claude map[string]bool
 	codex  map[string]bool
+	// codexDirs holds the working dirs (-C) of live codex processes. Fresh
+	// codex sessions carry no session id on the command line, so workdir is the
+	// only reliable liveness signal for them.
+	codexDirs map[string]bool
 }
 
 func (l liveSessionSet) has(provider, sessionID string) bool {
@@ -133,6 +138,16 @@ func (l liveSessionSet) has(provider, sessionID string) bool {
 		return l.codex[sessionID]
 	}
 	return false
+}
+
+// codexDirLive reports whether a live codex process is running in dir (matched
+// by its -C working dir / worktree path).
+func (l liveSessionSet) codexDirLive(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false
+	}
+	return l.codexDirs[filepath.Clean(dir)]
 }
 
 var reLiveClaudeSession = regexp.MustCompile(
@@ -151,8 +166,9 @@ func scanLiveSessions() (liveSessionSet, error) {
 		return liveSessionSet{}, err
 	}
 	set := liveSessionSet{
-		claude: map[string]bool{},
-		codex:  map[string]bool{},
+		claude:    map[string]bool{},
+		codex:     map[string]bool{},
+		codexDirs: map[string]bool{},
 	}
 	for _, line := range strings.Split(string(out), "\n") {
 		if strings.Contains(line, "claude") {
@@ -162,9 +178,16 @@ func scanLiveSessions() (liveSessionSet, error) {
 				}
 			}
 		}
-		if strings.Contains(line, "codex") && strings.Contains(line, "resume") {
-			for _, id := range anySessionUUIDs(line) {
-				set.codex[strings.ToLower(id)] = true
+		if strings.Contains(line, "codex") {
+			if strings.Contains(line, "resume") {
+				for _, id := range anySessionUUIDs(line) {
+					set.codex[strings.ToLower(id)] = true
+				}
+			}
+			// Fresh codex sessions have no id on the command line; the working
+			// dir (-C) is present for both fresh and resumed sessions.
+			for _, dir := range codexWorkdirsInLine(line) {
+				set.codexDirs[dir] = true
 			}
 		}
 	}
@@ -172,9 +195,11 @@ func scanLiveSessions() (liveSessionSet, error) {
 }
 
 type liveTaskRow struct {
-	slug      string
-	provider  string
-	sessionID string
+	slug         string
+	provider     string
+	sessionID    string
+	workDir      string
+	worktreePath string
 }
 
 func (r *livenessReconciler) reconcileTasks(db *sql.DB, live liveSessionSet) {
@@ -183,7 +208,8 @@ func (r *livenessReconciler) reconcileTasks(db *sql.DB, live liveSessionSet) {
 	// already imply a non-live state — the reconciler shouldn't second-
 	// guess workflow status.
 	rows, err := db.Query(`
-		SELECT slug, session_provider, session_id
+		SELECT slug, session_provider, session_id,
+		       COALESCE(work_dir, ''), COALESCE(worktree_path, '')
 		FROM tasks
 		WHERE status = 'in-progress'
 		  AND session_id IS NOT NULL
@@ -196,10 +222,16 @@ func (r *livenessReconciler) reconcileTasks(db *sql.DB, live liveSessionSet) {
 	var stale []liveTaskRow
 	for rows.Next() {
 		var row liveTaskRow
-		if err := rows.Scan(&row.slug, &row.provider, &row.sessionID); err != nil {
+		if err := rows.Scan(&row.slug, &row.provider, &row.sessionID, &row.workDir, &row.worktreePath); err != nil {
 			return
 		}
 		if live.has(row.provider, row.sessionID) {
+			continue
+		}
+		// Fresh codex sessions have no id on the command line — match by their
+		// working dir / worktree so an actively-running session isn't flipped to
+		// dead.
+		if row.provider == "codex" && (live.codexDirLive(row.workDir) || live.codexDirLive(row.worktreePath)) {
 			continue
 		}
 		stale = append(stale, row)

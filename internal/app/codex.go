@@ -409,14 +409,28 @@ func pollCaptureCodexSession(taskSlug, workDir string, started time.Time, stop <
 	ticker := time.NewTicker(750 * time.Millisecond)
 	defer ticker.Stop()
 	deadline := time.After(2 * time.Minute)
+	var lastErr error
 	for {
 		select {
 		case <-stop:
 			return
 		case <-deadline:
+			// Capture never landed within the window. Surface it loudly: a
+			// silent failure here leaves the task's session_id unset (or a prior
+			// binding stale), which Mission Control then renders as the wrong
+			// provider/session. A visible warning beats a mystery binding.
+			if lastErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: codex session capture for %q timed out after 2m (last error: %v); session_id may be unset\n", taskSlug, lastErr)
+			} else {
+				fmt.Fprintf(os.Stderr, "warning: codex session capture for %q timed out after 2m; no matching rollout found, session_id may be unset\n", taskSlug)
+			}
 			return
 		case <-ticker.C:
-			captured, _ := captureCodexSessionForTaskFromRoot(taskSlug, workDir, started)
+			captured, err := captureCodexSessionForTaskFromRoot(taskSlug, workDir, started)
+			if err != nil {
+				lastErr = err
+				continue
+			}
 			if captured != "" {
 				return
 			}

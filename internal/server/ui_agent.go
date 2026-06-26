@@ -37,6 +37,18 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	bridgeRunning := s.terminals != nil && s.terminals.running(tv.Slug)
 	sharedRunning := s.terminals != nil && s.terminals.sharedRunning(tv.Slug)
 	sessionLive := tv.SessionID != nil && live[strings.ToLower(*tv.SessionID)]
+	// Fresh codex sessions carry no session id on their command line (it's
+	// generated internally), so match them by working dir / worktree — otherwise
+	// an actively-working codex session is misread as dead.
+	if !sessionLive && provider == "codex" {
+		if k := codexDirLiveKey(tv.WorkDir); k != "" && live[k] {
+			sessionLive = true
+		} else if tv.WorktreePath != nil {
+			if k := codexDirLiveKey(*tv.WorktreePath); k != "" && live[k] {
+				sessionLive = true
+			}
+		}
+	}
 	terminalMode := "idle"
 	switch {
 	case bridgeRunning:
@@ -98,17 +110,26 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 	transcriptWaiting := s.codexTranscriptWaitingFor(tv, provider)
 	if !staleOverviewSession && tv.Status == "in-progress" {
 		if hookRuntime != nil && hookRuntime.Status != "" {
-			status = hookRuntime.Status
-			runtimeSource = "hook"
-			runtimeEvent = hookRuntime.EventKind
-			// If the hook says "running" but neither the hook nor the
-			// transcript has moved in a while, the hook layer is stale
-			// (a Stop hook may have failed to fire on interrupt, or
-			// hooks aren't reaching the server). Demote to "idle" so
-			// the UI reflects what the user observes in the terminal.
-			if status == "running" && runtimeStateStaleForRunning(hookRuntime.UpdatedAt, insights.ActivityAt) {
-				status = "idle"
-				runtimeEvent = hookRuntime.EventKind + ":stale"
+			if hookRuntime.Status == "dead" && sessionLive {
+				// A confirmed-live process (ps / codex-workdir scan) is
+				// authoritative over a stale "dead" the liveness reconciler may
+				// have written when it couldn't match the process. Keep the
+				// computed live status rather than showing a working session as
+				// dead.
+				runtimeSource = "process"
+			} else {
+				status = hookRuntime.Status
+				runtimeSource = "hook"
+				runtimeEvent = hookRuntime.EventKind
+				// If the hook says "running" but neither the hook nor the
+				// transcript has moved in a while, the hook layer is stale
+				// (a Stop hook may have failed to fire on interrupt, or
+				// hooks aren't reaching the server). Demote to "idle" so
+				// the UI reflects what the user observes in the terminal.
+				if status == "running" && runtimeStateStaleForRunning(hookRuntime.UpdatedAt, insights.ActivityAt) {
+					status = "idle"
+					runtimeEvent = hookRuntime.EventKind + ":stale"
+				}
 			}
 		}
 		if transcriptWaiting != nil {
