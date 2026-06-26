@@ -3,6 +3,8 @@ package server
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/user"
@@ -538,7 +540,10 @@ func (s *Server) cachedUIData() (uiData, error) {
 	if s.caches == nil || s.caches.uiData == nil {
 		return s.buildUIData()
 	}
-	return s.caches.uiData.load(time.Now(), s.buildUIData)
+	// Serve-stale-while-revalidate: a warm tab/boot gets the last snapshot
+	// instantly while a single background rebuild refreshes it. Only the very
+	// first build on a cold server blocks.
+	return s.caches.uiData.loadStale(time.Now(), s.buildUIData)
 }
 
 // freshUIData forces a rebuild and refreshes the snapshot. The debounced SSE
@@ -553,15 +558,34 @@ func (s *Server) freshUIData() (uiData, error) {
 }
 
 func (s *Server) buildUIData() (uiData, error) {
+	// Phase timing: a cold build that reads the DB + parses transcripts can run
+	// for many seconds and blocks the boot. Log a per-phase breakdown whenever a
+	// build is slow so the bottleneck is visible without a profiler.
+	buildStart := time.Now()
+	var phases []string
+	mk := buildStart
+	phase := func(name string) {
+		phases = append(phases, fmt.Sprintf("%s=%dms", name, time.Since(mk).Milliseconds()))
+		mk = time.Now()
+	}
+	defer func() {
+		if d := time.Since(buildStart); d >= 1500*time.Millisecond {
+			log.Printf("[perf] buildUIData %dms · %s", d.Milliseconds(), strings.Join(phases, " "))
+		}
+	}()
+
 	live, _ := s.cachedLiveAgentSessions()
+	phase("live")
 	tasks, err := flowdb.ListTasks(s.cfg.DB, flowdb.TaskFilter{Kind: "", IncludeArchived: false})
 	if err != nil {
 		return uiData{}, err
 	}
+	phase("listTasks")
 	taskViews, err := buildTaskViewsWithLive(s.cfg.DB, s.cfg.FlowRoot, tasks, live)
 	if err != nil {
 		return uiData{}, err
 	}
+	phase("taskViews")
 
 	agents := []uiAgent{}
 	backlog := []uiBacklogTask{}
@@ -609,6 +633,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		return doneTasks[i].Slug < doneTasks[j].Slug
 	})
 
+	phase("agents")
 	projects, err := s.uiProjects()
 	if err != nil {
 		return uiData{}, err
@@ -621,6 +646,7 @@ func (s *Server) buildUIData() (uiData, error) {
 	if err != nil {
 		return uiData{}, err
 	}
+	phase("projects+playbooks+workdirs")
 	kb := s.uiKBFiles()
 	transcript := []uiTranscript{{Type: "assistant", Text: "No transcript is available for the selected flow task yet."}}
 	diffFiles := []uiDiffFile{}
@@ -634,6 +660,7 @@ func (s *Server) buildUIData() (uiData, error) {
 		diffFiles = []uiDiffFile{{Name: "No local git diff", Add: 0, Rem: 0}}
 	}
 	memorySources := s.uiAgentMemorySources(taskViews, projects, playbooks, workdirs)
+	phase("kb+memSrc")
 
 	var dead *uiAgent
 	if len(doneCandidates) > 0 {
@@ -647,6 +674,7 @@ func (s *Server) buildUIData() (uiData, error) {
 	}
 	heatmap := buildActivityHeatmap(taskViews, time.Now())
 	tokenSeries, topTasks, modelMix := s.buildTokenSeries(taskViews, time.Now())
+	phase("heatmap+tokenSeries")
 	return uiData{
 		Agents:           agents,
 		DeadAgent:        dead,

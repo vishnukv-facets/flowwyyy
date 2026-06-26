@@ -344,6 +344,14 @@ func (s *Server) ListenAndServe(addr string) int {
 		s.kbDistiller.start()
 		defer s.kbDistiller.stop()
 	}
+	// Prime the ui-data snapshot in the background so the first page load after a
+	// restart hits a warm cache instead of blocking on the cold build (which
+	// scans every active session's transcript — tens of seconds on a busy
+	// laptop). Routed through cachedUIData so a concurrent first request shares
+	// this single build rather than forking a second one.
+	if s.caches != nil && s.caches.uiData != nil {
+		go func() { _, _ = s.cachedUIData() }()
+	}
 	// Per-channel steerer session idle-sweep: tear down PTYs of steerer sessions
 	// whose transcript has been quiet past the TTL (the chat row + session_id
 	// survive; the next event resumes them). Only runs when FLOW_STEERING_SESSIONS

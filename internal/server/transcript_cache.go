@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -39,6 +40,45 @@ type transcriptCacheEntry struct {
 	entries []TranscriptEntry
 	usage   transcriptUsageStats
 	pending *codexPendingUserInput
+
+	// Resume state for incremental re-scan. Session jsonl files are
+	// append-only, so when one grows we re-scan only the appended bytes from
+	// `consumed` instead of the whole (often huge) file — carrying the usage
+	// accumulator, entry tail, pending map and line counter forward. This is
+	// what keeps an ACTIVE session (whose file changes every turn, defeating
+	// the stat-keyed hit) cheap on the buildUIData hot path.
+	consumed   int64 // byte offset of the next unread line (a clean line boundary)
+	seq        int   // running line counter, for pending-input ordering
+	pendingMap map[string]codexPendingUserInput
+}
+
+// cloneTranscriptUsage deep-copies the mutable accumulator state so an
+// incremental re-scan mutates a fresh copy and never races readers holding the
+// previous (immutable, already-published) entry.
+func cloneTranscriptUsage(u transcriptUsageStats) transcriptUsageStats {
+	c := u
+	if u.TokensByDay != nil {
+		c.TokensByDay = make(map[string]int, len(u.TokensByDay))
+		for k, v := range u.TokensByDay {
+			c.TokensByDay[k] = v
+		}
+	}
+	if u.CostByDay != nil {
+		c.CostByDay = make(map[string]float64, len(u.CostByDay))
+		for k, v := range u.CostByDay {
+			c.CostByDay[k] = v
+		}
+	}
+	if u.claudeSeen != nil {
+		c.claudeSeen = make(map[string]struct{}, len(u.claudeSeen))
+		for k := range u.claudeSeen {
+			c.claudeSeen[k] = struct{}{}
+		}
+	}
+	if u.LookupEvents != nil {
+		c.LookupEvents = append([]transcriptLookupEvent(nil), u.LookupEvents...)
+	}
+	return c
 }
 
 const transcriptCacheEntryLimit = 200
@@ -66,7 +106,12 @@ func (c *transcriptCache) get(path string) (*transcriptCacheEntry, error) {
 	if ok && cached.mtime.Equal(st.ModTime()) && cached.size == st.Size() {
 		return cached, nil
 	}
-	entry, err := populateTranscriptCacheEntry(path)
+	// Incremental when the file only grew (append-only); else full re-scan.
+	var prev *transcriptCacheEntry
+	if ok && st.Size() > cached.consumed {
+		prev = cached
+	}
+	entry, err := scanTranscriptFrom(path, prev)
 	if err != nil {
 		return nil, err
 	}
@@ -86,52 +131,80 @@ func (c *transcriptCache) get(path string) (*transcriptCacheEntry, error) {
 // the cache miss cheap enough to absorb invisibly when a live session
 // appends a record.
 func populateTranscriptCacheEntry(path string) (*transcriptCacheEntry, error) {
+	return scanTranscriptFrom(path, nil)
+}
+
+// scanTranscriptFrom builds a cache entry from a jsonl session file. When prev
+// is non-nil it resumes from prev.consumed, carrying prev's accumulators
+// forward and parsing only the appended bytes (append-only files make this
+// identical to a full re-scan). When prev is nil it scans the whole file.
+//
+// Only fully newline-terminated lines advance `consumed`; a trailing partial
+// line (a record still being written) is left unconsumed so the next call
+// re-reads it cleanly rather than resuming mid-record.
+func scanTranscriptFrom(path string, prev *transcriptCacheEntry) (*transcriptCacheEntry, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
 	entry := &transcriptCacheEntry{}
 	pending := map[string]codexPendingUserInput{}
 	var offset int64
 	seq := 0
-
-	for scanner.Scan() {
-		line := append([]byte(nil), scanner.Bytes()...)
-		lineOffset := offset
-		offset += int64(len(line)) + 1
-		seq++
-		if len(line) == 0 {
-			continue
+	if prev != nil {
+		entry.usage = cloneTranscriptUsage(prev.usage)
+		entry.entries = append([]TranscriptEntry(nil), prev.entries...)
+		for k, v := range prev.pendingMap {
+			pending[k] = v
 		}
-		// 1) Recent transcript entries (existing dispatch handles both
-		//    Claude and Codex shapes). Keep only the tail; display,
-		//    terminal preview, last-action, and activity strips only need
-		//    recent rows, while usage stats below still scan everything.
-		if parsed := parseTranscriptLine(line, lineOffset); len(parsed) > 0 {
-			entry.entries = appendTranscriptTail(entry.entries, parsed, transcriptCacheEntryLimit)
+		offset = prev.consumed
+		seq = prev.seq
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
 		}
-		// 2) Token usage / model — same logic as sessionTranscriptUsageStats
-		//    but inlined to avoid a second file scan.
-		accumulateTranscriptUsage(&entry.usage, line)
-		// 3) Pending user-input tracking — same logic as
-		//    pendingCodexUserInput; the map is reduced to a single
-		//    latest entry after the scan.
-		accumulatePendingCodexUserInput(pending, line, seq)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
 	}
 
+	reader := bufio.NewReaderSize(f, 1024*1024)
+	for {
+		raw, err := reader.ReadBytes('\n')
+		if len(raw) > 0 && raw[len(raw)-1] == '\n' {
+			lineOffset := offset
+			offset += int64(len(raw))
+			seq++
+			line := raw[:len(raw)-1]
+			if n := len(line); n > 0 && line[n-1] == '\r' {
+				line = line[:n-1]
+			}
+			if len(line) > 0 {
+				// 1) Recent transcript entries (bounded tail — display,
+				//    terminal preview, last-action only need recent rows).
+				if parsed := parseTranscriptLine(line, lineOffset); len(parsed) > 0 {
+					entry.entries = appendTranscriptTail(entry.entries, parsed, transcriptCacheEntryLimit)
+				}
+				// 2) Token usage / model.
+				accumulateTranscriptUsage(&entry.usage, line)
+				// 3) Pending user-input tracking.
+				accumulatePendingCodexUserInput(pending, line, seq)
+			}
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+	}
+
+	entry.consumed = offset
+	entry.seq = seq
+	entry.pendingMap = pending
 	var latest *codexPendingUserInput
 	for _, item := range pending {
 		if latest == nil || item.Seq > latest.Seq {
-			copy := item
-			latest = &copy
+			cp := item
+			latest = &cp
 		}
 	}
 	entry.pending = latest

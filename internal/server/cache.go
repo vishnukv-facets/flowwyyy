@@ -56,9 +56,10 @@ func (c *ttlCache[K, V]) invalidate(key K) {
 // store() publishes a known-fresh value immediately (e.g. the broadcast path
 // after a mutation) instead of waiting out the TTL.
 type snapshotCache[V any] struct {
-	ttl time.Duration
-	mu  sync.Mutex
-	val atomic.Pointer[snapshotEntry[V]]
+	ttl        time.Duration
+	mu         sync.Mutex
+	val        atomic.Pointer[snapshotEntry[V]]
+	refreshing atomic.Bool
 }
 
 type snapshotEntry[V any] struct {
@@ -84,6 +85,34 @@ func (c *snapshotCache[V]) load(now time.Time, refresh func() (V, error)) (V, er
 	}
 	v, err := refresh()
 	c.val.Store(&snapshotEntry[V]{value: v, err: err, expiresAt: now.Add(c.ttl)})
+	return v, err
+}
+
+// loadStale serves the cached value IMMEDIATELY when one exists — returning a
+// stale value and kicking a single-flight background refresh — so a caller never
+// blocks on a slow rebuild. Only a cold cache (no value yet) blocks. Use for
+// expensive builds whose freshness is ALSO pushed by another path: the SSE
+// broadcast store()s fresh ui-data on every mutation, so polling reads can
+// safely lag by a TTL window without missing real changes.
+func (c *snapshotCache[V]) loadStale(now time.Time, refresh func() (V, error)) (V, error) {
+	if e := c.val.Load(); e != nil {
+		if now.After(e.expiresAt) && c.refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer c.refreshing.Store(false)
+				v, err := refresh()
+				c.store(time.Now(), v, err)
+			}()
+		}
+		return e.value, e.err
+	}
+	// Cold: block once; serialize so a request storm forks a single build.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if e := c.val.Load(); e != nil {
+		return e.value, e.err
+	}
+	v, err := refresh()
+	c.store(now, v, err)
 	return v, err
 }
 
@@ -135,9 +164,12 @@ func newUICaches() *uiCaches {
 		// refresh in the background. See flowDBDiagCache.
 		flowDBDiag: newFlowDBDiagCache(flowDBDiagCacheTTL, defaultFlowDBQuickCheckTimeout, flowDBDiagQuickCheckTimeout),
 		// Full ui-data rebuilds are requested on every change notification and
-		// from every open tab; collapse concurrent rebuilds and serve a snapshot
-		// up to one broadcast-debounce-window (250ms) old.
-		uiData: newSnapshotCache[uiData](250 * time.Millisecond),
+		// from every open tab. Served stale-while-revalidate (loadStale), so the
+		// TTL only bounds how old a polled read can be before a background
+		// refresh fires — real changes are still pushed immediately by the SSE
+		// broadcast (freshUIData → store). 2s keeps idle background rebuilds
+		// sparse without making active work feel laggy.
+		uiData: newSnapshotCache[uiData](2 * time.Second),
 		// Auto-run pid liveness: 15s TTL, probes only stored-'running' rows.
 		autoAlive: newTTLCache[int, bool](15 * time.Second),
 	}
