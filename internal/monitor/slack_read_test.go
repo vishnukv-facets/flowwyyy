@@ -142,6 +142,27 @@ func TestListSlackChannelsWithTokenIncludesDMsWhenRequested(t *testing.T) {
 	}
 }
 
+func TestResolveSlackChannelResolvesUserIDToDM(t *testing.T) {
+	old := slackOpenIMFn
+	t.Cleanup(func() { slackOpenIMFn = old })
+	var gotUser string
+	slackOpenIMFn = func(_ context.Context, _ string, userID string) (string, error) {
+		gotUser = userID
+		return "D777", nil
+	}
+
+	got, err := ResolveSlackChannel(context.Background(), "xoxp-x", "U03LK2CCE68", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "D777" || got.Kind != "im" {
+		t.Fatalf("resolved = %+v, want D777 im channel", got)
+	}
+	if gotUser != "U03LK2CCE68" {
+		t.Fatalf("opened DM for %q, want U03LK2CCE68", gotUser)
+	}
+}
+
 func TestResolveSlackChannelByNameAndID(t *testing.T) {
 	old := slackConversationsFn
 	t.Cleanup(func() { slackConversationsFn = old })

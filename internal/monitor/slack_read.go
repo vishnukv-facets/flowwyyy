@@ -138,6 +138,16 @@ func ResolveSlackChannel(ctx context.Context, token, ref string, includeDMs bool
 		id := normalizeSlackReadChannelID(ref)
 		return SlackChannelInfo{ID: id, Name: id, Kind: slackKindFromID(id)}, nil
 	}
+	// A USER id (U…/W…) is not a conversation id — resolve it to the 1:1 DM
+	// (im) channel so `flow slack history --channel <userid>` works instead of
+	// failing with "no channel matching".
+	if uid, ok := slackUserIDRef(ref); ok {
+		chID, err := slackOpenIMFn(ctx, token, uid)
+		if err != nil {
+			return SlackChannelInfo{}, fmt.Errorf("open DM with user %s: %w", uid, err)
+		}
+		return SlackChannelInfo{ID: chID, Name: chID, Kind: "im"}, nil
+	}
 	want := strings.TrimPrefix(ref, "#")
 	want = strings.ToLower(strings.TrimSpace(want))
 	channels, err := ListSlackChannelsWithToken(ctx, token, includeDMs)
@@ -173,6 +183,38 @@ func slackKindFromID(id string) string {
 		return "im"
 	}
 	return "channel"
+}
+
+// slackUserIDRef detects a Slack USER id (U…/W…), tolerating a slack:/@ prefix,
+// so `--channel <userid>` can be resolved to that user's 1:1 DM channel.
+func slackUserIDRef(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if strings.HasPrefix(strings.ToLower(ref), "slack:") {
+		ref = strings.TrimSpace(ref[len("slack:"):])
+	}
+	ref = strings.TrimPrefix(ref, "@")
+	if len(ref) < 2 || strings.ContainsAny(ref, " \t\r\n#") {
+		return "", false
+	}
+	switch ref[0] {
+	case 'U', 'W':
+		return ref, true
+	}
+	return "", false
+}
+
+// slackOpenIMFn resolves a user id to its 1:1 DM (im) channel id via
+// conversations.open. Mockable seam for tests.
+var slackOpenIMFn = func(ctx context.Context, token, userID string) (string, error) {
+	api := slack.New(token)
+	ch, _, _, err := api.OpenConversationContext(ctx, &slack.OpenConversationParameters{Users: []string{userID}})
+	if err != nil {
+		return "", err
+	}
+	if ch == nil {
+		return "", fmt.Errorf("no DM channel for user %s", userID)
+	}
+	return ch.ID, nil
 }
 
 func normalizeSlackReadChannelID(id string) string {
