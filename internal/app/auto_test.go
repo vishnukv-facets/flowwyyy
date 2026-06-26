@@ -306,6 +306,7 @@ func TestReconcileAutoRunLivePidStaysRunning(t *testing.T) {
 }
 
 func TestBuildAutoBootstrapPrompt(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir()) // isolate the injected voice from the real ~/.flow
 	prompt := buildAutoBootstrapPrompt("my-task", "task", "")
 
 	checks := []string{
@@ -325,6 +326,7 @@ func TestBuildAutoBootstrapPrompt(t *testing.T) {
 }
 
 func TestBuildAutoBootstrapPromptPlaybookRun(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir()) // isolate the injected voice from the real ~/.flow
 	prompt := buildAutoBootstrapPrompt("run-001", "playbook_run", "my-playbook")
 
 	if !strings.Contains(prompt, "my-playbook") {
@@ -332,6 +334,24 @@ func TestBuildAutoBootstrapPromptPlaybookRun(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "frozen snapshot") {
 		t.Error("playbook_run prompt should mention frozen snapshot")
+	}
+}
+
+// Headless/auto runs also message outward when the brief authorizes it, so their
+// prime must carry the operator's saved voice too — parity with task + steerer.
+func TestBuildAutoBootstrapPromptInjectsVoice(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root)
+	const marker = "ZZ-auto-voice-marker: terse, lowercase"
+	if err := os.WriteFile(filepath.Join(root, "persona.md"), []byte(marker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := buildAutoBootstrapPrompt("my-task", "task", "")
+	if !strings.Contains(got, marker) {
+		t.Errorf("auto bootstrap prompt missing the saved operator voice %q", marker)
+	}
+	if !strings.Contains(got, "OPERATOR VOICE") {
+		t.Errorf("auto bootstrap prompt missing the OPERATOR VOICE directive header")
 	}
 }
 

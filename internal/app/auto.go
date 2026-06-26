@@ -21,6 +21,7 @@ import (
 	"database/sql"
 	"errors"
 	"flow/internal/flowdb"
+	"flow/internal/steering"
 	"fmt"
 	"os"
 	"os/exec"
@@ -556,5 +557,5 @@ func buildAutoBootstrapPrompt(slug, kind, playbookSlug string) string {
 			"Closing out:\n"+
 			"- When the brief's \"Done when\" criteria are met and your changes are verified, run: flow done %s. That flips the task to done and triggers the close-out sweep (KB + project update) — it is how this autonomous run is recorded as successful. Do this yourself; no human will.\n",
 		slug, slug,
-	)
+	) + steering.OperatorVoiceDirective()
 }

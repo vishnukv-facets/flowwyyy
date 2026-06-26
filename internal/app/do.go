@@ -8,6 +8,7 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/harness"
 	"flow/internal/spawner"
+	"flow/internal/steering"
 	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
@@ -976,10 +977,17 @@ func resolveLaunchEffort(provider string, task *flowdb.Task, sessionModel string
 // session to harvest scripts, edge cases, and decision rules back into
 // the live playbook brief / playbook reference files.
 func buildBootstrapPromptForKindV2(slug, kind, playbookSlug string, isFirstRun bool) string {
+	var base string
 	if kind == "playbook_run" {
-		return buildPlaybookRunBootstrapPrompt(slug, playbookSlug, isFirstRun)
+		base = buildPlaybookRunBootstrapPrompt(slug, playbookSlug, isFirstRun)
+	} else {
+		base = buildTaskBootstrapPrompt(slug)
 	}
-	return buildTaskBootstrapPrompt(slug)
+	// Bake the operator's voice into the launch prime so a task session writes
+	// outbound Slack/GitHub replies in the operator's voice — the SAME guarantee
+	// the steerer's per-channel sessions get. The SKILL `flow voice` line is a
+	// soft nudge; this makes it part of the prompt the session boots with.
+	return base + steering.OperatorVoiceDirective()
 }
 
 // buildTaskBootstrapPrompt is the prompt for regular tasks.

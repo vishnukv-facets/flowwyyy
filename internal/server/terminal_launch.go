@@ -6,6 +6,7 @@ import (
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
 	"flow/internal/flowdb"
+	"flow/internal/steering"
 	"flow/internal/workdirreg"
 	"flow/internal/worktree"
 	"fmt"
@@ -621,7 +622,11 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
 			prompt += "\n\n" + note
 		}
-		return prompt
+		// Inject the operator's voice — parity with the CLI `flow do` launch and
+		// the steerer's per-channel sessions. This is the web-UI launch path, so
+		// without it a session opened from Mission Control would draft Slack/GitHub
+		// replies in a generic voice.
+		return prompt + steering.OperatorVoiceDirective()
 	}
 	playbookSlug := ""
 	if task.PlaybookSlug.Valid {
@@ -650,5 +655,5 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 	if isFirstRun {
 		prompt += "\n\nThis is the first run of this playbook. Be proactive about asking whether scripts, decision rules, and edge cases discovered during the run should be captured back into the live playbook for future runs."
 	}
-	return prompt
+	return prompt + steering.OperatorVoiceDirective()
 }

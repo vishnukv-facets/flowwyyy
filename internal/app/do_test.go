@@ -1028,6 +1028,7 @@ func TestBuildBootstrapPromptMentionsOther(t *testing.T) {
 }
 
 func TestBuildBootstrapPromptForPlaybookRun(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir()) // isolate the injected voice from the real ~/.flow
 	got := buildBootstrapPromptForKind("p--2026-04-30-10-30", "playbook_run", "p")
 	if !strings.Contains(got, "playbook `p`") {
 		t.Errorf("expected playbook reference, got:\n%s", got)
@@ -1047,6 +1048,7 @@ func TestBuildBootstrapPromptForPlaybookRun(t *testing.T) {
 }
 
 func TestBuildBootstrapPromptForRegularTask(t *testing.T) {
+	t.Setenv("FLOW_ROOT", t.TempDir()) // isolate the injected voice from the real ~/.flow
 	got := buildBootstrapPromptForKind("foo", "regular", "")
 	if strings.Contains(got, "playbook") {
 		t.Errorf("regular task prompt shouldn't mention playbook:\n%s", got)
@@ -1059,9 +1061,30 @@ func TestBuildBootstrapPromptForRegularTask(t *testing.T) {
 func TestBuildBootstrapPromptForKindWithEmptyKind(t *testing.T) {
 	// Defensive: an empty kind string (legacy rows that somehow didn't
 	// migrate) should fall through to the regular-task variant.
+	t.Setenv("FLOW_ROOT", t.TempDir()) // isolate the injected voice from the real ~/.flow
 	got := buildBootstrapPromptForKind("foo", "", "")
 	if strings.Contains(got, "playbook") {
 		t.Errorf("empty kind should default to regular, got:\n%s", got)
+	}
+}
+
+// A task session's launch prime must inject the operator's SAVED voice — the same
+// guarantee the steerer's per-channel sessions get — not just the soft SKILL nudge.
+func TestBuildBootstrapPromptForKindV2InjectsVoice(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root)
+	const marker = "ZZ-task-voice-marker: sign off lowercase, no emoji"
+	if err := os.WriteFile(filepath.Join(root, "persona.md"), []byte(marker), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"regular", "playbook_run"} {
+		got := buildBootstrapPromptForKindV2("foo", kind, "p", false)
+		if !strings.Contains(got, marker) {
+			t.Errorf("kind %q: task bootstrap prompt missing the saved operator voice %q", kind, marker)
+		}
+		if !strings.Contains(got, "OPERATOR VOICE") {
+			t.Errorf("kind %q: task bootstrap prompt missing the OPERATOR VOICE directive header", kind)
+		}
 	}
 }
 
