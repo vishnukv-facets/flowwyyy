@@ -321,7 +321,7 @@ func cmdDo(args []string) int {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status='in-progress',
 					 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
-					 session_provider=?, harness=?, session_id=?, session_started=?, updated_at=?
+					 session_provider=?, harness=?, session_id=?, session_path=NULL, session_started=?, updated_at=?
 					 WHERE slug=? AND status IN ('backlog','in-progress')`,
 				now, provider, harnessName, sessionID, now, now, task.Slug,
 			); err != nil {
@@ -332,7 +332,7 @@ func cmdDo(args []string) int {
 			if _, err := tx.Exec(
 				`UPDATE tasks SET status='in-progress',
 					 status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,
-					 session_provider=?, harness=?, session_id=NULL, session_started=?, updated_at=?
+					 session_provider=?, harness=?, session_id=NULL, session_path=NULL, session_started=?, updated_at=?
 					 WHERE slug=? AND status IN ('backlog','in-progress')`,
 				now, provider, harnessName, now, now, task.Slug,
 			); err != nil {
@@ -1173,6 +1173,19 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 			fmt.Printf("%s already bound to this %s session (%s)\n", task.Slug, session.Provider, session.ID)
 			return 0
 		}
+		// Provider lock: --force may re-attach a NEW session, but it must NEVER
+		// switch the task's provider. A codex task stays codex; a claude session
+		// cannot force-take it (that orphans the codex session AND silently
+		// changes the agent runtime out from under the task). This refusal holds
+		// even with --force — switching providers must be a deliberate act, not a
+		// side effect of binding the current session.
+		if task.SessionProvider != "" && task.SessionProvider != session.Provider {
+			fmt.Fprintf(os.Stderr,
+				"error: task %q is bound to a %s session; refusing to rebind it from a %s session — --force overwrites a stale binding but never changes the provider.\n"+
+					"  continue the task with its own agent (a %s session), or to deliberately switch it to %s start a fresh session from a new tab: flow do %s --fresh --agent %s\n",
+				task.Slug, task.SessionProvider, session.Provider, task.SessionProvider, session.Provider, task.Slug, session.Provider)
+			return 1
+		}
 		if !force {
 			fmt.Fprintf(os.Stderr,
 				"error: task %q is already bound to %s session %s — pass --force to overwrite (this orphans the prior session)\n",
@@ -1187,6 +1200,7 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 			session_provider = ?,
 			harness         = ?,
 			session_id      = ?,
+			session_path    = NULL,
 			session_started = COALESCE(session_started, ?),
 			status          = 'in-progress',
 			status_changed_at = CASE WHEN status != 'in-progress' THEN ? ELSE status_changed_at END,

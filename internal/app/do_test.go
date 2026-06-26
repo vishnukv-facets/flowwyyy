@@ -1347,6 +1347,43 @@ func TestCmdDoHereForceOverwritesBinding(t *testing.T) {
 	}
 }
 
+// TestCmdDoHereForceRefusesProviderSwitch pins that --force may re-attach a new
+// session but must NEVER change the task's provider: a claude session cannot
+// force-take a codex-bound task (which would orphan the codex session and
+// silently swap the agent runtime). The binding stays codex.
+func TestCmdDoHereForceRefusesProviderSwitch(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "prov-task")
+
+	const codexSID = "019eff1e-55e2-7f03-8540-75445627827b"
+	const claudeSID = "f00ba111-2222-4333-8444-555555555555"
+	db := openFlowDB(t)
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_provider='codex', harness='codex', session_started=?, status='in-progress' WHERE slug='prov-task'`,
+		codexSID, flowdb.NowISO(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	// A CLAUDE session tries to force-take the codex-bound task.
+	t.Setenv("CODEX_THREAD_ID", "")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", claudeSID)
+	if rc := cmdDo([]string{"prov-task", "--here", "--force"}); rc == 0 {
+		t.Fatalf("rc=0, want non-zero: --force must NOT switch provider codex→claude")
+	}
+
+	db = openFlowDB(t)
+	task, _ := flowdb.GetTask(db, "prov-task")
+	db.Close()
+	if task.SessionProvider != "codex" {
+		t.Errorf("session_provider=%q, want codex (unchanged)", task.SessionProvider)
+	}
+	if task.SessionID.String != codexSID {
+		t.Errorf("session_id=%q, want %s (unchanged)", task.SessionID.String, codexSID)
+	}
+}
+
 // TestCmdDoHereIdempotent pins that re-running --here against a
 // task already bound to THIS session is a no-op success (no error,
 // no overwrite needed).
