@@ -20,10 +20,25 @@ interface AttnItem {
   why?: string
 }
 
+// Dismissals persist in localStorage so a card you closed stays closed across
+// new tabs and reloads. It only re-appears when the session goes back to
+// waiting (the prune effect below drops the dismissal once it stops waiting).
+const DISMISSED_KEY = 'flow.attn.dismissed'
+
+function loadDismissed(): Record<string, boolean> {
+  try {
+    const raw = localStorage.getItem(DISMISSED_KEY)
+    const parsed = raw ? JSON.parse(raw) : null
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {}
+  } catch {
+    return {}
+  }
+}
+
 export function AttentionWidget() {
   const { windows, restore, popOut, activeSessionSlug } = useFloatingTerminals()
   const { data: ui } = useUiData()
-  const [dismissed, setDismissed] = useState<Record<string, boolean>>({})
+  const [dismissed, setDismissed] = useState<Record<string, boolean>>(loadDismissed)
 
   const items = useMemo<AttnItem[]>(() => {
     const byId = new Map<string, AttnItem>()
@@ -43,9 +58,37 @@ export function AttentionWidget() {
     return [...byId.values()]
   }, [windows, ui?.AGENTS, activeSessionSlug])
 
-  // Forget dismissals once a session stops waiting, so the next time it needs
-  // input it alerts again rather than staying silent.
+  // Persist dismissals so closing a card sticks across new tabs / reloads.
   useEffect(() => {
+    try {
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify(dismissed))
+    } catch {
+      // ignore storage write failures (private mode, quota)
+    }
+  }, [dismissed])
+
+  // Live cross-tab sync: dismissing a card in one tab clears it in the others.
+  // The storage event fires only in OTHER tabs; we update only when the value
+  // actually differs (returning the same reference otherwise) so this doesn't
+  // re-trigger the persist effect and ping-pong writes between tabs.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== DISMISSED_KEY) return
+      setDismissed((cur) => {
+        const incoming = loadDismissed()
+        return JSON.stringify(incoming) === JSON.stringify(cur) ? cur : incoming
+      })
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  // Forget dismissals once a session stops waiting, so the next time it needs
+  // input it alerts again rather than staying silent. Guard on the snapshot
+  // having loaded: before ui data arrives `items` is empty and would wrongly
+  // wipe persisted dismissals on a freshly opened tab.
+  useEffect(() => {
+    if (!ui) return
     const ids = new Set(items.map((i) => i.id))
     setDismissed((d) => {
       let changed = false
@@ -56,7 +99,7 @@ export function AttentionWidget() {
       }
       return changed ? next : d
     })
-  }, [items])
+  }, [items, ui])
 
   const needsYou = items.filter((i) => !dismissed[i.id])
   if (needsYou.length === 0) return null
