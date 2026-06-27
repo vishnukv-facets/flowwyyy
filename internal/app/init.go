@@ -129,11 +129,7 @@ func cmdInit(args []string) int {
 		return 1
 	}
 	if _, err := os.Stat(skillPath); os.IsNotExist(err) {
-		if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "error: create %s: %v\n", filepath.Dir(skillPath), err)
-			return 1
-		}
-		if err := os.WriteFile(skillPath, embeddedSkill, 0o644); err != nil {
+		if err := installEmbeddedSkill(skillPath); err != nil {
 			fmt.Fprintf(os.Stderr, "error: write %s: %v\n", skillPath, err)
 			return 1
 		}

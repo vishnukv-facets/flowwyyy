@@ -1,7 +1,10 @@
 package app
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +80,44 @@ func withTempHome(t *testing.T) string {
 	return dir
 }
 
+func embeddedSkillCorpus(t *testing.T) string {
+	t.Helper()
+	var b strings.Builder
+	b.Write(embeddedSkill)
+
+	refsDir := "skill/references"
+	if _, err := fs.Stat(embeddedSkillFS, refsDir); errors.Is(err, fs.ErrNotExist) {
+		return b.String()
+	} else if err != nil {
+		t.Fatalf("stat skill references: %v", err)
+	}
+	if err := fs.WalkDir(embeddedSkillFS, refsDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		data, err := embeddedSkillFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		b.WriteString("\n\n")
+		b.Write(data)
+		return nil
+	}); err != nil {
+		t.Fatalf("read skill references: %v", err)
+	}
+	return b.String()
+}
+
+func TestEmbeddedSkillFitsProgressiveDisclosureBudget(t *testing.T) {
+	const maxSkillLines = 350
+	if lines := bytes.Count(embeddedSkill, []byte("\n")); lines > maxSkillLines {
+		t.Fatalf("SKILL.md has %d lines, want <= %d", lines, maxSkillLines)
+	}
+}
+
 func TestSkillInstallWritesFile(t *testing.T) {
 	home := withTempHome(t)
 
@@ -102,6 +143,38 @@ func TestSkillInstallWritesFile(t *testing.T) {
 	}
 	if !strings.Contains(string(codexData), "name: flow") {
 		t.Errorf("installed codex skill missing frontmatter 'name: flow'")
+	}
+}
+
+func TestSkillInstallWritesReferenceFiles(t *testing.T) {
+	home := withTempHome(t)
+
+	if rc := cmdSkill([]string{"install"}); rc != 0 {
+		t.Fatalf("install rc=%d", rc)
+	}
+	for _, base := range []string{
+		filepath.Join(home, ".claude", "skills", "flow"),
+		filepath.Join(home, ".codex", "skills", "flow"),
+	} {
+		for _, rel := range []string{
+			"references/bootstrap.md",
+			"references/task-intake.md",
+			"references/command-reference.md",
+			"references/connectors.md",
+			"references/playbooks.md",
+			"references/kb-closeout.md",
+			"references/orchestration.md",
+		} {
+			path := filepath.Join(base, rel)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Errorf("installed reference missing %s: %v", path, err)
+				continue
+			}
+			if len(bytes.TrimSpace(data)) == 0 {
+				t.Errorf("installed reference %s is empty", path)
+			}
+		}
 	}
 }
 
@@ -430,7 +503,7 @@ func TestSkillUnknownSubcommand(t *testing.T) {
 }
 
 func TestSkillMentionsPlaybooks(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"## 2. The model",
 		"**Playbooks**",
@@ -459,7 +532,7 @@ func TestSkillMentionsPlaybooks(t *testing.T) {
 }
 
 func TestSkillDocumentsCodexAutoRuns(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Headless background run",
 		"Claude or Codex",
@@ -483,7 +556,7 @@ func TestSkillDocumentsCodexAutoRuns(t *testing.T) {
 }
 
 func TestSkillMentionsDMMonitoring(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Monitoring a DM reply (automatic)",
 		"PostToolUse",
@@ -501,7 +574,7 @@ func TestSkillMentionsDMMonitoring(t *testing.T) {
 }
 
 func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Slack app command DM",
 		"`:eyes:` reaction",
@@ -515,7 +588,7 @@ func TestSkillDocumentsSlackCommandEyesAck(t *testing.T) {
 }
 
 func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Slack Connect",
 		"flow slack send",
@@ -530,7 +603,7 @@ func TestSkillDocumentsSlackConnectSafeReplyPath(t *testing.T) {
 }
 
 func TestSkillDocumentsSlackReadFallback(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"standalone read fallback",
 		"flow slack history",
@@ -546,7 +619,7 @@ func TestSkillDocumentsSlackReadFallback(t *testing.T) {
 }
 
 func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, bad := range []string{
 		"Sent using @codex",
 		"Always append this footer to every Codex-sent Slack reply",
@@ -567,7 +640,7 @@ func TestSkillDoesNotInstructCodexSlackFooter(t *testing.T) {
 }
 
 func TestSkillMentionsSoftDelete(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"delete/remove/trash",
 		"flow delete <ref>",
@@ -585,7 +658,7 @@ func TestSkillMentionsSoftDelete(t *testing.T) {
 }
 
 func TestSkillDocumentsMemorySearch(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"### 4.9a Search flow memory",
 		"searches briefs, updates, and memories by",
@@ -603,7 +676,7 @@ func TestSkillDocumentsMemorySearch(t *testing.T) {
 }
 
 func TestSkillHasPlaybookSections(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"### 4.12 Add a playbook",
 		"### 4.13 Run a playbook",
@@ -621,7 +694,7 @@ func TestSkillHasPlaybookSections(t *testing.T) {
 }
 
 func TestSkillDocumentsTaskArtifactsDirectory(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Task artifacts directory",
 		"$FLOW_ROOT/tasks/<task-slug>/artifacts/",
@@ -636,7 +709,7 @@ func TestSkillDocumentsTaskArtifactsDirectory(t *testing.T) {
 }
 
 func TestSkillSection414(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"### 4.14 Substantive-unrelated-work check",
 		"ongoing check, not one-shot",
@@ -651,7 +724,7 @@ func TestSkillSection414(t *testing.T) {
 }
 
 func TestSkillIntakeMinimal(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Required sections (always asked, in this order)",
 		"Optional sections (offered, can be deferred)",
@@ -669,7 +742,7 @@ func TestSkillIntakeMinimal(t *testing.T) {
 }
 
 func TestSkillIntakeSurfacesDueDateAndAssignee(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"**Assignee**",
 		"Me (self)",
@@ -686,7 +759,7 @@ func TestSkillIntakeSurfacesDueDateAndAssignee(t *testing.T) {
 }
 
 func TestSkillUsesAskUserQuestionConsistently(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	// The skill should have many AskUserQuestion references — at least one
 	// per major workflow that involves user choice.
 	count := strings.Count(got, "AskUserQuestion")
@@ -700,7 +773,7 @@ func TestSkillUsesAskUserQuestionConsistently(t *testing.T) {
 }
 
 func TestSkillHasPlaybookPersistAdjustmentsPattern(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Persisting in-run adjustments back to the playbook",
 		"frozen snapshot",
@@ -716,7 +789,7 @@ func TestSkillHasPlaybookPersistAdjustmentsPattern(t *testing.T) {
 }
 
 func TestSkillHasMidInterviewDriftRule(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Mid-interview drift",
 		"sub-question has 2–4 discrete options",
@@ -735,7 +808,7 @@ func TestSkillHasMidInterviewDriftRule(t *testing.T) {
 // `flow-version-stale:` signal the SessionStart hook emits when the
 // local binary lags the latest GitHub release.
 func TestSkillHasUpgradeWorkflow(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"### 4.15 Upgrade flow itself",
 		"https://github.com/Facets-cloud/flow",
@@ -758,7 +831,7 @@ func TestSkillHasUpgradeWorkflow(t *testing.T) {
 // Claude never proactively offers to close, which means the user's
 // learnings stay locked in the transcript.
 func TestSkillEmphasizesCloseOutValue(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Why closing matters",
 		"close-out sweep",
@@ -786,7 +859,7 @@ func TestSkillEmphasizesCloseOutValue(t *testing.T) {
 // at close-out, completed work may supersede a provisional KB entry (a plan now
 // executed) in place, so the always-loaded KB doesn't carry stale plans forever.
 func TestSkillDocumentsCloseoutKBUpgrade(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Real-time scoop is append-only",
 		"Exception — close-out upgrade",
@@ -804,7 +877,7 @@ func TestSkillDocumentsCloseoutKBUpgrade(t *testing.T) {
 // right Settings pane via the deep-link URL, and retry only after
 // explicit user confirmation.
 func TestSkillHasAccessibilityErrorRecipe(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"macOS Accessibility error from the Terminal.app backend",
 		"Trust the error verbatim",
@@ -824,7 +897,7 @@ func TestSkillHasAccessibilityErrorRecipe(t *testing.T) {
 // its capabilities and AskUserQuestion for the user's intent — NOT
 // auto-run §4.1, auto-list tasks, or auto-propose opening a task.
 func TestSkillHasExplicitInvocationSection(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"## 1a. When invoked explicitly with no intent",
 		"DO NOT auto-run any workflow",
@@ -848,7 +921,7 @@ func TestSkillHasExplicitInvocationSection(t *testing.T) {
 // "Mark done?" prompt that read "Yes, `flow done <slug>`". If either
 // regresses, a future sweep loses ground silently.
 func TestSkillNoCliCoachingInUserFacingLabels(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, banned := range []string{
 		`"Yes, run flow init"`,
 		"\"Yes, `flow done <slug>`\"",
@@ -869,7 +942,7 @@ func TestSkillNoCliCoachingInUserFacingLabels(t *testing.T) {
 }
 
 func TestSkillHasFirstRunCapturePattern(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"First-run capture",
 		"FIRST RUN OF THIS PLAYBOOK",
@@ -885,7 +958,7 @@ func TestSkillHasFirstRunCapturePattern(t *testing.T) {
 }
 
 func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"GitHub PR and issue tasks",
 		// App-based webhook ingress (the legacy gh search-poller was removed).
@@ -906,7 +979,7 @@ func TestSkillDocumentsGitHubMonitorBootstrap(t *testing.T) {
 }
 
 func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"inbox.jsonl",
 		"same Flow-owned terminal session",
@@ -924,7 +997,7 @@ func TestSkillDocumentsSameSessionInboxMonitor(t *testing.T) {
 }
 
 func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"Respond to Attention confirmed handoffs",
 		"Confirmed handoff request from the attention router",
@@ -940,7 +1013,7 @@ func TestSkillDocumentsAttentionConfirmedHandoff(t *testing.T) {
 }
 
 func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"flow attention list [--status new|acted|dismissed|snoozed|all]",
 		"flow attention act <id> <make-task|forward|confirm-handoff|dismiss>",
@@ -969,7 +1042,7 @@ func TestSkillDocumentsAttentionWorkflow(t *testing.T) {
 }
 
 func TestSkillDocumentsStandupBriefing(t *testing.T) {
-	got := string(embeddedSkill)
+	got := embeddedSkillCorpus(t)
 	for _, want := range []string{
 		"flow standup [--for today|monday|24h] [--clipboard]",
 		"generate a copyable briefing from Attention, waiting, stale, ready, and recent activity",

@@ -1,9 +1,10 @@
 package app
 
 import (
-	_ "embed"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,9 @@ import (
 
 //go:embed skill/SKILL.md
 var embeddedSkill []byte
+
+//go:embed skill
+var embeddedSkillFS embed.FS
 
 // hookCommand is the exact string written into settings.json under
 // hooks.SessionStart so install/uninstall can idempotently find it.
@@ -158,10 +162,7 @@ func maybeAutoUpgradeSkill() {
 	}
 	// Version mismatch — refresh skill bytes and the SessionStart hook.
 	for _, path := range paths {
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return
-		}
-		if err := os.WriteFile(path, embeddedSkill, 0o644); err != nil {
+		if err := installEmbeddedSkill(path); err != nil {
 			return
 		}
 	}
@@ -173,6 +174,44 @@ func maybeAutoUpgradeSkill() {
 	// uninstall any stale entry left behind by older binaries.
 	_, _ = uninstallUserPromptSubmitHook()
 	fmt.Fprintf(os.Stderr, "flow: upgraded skill to %s\n", Version)
+}
+
+func installEmbeddedSkill(dest string) error {
+	targetDir := filepath.Dir(dest)
+	entries, err := fs.ReadDir(embeddedSkillFS, "skill")
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(targetDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return fs.WalkDir(embeddedSkillFS, "skill", func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel := strings.TrimPrefix(path, "skill")
+		rel = strings.TrimPrefix(rel, "/")
+		target := targetDir
+		if rel != "" {
+			target = filepath.Join(targetDir, filepath.FromSlash(rel))
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		data, err := embeddedSkillFS.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, 0o644)
+	})
 }
 
 // cmdSkill dispatches `flow skill install|uninstall|update`.
@@ -218,11 +257,7 @@ func skillInstall(args []string, forceDefault bool) int {
 		}
 	}
 	for _, dest := range dests {
-		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "error: create %s: %v\n", filepath.Dir(dest), err)
-			return 1
-		}
-		if err := os.WriteFile(dest, embeddedSkill, 0o644); err != nil {
+		if err := installEmbeddedSkill(dest); err != nil {
 			fmt.Fprintf(os.Stderr, "error: write %s: %v\n", dest, err)
 			return 1
 		}
