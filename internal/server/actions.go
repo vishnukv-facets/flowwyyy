@@ -397,6 +397,20 @@ func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
 	if slug == "" {
 		return actionResponse{OK: false, Message: "no session specified"}, http.StatusBadRequest
 	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil {
+		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound
+	}
+	if s.taskManuallyPaused(task) {
+		notBefore := ""
+		if hold, ok := s.taskProviderRateLimitHold(slug); ok {
+			notBefore = hold.Until.UTC().Format(time.RFC3339)
+		}
+		if _, err := flowdb.EnqueuePausedSessionInputAfter(s.cfg.DB, slug, text, notBefore); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "Queued instruction; resume the session to deliver it."}, http.StatusOK
+	}
 	// Live server PTY → inject straight away (paste + delayed Enter).
 	if s.terminals != nil && s.terminals.running(slug) {
 		if err := s.terminals.wakeTask(slug, text); err != nil {
@@ -412,10 +426,6 @@ func (s *Server) nudgeSession(slug, text string) (actionResponse, int) {
 	// and the nudge is wrongly refused.
 	if s.terminals != nil && s.terminals.wakeSharedTask(slug, text) {
 		return actionResponse{OK: true, Message: "Instruction sent to session"}, http.StatusOK
-	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
-	if err != nil {
-		return actionResponse{OK: false, Message: "session not found"}, http.StatusNotFound
 	}
 	// A native (user-owned terminal) session is alive: flow has no PTY to inject
 	// into and must not spawn a duplicate.
@@ -455,7 +465,17 @@ func (s *Server) pauseTask(target string) (actionResponse, int) {
 	if err := validateSlug(target); err != nil {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusBadRequest
 	}
-	s.terminals.stop(target)
+	task, err := flowdb.GetTask(s.cfg.DB, target)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return actionResponse{OK: false, Message: "task not found: " + target}, http.StatusNotFound
+		}
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	if err := s.terminals.stop(target); err != nil {
+		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+	}
+	s.markTaskPaused(task)
 	agent, err := s.agentForTask(target)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -464,6 +484,94 @@ func (s *Server) pauseTask(target string) (actionResponse, int) {
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
 	return actionResponse{OK: true, Message: "paused " + target + "; agent is idle", Agent: agent}, http.StatusOK
+}
+
+func (s *Server) markTaskPaused(task *flowdb.Task) {
+	if s == nil || s.cfg.DB == nil || task == nil {
+		return
+	}
+	provider := task.SessionProvider
+	if provider == "" {
+		provider = "claude"
+	}
+	_ = flowdb.PauseSession(s.cfg.DB, task.Slug, provider, task.SessionID.String)
+}
+
+func (s *Server) markLaunchResumed(launch terminalLaunch) bool {
+	if s == nil || s.cfg.DB == nil || launch.FreeAgent {
+		return false
+	}
+	return s.clearTaskPause(launch.Slug)
+}
+
+func (s *Server) taskManuallyPaused(task *flowdb.Task) bool {
+	if task == nil {
+		return false
+	}
+	provider := task.SessionProvider
+	if provider == "" {
+		provider = "claude"
+	}
+	return s.taskManuallyPausedByID(provider, task.Slug, task.SessionID.String)
+}
+
+func (s *Server) taskManuallyPausedByID(provider, slug, sessionID string) bool {
+	if s == nil || s.cfg.DB == nil {
+		return false
+	}
+	_, ok, err := flowdb.GetPausedSession(s.cfg.DB, slug)
+	if err != nil || !ok {
+		return false
+	}
+	if s.taskSessionLive(slug, sessionID) {
+		moved := s.clearTaskPause(slug)
+		if moved && s.terminals != nil {
+			s.terminals.flushWakes(slug)
+		}
+		return false
+	}
+	return true
+}
+
+func (s *Server) clearTaskPause(slug string) bool {
+	if s == nil || s.cfg.DB == nil {
+		return false
+	}
+	n, err := flowdb.MovePausedSessionInputsToPendingWakes(s.cfg.DB, slug)
+	if err != nil {
+		return false
+	}
+	_ = flowdb.ClearPausedSession(s.cfg.DB, slug)
+	return n > 0
+}
+
+func (s *Server) taskSessionLive(slug, sessionID string) bool {
+	if s == nil {
+		return false
+	}
+	if s.terminals != nil && (s.terminals.running(slug) || s.terminals.sharedRunning(slug)) {
+		return true
+	}
+	live, err := s.cachedLiveAgentSessions()
+	if err != nil {
+		return false
+	}
+	if sid := strings.ToLower(strings.TrimSpace(sessionID)); sid != "" && live[sid] {
+		return true
+	}
+	task, err := flowdb.GetTask(s.cfg.DB, slug)
+	if err != nil || task == nil || task.SessionProvider != "codex" {
+		return false
+	}
+	if k := codexDirLiveKey(task.WorkDir); k != "" && live[k] {
+		return true
+	}
+	if task.WorktreePath.Valid {
+		if k := codexDirLiveKey(task.WorktreePath.String); k != "" && live[k] {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) clearWaiting(target string) (actionResponse, int) {

@@ -46,6 +46,36 @@ func (h *terminalHub) waitForSessionReady(slug string, stable, timeout time.Dura
 	}
 }
 
+func waitForSharedSessionReady(name string, stable, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	pollEvery := 120 * time.Millisecond
+	if stable > 0 && stable/2 < pollEvery {
+		pollEvery = stable / 2
+		if pollEvery < 10*time.Millisecond {
+			pollEvery = 10 * time.Millisecond
+		}
+	}
+	var last string
+	var lastChange time.Time
+	sawOutput := false
+	for time.Now().Before(deadline) {
+		cur, ok := sharedTerminalCapturePane(name)
+		if !ok {
+			return
+		}
+		now := time.Now()
+		if !sawOutput || cur != last {
+			sawOutput = true
+			last = cur
+			lastChange = now
+		}
+		if sessionBooted(sawOutput, lastChange, now, stable) {
+			return
+		}
+		time.Sleep(pollEvery)
+	}
+}
+
 // wakeTask delivers a wake prompt into a live browser-PTY session — UNLESS the
 // session is currently blocked on the operator's input (an open AskUserQuestion
 // selector or a permission prompt), in which case injecting would auto-submit

@@ -611,6 +611,40 @@ func TestCmdDoResumesExistingSession(t *testing.T) {
 	}
 }
 
+func TestCmdDoResumeClearsPausedSession(t *testing.T) {
+	setupFlowRoot(t)
+	seedTask(t, "old-task")
+
+	db := openFlowDB(t)
+	if _, err := db.Exec(`UPDATE tasks SET session_id='existing-sid', session_started=? WHERE slug='old-task'`, flowdb.NowISO()); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.PauseSession(db, "old-task", "claude", "existing-sid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := flowdb.EnqueuePausedSessionInput(db, "old-task", "queued while paused"); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	stubITerm(t)
+	if rc := cmdDo([]string{"old-task"}); rc != 0 {
+		t.Fatalf("rc=%d", rc)
+	}
+
+	db = openFlowDB(t)
+	if _, ok, err := flowdb.GetPausedSession(db, "old-task"); err != nil || ok {
+		t.Fatalf("paused row ok=%v err=%v, want cleared", ok, err)
+	}
+	if has, err := flowdb.HasPausedSessionInput(db, "old-task"); err != nil || has {
+		t.Fatalf("paused queue has=%v err=%v, want moved", has, err)
+	}
+	pw, ok, err := flowdb.PeekPendingWake(db, "old-task")
+	if err != nil || !ok || pw.Prompt != "queued while paused" {
+		t.Fatalf("pending wake = %q,%v err=%v", pw.Prompt, ok, err)
+	}
+}
+
 // TestCmdDoFreshRotatesStaleSession verifies --fresh overwrites an
 // existing session_id with a newly-allocated UUID and spawns with that
 // UUID via --session-id (not --resume).

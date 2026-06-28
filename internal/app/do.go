@@ -207,6 +207,7 @@ func cmdDo(args []string) int {
 				}
 				focused, ferr := spawner.FocusSession(task.SessionID.String)
 				if focused {
+					clearPausedTaskResume(db, task.Slug)
 					fmt.Printf("Already open: %s — switched to existing tab\n", task.Slug)
 					return 0
 				}
@@ -579,6 +580,7 @@ func cmdDo(args []string) int {
 		if err := recordAutoRunLaunched(db, task.Slug, pid, logPath); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: record auto run: %v\n", err)
 		}
+		clearPausedTaskResume(db, task.Slug)
 		fmt.Printf("Launched autonomous run for %s (pid %d)\n  log: %s\n", task.Slug, pid, logPath)
 		return 0
 	}
@@ -668,6 +670,7 @@ func cmdDo(args []string) int {
 			return 1
 		}
 	}
+	clearPausedTaskResume(db, task.Slug)
 	if err := workdirreg.Touch(db, task.WorkDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
 	}
@@ -843,6 +846,7 @@ func cmdDoBackground(db *sql.DB, task *flowdb.Task, provider string, fresh, forc
 	action := "Spawned"
 	if !needsBootstrap {
 		if existing := backgroundAgentForSession(bg, task.SessionID.String); existing != nil && existing.PID > 0 && !force {
+			clearPausedTaskResume(db, task.Slug)
 			fmt.Printf("Already running in background: %s (%s pid %d, %s/%s)\n",
 				task.Slug, existing.ShortID, existing.PID, existing.Status, existing.State)
 			return 0
@@ -889,8 +893,22 @@ func cmdDoBackground(db *sql.DB, task *flowdb.Task, provider string, fresh, forc
 	if err := workdirreg.Touch(db, task.WorkDir); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: bump workdir last_used_at: %v\n", err)
 	}
+	clearPausedTaskResume(db, task.Slug)
 	fmt.Printf("%s background session for %s (%s, pid %d)\n", action, task.Slug, agent.SessionID, agent.PID)
 	return 0
+}
+
+func clearPausedTaskResume(db *sql.DB, slug string) {
+	if db == nil {
+		return
+	}
+	if _, err := flowdb.MovePausedSessionInputsToPendingWakes(db, slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: move paused input for %s: %v\n", slug, err)
+		return
+	}
+	if err := flowdb.ClearPausedSession(db, slug); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: clear paused session for %s: %v\n", slug, err)
+	}
 }
 
 func backgroundAgentForSession(bg harness.BackgroundLauncher, sessionID string) *harness.BackgroundAgent {
@@ -1178,6 +1196,7 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 			if err := captureTaskGitStartSnapshot(task, false); err != nil {
 				fmt.Fprintf(os.Stderr, "warning: git start snapshot: %v\n", err)
 			}
+			clearPausedTaskResume(db, task.Slug)
 			fmt.Printf("%s already bound to this %s session (%s)\n", task.Slug, session.Provider, session.ID)
 			return 0
 		}
@@ -1227,6 +1246,7 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 	if err := captureTaskGitStartSnapshot(task, force); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: git start snapshot: %v\n", err)
 	}
+	clearPausedTaskResume(db, task.Slug)
 	fmt.Printf("Bound %s to this %s session (%s)\n", task.Slug, session.Provider, session.ID)
 	return 0
 }

@@ -31,6 +31,33 @@ export function authToken(): string {
   return window.__FLOW_TOKEN__ ?? ''
 }
 
+let tokenProbeAt = 0
+let tokenReloading = false
+
+export function extractFlowTokenFromHTML(html: string): string {
+  return html.match(/window\.__FLOW_TOKEN__\s*=\s*"([a-f0-9]{64})"/i)?.[1] ?? ''
+}
+
+export async function reloadIfLocalSessionTokenChanged(): Promise<void> {
+  if (isRemoteMode() || tokenReloading) return
+  const current = window.__FLOW_TOKEN__ ?? ''
+  if (!current) return
+  const now = Date.now()
+  if (now - tokenProbeAt < 2000) return
+  tokenProbeAt = now
+  try {
+    const res = await fetch('/', { cache: 'no-store' })
+    if (!res.ok) return
+    const next = extractFlowTokenFromHTML(await res.text())
+    if (next && next !== current) {
+      tokenReloading = true
+      window.location.reload()
+    }
+  } catch {
+    /* server is still down */
+  }
+}
+
 // deviceLabel derives a friendly, human-readable device label from the
 // user-agent so the laptop's paired-devices list reads "iPad" / "iPhone" /
 // "Android phone" rather than a raw UA string. Best-effort; falls back to a

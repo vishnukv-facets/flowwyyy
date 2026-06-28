@@ -303,14 +303,19 @@ func withholdUnattendedRespawn(task *flowdb.Task, entries []monitor.InboxEntry) 
 // paths return nil to avoid hot loops (events remain in inbox.jsonl regardless).
 func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) error {
 	prompt := s.inboxWakePrompt(slug, entries)
+	task, taskErr := flowdb.GetTask(s.cfg.DB, slug)
+	paused := taskErr == nil && s.taskManuallyPaused(task)
 	if hold, ok := s.taskProviderRateLimitHold(slug); ok {
+		if paused {
+			_, err := flowdb.EnqueuePausedSessionInputAfter(s.cfg.DB, slug, prompt, hold.Until.UTC().Format(time.RFC3339))
+			return err
+		}
 		if err := s.queueWakeAfterRateLimit(slug, prompt, hold); err != nil {
 			return err
 		}
 		live := s.terminals != nil && (s.terminals.running(slug) || s.terminals.sharedRunning(slug))
 		if !live {
-			if task, err := flowdb.GetTask(s.cfg.DB, slug); err == nil && task != nil &&
-				(task.Status == "backlog" || task.Status == "in-progress") && !s.taskAgentProcessLive(task) {
+			if taskErr == nil && task != nil && (task.Status == "backlog" || task.Status == "in-progress") && !s.taskAgentProcessLive(task) {
 				if err := s.enqueueOpenTaskAfter(slug, hold); err != nil {
 					return err
 				}
@@ -322,6 +327,10 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	if s.terminals != nil && s.terminals.running(slug) {
 		return s.terminals.wakeTask(slug, prompt)
 	}
+	if paused {
+		_, err := flowdb.EnqueuePausedSessionInput(s.cfg.DB, slug, prompt)
+		return err
+	}
 	// No browser PTY is attached in this server process, but the agent may still
 	// be alive in its detached tmux session — the common case right after a
 	// `flow ui serve` restart, since the tmux session outlives the server. Wake
@@ -332,8 +341,7 @@ func (s *Server) deliverInboxEvents(slug string, entries []monitor.InboxEntry) e
 	if s.terminals != nil && s.terminals.wakeSharedTask(slug, prompt) {
 		return nil
 	}
-	task, err := flowdb.GetTask(s.cfg.DB, slug)
-	if err != nil {
+	if taskErr != nil {
 		return nil // task gone — nothing to deliver to
 	}
 	if s.taskAgentProcessLive(task) {

@@ -190,6 +190,12 @@ func (s *Server) openTaskBridge(target, terminalKind string, force bool) (action
 		}
 		return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 	}
+	if movedPaused := s.markLaunchResumed(launch); movedPaused && s.terminals != nil {
+		go func() {
+			waitForSharedSessionReady(sharedName, steererWakeStable, steererWakeTimeout)
+			s.terminals.flushWakes(target)
+		}()
+	}
 	agent, _ := s.agentForTask(target)
 	if agent != nil {
 		agent.Status = "running"

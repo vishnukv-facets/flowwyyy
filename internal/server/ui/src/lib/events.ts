@@ -2,6 +2,7 @@
 // invalidation so the UI stays live without polling. Pure push; all
 // request/response traffic goes through rpc.ts instead.
 
+import { reloadIfLocalSessionTokenChanged } from './devicetoken'
 import { wsURL } from './wsurl'
 
 export interface EventEnvelope {
@@ -61,6 +62,7 @@ class EventsClient {
   }
 
   private scheduleReconnect() {
+    void reloadIfLocalSessionTokenChanged()
     const delay = this.backoff
     this.backoff = Math.min(this.backoff * 1.7, 8000)
     setTimeout(() => this.connect(), delay)

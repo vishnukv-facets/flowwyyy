@@ -4,9 +4,9 @@ import { useAction } from '../lib/query'
 
 // A one-line composer to nudge a running agent without opening the terminal.
 // Posts a `nudge` action, which injects the text into the session's PTY via the
-// same path the inbox monitor uses to auto-inject on new messages (resuming the
-// session first if it isn't live). Lives on session cards/rows and the detail
-// header. Stops click/key propagation so typing here never navigates the card.
+// same path the inbox monitor uses to auto-inject on new messages. Paused
+// sessions queue the text until resume. Stops click/key propagation so typing
+// here never navigates the card.
 export function NudgeComposer({ slug, compact = false }: { slug: string; compact?: boolean }) {
   const [text, setText] = useState('')
   const action = useAction()
@@ -22,6 +22,7 @@ export function NudgeComposer({ slug, compact = false }: { slug: string; compact
     >
       <input
         className="nudge-input"
+        aria-label="Instruction"
         placeholder="Send an instruction…"
         value={text}
         disabled={action.isPending}

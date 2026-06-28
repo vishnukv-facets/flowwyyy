@@ -12,6 +12,7 @@ import { useAction } from '../lib/query'
 const BADGE_TONE: Record<string, string> = {
   waiting: 'warn',
   running: 'ok',
+  paused: 'warn',
   dead: 'danger',
   stale: 'danger',
   released: '',
@@ -21,6 +22,7 @@ const AUTO_DOT: Record<string, string> = { running: 'running', completed: 'done'
 const STATUS_LABEL: Record<string, string> = {
   dead: 'crashed',
   stale: 'stalled',
+  paused: 'paused',
 }
 
 export function AgentCard({
@@ -43,12 +45,12 @@ export function AgentCard({
   // for completion; the runtime status drives everything else.
   const isDone = agent.task_status === 'done'
   const badgeStatus = isDone ? 'done' : agent.status
-  const canRestart = !isDone && agent.status !== 'running' && !!agent.session_id
-  const restart = (e: MouseEvent<HTMLButtonElement>) => {
+  const canResume = !isDone && agent.status !== 'running' && agent.task_status === 'in-progress'
+  const resume = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
-    if (!canRestart || action.isPending) return
+    if (!canResume || action.isPending) return
     action.mutate(
-      { kind: 'restart', target: agent.slug },
+      { kind: 'resume', target: agent.slug },
       { onSuccess: () => popOut({ slug: agent.slug, provider: agent.provider, title: agent.name }) },
     )
   }
@@ -101,14 +103,14 @@ export function AgentCard({
             auto: {agent.auto_run_status}
           </span>
         )}
-        {canRestart && (
+        {canResume && (
           <button
             type="button"
             className="btn icon ghost sm acard-open"
             title="Resume session in a floating window"
             aria-label="Resume session in a floating window"
             disabled={action.isPending}
-            onClick={restart}
+            onClick={resume}
           >
             {action.isPending ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
           </button>

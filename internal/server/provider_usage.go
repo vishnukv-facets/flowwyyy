@@ -97,6 +97,12 @@ func readClaudeProviderUsage(flowRoot string) providerUsageResponse {
 			return unavailableUsage("claude", err.Error())
 		}
 		if stale {
+			if len(windows) > 0 {
+				out := annotateUsageLimit(providerUsageResponse{Provider: "claude", Available: true, Source: path, ObservedAt: observed, Windows: windows})
+				if out.Limited {
+					return out
+				}
+			}
 			return unavailableUsage("claude", "flow Claude usage capture is stale")
 		}
 		if len(windows) == 0 {

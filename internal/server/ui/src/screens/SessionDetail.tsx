@@ -386,7 +386,7 @@ export function SessionDetail({ slug }: { slug: string }) {
 
           <div className="toolbar" style={{ marginBottom: 4 }}>
             {!done && !terminalVisible && !autoRunRunning && (
-              <button className="btn primary sm" disabled={busy === 'open'} onClick={() => setOpen(true)}>
+              <button type="button" className="btn primary sm" disabled={busy === 'resume'} onClick={() => run('resume', {}, { reconnect: true })}>
                 <Play size={14} /> {task.session_id ? 'Resume session' : 'Start session'}
               </button>
             )}
@@ -708,12 +708,14 @@ export function SessionDetail({ slug }: { slug: string }) {
                   </div>
                 ) : (
                   <>
-                    <div className="dim">Session idle</div>
-                    <button className="btn primary" onClick={() => setOpen(true)}>
+                    <div className="dim">{agent?.status === 'paused' ? 'Session paused' : 'Session idle'}</div>
+                    <button type="button" className="btn primary" disabled={busy === 'resume'} onClick={() => run('resume', {}, { reconnect: true })}>
                       <Play size={15} /> {task.session_id ? 'Resume in browser' : 'Launch in browser'}
                     </button>
                     <div className="faint" style={{ fontSize: 11.5, maxWidth: 360, textAlign: 'center' }}>
-                      A live {provider} terminal attaches here over WebSocket. Keystrokes and resize stream to the PTY.
+                      {agent?.status === 'paused'
+                        ? 'Queued instructions will send when this session resumes.'
+                        : `A live ${provider} terminal attaches here over WebSocket. Keystrokes and resize stream to the PTY.`}
                     </div>
                   </>
                 )}

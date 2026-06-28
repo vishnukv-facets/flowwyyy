@@ -316,6 +316,9 @@ func runMigrations(db *sql.DB) error {
 			return fmt.Errorf("add pending_wakes.not_before: %w", err)
 		}
 	}
+	if err := migrateFlowPauseRuntimeRows(db); err != nil {
+		return err
+	}
 
 	has, err = columnExists(db, "tasks", "session_provider")
 	if err != nil {
@@ -1101,6 +1104,25 @@ func migrateAgentRuntimeStatesAllowReleased(db *sql.DB) error {
 		return fmt.Errorf("commit: %w", err)
 	}
 	committed = true
+	return nil
+}
+
+func migrateFlowPauseRuntimeRows(db *sql.DB) error {
+	_, err := db.Exec(`
+		INSERT OR IGNORE INTO paused_sessions (slug, provider, session_id, paused_at, updated_at)
+		SELECT
+			task_slug,
+			provider,
+			CASE WHEN session_id LIKE 'flow-pause:%' THEN NULL ELSE session_id END,
+			updated_at,
+			updated_at
+		  FROM agent_runtime_states
+		 WHERE status = 'idle'
+		   AND event_kind = 'flow_pause'
+		   AND COALESCE(task_slug, '') != ''`)
+	if err != nil {
+		return fmt.Errorf("migrate flow_pause runtime rows: %w", err)
+	}
 	return nil
 }
 

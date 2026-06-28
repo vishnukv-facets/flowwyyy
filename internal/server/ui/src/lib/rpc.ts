@@ -2,6 +2,7 @@
 // rides this socket to /ws/rpc; the server replays it through the REST handler
 // mux and returns a correlated response. No fetch() anywhere in the app.
 
+import { reloadIfLocalSessionTokenChanged } from './devicetoken'
 import { wsURL } from './wsurl'
 
 export type ConnStatus = 'connecting' | 'open' | 'closed'
@@ -141,6 +142,7 @@ class RpcClient {
   }
 
   private scheduleReconnect() {
+    void reloadIfLocalSessionTokenChanged()
     const delay = this.backoff
     this.backoff = Math.min(this.backoff * 1.7, 8000)
     setTimeout(() => this.connect(), delay)

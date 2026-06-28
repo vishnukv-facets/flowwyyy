@@ -1572,8 +1572,8 @@ func TestPauseActionStopsBrowserTerminalButKeepsTaskIdle(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	if !resp.OK || resp.Agent == nil || resp.Agent.Status != "idle" {
-		t.Fatalf("expected paused idle agent response, got %+v", resp)
+	if !resp.OK || resp.Agent == nil || resp.Agent.Status != "paused" {
+		t.Fatalf("expected paused agent response, got %+v", resp)
 	}
 	srv.terminals.mu.Lock()
 	_, stillRunning := srv.terminals.sessions["build-ui"]
@@ -1590,6 +1590,176 @@ func TestPauseActionStopsBrowserTerminalButKeepsTaskIdle(t *testing.T) {
 	}
 	if !task.SessionID.Valid || task.SessionID.String != sessionID {
 		t.Fatalf("pause should preserve session_id, got %#v", task.SessionID)
+	}
+	ps, ok, err := flowdb.GetPausedSession(db, "build-ui")
+	if err != nil || !ok {
+		t.Fatalf("pause state ok=%v err=%v", ok, err)
+	}
+	if ps.Provider != "claude" || !ps.SessionID.Valid || ps.SessionID.String != sessionID {
+		t.Fatalf("pause state = %+v, want claude/%s", ps, sessionID)
+	}
+}
+
+func TestPauseActionStopsSharedTerminalBeforeRecordingPause(t *testing.T) {
+	fakeLaunchCapabilities(t)
+	root, db := testRootDB(t)
+	commands := enableSharedTerminalForTest(t)
+	insertProjectTask(t, db, root)
+	sessionID := "22222222-3333-4333-8333-222222222222"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = sharedTerminalCommand("new-session", "-d", "-s", sharedTerminalSessionName("build-ui"))
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "pause", Target: "build-ui"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("pause status = %d, resp = %+v", status, resp)
+	}
+	if sharedTerminalHasSession(sharedTerminalSessionName("build-ui")) {
+		t.Fatal("pause should kill the shared tmux session before recording pause")
+	}
+	if _, ok, err := flowdb.GetPausedSession(db, "build-ui"); err != nil || !ok {
+		t.Fatalf("pause row ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(fmt.Sprint(*commands), "kill-session -t flow-build-ui") {
+		t.Fatalf("shared tmux kill was not issued: %#v", *commands)
+	}
+}
+
+func TestTaskPausedStateClearsWhenSessionIsLiveAgain(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "33333333-4444-4444-8444-333333333333"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.PauseSession(db, "build-ui", "claude", sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := flowdb.EnqueuePausedSessionInput(db, "build-ui", "queued while paused"); err != nil {
+		t.Fatal(err)
+	}
+	oldPS := psRunner
+	psRunner = func() ([]byte, error) {
+		return []byte("123 claude --session-id " + sessionID + "\n"), nil
+	}
+	t.Cleanup(func() { psRunner = oldPS })
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	task, err := flowdb.GetTask(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.taskManuallyPaused(task) {
+		t.Fatal("live session should clear stale manual pause state")
+	}
+	if _, ok, err := flowdb.GetPausedSession(db, "build-ui"); err != nil || ok {
+		t.Fatalf("paused row ok=%v err=%v, want cleared", ok, err)
+	}
+	if has, err := flowdb.HasPausedSessionInput(db, "build-ui"); err != nil || has {
+		t.Fatalf("paused queue has=%v err=%v, want moved", has, err)
+	}
+	if pw, ok := srv.terminals.wakes.peek("build-ui"); !ok || pw.Prompt != "queued while paused" {
+		t.Fatalf("pending wake = %q,%v; want moved queued prompt", pw.Prompt, ok)
+	}
+}
+
+func TestNudgeQueuesForPausedSession(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "33333333-3333-4333-8333-333333333333"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.PauseSession(db, "build-ui", "claude", sessionID); err != nil {
+		t.Fatal(err)
+	}
+	oldPS := psRunner
+	psRunner = func() ([]byte, error) { return []byte{}, nil }
+	t.Cleanup(func() { psRunner = oldPS })
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "nudge", Target: "build-ui", Prompt: "keep going"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("nudge status = %d, resp = %+v", status, resp)
+	}
+	pw, ok, err := flowdb.PeekPausedSessionInput(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || pw.Prompt != "keep going" {
+		t.Fatalf("queued wake = %q,%v; want keep going,true", pw.Prompt, ok)
+	}
+}
+
+func TestPauseAndNudgeQueuesForCodexWithoutCapturedSession(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_provider = 'codex', session_id = NULL, session_started = ? WHERE slug = 'build-ui'`,
+		"2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	oldPS := psRunner
+	psRunner = func() ([]byte, error) { return []byte{}, nil }
+	t.Cleanup(func() { psRunner = oldPS })
+
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	resp, status := srv.runAction(actionRequest{Kind: "pause", Target: "build-ui"})
+	if status != http.StatusOK || resp.Agent == nil || resp.Agent.Status != "paused" {
+		t.Fatalf("pause status = %d, resp = %+v", status, resp)
+	}
+	resp, status = srv.runAction(actionRequest{Kind: "nudge", Target: "build-ui", Prompt: "resume when ready"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("nudge status = %d, resp = %+v", status, resp)
+	}
+	pw, ok, err := flowdb.PeekPausedSessionInput(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || pw.Prompt != "resume when ready" {
+		t.Fatalf("queued wake = %q,%v; want resume when ready,true", pw.Prompt, ok)
+	}
+}
+
+func TestDeliverInboxEventsQueuesForPausedSession(t *testing.T) {
+	root, db := testRootDB(t)
+	insertProjectTask(t, db, root)
+	sessionID := "44444444-4444-4444-8444-444444444444"
+	if _, err := db.Exec(
+		`UPDATE tasks SET status = 'in-progress', session_id = ?, session_started = ? WHERE slug = 'build-ui'`,
+		sessionID, "2026-05-12T10:01:00+05:30",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.PauseSession(db, "build-ui", "claude", sessionID); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	entries := []monitor.InboxEntry{{
+		Event: monitor.InboundEvent{Kind: "flow_tell", ChannelType: "flow", Text: "queued follow-up"},
+		Meta:  monitor.InboxEventMeta{Source: "flow", Actionable: true},
+	}}
+	if err := srv.deliverInboxEvents("build-ui", entries); err != nil {
+		t.Fatalf("deliverInboxEvents: %v", err)
+	}
+	pw, ok, err := flowdb.PeekPausedSessionInput(db, "build-ui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || !strings.Contains(pw.Prompt, "queued follow-up") {
+		t.Fatalf("queued wake = %q,%v; want queued follow-up", pw.Prompt, ok)
 	}
 }
 

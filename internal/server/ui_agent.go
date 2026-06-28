@@ -137,6 +137,11 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 			runtimeSource = "transcript"
 			runtimeEvent = "request_user_input"
 		}
+		if s.taskManuallyPausedByID(provider, tv.Slug, sessionID) {
+			status = "paused"
+			runtimeSource = "flow"
+			runtimeEvent = "flow_pause"
+		}
 	}
 	// When the task was bootstrapped into a git worktree (see `flow do`),
 	// the user is editing on the worktree's branch, not the parent repo's

@@ -189,6 +189,27 @@ CREATE TABLE IF NOT EXISTS pending_wakes (
     created_at TEXT NOT NULL
 );
 
+-- Manual pause state and paused-session input queue. While a task is paused,
+-- follow-up nudges/inbox wakes are held here instead of restarting or poking
+-- the PTY. Resume moves queued rows into pending_wakes, then the existing wake
+-- drain handles readiness, ordering, and injection.
+CREATE TABLE IF NOT EXISTS paused_sessions (
+    slug       TEXT PRIMARY KEY,
+    provider   TEXT NOT NULL DEFAULT '',
+    session_id TEXT,
+    paused_at  TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS paused_session_queue (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug       TEXT NOT NULL,
+    prompt     TEXT NOT NULL,
+    not_before TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paused_session_queue_slug ON paused_session_queue(slug, id);
+
 -- Provider rate-limit hold queue. When Claude/Codex is out of tokens, automatic
 -- connector ingestion and automatic task opens are persisted here instead of
 -- dispatching immediately. The server drains ready rows after the provider

@@ -40,8 +40,15 @@ func (h *terminalHub) attach(slug string, cols, rows int) (*terminalSession, err
 	h.mu.Lock()
 	h.sessions[slug] = sess
 	h.mu.Unlock()
+	movedPaused := h.server != nil && h.server.markLaunchResumed(launch)
 	if h.server != nil && h.server.inboxMonitors != nil {
 		h.server.inboxMonitors.start(slug)
+	}
+	if movedPaused || (h.wakes != nil && h.wakes.has(slug)) {
+		go func() {
+			h.waitForSessionReady(slug, steererWakeStable, steererWakeTimeout)
+			h.flushWakes(slug)
+		}()
 	}
 	return sess, nil
 }
@@ -322,7 +329,7 @@ func (h *terminalHub) attachFloatingBrowser(id string, cols, rows int) (*termina
 	return sess, false, err
 }
 
-func (h *terminalHub) stop(slug string) {
+func (h *terminalHub) stop(slug string) error {
 	h.mu.Lock()
 	sess := h.sessions[slug]
 	delete(h.sessions, slug)
@@ -333,6 +340,19 @@ func (h *terminalHub) stop(slug string) {
 		}
 		sess.terminate()
 	}
+	if h.sharedRunningCache != nil {
+		h.sharedRunningCache.invalidate(slug)
+	}
+	name := sharedTerminalSessionName(slug)
+	if sharedTerminalHasSession(name) {
+		if err := sharedTerminalKillSession(name); err != nil {
+			return fmt.Errorf("stop shared terminal %s: %w", name, err)
+		}
+	}
+	if sharedTerminalHasSession(name) {
+		return fmt.Errorf("shared terminal %s is still running", name)
+	}
+	return nil
 }
 
 func (h *terminalHub) sendInput(slug, data string) error {

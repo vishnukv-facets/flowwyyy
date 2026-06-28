@@ -6,7 +6,7 @@ import { ArrowDownToLine, Ban } from 'lucide-react'
 import '@xterm/xterm/css/xterm.css'
 import { pushToast } from '../lib/toast'
 import { uploadTerminalAttachments } from '../lib/api'
-import { authToken } from '../lib/devicetoken'
+import { authToken, reloadIfLocalSessionTokenChanged } from '../lib/devicetoken'
 
 // Live PTY terminal powered by xterm.js, bound to flow's terminal JSON
 // protocol: server pushes {type:"output"|"status"|"error"}, client sends
@@ -597,6 +597,7 @@ export function TaskTerminal({
 
     const scheduleReconnect = () => {
       if (destroyed || reconnectTimer) return
+      void reloadIfLocalSessionTokenChanged()
       const delay = reconnectBackoff
       reconnectBackoff = Math.min(Math.round(reconnectBackoff * 1.7), TERMINAL_RECONNECT_MAX_MS)
       notifyStatus('status', `reconnecting in ${Math.max(1, Math.ceil(delay / 1000))}s`)

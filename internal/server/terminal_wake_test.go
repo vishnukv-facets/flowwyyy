@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -32,6 +33,28 @@ func TestSessionBooted(t *testing.T) {
 				t.Errorf("sessionBooted(%v, %v) = %v, want %v", tc.sawOutput, tc.lastOutput, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestWaitForSharedSessionReadyWaitsForStablePane(t *testing.T) {
+	oldCmd := sharedTerminalCommand
+	defer func() { sharedTerminalCommand = oldCmd }()
+
+	captures := 0
+	sharedTerminalCommand = func(args ...string) ([]byte, error) {
+		if len(args) > 0 && args[0] == "capture-pane" {
+			captures++
+			if captures < 3 {
+				return []byte(fmt.Sprintf("boot %d", captures)), nil
+			}
+			return []byte("ready"), nil
+		}
+		return nil, nil
+	}
+
+	waitForSharedSessionReady("flow-demo", 25*time.Millisecond, 300*time.Millisecond)
+	if captures < 4 {
+		t.Fatalf("captures = %d, want enough samples to observe stable pane", captures)
 	}
 }
 

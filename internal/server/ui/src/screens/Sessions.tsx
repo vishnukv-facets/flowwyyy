@@ -66,7 +66,7 @@ export function Sessions() {
     all: live.length,
     running: live.filter((a) => a.status === 'running').length,
     waiting: live.filter((a) => a.status === 'waiting').length,
-    idle: live.filter((a) => a.status === 'idle' || a.status === 'stale').length,
+    idle: live.filter((a) => a.status === 'idle' || a.status === 'stale' || a.status === 'paused').length,
     done: done.length,
   }
 
@@ -87,7 +87,7 @@ export function Sessions() {
     if (filter === 'done') base = done
     else if (filter === 'running') base = live.filter((a) => a.status === 'running')
     else if (filter === 'waiting') base = live.filter((a) => a.status === 'waiting')
-    else if (filter === 'idle') base = live.filter((a) => a.status === 'idle' || a.status === 'stale')
+    else if (filter === 'idle') base = live.filter((a) => a.status === 'idle' || a.status === 'stale' || a.status === 'paused')
     else base = live
     const needle = q.trim().toLowerCase()
     return base.filter((a) => {

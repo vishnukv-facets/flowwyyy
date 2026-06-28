@@ -30,6 +30,7 @@ const STATUS_CLASS: Record<string, string> = {
   stale: 'stale',
   dead: 'stale',
   released: 'done',
+  paused: 'idle',
   idle: 'idle',
   done: 'done',
   backlog: 'idle',
@@ -49,6 +50,8 @@ export function StatusBadge({ status }: { status: string }) {
       ? 'danger'
       : status === 'done'
       ? 'info'
+      : status === 'paused'
+      ? 'warn'
       : ''
   return (
     <span className={`badge ${tone}`}>
@@ -85,19 +88,12 @@ export function TokenBar({ used, max }: { used: number; max: number }) {
   )
 }
 
-// Compact circular context gauge — a donut showing how full the model's
-// context window is, sized to sit inline next to the token/cost pill. Hover
-// shows the full breakdown. Tone warms as the window fills (closer to compaction).
-// Claude Code reserves ~16.5% of the window for the auto-compact buffer, so the
-// USABLE context is ~83.5% of the total. We report % against that usable window
-// — 100% ≈ where auto-compact fires — so the ring matches the terminal statusline
-// (gsd-statusline normalizes the same way) and Claude's own "headroom" meter,
-// rather than % of the raw window (which reads ~11 points low on a 1M session).
-const USABLE_CONTEXT_FRACTION = 0.835
-
+// Compact circular context gauge, using the same raw used/max transcript values
+// the terminal statusline reports.
 export function ContextRing({ used, max }: { used: number; max: number }) {
-  const usable = Math.max(1, Math.round(max * USABLE_CONTEXT_FRACTION))
-  const p = Math.min(100, pct(used, usable))
+  const p = Math.min(100, pct(used, max))
+  const leftPct = Math.max(0, 100 - p)
+  const leftTokens = Math.max(0, max - used)
   const tone =
     p >= 90
       ? 'var(--danger)'
@@ -112,10 +108,7 @@ export function ContextRing({ used, max }: { used: number; max: number }) {
   return (
     <span
       className="tag ctx-ring"
-      title={`Context: ${used.toLocaleString()} / ${max.toLocaleString()} tokens · ${p}% of usable (pre auto-compact) · ${Math.max(
-        0,
-        usable - used,
-      ).toLocaleString()} left before auto-compact`}
+      title={`Context: ${used.toLocaleString()} / ${max.toLocaleString()} tokens · ${p}% used · ${leftPct}% left (${leftTokens.toLocaleString()} tokens)`}
     >
       <svg className="ctx-ring-svg" width="16" height="16" viewBox="0 0 18 18" aria-hidden="true">
         <circle cx="9" cy="9" r={r} fill="none" stroke="var(--border-strong)" strokeWidth="2.6" />
@@ -131,7 +124,7 @@ export function ContextRing({ used, max }: { used: number; max: number }) {
           transform="rotate(-90 9 9)"
         />
       </svg>
-      <span className="ctx-ring-pct">{p}% ctx</span>
+      <span className="ctx-ring-pct">{leftPct}% left</span>
     </span>
   )
 }

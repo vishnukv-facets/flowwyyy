@@ -7,10 +7,10 @@ import (
 	"flow/internal/flowdb"
 )
 
-// wakeQueue is the persistent buffer of wake prompts withheld because a session
-// was blocked on the operator's input (an open AskUserQuestion selector or a
-// permission prompt). Backed by the pending_wakes table so a "flow ui serve"
-// restart never loses a buffered wake — including an operator-approved reply.
+// wakeQueue is the persistent buffer of wake prompts that are ready to deliver
+// once a session is safe to receive input (AskUserQuestion / permission prompts
+// are clear, not_before holds elapsed). Paused-session input first lands in
+// paused_session_queue, then moves here when resume starts.
 // The only in-memory state is the per-slug flush guard (concurrency control
 // within one process); the queue itself is the database.
 type wakeQueue struct {

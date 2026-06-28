@@ -112,6 +112,32 @@ func TestProviderUsageMarksLimitReached(t *testing.T) {
 	}
 }
 
+func TestProviderUsageTrustsStaleClaudeLimitUntilReset(t *testing.T) {
+	root, db := testRootDB(t)
+	cache := filepath.Join(root, "provider_usage", "claude.json")
+	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reset := time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339)
+	if err := os.WriteFile(cache, []byte(`{
+		"rate_limits": {
+			"five_hour": {"used_percentage": 42, "resets_at": "`+time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)+`"},
+			"seven_day": {"used_percentage": 100, "resets_at": "`+reset+`"}
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-7 * time.Hour)
+	if err := os.Chtimes(cache, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=claude")
+	if !got.Available || !got.Limited || got.LimitResetAt != reset {
+		t.Fatalf("usage = %+v; want available limited until %q", got, reset)
+	}
+}
+
 func TestProviderUsageIncludesQueuedAutomation(t *testing.T) {
 	root, db := testRootDB(t)
 	cache := filepath.Join(root, "provider_usage", "claude.json")

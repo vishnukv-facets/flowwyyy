@@ -102,6 +102,47 @@ func TestPendingWakesNotBefore(t *testing.T) {
 	}
 }
 
+func TestPausedSessionQueueMovesToPendingWakes(t *testing.T) {
+	db := openTestDB(t)
+	if err := PauseSession(db, "demo", "codex", ""); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	ps, ok, err := GetPausedSession(db, "demo")
+	if err != nil || !ok || ps.Provider != "codex" {
+		t.Fatalf("paused session = %+v ok=%v err=%v; want codex", ps, ok, err)
+	}
+	if _, err := EnqueuePausedSessionInput(db, "demo", "first"); err != nil {
+		t.Fatalf("enqueue first: %v", err)
+	}
+	if _, err := EnqueuePausedSessionInputAfter(db, "demo", "second", "2026-06-25T12:00:00Z"); err != nil {
+		t.Fatalf("enqueue second: %v", err)
+	}
+	n, err := MovePausedSessionInputsToPendingWakes(db, "demo")
+	if err != nil || n != 2 {
+		t.Fatalf("move = %d,%v; want 2,nil", n, err)
+	}
+	if has, err := HasPausedSessionInput(db, "demo"); err != nil || has {
+		t.Fatalf("paused input remaining = %v,%v; want false,nil", has, err)
+	}
+	pw, ok, err := PeekPendingWake(db, "demo")
+	if err != nil || !ok || pw.Prompt != "first" {
+		t.Fatalf("pending first = %+v ok=%v err=%v", pw, ok, err)
+	}
+	if err := AckPendingWake(db, pw.ID); err != nil {
+		t.Fatalf("ack first: %v", err)
+	}
+	pw, ok, err = PeekPendingWake(db, "demo")
+	if err != nil || !ok || pw.Prompt != "second" || pw.NotBefore != "2026-06-25T12:00:00Z" {
+		t.Fatalf("pending second = %+v ok=%v err=%v", pw, ok, err)
+	}
+	if err := ClearPausedSession(db, "demo"); err != nil {
+		t.Fatalf("clear pause: %v", err)
+	}
+	if _, ok, err := GetPausedSession(db, "demo"); err != nil || ok {
+		t.Fatalf("paused after clear ok=%v err=%v; want false,nil", ok, err)
+	}
+}
+
 func TestRateLimitQueueReadyAndReschedule(t *testing.T) {
 	db := openTestDB(t)
 	if _, err := EnqueueRateLimitQueue(db, RateLimitQueueSlackEvent, "claude", []byte(`{"kind":"message"}`), "2026-06-25T10:00:00Z"); err != nil {
