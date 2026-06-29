@@ -54,6 +54,16 @@ func currentSessionForProvider(provider string) currentAgentSession {
 		}
 		return currentCodexSession()
 	}
+	switch strings.TrimSpace(strings.ToLower(os.Getenv("FLOW_SESSION_PROVIDER"))) {
+	case sessionProviderCodex:
+		if session := currentCodexSession(); session.ID != "" {
+			return session
+		}
+	case sessionProviderClaude:
+		if session := currentClaudeSession(); session.ID != "" {
+			return session
+		}
+	}
 	if session := currentClaudeSession(); session.ID != "" {
 		return session
 	}

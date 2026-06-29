@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
+	"flow/internal/contextpack"
 	"flow/internal/flowdb"
 	"flow/internal/harness"
 	"flow/internal/spawner"
@@ -480,13 +481,13 @@ func cmdDo(args []string) int {
 		}
 		isFirstRun = runCount <= 1
 	}
+	contextRoot := ""
+	if r, err := flowRoot(); err == nil {
+		contextRoot = r
+	}
 	prompt := buildBootstrapPromptForKindV2(task.Slug, task.Kind, playbookSlug, isFirstRun)
-	// Brief the session on upstream dependency work that may be unmerged, so it
-	// reviews those changes instead of assuming they're in its base branch.
 	if task.Kind != "playbook_run" {
-		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
-			prompt += "\n\n" + note
-		}
+		prompt = appendTaskContextPack(prompt, db, contextRoot, task.Slug)
 	}
 	permissionMode := task.PermissionMode
 	if permissionMode == "" {
@@ -816,9 +817,11 @@ func cmdDoBackground(db *sql.DB, task *flowdb.Task, provider string, fresh, forc
 	}
 	prompt := buildBootstrapPromptForKindV2(task.Slug, task.Kind, playbookSlug, isFirstRun)
 	if task.Kind != "playbook_run" {
-		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
-			prompt += "\n\n" + note
+		contextRoot := ""
+		if r, err := flowRoot(); err == nil {
+			contextRoot = r
 		}
+		prompt = appendTaskContextPack(prompt, db, contextRoot, task.Slug)
 	}
 
 	permissionMode := task.PermissionMode
@@ -1008,6 +1011,17 @@ func buildBootstrapPromptForKindV2(slug, kind, playbookSlug string, isFirstRun b
 	return base + steering.OperatorVoiceDirective()
 }
 
+func appendTaskContextPack(prompt string, db *sql.DB, root, slug string) string {
+	pack, err := contextpack.Build(db, root, contextpack.Ref{Kind: contextpack.RefTask, ID: slug}, contextpack.Options{})
+	if err == nil && len(pack.Sections) > 0 {
+		return prompt + "\n\n" + contextpack.RenderMarkdown(pack)
+	}
+	if note := flowdb.DependencyBootstrapNote(db, slug); note != "" {
+		return prompt + "\n\n" + note
+	}
+	return prompt
+}
+
 // buildTaskBootstrapPrompt is the prompt for regular tasks.
 func buildTaskBootstrapPrompt(slug string) string {
 	return fmt.Sprintf(
@@ -1128,23 +1142,6 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 			"error: --here requires running inside a Claude Code or Codex session ($CLAUDE_CODE_SESSION_ID or $CODEX_THREAD_ID is unset)")
 		return 1
 	}
-	if requestedProvider != "" && requestedProvider != session.Provider {
-		fmt.Fprintf(os.Stderr,
-			"error: --agent %s was requested, but the current session is %s via $%s\n",
-			requestedProvider, session.Provider, session.EnvVar)
-		return 1
-	}
-	if session.Provider == sessionProviderClaude {
-		if !sessionUUIDRe.MatchString(session.ID) {
-			fmt.Fprintf(os.Stderr,
-				"error: $%s is not a valid v4 UUID (got %q)\n", session.EnvVar, session.ID)
-			return 1
-		}
-	} else if !sessionAnyUUIDRe.MatchString(session.ID) {
-		fmt.Fprintf(os.Stderr,
-			"error: $%s is not a valid UUID (got %q)\n", session.EnvVar, session.ID)
-		return 1
-	}
 
 	dbPath, err := flowDBPath()
 	if err != nil {
@@ -1161,6 +1158,29 @@ func cmdDoHere(query string, force bool, requestedProvider string) int {
 	task, rc := findTask(db, query)
 	if rc != 0 {
 		return rc
+	}
+
+	if requestedProvider == "" && strings.TrimSpace(task.SessionProvider) != "" {
+		if preferred := currentSessionForProvider(task.SessionProvider); preferred.ID != "" {
+			session = preferred
+		}
+	}
+	if requestedProvider != "" && requestedProvider != session.Provider {
+		fmt.Fprintf(os.Stderr,
+			"error: --agent %s was requested, but the current session is %s via $%s\n",
+			requestedProvider, session.Provider, session.EnvVar)
+		return 1
+	}
+	if session.Provider == sessionProviderClaude {
+		if !sessionUUIDRe.MatchString(session.ID) {
+			fmt.Fprintf(os.Stderr,
+				"error: $%s is not a valid v4 UUID (got %q)\n", session.EnvVar, session.ID)
+			return 1
+		}
+	} else if !sessionAnyUUIDRe.MatchString(session.ID) {
+		fmt.Fprintf(os.Stderr,
+			"error: $%s is not a valid UUID (got %q)\n", session.EnvVar, session.ID)
+		return 1
 	}
 
 	if task.Status == "done" {

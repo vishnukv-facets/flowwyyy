@@ -129,6 +129,46 @@ func TestGitHubDispatcher_PRReviewRequestCreatesTask(t *testing.T) {
 	}
 }
 
+func TestGitHubDispatcherRecordsCommentWorkEvent(t *testing.T) {
+	db := dispatcherTestDB(t)
+	const tag = "gh-pr:owner/repo#9"
+	seedGitHubTask(t, "review-fix", db, tag)
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRComment,
+		Owner:     "owner",
+		Repo:      "repo",
+		Number:    9,
+		Title:     "Fix review issue",
+		Body:      "Can you update this?",
+		URL:       "https://github.com/owner/repo/pull/9#issuecomment-123",
+		Author:    "octo",
+		CommentID: "IC_123",
+		EventKey:  "issue-comment:IC_123",
+		RawJSON:   `{"comment":{"id":"IC_123"}}`,
+		CreatedAt: "2026-06-27T10:00:00Z",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "github_comment", TaskSlug: "review-fix"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("github_comment rows = %d, want 1: %+v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.EventID != "github:issue-comment:IC_123" || got.Source != "github" || got.ExternalID != "issue-comment:IC_123" || got.ExternalURL != ev.URL {
+		t.Fatalf("github_comment provenance = %+v", got)
+	}
+	if got.ActorKind != "github_user" || got.ActorID != "octo" {
+		t.Fatalf("github actor = %q/%q", got.ActorKind, got.ActorID)
+	}
+}
+
 func TestGitHubDispatcher_SecondPREventAppendsWithoutDuplicateTask(t *testing.T) {
 	t.Setenv("FLOW_GH_AUTOOPEN", "0")
 	db := dispatcherTestDB(t)

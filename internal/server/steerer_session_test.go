@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -290,6 +291,53 @@ func TestRenderSteererTurnWithAttachmentsUsesClaudePaste(t *testing.T) {
 	}
 	if !strings.Contains(out, "Attachments (untrusted external evidence):") {
 		t.Fatalf("rendered turn missing attachment trust boundary:\n%q", out)
+	}
+}
+
+func TestAppendSteererChatContextPack(t *testing.T) {
+	root := t.TempDir()
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	wc, err := flowdb.CreateWorkContext(db, flowdb.WorkContext{Title: "Steerer context", Summary: "Same customer thread."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := flowdb.CreateWorkContextSourceAnchor(db, flowdb.WorkContextSourceAnchor{
+		WorkContextID: wc.ID,
+		Source:        "slack",
+		AnchorType:    "slack_channel_thread",
+		ExternalID:    "C1:100.1",
+		URL:           "https://slack.example/archives/C1/p1001",
+		Label:         "Slack thread",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := flowdb.NowISO()
+	if err := flowdb.InsertChat(db, flowdb.Chat{
+		Slug:           "chat-steer-c1",
+		Title:          "#support",
+		Provider:       "claude",
+		Origin:         "steerer",
+		WorkContextID:  sql.NullString{String: wc.ID, Valid: true},
+		CreatedAt:      now,
+		LastActivityAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	chat, err := flowdb.GetChat(db, "chat-steer-c1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := appendSteererChatContextPack("base turn", db, root, chat)
+	for _, want := range []string{"base turn", "# ContextPack", "Chat chat-steer-c1", "Steerer context", "UNTRUSTED external evidence", "https://slack.example/archives/C1/p1001"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("steerer turn missing %q:\n%s", want, got)
+		}
 	}
 }
 

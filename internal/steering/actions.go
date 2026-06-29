@@ -140,7 +140,10 @@ func makeTaskEffect(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error
 		}
 	}
 	tagSourceThread(ctx, slug, item)
-	return flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, slug, nowRFC3339()); err != nil {
+		return err
+	}
+	return recordAttentionWorkEvent(db, item, "make_task", slug)
 }
 
 // taskSlugExists reports whether a task row already holds this slug — in ANY
@@ -189,7 +192,50 @@ func forwardEffect(ctx context.Context, db *sql.DB, item flowdb.FeedItem) error 
 	if err := taskForwarder(ctx, db, target, item, feedForwardMessage(item)); err != nil {
 		return err
 	}
-	return flowdb.SetFeedItemActed(db, item.ID, target, nowRFC3339())
+	if err := flowdb.SetFeedItemActed(db, item.ID, target, nowRFC3339()); err != nil {
+		return err
+	}
+	return recordAttentionWorkEvent(db, item, "forward", target)
+}
+
+func recordAttentionWorkEvent(db *sql.DB, item flowdb.FeedItem, action, taskSlug string) error {
+	if db == nil {
+		return nil
+	}
+	eventType := "attention_" + action
+	projectSlug, workContextID := "", ""
+	if task, err := flowdb.GetTask(db, strings.TrimSpace(taskSlug)); err == nil && task != nil {
+		taskSlug = task.Slug
+		if task.ProjectSlug.Valid {
+			projectSlug = task.ProjectSlug.String
+		}
+		if task.WorkContextID.Valid {
+			workContextID = task.WorkContextID.String
+		}
+	} else {
+		taskSlug = ""
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"feed_item_id":      strings.TrimSpace(item.ID),
+		"suggested_action":  strings.TrimSpace(item.SuggestedAction),
+		"source_thread_key": strings.TrimSpace(item.ThreadKey),
+		"source_ts":         strings.TrimSpace(item.TS),
+	})
+	_, _, err := flowdb.AppendWorkEventLog(db, flowdb.WorkEventLogEntry{
+		EventID:       "attention:" + strings.TrimSpace(item.ID) + ":" + action,
+		EventType:     eventType,
+		OccurredAt:    firstNonEmpty(item.CreatedAt, nowRFC3339()),
+		TaskSlug:      taskSlug,
+		ProjectSlug:   projectSlug,
+		WorkContextID: workContextID,
+		ActorKind:     "operator",
+		ActorID:       "attention-router",
+		Source:        firstNonEmpty(item.Source, "attention"),
+		ExternalID:    strings.TrimSpace(item.ID),
+		ExternalURL:   strings.TrimSpace(item.URL),
+		MetadataJSON:  string(meta),
+	})
+	return err
 }
 
 // RequestHandoff asks the matched task's owning agent to confirm whether this

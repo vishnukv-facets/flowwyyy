@@ -63,6 +63,18 @@ func stubActionIO(t *testing.T) (*[]spawnRec, *[]tellRec) {
 	return &spawns, &tells
 }
 
+func seedSteeringTask(t *testing.T, db *sql.DB, slug string) {
+	t.Helper()
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, session_provider, created_at, updated_at)
+		 VALUES (?, ?, 'backlog', 'high', ?, 'claude', ?, ?)`,
+		slug, slug, t.TempDir(), now, now,
+	); err != nil {
+		t.Fatalf("seed task %s: %v", slug, err)
+	}
+}
+
 func TestMakeTaskFromFeed(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {
@@ -186,6 +198,44 @@ func TestMakeTaskFromFeedRecordsFeedback(t *testing.T) {
 	}
 	if got[0].DraftEditDelta != "" {
 		t.Errorf("make-task feedback should not record draft delta, got %q", got[0].DraftEditDelta)
+	}
+}
+
+func TestMakeTaskFromFeedRecordsWorkEvent(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "we-make", Source: "slack", ThreadKey: "C_eng:1700000000.000400", Channel: "C_eng",
+		ChannelType: "channel", Author: "U_OWNER", TS: "1700000000.000400",
+		URL:     "https://example.slack.com/archives/C_eng/p1700000000000400",
+		Summary: "please make a task", SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	seedSteeringTask(t, db, FeedTaskSlug(item))
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "attention_make_task", TaskSlug: FeedTaskSlug(item)})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("attention_make_task rows = %d, want 1: %+v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.EventID != "attention:we-make:make_task" || got.Source != "slack" || got.ExternalID != "we-make" || got.ExternalURL != item.URL {
+		t.Fatalf("attention_make_task provenance = %+v", got)
+	}
+	if got.ActorKind != "operator" || got.ActorID != "attention-router" {
+		t.Fatalf("attention_make_task actor = %q/%q", got.ActorKind, got.ActorID)
 	}
 }
 
@@ -405,6 +455,45 @@ func TestForwardFeed(t *testing.T) {
 	}
 	if items, _ := flowdb.ListFeedItems(db, "acted"); len(items) != 1 {
 		t.Errorf("forwarded item should be 'acted'")
+	}
+}
+
+func TestForwardFeedRecordsWorkEvent(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+	seedSteeringTask(t, db, "kong-split")
+
+	item := flowdb.FeedItem{
+		ID: "we-forward", Source: "slack", ThreadKey: "C1:200.2", Channel: "C1",
+		ChannelType: "channel", Author: "U_ASKER", TS: "200.2",
+		URL:     "https://example.slack.com/archives/C1/p2002",
+		Summary: "forward this context", MatchedTask: "kong-split", SuggestedAction: "forward",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := ForwardFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("ForwardFeed: %v", err)
+	}
+
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "attention_forward", TaskSlug: "kong-split"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("attention_forward rows = %d, want 1: %+v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.EventID != "attention:we-forward:forward" || got.Source != "slack" || got.ExternalID != "we-forward" || got.ExternalURL != item.URL {
+		t.Fatalf("attention_forward provenance = %+v", got)
+	}
+	if got.ActorKind != "operator" || got.ActorID != "attention-router" {
+		t.Fatalf("attention_forward actor = %q/%q", got.ActorKind, got.ActorID)
 	}
 }
 

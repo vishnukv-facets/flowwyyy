@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // autoTestSetup initializes a temp FLOW_ROOT and returns the db path.
@@ -219,6 +220,139 @@ func TestAutoExecRunsCodexWithoutSessionID(t *testing.T) {
 	}
 	if run.Status != "completed" || !run.SessionID.Valid || run.SessionID.String != codexSessionID {
 		t.Fatalf("unexpected codex run ledger row: %+v", run)
+	}
+}
+
+func TestAutoExecRetriesOtherProviderOnCreditExhaustion(t *testing.T) {
+	_, db := autoTestSetup(t)
+	stubClaudeRunner(t, nil)
+	seedAutoTask(t, db, "at-switch", "sess-claude-switch")
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return "run-switch-1", nil }
+	t.Cleanup(func() { newUUID = oldUUID })
+
+	resetAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	var providers []string
+	old := autoRunner
+	autoRunner = func(req autoRunRequest) error {
+		providers = append(providers, req.Provider)
+		switch req.Provider {
+		case sessionProviderClaude:
+			return fmt.Errorf("usage limit reached; reset at %s", resetAt)
+		case sessionProviderCodex:
+			if req.SessionID != "" {
+				t.Fatalf("codex retry should not reuse claude session_id, got %q", req.SessionID)
+			}
+			t.Setenv("FLOW_TASK", "at-switch")
+			t.Setenv("FLOW_SESSION_PROVIDER", sessionProviderCodex)
+			t.Setenv("CODEX_THREAD_ID", "codex-thread-switch")
+			if rc := cmdDone([]string{"at-switch"}); rc != 0 {
+				return fmt.Errorf("cmdDone returned %d", rc)
+			}
+			return nil
+		default:
+			return fmt.Errorf("unexpected provider %q", req.Provider)
+		}
+	}
+	t.Cleanup(func() { autoRunner = old })
+
+	rc := cmdAutoExec([]string{"at-switch"})
+	if rc != 0 {
+		t.Fatalf("cmdAutoExec: rc=%d", rc)
+	}
+	if strings.Join(providers, ",") != "claude,codex" {
+		t.Fatalf("providers = %v, want claude then codex", providers)
+	}
+
+	task, err := flowdb.GetTask(db, "at-switch")
+	if err != nil {
+		t.Fatalf("get task: %v", err)
+	}
+	if task.SessionProvider != sessionProviderCodex {
+		t.Fatalf("session_provider = %q, want codex", task.SessionProvider)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != "codex-thread-switch" {
+		t.Fatalf("session_id = %+v, want codex-thread-switch", task.SessionID)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "completed" {
+		t.Fatalf("auto_run_status = %q, want completed", task.AutoRunStatus.String)
+	}
+	run, err := flowdb.GetBrainRun(db, "run-switch-1")
+	if err != nil {
+		t.Fatalf("GetBrainRun: %v", err)
+	}
+	if run.Provider != sessionProviderCodex || run.Status != "completed" {
+		t.Fatalf("unexpected retry run ledger row: %+v", run)
+	}
+}
+
+func TestAutoExecHoldsPlaybookScheduleWhenBothProvidersExhausted(t *testing.T) {
+	_, db := autoTestSetup(t)
+	workDir := t.TempDir()
+	if err := flowdb.UpsertPlaybook(db, &flowdb.Playbook{Slug: "digest", Name: "Digest", WorkDir: workDir}); err != nil {
+		t.Fatalf("upsert playbook: %v", err)
+	}
+	if err := flowdb.SetPlaybookSchedule(db, "digest", "@every 1h", "every hour", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)); err != nil {
+		t.Fatalf("set schedule: %v", err)
+	}
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, work_dir, session_provider, session_id, kind, playbook_slug, created_at, updated_at)
+		 VALUES ('digest--run', 'digest run', 'in-progress', ?, 'claude', 'sess-digest-run', 'playbook_run', 'digest', ?, ?)`,
+		workDir, now, now,
+	); err != nil {
+		t.Fatalf("seed playbook run: %v", err)
+	}
+	oldUUID := newUUID
+	newUUID = func() (string, error) { return "run-both-limited-1", nil }
+	t.Cleanup(func() { newUUID = oldUUID })
+
+	codexReset := time.Now().UTC().Add(30 * time.Minute).Truncate(time.Second)
+	claudeReset := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	var providers []string
+	old := autoRunner
+	autoRunner = func(req autoRunRequest) error {
+		providers = append(providers, req.Provider)
+		switch req.Provider {
+		case sessionProviderClaude:
+			return fmt.Errorf("usage limit reached; reset at %s", claudeReset.Format(time.RFC3339))
+		case sessionProviderCodex:
+			return fmt.Errorf("credit balance exhausted; reset at %s", codexReset.Format(time.RFC3339))
+		default:
+			return fmt.Errorf("unexpected provider %q", req.Provider)
+		}
+	}
+	t.Cleanup(func() { autoRunner = old })
+
+	rc := cmdAutoExec([]string{"digest--run"})
+	if rc != 1 {
+		t.Fatalf("cmdAutoExec: rc=%d, want 1", rc)
+	}
+	if strings.Join(providers, ",") != "claude,codex" {
+		t.Fatalf("providers = %v, want claude then codex", providers)
+	}
+	pb, err := flowdb.GetPlaybook(db, "digest")
+	if err != nil {
+		t.Fatalf("get playbook: %v", err)
+	}
+	if !pb.NextFireAt.Valid || pb.NextFireAt.String != codexReset.Format(time.RFC3339) {
+		t.Fatalf("next_fire_at = %+v, want %s", pb.NextFireAt, codexReset.Format(time.RFC3339))
+	}
+	if !pb.ScheduleHoldReason.Valid || pb.ScheduleHoldReason.String != "provider_limit" {
+		t.Fatalf("schedule_hold_reason = %+v, want provider_limit", pb.ScheduleHoldReason)
+	}
+	if !pb.ScheduleHoldUntil.Valid || pb.ScheduleHoldUntil.String != codexReset.Format(time.RFC3339) {
+		t.Fatalf("schedule_hold_until = %+v, want %s", pb.ScheduleHoldUntil, codexReset.Format(time.RFC3339))
+	}
+	if pb.SchedulePausedAt.Valid {
+		t.Fatalf("provider-limit hold should not set manual pause: %+v", pb.SchedulePausedAt)
+	}
+	task, err := flowdb.GetTask(db, "digest--run")
+	if err != nil {
+		t.Fatalf("get run task: %v", err)
+	}
+	if !task.AutoRunStatus.Valid || task.AutoRunStatus.String != "dead" {
+		t.Fatalf("auto_run_status = %q, want dead", task.AutoRunStatus.String)
 	}
 }
 

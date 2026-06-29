@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS playbooks (
     schedule_spec       TEXT,
     schedule_input      TEXT,
     schedule_paused_at  TEXT,
+    schedule_hold_reason TEXT,
+    schedule_hold_until TEXT,
     next_fire_at        TEXT,
     last_fired_at       TEXT,
     last_fire_run_slug  TEXT,
@@ -38,6 +40,43 @@ CREATE TABLE IF NOT EXISTS playbooks (
     updated_at          TEXT NOT NULL,
     archived_at         TEXT,
     deleted_at          TEXT
+);
+
+CREATE TABLE IF NOT EXISTS work_contexts (
+    id          TEXT PRIMARY KEY,
+    slug        TEXT UNIQUE,
+    title       TEXT NOT NULL,
+    summary     TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived')),
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS work_context_source_anchors (
+    id              TEXT PRIMARY KEY,
+    work_context_id TEXT NOT NULL REFERENCES work_contexts(id) ON DELETE CASCADE,
+    source          TEXT NOT NULL CHECK (source IN ('slack','github','flow')),
+    anchor_type     TEXT NOT NULL CHECK (anchor_type IN (
+        'slack_channel_thread','slack_dm','slack_group_dm',
+        'github_pr','github_issue','github_comment',
+        'flow_chat','flow_task','flow_session'
+    )),
+    external_id     TEXT NOT NULL,
+    url             TEXT,
+    label           TEXT,
+    metadata_json   TEXT,
+    created_at      TEXT NOT NULL,
+    UNIQUE (work_context_id, source, anchor_type, external_id)
+);
+
+CREATE TABLE IF NOT EXISTS work_context_edges (
+    from_context_id TEXT NOT NULL REFERENCES work_contexts(id) ON DELETE CASCADE,
+    to_context_id   TEXT NOT NULL REFERENCES work_contexts(id) ON DELETE CASCADE,
+    kind            TEXT NOT NULL CHECK (kind IN ('related','follow-up','fork','duplicate','blocked-by')),
+    note            TEXT,
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (from_context_id, to_context_id, kind),
+    CHECK (from_context_id <> to_context_id)
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -50,6 +89,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     parent_slug           TEXT REFERENCES tasks(slug),
     forked_from_slug      TEXT REFERENCES tasks(slug),
     fork_reason           TEXT,
+    work_context_id       TEXT REFERENCES work_contexts(id) ON DELETE SET NULL,
     priority              TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('high','medium','low')),
     work_dir              TEXT NOT NULL,
     waiting_on            TEXT,
@@ -166,6 +206,7 @@ CREATE TABLE IF NOT EXISTS agent_runtime_states (
     provider     TEXT NOT NULL CHECK (provider IN ('claude','codex')),
     session_id   TEXT NOT NULL,
     task_slug    TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    work_context_id TEXT REFERENCES work_contexts(id) ON DELETE SET NULL,
     status       TEXT NOT NULL CHECK (status IN ('running','waiting','idle','dead','released')),
     event_kind   TEXT NOT NULL,
     message      TEXT,
@@ -479,6 +520,10 @@ END;
 CREATE INDEX IF NOT EXISTS idx_tasks_project    ON tasks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_tasks_status     ON tasks(status);
 CREATE INDEX IF NOT EXISTS idx_tasks_updated_at ON tasks(updated_at);
+CREATE INDEX IF NOT EXISTS idx_work_context_anchors_context ON work_context_source_anchors(work_context_id);
+CREATE INDEX IF NOT EXISTS idx_work_context_anchors_lookup ON work_context_source_anchors(source, anchor_type, external_id);
+CREATE INDEX IF NOT EXISTS idx_work_context_edges_from ON work_context_edges(from_context_id);
+CREATE INDEX IF NOT EXISTS idx_work_context_edges_to ON work_context_edges(to_context_id);
 CREATE INDEX IF NOT EXISTS idx_task_tags_tag    ON task_tags(tag);
 CREATE INDEX IF NOT EXISTS idx_github_event_log_task ON github_event_log(task_slug);
 CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_task ON agent_runtime_states(task_slug);
@@ -517,6 +562,7 @@ CREATE TABLE IF NOT EXISTS chats (
     title            TEXT NOT NULL,
     provider         TEXT NOT NULL,
     origin           TEXT NOT NULL,
+    work_context_id  TEXT REFERENCES work_contexts(id) ON DELETE SET NULL,
     session_id       TEXT,
     created_at       TEXT NOT NULL,
     last_activity_at TEXT NOT NULL,
@@ -526,6 +572,59 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chats_last_activity ON chats(last_activity_at DESC);
+
+CREATE TABLE IF NOT EXISTS work_event_log (
+    event_id         TEXT PRIMARY KEY,
+    event_type       TEXT NOT NULL,
+    occurred_at      TEXT NOT NULL,
+    created_at       TEXT NOT NULL,
+    provider         TEXT,
+    session_id       TEXT,
+    task_slug        TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    chat_slug        TEXT REFERENCES chats(slug) ON DELETE SET NULL,
+    project_slug     TEXT REFERENCES projects(slug) ON DELETE SET NULL,
+    work_context_id  TEXT REFERENCES work_contexts(id) ON DELETE SET NULL,
+    actor_kind       TEXT,
+    actor_id         TEXT,
+    source_anchor_id TEXT REFERENCES work_context_source_anchors(id) ON DELETE SET NULL,
+    source           TEXT,
+    external_id      TEXT,
+    external_url     TEXT,
+    metadata_json    TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_event_log_occurred ON work_event_log(occurred_at DESC, event_id DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_type ON work_event_log(event_type, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_task ON work_event_log(task_slug, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_chat ON work_event_log(chat_slug, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_project ON work_event_log(project_slug, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_context ON work_event_log(work_context_id, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS idx_work_event_log_external ON work_event_log(source, external_id);
+
+CREATE TABLE IF NOT EXISTS session_read_items (
+    id                TEXT PRIMARY KEY,
+    kind              TEXT NOT NULL CHECK (kind IN ('ask','say')),
+    status            TEXT NOT NULL CHECK (status IN ('pending','unread','read','answered')),
+    text              TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    read_at           TEXT,
+    answered_at       TEXT,
+    provider          TEXT,
+    session_id        TEXT,
+    task_slug         TEXT REFERENCES tasks(slug) ON DELETE SET NULL,
+    chat_slug         TEXT REFERENCES chats(slug) ON DELETE SET NULL,
+    project_slug      TEXT REFERENCES projects(slug) ON DELETE SET NULL,
+    work_context_id   TEXT REFERENCES work_contexts(id) ON DELETE SET NULL,
+    dedupe_key        TEXT UNIQUE,
+    dependencies_json TEXT NOT NULL DEFAULT '[]',
+    metadata_json     TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_session_read_items_status ON session_read_items(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_session_read_items_task ON session_read_items(task_slug, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_session_read_items_chat ON session_read_items(chat_slug, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_session_read_items_context ON session_read_items(work_context_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS kb_capture (
     session_id   TEXT PRIMARY KEY,
@@ -553,6 +652,9 @@ CREATE TABLE IF NOT EXISTS remote_devices (
 const indexesPostMigrate = `
 CREATE INDEX IF NOT EXISTS idx_tasks_kind          ON tasks(kind);
 CREATE INDEX IF NOT EXISTS idx_tasks_playbook_slug ON tasks(playbook_slug);
+CREATE INDEX IF NOT EXISTS idx_tasks_work_context ON tasks(work_context_id);
+CREATE INDEX IF NOT EXISTS idx_chats_work_context ON chats(work_context_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runtime_states_work_context ON agent_runtime_states(work_context_id);
 CREATE INDEX IF NOT EXISTS idx_playbooks_project   ON playbooks(project_slug);
 CREATE INDEX IF NOT EXISTS idx_projects_deleted_at ON projects(deleted_at);
 CREATE INDEX IF NOT EXISTS idx_playbooks_deleted_at ON playbooks(deleted_at);

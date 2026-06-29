@@ -3,9 +3,12 @@ package app
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"flow/internal/flowdb"
 )
 
 func TestCmdSlackNoSubcommand(t *testing.T) {
@@ -70,6 +73,50 @@ func TestCmdSlackSendViaServerSuccess(t *testing.T) {
 	}
 	if gotChannel != "D1" || gotText != "hi" {
 		t.Errorf("posted channel=%q text=%q, want D1/hi", gotChannel, gotText)
+	}
+}
+
+func TestCmdSlackSendRecordsWorkEvent(t *testing.T) {
+	root := setupFlowRoot(t)
+	t.Setenv("CODEX_SESSION_ID", "codex-slack-session")
+	if rc := cmdAdd([]string{"task", "Reply in Slack", "--slug", "slack-reply-task", "--work-dir", t.TempDir(), "--agent", "codex"}); rc != 0 {
+		t.Fatalf("cmdAdd rc=%d", rc)
+	}
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	if _, err := db.Exec(`UPDATE tasks SET session_id = ?, session_provider = 'codex' WHERE slug = ?`, "codex-slack-session", "slack-reply-task"); err != nil {
+		t.Fatalf("bind task session: %v", err)
+	}
+	db.Close()
+
+	stubPostSlackSend(t, func(channel, threadTS, text, identity, file string, postAt int64) (int, string, error) {
+		return 200, `{"ok":true}`, nil
+	})
+	rc := cmdSlack([]string{"send", "--channel", "C123", "--thread-ts", "1780000000.000100", "--text", "On it", "--as", "user"})
+	if rc != 0 {
+		t.Fatalf("cmdSlack rc=%d", rc)
+	}
+
+	db, err = flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("reopen DB: %v", err)
+	}
+	defer db.Close()
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "slack_send", TaskSlug: "slack-reply-task"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("slack_send rows = %d, want 1: %+v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.Source != "slack" || got.Provider != "codex" || got.SessionID != "codex-slack-session" || got.ExternalID != "C123:1780000000.000100" {
+		t.Fatalf("slack_send provenance = %+v", got)
+	}
+	if !strings.Contains(got.MetadataJSON, `"identity":"user"`) || !strings.Contains(got.MetadataJSON, `"text_len":5`) {
+		t.Fatalf("slack_send metadata = %s", got.MetadataJSON)
 	}
 }
 

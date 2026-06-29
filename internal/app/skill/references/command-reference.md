@@ -37,6 +37,20 @@ Read
                      generate a copyable briefing from Attention, waiting, stale, ready, and recent activity
   flow search "<query>" [--in briefs,updates,memories,transcripts] [--limit N] [--format table|json|tsv]
   flow transcript   [<ref>] [--compact]    (readable transcript from session jsonl)
+  flow read ask "<question>" [--key <dedupe-key>]
+                     publish a structured pending question from this session; replies should use flow tell
+  flow read say "<note>" [--key <dedupe-key>]
+                     publish a structured unread status/finding from this session
+  flow read list [--status pending|unread|read|answered|all] [--format table|json]
+                     list structured questions and notes with task/chat/context metadata
+  flow read mark <id> (--read|--answered)
+                     mark a question/note read or answered after handling it
+  flow context bind [--context <id-or-slug>] [--title <title>] [--slug <slug>]
+                    [--task <slug>] [--chat <slug>]
+                    [--anchor-type <type>] [--external-id <id>] [--url <url>] [--label <text>]
+                     bind tasks, chats, and source anchors to the same shared WorkContext
+  flow context inspect <id-or-slug|task:<slug>|chat:<slug>>
+                     inspect current WorkContext, anchors, edges, and recent provenance events
   flow list tasks    [--status backlog|in-progress|done] [--project <slug>]
                      [--priority high|medium|low] [--since today|monday|7d|YYYY-MM-DD]
                      [--include-archived] [--include-deleted|--deleted]

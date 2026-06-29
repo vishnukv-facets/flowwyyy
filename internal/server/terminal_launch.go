@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flow/internal/agenthooks"
 	"flow/internal/agents"
+	"flow/internal/contextpack"
 	"flow/internal/flowdb"
 	"flow/internal/steering"
 	"flow/internal/workdirreg"
@@ -618,10 +619,7 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 				"6. Only then begin work. If any brief section is blank or unclear, ASK; do not infer.",
 			task.Slug, task.Slug, task.Slug,
 		)
-		// Brief the session on upstream dependency work that may be unmerged.
-		if note := flowdb.DependencyBootstrapNote(db, task.Slug); note != "" {
-			prompt += "\n\n" + note
-		}
+		prompt = appendBrowserTaskContextPack(prompt, db, task.Slug)
 		// Inject the operator's voice — parity with the CLI `flow do` launch and
 		// the steerer's per-channel sessions. This is the web-UI launch path, so
 		// without it a session opened from Mission Control would draft Slack/GitHub
@@ -656,4 +654,15 @@ func buildBrowserTerminalBootstrapPrompt(db *sql.DB, task *flowdb.Task) string {
 		prompt += "\n\nThis is the first run of this playbook. Be proactive about asking whether scripts, decision rules, and edge cases discovered during the run should be captured back into the live playbook for future runs."
 	}
 	return prompt + steering.OperatorVoiceDirective()
+}
+
+func appendBrowserTaskContextPack(prompt string, db *sql.DB, slug string) string {
+	pack, err := contextpack.Build(db, os.Getenv("FLOW_ROOT"), contextpack.Ref{Kind: contextpack.RefTask, ID: slug}, contextpack.Options{})
+	if err == nil && len(pack.Sections) > 0 {
+		return prompt + "\n\n" + contextpack.RenderMarkdown(pack)
+	}
+	if note := flowdb.DependencyBootstrapNote(db, slug); note != "" {
+		return prompt + "\n\n" + note
+	}
+	return prompt
 }

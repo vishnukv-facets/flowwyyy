@@ -14,6 +14,7 @@ type Chat struct {
 	Title          string
 	Provider       string // claude|codex
 	Origin         string // ui|slack
+	WorkContextID  sql.NullString
 	SessionID      sql.NullString
 	CreatedAt      string
 	LastActivityAt string
@@ -29,7 +30,7 @@ type ChatFilter struct {
 
 // ---------- column list ----------
 
-const chatCols = "slug, title, provider, origin, session_id, created_at, last_activity_at, archived_at, deleted_at, muted_at"
+const chatCols = "slug, title, provider, origin, work_context_id, session_id, created_at, last_activity_at, archived_at, deleted_at, muted_at"
 
 // ---------- scan ----------
 
@@ -37,6 +38,7 @@ func scanChat(row interface{ Scan(dest ...any) error }) (*Chat, error) {
 	var c Chat
 	err := row.Scan(
 		&c.Slug, &c.Title, &c.Provider, &c.Origin,
+		&c.WorkContextID,
 		&c.SessionID,
 		&c.CreatedAt, &c.LastActivityAt,
 		&c.ArchivedAt, &c.DeletedAt, &c.MutedAt,
@@ -52,8 +54,9 @@ func scanChat(row interface{ Scan(dest ...any) error }) (*Chat, error) {
 // InsertChat writes a new chat row. Slug must be unique.
 func InsertChat(db *sql.DB, c Chat) error {
 	_, err := db.Exec(
-		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
 		c.Slug, c.Title, c.Provider, c.Origin,
+		c.WorkContextID,
 		c.SessionID,
 		c.CreatedAt, c.LastActivityAt,
 		c.ArchivedAt, c.DeletedAt, c.MutedAt,
@@ -87,11 +90,12 @@ func GetChat(db *sql.DB, slug string) (*Chat, error) {
 // always unique (UI overview-<uuid>) simply insert.
 func UpsertChat(db *sql.DB, c Chat) error {
 	_, err := db.Exec(
-		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?)
+		`INSERT INTO chats (`+chatCols+`) VALUES (?,?,?,?,?,?,?,?,?,?,?)
 		 ON CONFLICT(slug) DO UPDATE SET
 		   title = excluded.title,
 		   provider = excluded.provider,
 		   origin = excluded.origin,
+		   work_context_id = excluded.work_context_id,
 		   session_id = excluded.session_id,
 		   created_at = excluded.created_at,
 		   last_activity_at = excluded.last_activity_at,
@@ -99,6 +103,7 @@ func UpsertChat(db *sql.DB, c Chat) error {
 		   deleted_at = NULL,
 		   muted_at = NULL`,
 		c.Slug, c.Title, c.Provider, c.Origin,
+		c.WorkContextID,
 		c.SessionID,
 		c.CreatedAt, c.LastActivityAt,
 		c.ArchivedAt, c.DeletedAt, c.MutedAt,

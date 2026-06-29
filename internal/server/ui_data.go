@@ -281,22 +281,22 @@ type uiTrashItem struct {
 }
 
 type uiAgent struct {
-	Slug            string         `json:"slug"`
-	Name            string         `json:"name"`
-	Project         *string        `json:"project"`
-	Kind            string         `json:"kind"`
-	PlaybookSlug    *string        `json:"playbook_slug,omitempty"`
-	Parent          *TaskSummary   `json:"parent,omitempty"`
-	Parents         []TaskSummary  `json:"parents,omitempty"`
-	Children        []TaskSummary  `json:"children,omitempty"`
-	ForkedFromSlug  *string        `json:"forked_from_slug,omitempty"`
-	ForkedFrom      *TaskSummary   `json:"forked_from,omitempty"`
-	ForkReason      *string        `json:"fork_reason,omitempty"`
-	Forks           []TaskSummary  `json:"forks,omitempty"`
-	Branch          string         `json:"branch"`
-	Branches        []string       `json:"branches,omitempty"`
-	WorkDir         string         `json:"work_dir"`
-	Provider        string         `json:"provider"`
+	Slug           string        `json:"slug"`
+	Name           string        `json:"name"`
+	Project        *string       `json:"project"`
+	Kind           string        `json:"kind"`
+	PlaybookSlug   *string       `json:"playbook_slug,omitempty"`
+	Parent         *TaskSummary  `json:"parent,omitempty"`
+	Parents        []TaskSummary `json:"parents,omitempty"`
+	Children       []TaskSummary `json:"children,omitempty"`
+	ForkedFromSlug *string       `json:"forked_from_slug,omitempty"`
+	ForkedFrom     *TaskSummary  `json:"forked_from,omitempty"`
+	ForkReason     *string       `json:"fork_reason,omitempty"`
+	Forks          []TaskSummary `json:"forks,omitempty"`
+	Branch         string        `json:"branch"`
+	Branches       []string      `json:"branches,omitempty"`
+	WorkDir        string        `json:"work_dir"`
+	Provider       string        `json:"provider"`
 	// Origin tags a chat-backed agent ("steerer" | "slack" | "ui"); empty for
 	// task sessions. Lets buildUIStats attribute the Steering slice (GAP-12).
 	Origin          string         `json:"origin,omitempty"`
@@ -438,9 +438,11 @@ type uiPlaybook struct {
 	Runs     []uiPlaybookRun `json:"runs"`
 	WorkDir  string          `json:"work_dir"`
 	// Scheduling (nil/false when unscheduled).
-	Schedule       *string `json:"schedule"`
-	SchedulePaused bool    `json:"schedule_paused"`
-	NextFireAt     *string `json:"next_fire_at"`
+	Schedule           *string `json:"schedule"`
+	SchedulePaused     bool    `json:"schedule_paused"`
+	ScheduleHoldReason *string `json:"schedule_hold_reason"`
+	ScheduleHoldUntil  *string `json:"schedule_hold_until"`
+	NextFireAt         *string `json:"next_fire_at"`
 }
 
 // uiPlaybookRun is one run shown as a hoverable bar in the Active Playbooks

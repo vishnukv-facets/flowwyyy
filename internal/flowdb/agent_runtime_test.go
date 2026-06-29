@@ -34,3 +34,54 @@ func TestAgentRuntimeStateAwaitingHumanInput(t *testing.T) {
 		})
 	}
 }
+
+func TestUpsertAgentRuntimeStateLogsSessionBindOnce(t *testing.T) {
+	db := openTempDB(t)
+	insertProject(t, db, "ledger-proj", "Ledger project", t.TempDir(), "high")
+	insertTask(t, db, "ledger-task", "Ledger task", "backlog", "high", t.TempDir(), "ledger-proj")
+	ctx, err := CreateWorkContext(db, WorkContext{Title: "Runtime context"})
+	if err != nil {
+		t.Fatalf("CreateWorkContext: %v", err)
+	}
+
+	if err := UpsertAgentRuntimeState(db, AgentRuntimeStateInput{
+		Provider:      "codex",
+		SessionID:     "codex-session-1",
+		TaskSlug:      "ledger-task",
+		WorkContextID: ctx.ID,
+		Status:        "running",
+		EventKind:     "session_start",
+		Seq:           1,
+	}); err != nil {
+		t.Fatalf("UpsertAgentRuntimeState first: %v", err)
+	}
+	if err := UpsertAgentRuntimeState(db, AgentRuntimeStateInput{
+		Provider:      "codex",
+		SessionID:     "codex-session-1",
+		TaskSlug:      "ledger-task",
+		WorkContextID: ctx.ID,
+		Status:        "waiting",
+		EventKind:     "stop",
+		Seq:           2,
+	}); err != nil {
+		t.Fatalf("UpsertAgentRuntimeState update: %v", err)
+	}
+
+	rows, err := ListWorkEventLog(db, WorkEventLogFilter{EventType: "session_bound", TaskSlug: "ledger-task"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("session_bound rows = %d, want 1: %+v", len(rows), rows)
+	}
+	got := rows[0]
+	if got.EventID != "session-bound:codex:codex-session-1:ledger-task" {
+		t.Fatalf("EventID = %q", got.EventID)
+	}
+	if got.Provider != "codex" || got.SessionID != "codex-session-1" || got.ProjectSlug != "ledger-proj" || got.WorkContextID != ctx.ID {
+		t.Fatalf("missing session provenance: %+v", got)
+	}
+	if got.ActorKind != "agent" || got.ActorID != "codex:codex-session-1" {
+		t.Fatalf("actor = %q/%q, want agent/codex:codex-session-1", got.ActorKind, got.ActorID)
+	}
+}

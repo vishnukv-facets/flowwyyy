@@ -32,6 +32,7 @@ import type {
   OwnerView,
   OwnerDetailView,
   OverviewView,
+  ProviderQueueResponse,
   ProviderUsage,
   PlaybookView,
   ProjectView,
@@ -220,6 +221,32 @@ export function useProviderUsage(provider: string) {
     enabled: provider === 'claude' || provider === 'codex',
     staleTime: 0,
     refetchInterval: 2000,
+  })
+}
+
+export function useProviderQueue(enabled = true) {
+  return useQuery({
+    queryKey: ['provider-queue'],
+    queryFn: () => apiGet<ProviderQueueResponse>('/api/provider-queue'),
+    enabled,
+    staleTime: 0,
+  })
+}
+
+export function useDismissProviderQueue() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (req: { id?: number; all?: boolean }) =>
+      apiPost<{ ok: boolean }>('/api/provider-queue/dismiss', req),
+    onSuccess: (_data, req) => {
+      pushToast('ok', req.all ? 'Queue dismissed' : 'Queued action dismissed')
+      qc.invalidateQueries({ queryKey: ['provider-queue'] })
+      qc.invalidateQueries({ queryKey: ['provider-usage'] })
+      qc.invalidateQueries({ queryKey: ['ui-data'] })
+    },
+    onError: (err: Error) => {
+      pushToast('error', err.message || 'queue action failed')
+    },
   })
 }
 

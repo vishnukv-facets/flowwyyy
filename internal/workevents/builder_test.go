@@ -181,6 +181,76 @@ func TestBuildSuppressesHeadUpdateAfterMergedPR(t *testing.T) {
 	}
 }
 
+func TestBuildIncludesLedgerOnlyWorkEvents(t *testing.T) {
+	db, root := testDB(t)
+	seedProject(t, db)
+	seedTask(t, db, "reply-task", "in-progress", "high")
+	if _, _, err := flowdb.AppendWorkEventLog(db, flowdb.WorkEventLogEntry{
+		EventID:      "slack-send-1",
+		EventType:    "slack_send",
+		OccurredAt:   "2026-06-07T09:00:00Z",
+		CreatedAt:    "2026-06-07T09:00:01Z",
+		Provider:     "codex",
+		SessionID:    "codex-1",
+		TaskSlug:     "reply-task",
+		Source:       "slack",
+		ExternalID:   "C1:123.4",
+		ExternalURL:  "https://example.slack.com/archives/C1/p1234",
+		ActorKind:    "agent",
+		ActorID:      "codex:codex-1",
+		MetadataJSON: `{"channel":"C1"}`,
+	}); err != nil {
+		t.Fatalf("AppendWorkEventLog: %v", err)
+	}
+
+	got, err := Build(db, root, Filter{Source: "slack"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	ev := requireEvent(t, got.Items, "ledger:slack-send-1")
+	if ev.Kind != "slack_send" || ev.Bucket != BucketHandled || ev.TaskSlug != "reply-task" || ev.EventKey != "C1:123.4" {
+		t.Fatalf("ledger slack event = %+v", ev)
+	}
+}
+
+func TestBuildDoesNotDuplicateLedgerRowsForDerivedInboxEvents(t *testing.T) {
+	db, root := testDB(t)
+	seedProject(t, db)
+	seedTask(t, db, "review-this-pr", "in-progress", "high")
+	if err := monitor.AppendInboxEvent("review-this-pr", monitor.InboundEvent{
+		Kind: "pr_comment", ChannelType: "github", Channel: "owner/repo",
+		ThreadTS: "gh-pr:owner/repo#9", URL: "https://github.com/owner/repo/pull/9#issuecomment-123",
+		Text: "Can you update this?", UserID: "octo", EventKey: "issue-comment:IC_123",
+	}); err != nil {
+		t.Fatalf("append inbox: %v", err)
+	}
+	if _, _, err := flowdb.AppendWorkEventLog(db, flowdb.WorkEventLogEntry{
+		EventID:     "github:issue-comment:IC_123",
+		EventType:   "github_comment",
+		OccurredAt:  "2026-06-07T09:00:00Z",
+		CreatedAt:   "2026-06-07T09:00:01Z",
+		TaskSlug:    "review-this-pr",
+		Source:      "github",
+		ExternalID:  "issue-comment:IC_123",
+		ExternalURL: "https://github.com/owner/repo/pull/9#issuecomment-123",
+		ActorKind:   "github_user",
+		ActorID:     "octo",
+	}); err != nil {
+		t.Fatalf("AppendWorkEventLog: %v", err)
+	}
+
+	got, err := Build(db, root, Filter{Source: "github"})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.Items) != 1 {
+		t.Fatalf("items = %d, want one derived inbox event, got %+v", len(got.Items), got.Items)
+	}
+	if got.Items[0].Kind != "pr_comment" || got.Items[0].Bucket != BucketNeedsAction {
+		t.Fatalf("dedup kept wrong event: %+v", got.Items[0])
+	}
+}
+
 func requireEvent(t *testing.T, items []Event, id string) Event {
 	t.Helper()
 	for _, it := range items {

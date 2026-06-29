@@ -1,6 +1,8 @@
 package app
 
 import (
+	"database/sql"
+	"encoding/json"
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
 	"flow/internal/server"
@@ -122,8 +124,13 @@ func cmdTell(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: close inbox: %v\n", err)
 		return 1
 	}
-	if err := monitor.AppendInboxEvent(task.Slug, monitor.FlowTellEvent(sender, message, now)); err != nil {
+	ev := monitor.FlowTellEvent(sender, message, now)
+	if err := monitor.AppendInboxEvent(task.Slug, ev); err != nil {
 		fmt.Fprintf(os.Stderr, "error: append inbox jsonl: %v\n", err)
+		return 1
+	}
+	if err := recordFlowTellWorkEvent(db, task, ev); err != nil {
+		fmt.Fprintf(os.Stderr, "error: append work event: %v\n", err)
 		return 1
 	}
 
@@ -142,6 +149,38 @@ func cmdTell(args []string) int {
 		notifyInboxChanged(task.Slug, sender, message)
 	}
 	return 0
+}
+
+func recordFlowTellWorkEvent(db *sql.DB, task *flowdb.Task, ev monitor.InboundEvent) error {
+	if db == nil || task == nil {
+		return nil
+	}
+	projectSlug := ""
+	if task.ProjectSlug.Valid {
+		projectSlug = task.ProjectSlug.String
+	}
+	workContextID := ""
+	if task.WorkContextID.Valid {
+		workContextID = task.WorkContextID.String
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"channel": ev.Channel,
+		"kind":    ev.Kind,
+	})
+	_, _, err := flowdb.AppendWorkEventLog(db, flowdb.WorkEventLogEntry{
+		EventID:       "flow-tell:" + task.Slug + ":" + ev.EventKey,
+		EventType:     "flow_tell",
+		OccurredAt:    ev.TS,
+		TaskSlug:      task.Slug,
+		ProjectSlug:   projectSlug,
+		WorkContextID: workContextID,
+		ActorKind:     "flow",
+		ActorID:       ev.UserID,
+		Source:        "flow",
+		ExternalID:    ev.EventKey,
+		MetadataJSON:  string(meta),
+	})
+	return err
 }
 
 // notifyInboxChanged pokes the local flow UI server so it publishes an

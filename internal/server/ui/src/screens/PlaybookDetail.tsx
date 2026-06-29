@@ -125,6 +125,7 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
   const [value, setValue] = useState('')
   const [showHelp, setShowHelp] = useState(false)
   const scheduled = !!pb.schedule
+  const providerLimited = pb.schedule_hold_reason === 'provider_limit' && !!pb.schedule_hold_until
 
   const save = () => {
     const v = value.trim()
@@ -164,7 +165,7 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
         <div className="spacer" />
         {scheduled && !editing && (
           <span className={`badge ${pb.schedule_paused ? 'warn' : 'ok'}`}>
-            {pb.schedule_paused ? 'paused' : 'active'}
+            {providerLimited ? 'limited' : pb.schedule_paused ? 'paused' : 'active'}
           </span>
         )}
       </div>
@@ -203,7 +204,9 @@ function SchedulePanel({ pb, action }: { pb: PlaybookView; action: ReturnType<ty
             {pb.schedule} {pb.schedule_spec && <span className="faint mono" style={{ fontSize: 12 }}>· {pb.schedule_spec}</span>}
           </div>
           <div className="faint" style={{ fontSize: 12, marginTop: 6 }}>
-            {pb.schedule_paused
+            {providerLimited && pb.schedule_hold_until
+              ? `Provider credits limited — paused until ${until(pb.schedule_hold_until)} · ${dateTime(pb.schedule_hold_until)}`
+              : pb.schedule_paused
               ? 'Paused — will not fire until resumed.'
               : pb.next_fire_at
                 ? `Next run ${until(pb.next_fire_at)} · ${dateTime(pb.next_fire_at)}`

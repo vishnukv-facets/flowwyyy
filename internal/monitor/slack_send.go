@@ -226,9 +226,22 @@ var uploadFileFn = func(channel, threadTS, comment, filePath, identity string) e
 		InitialComment:  comment,
 		ThreadTimestamp: strings.TrimSpace(threadTS),
 	}); err != nil {
-		return fmt.Errorf("complete upload: %w", err)
+		return fileUploadCompleteError(channel, identity, err)
 	}
 	return nil
+}
+
+func fileUploadCompleteError(channel, identity string, err error) error {
+	if err == nil {
+		return nil
+	}
+	channel = strings.TrimSpace(channel)
+	if strings.EqualFold(strings.TrimSpace(identity), "bot") &&
+		strings.HasPrefix(strings.ToUpper(channel), "D") &&
+		strings.Contains(err.Error(), "channel_not_found") {
+		return fmt.Errorf("complete upload: channel_not_found (bot token cannot upload into DM %s; retry with --channel <Slack user id> so Flow can open the bot DM, or use --as user for an operator DM): %w", channel, err)
+	}
+	return fmt.Errorf("complete upload: %w", err)
 }
 
 // SendFileAs uploads a local file as an attachment to a Slack channel/DM, with
@@ -246,11 +259,23 @@ func SendFileAsThread(channel, threadTS, comment, filePath, identity string) err
 	if !slackWritesEnabled() {
 		return fmt.Errorf("slack writes disabled (set FLOW_SLACK_WRITES_ENABLED=1)")
 	}
-	if strings.TrimSpace(channel) == "" {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
 		return fmt.Errorf("channel is required")
 	}
 	if strings.TrimSpace(filePath) == "" {
 		return fmt.Errorf("file is required")
+	}
+	if uid, ok := slackUserIDRef(channel); ok {
+		token, _ := resolveSendIdentity(channel, identity)
+		if strings.TrimSpace(token) == "" {
+			return fmt.Errorf("no slack token configured (FLOW_SLACK_TOKEN / user token)")
+		}
+		chID, err := slackOpenIMFn(context.Background(), token, uid)
+		if err != nil {
+			return fmt.Errorf("open DM with user %s for file upload: %w", uid, err)
+		}
+		channel = chID
 	}
 	return uploadFileFn(channel, threadTS, comment, filePath, identity)
 }

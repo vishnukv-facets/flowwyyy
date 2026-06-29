@@ -3427,6 +3427,38 @@ func TestUpdatePlaybookStoresName(t *testing.T) {
 	}
 }
 
+func TestPlaybookViewShowsProviderLimitHoldAsPaused(t *testing.T) {
+	root, db := testRootDB(t)
+	now := time.Now().UTC()
+	if err := flowdb.UpsertPlaybook(db, &flowdb.Playbook{Slug: "daily", Name: "Daily", WorkDir: root}); err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.SetPlaybookSchedule(db, "daily", "@every 1h", "every hour", now.Add(-time.Minute).Format(time.RFC3339)); err != nil {
+		t.Fatal(err)
+	}
+	holdUntil := now.Add(30 * time.Minute).Format(time.RFC3339)
+	if err := flowdb.HoldPlaybookSchedule(db, "daily", "provider_limit", holdUntil); err != nil {
+		t.Fatal(err)
+	}
+	pb, err := flowdb.GetPlaybook(db, "daily")
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := BuildPlaybookView(db, root, pb)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !view.SchedulePaused {
+		t.Fatalf("SchedulePaused = false, want true for provider-limit hold")
+	}
+	if view.ScheduleHoldReason == nil || *view.ScheduleHoldReason != "provider_limit" {
+		t.Fatalf("ScheduleHoldReason = %#v, want provider_limit", view.ScheduleHoldReason)
+	}
+	if view.ScheduleHoldUntil == nil || *view.ScheduleHoldUntil != holdUntil {
+		t.Fatalf("ScheduleHoldUntil = %#v, want %s", view.ScheduleHoldUntil, holdUntil)
+	}
+}
+
 func TestUpdatePlaybookRejectsBlankName(t *testing.T) {
 	root, db := testRootDB(t)
 	now := "2026-05-12T10:00:00+05:30"

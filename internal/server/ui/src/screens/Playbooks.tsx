@@ -153,6 +153,7 @@ export function Playbooks() {
         <div className="grid cards stagger">
           {shown.map((p) => {
             const archived = !!p.archived_at
+            const providerLimited = p.schedule_hold_reason === 'provider_limit' && !!p.schedule_hold_until
             return (
             <article
               key={p.slug}
@@ -202,13 +203,15 @@ export function Playbooks() {
                 <Sparkline data={p.run_days_30?.slice(-14) ?? []} />
               </div>
               {p.recent_runs?.[0] && (
-                <div className="faint" style={{ fontSize: 11.5 }}>last run {ago(p.recent_runs[0].created_at)}</div>
+                <div className="faint" style={{ fontSize: 12 }}>last run {ago(p.recent_runs[0].created_at)}</div>
               )}
               {p.schedule && (
-                <div className="faint" style={{ fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <div className="faint" style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
                   <CalendarClock size={11} />
-                  {p.schedule_paused
-                    ? <>schedule paused</>
+                  {providerLimited && p.schedule_hold_until
+                    ? <>limited · paused until {until(p.schedule_hold_until)}</>
+                    : p.schedule_paused
+                      ? <>schedule paused</>
                     : p.next_fire_at
                       ? <>{p.schedule} · next {until(p.next_fire_at)}</>
                       : <>{p.schedule}</>}

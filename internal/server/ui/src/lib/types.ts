@@ -372,6 +372,8 @@ export interface PlaybookView {
   schedule: string | null;
   schedule_spec: string | null;
   schedule_paused: boolean;
+  schedule_hold_reason: string | null;
+  schedule_hold_until: string | null;
   next_fire_at: string | null;
   last_fired_at: string | null;
   last_fire_run_slug: string | null;
@@ -720,6 +722,8 @@ export interface PlaybookMC {
   work_dir: string;
   schedule: string | null;
   schedule_paused: boolean;
+  schedule_hold_reason: string | null;
+  schedule_hold_until: string | null;
   next_fire_at: string | null;
 }
 
@@ -1284,6 +1288,25 @@ export interface ProviderUsage {
   windows: ProviderUsageWindow[];
   queued_actions: number;
   next_queue_run_after?: string;
+}
+
+export interface ProviderQueueItem {
+  id: number;
+  kind: string;
+  provider: string;
+  target: string;
+  summary: string;
+  payload_json: string;
+  run_after: string;
+  attempts: number;
+  last_error?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProviderQueueResponse {
+  count: number;
+  items: ProviderQueueItem[];
 }
 
 // A Slack send held for the operator's approval because its channel is outside

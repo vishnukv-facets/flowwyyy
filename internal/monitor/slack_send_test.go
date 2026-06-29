@@ -1,8 +1,12 @@
 package monitor
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
+
+	"github.com/slack-go/slack"
 )
 
 func TestSendAsBotWritesDisabled(t *testing.T) {
@@ -292,6 +296,53 @@ func TestSendFileAsThreadForwardsThreadTS(t *testing.T) {
 	}
 	if gotThreadTS != "1234.000100" {
 		t.Errorf("thread_ts = %q, want 1234.000100", gotThreadTS)
+	}
+}
+
+func TestSendFileAsThreadResolvesUserIDToDMBeforeUpload(t *testing.T) {
+	t.Setenv("FLOW_SLACK_WRITES_ENABLED", "1")
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+	const userID = "U08DNTD6U4R"
+	const dmID = "D08FCPGLC8P"
+
+	origOpen := slackOpenIMFn
+	slackOpenIMFn = func(ctx context.Context, token, userIDArg string) (string, error) {
+		if token != "xoxb-bot" {
+			t.Fatalf("open DM token = %q, want bot token", token)
+		}
+		if userIDArg != userID {
+			t.Fatalf("open DM user = %q, want %s", userIDArg, userID)
+		}
+		return dmID, nil
+	}
+	t.Cleanup(func() { slackOpenIMFn = origOpen })
+
+	var gotChannel string
+	origUpload := uploadFileFn
+	uploadFileFn = func(channel, threadTS, comment, filePath, identity string) error {
+		gotChannel = channel
+		return nil
+	}
+	t.Cleanup(func() { uploadFileFn = origUpload })
+
+	if err := SendFileAsThread(userID, "", "caption", "/tmp/x.pdf", "bot"); err != nil {
+		t.Fatalf("SendFileAsThread: %v", err)
+	}
+	if gotChannel != dmID {
+		t.Fatalf("upload channel = %q, want resolved DM %s", gotChannel, dmID)
+	}
+}
+
+func TestFileUploadCompleteErrorGuidesBotDMChannelNotFound(t *testing.T) {
+	err := fileUploadCompleteError("D08FCPGLC8P", "bot", slack.SlackErrorResponse{Err: "channel_not_found"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"channel_not_found", "--channel <Slack user id>", "--as user"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
 	}
 }
 

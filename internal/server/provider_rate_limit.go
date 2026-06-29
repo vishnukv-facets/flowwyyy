@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,6 +22,157 @@ type providerLimitHold struct {
 
 type queuedOpenTaskPayload struct {
 	Slug string `json:"slug"`
+}
+
+type providerQueueResponse struct {
+	Count int                     `json:"count"`
+	Items []providerQueueItemView `json:"items"`
+}
+
+type providerQueueItemView struct {
+	ID          int64  `json:"id"`
+	Kind        string `json:"kind"`
+	Provider    string `json:"provider"`
+	Target      string `json:"target"`
+	Summary     string `json:"summary"`
+	PayloadJSON string `json:"payload_json"`
+	RunAfter    string `json:"run_after"`
+	Attempts    int    `json:"attempts"`
+	LastError   string `json:"last_error,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+func (s *Server) handleProviderQueue(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/provider-queue":
+		s.handleProviderQueueList(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/provider-queue/dismiss":
+		s.handleProviderQueueDismiss(w, r)
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleProviderQueueList(w http.ResponseWriter, _ *http.Request) {
+	if s == nil || s.cfg.DB == nil {
+		writeError(w, errors.New("database unavailable"), http.StatusInternalServerError)
+		return
+	}
+	items, err := flowdb.ListPendingRateLimitQueue(s.cfg.DB, 500)
+	if err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	out := providerQueueResponse{Count: len(items), Items: make([]providerQueueItemView, 0, len(items))}
+	for _, item := range items {
+		out.Items = append(out.Items, providerQueueItemViewFor(item))
+	}
+	writeJSON(w, out)
+}
+
+func (s *Server) handleProviderQueueDismiss(w http.ResponseWriter, r *http.Request) {
+	if s == nil || s.cfg.DB == nil {
+		writeError(w, errors.New("database unavailable"), http.StatusInternalServerError)
+		return
+	}
+	var req struct {
+		ID  int64 `json:"id"`
+		All bool  `json:"all"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, fmt.Errorf("decode provider queue dismiss: %w", err), http.StatusBadRequest)
+		return
+	}
+	if req.All {
+		if err := flowdb.DismissAllRateLimitQueue(s.cfg.DB); err != nil {
+			writeError(w, err, http.StatusInternalServerError)
+			return
+		}
+		s.publishUIChange("tasks")
+		writeJSON(w, map[string]any{"ok": true})
+		return
+	}
+	if req.ID <= 0 {
+		writeError(w, errors.New("id is required"), http.StatusBadRequest)
+		return
+	}
+	if err := flowdb.DismissRateLimitQueue(s.cfg.DB, req.ID); err != nil {
+		writeError(w, err, http.StatusInternalServerError)
+		return
+	}
+	s.publishUIChange("tasks")
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func providerQueueItemViewFor(item flowdb.RateLimitQueueItem) providerQueueItemView {
+	target, summary := summarizeProviderQueueItem(item)
+	out := providerQueueItemView{
+		ID:          item.ID,
+		Kind:        item.Kind,
+		Provider:    item.Provider,
+		Target:      target,
+		Summary:     summary,
+		PayloadJSON: item.PayloadJSON,
+		RunAfter:    item.RunAfter,
+		Attempts:    item.Attempts,
+		CreatedAt:   item.CreatedAt,
+		UpdatedAt:   item.UpdatedAt,
+	}
+	if item.LastError.Valid {
+		out.LastError = item.LastError.String
+	}
+	return out
+}
+
+func summarizeProviderQueueItem(item flowdb.RateLimitQueueItem) (target, summary string) {
+	switch item.Kind {
+	case flowdb.RateLimitQueueSlackEvent:
+		var ev monitor.InboundEvent
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &ev); err == nil {
+			target = strings.TrimSpace(ev.Channel)
+			if ev.ThreadTS != "" && ev.ThreadTS != ev.TS {
+				target = strings.TrimSpace(target + " " + ev.ThreadTS)
+			}
+			summary = strings.TrimSpace(ev.Kind)
+			if ev.Text != "" {
+				summary = strings.TrimSpace(summary + ": " + compactQueueText(ev.Text, 120))
+			}
+		}
+	case flowdb.RateLimitQueueGitHubEvent:
+		var ev monitor.GitHubEvent
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &ev); err == nil {
+			target = ev.RepoKey()
+			if ev.Number > 0 {
+				target = fmt.Sprintf("%s#%d", target, ev.Number)
+			}
+			summary = strings.TrimSpace(string(ev.Kind))
+			if ev.Title != "" {
+				summary = strings.TrimSpace(summary + ": " + compactQueueText(ev.Title, 120))
+			}
+		}
+	case flowdb.RateLimitQueueOpenTask:
+		var payload queuedOpenTaskPayload
+		if err := json.Unmarshal([]byte(item.PayloadJSON), &payload); err == nil {
+			target = strings.TrimSpace(payload.Slug)
+			summary = "open task " + target
+		}
+	}
+	if strings.TrimSpace(summary) == "" {
+		summary = item.Kind
+	}
+	return strings.TrimSpace(target), summary
+}
+
+func compactQueueText(s string, max int) string {
+	text := strings.Join(strings.Fields(s), " ")
+	if max <= 0 || len(text) <= max {
+		return text
+	}
+	if max <= 3 {
+		return text[:max]
+	}
+	return text[:max-3] + "..."
 }
 
 func (s *Server) providerRateLimitHold(provider string) (providerLimitHold, bool) {

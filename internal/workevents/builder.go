@@ -35,6 +35,11 @@ func Build(db *sql.DB, flowRoot string, filter Filter) (Result, error) {
 	items = append(items, attention...)
 	items = append(items, taskStateEvents(db, tasks)...)
 	items = append(items, inboxEvents(tasks)...)
+	ledger, err := ledgerEvents(db, bySlug, items)
+	if err != nil {
+		return Result{}, err
+	}
+	items = append(items, ledger...)
 
 	items = filterAndSort(items, filter)
 	return Result{Items: items, Counts: Count(items)}, nil
@@ -271,6 +276,110 @@ func classifyInboxEvent(task *flowdb.Task, ev monitor.InboundEvent, source strin
 		}
 	}
 	return BucketFYI, "inbox_activity_fyi", "Task inbox activity was recorded."
+}
+
+func ledgerEvents(db *sql.DB, tasks map[string]*flowdb.Task, existing []Event) ([]Event, error) {
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Event, 0, len(rows))
+	for _, row := range rows {
+		if ledgerDuplicatesDerivedEvent(row, existing) {
+			continue
+		}
+		task := tasks[row.TaskSlug]
+		project := row.ProjectSlug
+		if project == "" && task != nil && task.ProjectSlug.Valid {
+			project = task.ProjectSlug.String
+		}
+		out = append(out, Event{
+			ID:          "ledger:" + row.EventID,
+			Source:      firstNonEmpty(row.Source, "flow"),
+			Kind:        row.EventType,
+			EventKey:    row.ExternalID,
+			URL:         row.ExternalURL,
+			Title:       ledgerTitle(row.EventType),
+			Summary:     ledgerSummary(row),
+			Actor:       row.ActorID,
+			OccurredAt:  row.OccurredAt,
+			ObservedAt:  firstNonEmpty(row.CreatedAt, row.OccurredAt),
+			TaskSlug:    row.TaskSlug,
+			ProjectSlug: project,
+			EntityKind:  "work_event",
+			EntityRef:   row.EventID,
+			Bucket:      ledgerBucket(row.EventType),
+			ReasonCode:  "work_event_ledger",
+			ReasonText:  "Recorded by the append-only work event ledger.",
+			Links:       validLinks([]Link{taskLink(task), {Kind: "source", Target: row.ExternalURL, URL: row.ExternalURL}}),
+		})
+	}
+	return out, nil
+}
+
+func ledgerDuplicatesDerivedEvent(row flowdb.WorkEventLogEntry, existing []Event) bool {
+	source := strings.TrimSpace(row.Source)
+	externalID := strings.TrimSpace(row.ExternalID)
+	if source == "" || externalID == "" {
+		return false
+	}
+	for _, ev := range existing {
+		if ev.Source != source {
+			continue
+		}
+		key := strings.TrimSpace(ev.EventKey)
+		if key == externalID || strings.HasSuffix(key, ":"+externalID) {
+			return true
+		}
+	}
+	return false
+}
+
+func ledgerBucket(eventType string) Bucket {
+	switch eventType {
+	case "slack_send", "flow_tell", "session_bound", "attention_forward", "attention_make_task":
+		return BucketHandled
+	default:
+		return BucketFYI
+	}
+}
+
+func ledgerTitle(eventType string) string {
+	switch eventType {
+	case "slack_send":
+		return "Slack send"
+	case "flow_tell":
+		return "Flow tell"
+	case "session_bound":
+		return "Session bound"
+	case "github_comment":
+		return "GitHub comment"
+	case "attention_forward":
+		return "Attention forward"
+	case "attention_make_task":
+		return "Attention make task"
+	default:
+		if eventType == "" {
+			return "Work event"
+		}
+		return strings.ReplaceAll(eventType, "_", " ")
+	}
+}
+
+func ledgerSummary(row flowdb.WorkEventLogEntry) string {
+	switch row.EventType {
+	case "slack_send":
+		return "Slack message sent"
+	case "flow_tell":
+		return "Flow tell delivered"
+	case "session_bound":
+		return "Agent session bound to Flow work"
+	case "attention_forward":
+		return "Attention item forwarded"
+	case "attention_make_task":
+		return "Attention item turned into a task"
+	}
+	return ""
 }
 
 func taskIsDone(task *flowdb.Task) bool {

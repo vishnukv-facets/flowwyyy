@@ -3,6 +3,7 @@ package monitor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -411,13 +412,66 @@ func (d *GitHubDispatcher) recordEvent(ev GitHubEvent, slug string) error {
 			taskSlug = ""
 		}
 	}
-	_, err := flowdb.RecordGitHubEvent(d.DB, flowdb.GitHubEventLogEntry{
+	inserted, err := flowdb.RecordGitHubEvent(d.DB, flowdb.GitHubEventLogEntry{
 		EventKey:  key,
 		EventKind: string(ev.Kind),
 		TaskSlug:  taskSlug,
 		RawJSON:   ev.RawJSON,
 	})
+	if err != nil || !inserted {
+		return err
+	}
+	return d.recordGitHubWorkEvent(ev, taskSlug, key)
+}
+
+func (d *GitHubDispatcher) recordGitHubWorkEvent(ev GitHubEvent, taskSlug, key string) error {
+	eventType := githubWorkEventType(ev.Kind)
+	if eventType == "" {
+		return nil
+	}
+	projectSlug, workContextID := "", ""
+	if taskSlug != "" {
+		if task, err := flowdb.GetTask(d.DB, taskSlug); err == nil && task != nil {
+			if task.ProjectSlug.Valid {
+				projectSlug = task.ProjectSlug.String
+			}
+			if task.WorkContextID.Valid {
+				workContextID = task.WorkContextID.String
+			}
+		}
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"event_kind": string(ev.Kind),
+		"link_tag":   ev.LinkTag(),
+		"repo":       ev.RepoKey(),
+		"number":     ev.Number,
+		"comment_id": strings.TrimSpace(ev.CommentID),
+	})
+	_, _, err := flowdb.AppendWorkEventLog(d.DB, flowdb.WorkEventLogEntry{
+		EventID:       "github:" + key,
+		EventType:     eventType,
+		OccurredAt:    firstNonEmpty(ev.UpdatedAt, ev.CreatedAt),
+		TaskSlug:      taskSlug,
+		ProjectSlug:   projectSlug,
+		WorkContextID: workContextID,
+		ActorKind:     "github_user",
+		ActorID:       strings.TrimSpace(ev.Author),
+		Source:        "github",
+		ExternalID:    key,
+		ExternalURL:   strings.TrimSpace(ev.URL),
+		MetadataJSON:  string(meta),
+	})
 	return err
+}
+
+func githubWorkEventType(kind GitHubEventKind) string {
+	switch kind {
+	case GitHubEventPRReviewComment, GitHubEventPRReviewChangesRequested, GitHubEventPRReviewApproved,
+		GitHubEventPRComment, GitHubEventIssueComment:
+		return "github_comment"
+	default:
+		return ""
+	}
 }
 
 func (d *GitHubDispatcher) recordHeadSHASeen(ev GitHubEvent, slug string) error {

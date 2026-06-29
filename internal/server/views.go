@@ -557,6 +557,7 @@ func BuildProjectViews(db *sql.DB, root string, projects []*flowdb.Project) ([]P
 }
 
 func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookView, error) {
+	holdReason, holdUntil, holdActive := activePlaybookScheduleHold(pb, time.Now())
 	view := PlaybookView{
 		Slug:        pb.Slug,
 		Name:        pb.Name,
@@ -571,12 +572,14 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 		AuxFiles:    auxFiles(filepath.Join(root, "playbooks", pb.Slug)),
 		RunDays30:   make([]int, 30),
 
-		Schedule:        nullStringPtr(pb.ScheduleInput),
-		ScheduleSpec:    nullStringPtr(pb.ScheduleSpec),
-		SchedulePaused:  pb.SchedulePausedAt.Valid,
-		NextFireAt:      nullStringPtr(pb.NextFireAt),
-		LastFiredAt:     nullStringPtr(pb.LastFiredAt),
-		LastFireRunSlug: nullStringPtr(pb.LastFireRunSlug),
+		Schedule:           nullStringPtr(pb.ScheduleInput),
+		ScheduleSpec:       nullStringPtr(pb.ScheduleSpec),
+		SchedulePaused:     pb.SchedulePausedAt.Valid || holdActive,
+		ScheduleHoldReason: holdReason,
+		ScheduleHoldUntil:  holdUntil,
+		NextFireAt:         nullStringPtr(pb.NextFireAt),
+		LastFiredAt:        nullStringPtr(pb.LastFiredAt),
+		LastFireRunSlug:    nullStringPtr(pb.LastFireRunSlug),
 	}
 	if view.Updates == nil {
 		view.Updates = []FileRef{}
@@ -628,6 +631,19 @@ func BuildPlaybookView(db *sql.DB, root string, pb *flowdb.Playbook) (PlaybookVi
 		view.RecentRuns = []RunSummary{}
 	}
 	return view, nil
+}
+
+func activePlaybookScheduleHold(pb *flowdb.Playbook, now time.Time) (*string, *string, bool) {
+	if pb == nil || !pb.ScheduleHoldReason.Valid || !pb.ScheduleHoldUntil.Valid {
+		return nil, nil, false
+	}
+	until, err := time.Parse(time.RFC3339, pb.ScheduleHoldUntil.String)
+	if err != nil || !until.After(now) {
+		return nil, nil, false
+	}
+	reason := pb.ScheduleHoldReason.String
+	untilText := pb.ScheduleHoldUntil.String
+	return &reason, &untilText, true
 }
 
 func BuildPlaybookViews(db *sql.DB, root string, pbs []*flowdb.Playbook) ([]PlaybookView, error) {

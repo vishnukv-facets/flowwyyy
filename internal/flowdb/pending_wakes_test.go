@@ -176,4 +176,28 @@ func TestRateLimitQueueReadyAndReschedule(t *testing.T) {
 	if len(ready) != 0 {
 		t.Fatalf("ready after reschedule = %+v; want none", ready)
 	}
+	pending, err := ListPendingRateLimitQueue(db, 10)
+	if err != nil {
+		t.Fatalf("list pending: %v", err)
+	}
+	if len(pending) != 1 || pending[0].ID != id2 || pending[0].LastError.String != "still limited" {
+		t.Fatalf("pending = %+v; want rescheduled open task", pending)
+	}
+	if err := DismissRateLimitQueue(db, id2); err != nil {
+		t.Fatalf("dismiss: %v", err)
+	}
+	count, err := CountPendingRateLimitQueue(db)
+	if err != nil {
+		t.Fatalf("count pending: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("pending count after dismiss = %d, want 0", count)
+	}
+	pending, err = ListPendingRateLimitQueue(db, 10)
+	if err != nil {
+		t.Fatalf("list after dismiss: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("pending after dismiss = %+v; want none", pending)
+	}
 }

@@ -85,6 +85,10 @@ func Run(args []string) int {
 		return cmdSpawn(rest)
 	case "tell":
 		return cmdTell(rest)
+	case "read":
+		return cmdRead(rest)
+	case "context":
+		return cmdContext(rest)
 	case "slack":
 		return cmdSlack(rest)
 	case "voice":
@@ -137,6 +141,11 @@ Read:
   flow show project    [<ref>]
   flow show owner      <slug>
   flow transcript      [<ref>] [--compact]           (readable transcript from session jsonl)
+  flow read ask "<question>" [--key <dedupe-key>]     (publish a structured pending question)
+  flow read say "<note>"     [--key <dedupe-key>]     (publish a structured unread status note)
+  flow read list [--status pending|unread|read|answered|all]
+  flow context bind [--context <id-or-slug>] [--title <title>] [--task <slug>] [--chat <slug>]
+  flow context inspect <id-or-slug|task:<slug>|chat:<slug>>
   flow list tasks    [--status ...] [--project ...] [--priority ...] [--tag <t>] [--since ...] [--include-archived] [--include-deleted|--deleted]
   flow list projects [--status ...] [--include-archived] [--include-deleted|--deleted]
   flow list owners   [--status active|paused|retired] [--include-archived]

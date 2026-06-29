@@ -1,6 +1,7 @@
 package app
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
 
@@ -273,7 +275,11 @@ func cmdSlackSend(args []string) int {
 		}
 		if status >= 200 && status < 300 {
 			if postAt != 0 {
-				printSlackScheduleConfirmation(slackScheduledMessageID(respBody), postAt)
+				scheduledID := slackScheduledMessageID(respBody)
+				recordSlackSendWorkEvent(*channel, thread, body, identity, filePath, postAt, scheduledID)
+				printSlackScheduleConfirmation(scheduledID, postAt)
+			} else {
+				recordSlackSendWorkEvent(*channel, thread, body, identity, filePath, 0, "")
 			}
 			return 0
 		}
@@ -293,6 +299,7 @@ func cmdSlackSend(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
+		recordSlackSendWorkEvent(*channel, thread, body, identity, filePath, postAt, id)
 		printSlackScheduleConfirmation(id, postAt)
 		return 0
 	}
@@ -301,13 +308,119 @@ func cmdSlackSend(args []string) int {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return 1
 		}
+		recordSlackSendWorkEvent(*channel, thread, body, identity, filePath, 0, "")
 		return 0
 	}
 	if err := slackSendFn(*channel, thread, body, identity); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	recordSlackSendWorkEvent(*channel, thread, body, identity, filePath, 0, "")
 	return 0
+}
+
+func recordSlackSendWorkEvent(channel, threadTS, text, identity, filePath string, postAt int64, scheduledID string) {
+	if strings.TrimSpace(os.Getenv("FLOW_ROOT")) == "" {
+		return
+	}
+	session := currentSessionForProvider("")
+	if session.ID == "" && strings.TrimSpace(os.Getenv("FLOW_TASK")) == "" {
+		return
+	}
+	dbPath, err := flowDBPath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: record slack send work event: %v\n", err)
+		return
+	}
+	db, err := flowdb.OpenDB(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: record slack send work event: %v\n", err)
+		return
+	}
+	defer db.Close()
+
+	task := currentWorkEventTask(db, session)
+	taskSlug, projectSlug, workContextID := taskWorkEventFields(task)
+	actorKind, actorID := "operator", "user"
+	if session.ID != "" {
+		actorKind = "agent"
+		actorID = session.Provider + ":" + session.ID
+	}
+	meta := map[string]any{
+		"channel":   strings.TrimSpace(channel),
+		"thread_ts": strings.TrimSpace(threadTS),
+		"identity":  strings.TrimSpace(identity),
+		"text_len":  len([]rune(text)),
+	}
+	if strings.TrimSpace(filePath) != "" {
+		meta["file"] = strings.TrimSpace(filePath)
+	}
+	if postAt != 0 {
+		meta["post_at"] = postAt
+	}
+	if strings.TrimSpace(scheduledID) != "" {
+		meta["scheduled_message_id"] = strings.TrimSpace(scheduledID)
+	}
+	raw, _ := json.Marshal(meta)
+	_, _, err = flowdb.AppendWorkEventLog(db, flowdb.WorkEventLogEntry{
+		EventType:     "slack_send",
+		Provider:      session.Provider,
+		SessionID:     session.ID,
+		TaskSlug:      taskSlug,
+		ProjectSlug:   projectSlug,
+		WorkContextID: workContextID,
+		ActorKind:     actorKind,
+		ActorID:       actorID,
+		Source:        "slack",
+		ExternalID:    slackWorkEventExternalID(channel, threadTS, scheduledID),
+		MetadataJSON:  string(raw),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: record slack send work event: %v\n", err)
+	}
+}
+
+func currentWorkEventTask(db *sql.DB, session currentAgentSession) *flowdb.Task {
+	if db == nil {
+		return nil
+	}
+	if session.ID != "" {
+		if task, err := flowdb.TaskBySessionID(db, session.ID); err == nil {
+			return task
+		}
+	}
+	if slug := strings.TrimSpace(os.Getenv("FLOW_TASK")); slug != "" {
+		if task, err := flowdb.GetTask(db, slug); err == nil {
+			return task
+		}
+	}
+	return nil
+}
+
+func taskWorkEventFields(task *flowdb.Task) (taskSlug, projectSlug, workContextID string) {
+	if task == nil {
+		return "", "", ""
+	}
+	taskSlug = task.Slug
+	if task.ProjectSlug.Valid {
+		projectSlug = task.ProjectSlug.String
+	}
+	if task.WorkContextID.Valid {
+		workContextID = task.WorkContextID.String
+	}
+	return taskSlug, projectSlug, workContextID
+}
+
+func slackWorkEventExternalID(channel, threadTS, scheduledID string) string {
+	if id := strings.TrimSpace(scheduledID); id != "" {
+		return id
+	}
+	channel = strings.TrimSpace(channel)
+	threadTS = strings.TrimSpace(threadTS)
+	if threadTS != "" {
+		return channel + ":" + threadTS
+	}
+	return channel
 }
 
 func readSlackTextFile(path string) (string, error) {

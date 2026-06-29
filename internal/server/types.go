@@ -540,12 +540,14 @@ type PlaybookView struct {
 	// Scheduling. Schedule is the operator's phrase ("every 6 hours"),
 	// ScheduleSpec the canonical cron. SchedulePaused => retained but not
 	// firing. All nil/false when the playbook has no schedule.
-	Schedule        *string `json:"schedule"`
-	ScheduleSpec    *string `json:"schedule_spec"`
-	SchedulePaused  bool    `json:"schedule_paused"`
-	NextFireAt      *string `json:"next_fire_at"`
-	LastFiredAt     *string `json:"last_fired_at"`
-	LastFireRunSlug *string `json:"last_fire_run_slug"`
+	Schedule           *string `json:"schedule"`
+	ScheduleSpec       *string `json:"schedule_spec"`
+	SchedulePaused     bool    `json:"schedule_paused"`
+	ScheduleHoldReason *string `json:"schedule_hold_reason"`
+	ScheduleHoldUntil  *string `json:"schedule_hold_until"`
+	NextFireAt         *string `json:"next_fire_at"`
+	LastFiredAt        *string `json:"last_fired_at"`
+	LastFireRunSlug    *string `json:"last_fire_run_slug"`
 }
 
 type KBFileView struct {

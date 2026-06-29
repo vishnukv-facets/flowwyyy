@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"flow/internal/flowdb"
 	"flow/internal/monitor"
 )
 
@@ -43,5 +44,21 @@ func TestCmdTellAppendsActionableInboxJSONL(t *testing.T) {
 	}
 	if !strings.Contains(got.Event.Text, "Forwarded file context") || !strings.Contains(got.Event.Text, "Security report: clean") {
 		t.Fatalf("event text missing forwarded context: %q", got.Event.Text)
+	}
+
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "flow_tell", TaskSlug: "review-plan"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("flow_tell rows = %d, want 1: %+v", len(rows), rows)
+	}
+	if rows[0].Source != "flow" || rows[0].ActorID != "attention-router" || rows[0].ExternalID == "" {
+		t.Fatalf("flow_tell provenance = %+v", rows[0])
 	}
 }

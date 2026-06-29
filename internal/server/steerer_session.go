@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"flow/internal/contextpack"
 	"flow/internal/flowdb"
 	"flow/internal/monitor"
 	"flow/internal/steering"
@@ -229,7 +230,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 	case steererActWake:
 		slot.state = steererSlotLive
 		slot.lastDeliveryAt = time.Now()
-		turn := renderSteererTurnForProvider(p, chat.Provider)
+		turn := s.appendSteererChatContextPack(renderSteererTurnForProvider(p, chat.Provider), chat)
 		// On laptop wake a session resuming from suspension may still be settling;
 		// gate the paste on quiescence so it lands in a ready input box, not mid-render.
 		s.terminals.waitForSessionReady(slug, steererWakeStable, steererWakeTimeout)
@@ -240,7 +241,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 		return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
 	case steererActResume:
 		s.maybeUpgradeSteererTitle(chat, p, key)
-		turn := renderSteererTurnForProvider(p, chat.Provider)
+		turn := s.appendSteererChatContextPack(renderSteererTurnForProvider(p, chat.Provider), chat)
 		return s.resumeSteererChat(slot, chat, turn)
 	default: // steererActStart
 		title := s.resolveSteererChatTitle(context.Background(), p, key)
@@ -248,6 +249,28 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 		turn := renderSteererTurnForProvider(p, provider)
 		return s.startNewSteererChat(slot, slug, turn, title, provider)
 	}
+}
+
+func (s *Server) appendSteererChatContextPack(turn string, chat *flowdb.Chat) string {
+	if s == nil || s.cfg.DB == nil {
+		return turn
+	}
+	root := ""
+	if r, err := s.absFlowRoot(); err == nil {
+		root = r
+	}
+	return appendSteererChatContextPack(turn, s.cfg.DB, root, chat)
+}
+
+func appendSteererChatContextPack(turn string, db *sql.DB, root string, chat *flowdb.Chat) string {
+	if chat == nil {
+		return turn
+	}
+	pack, err := contextpack.Build(db, root, contextpack.Ref{Kind: contextpack.RefChat, ID: chat.Slug}, contextpack.Options{})
+	if err != nil || len(pack.Sections) == 0 {
+		return turn
+	}
+	return turn + "\n\n" + contextpack.RenderMarkdown(pack)
 }
 
 // steererSendReplyPrompt builds the one-shot, operator-authorized SEND instruction

@@ -1092,6 +1092,56 @@ func TestBuildBootstrapPromptForRegularTask(t *testing.T) {
 	}
 }
 
+func TestAppendTaskContextPackAddsStructuredDependencyContext(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLOW_ROOT", root)
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	insertProject(t, db, "flowwyyy", "flowwyyy", "/tmp/flowwyyy", "high")
+	insertTask(t, db, "upstream", "Build upstream ledger", "done", "high", "/tmp/flowwyyy", "flowwyyy")
+	insertTask(t, db, "child", "Build child pack", "in-progress", "high", "/tmp/flowwyyy", "flowwyyy")
+	if err := flowdb.AddTaskDependency(db, "child", "upstream"); err != nil {
+		t.Fatal(err)
+	}
+	updatePath := filepath.Join(root, "tasks", "upstream", "updates", "2026-06-28-handoff.md")
+	if err := os.MkdirAll(filepath.Dir(updatePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(updatePath, []byte("# Handoff\n\nLedger handoff shipped.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wc, err := flowdb.CreateWorkContext(db, flowdb.WorkContext{Title: "Child context"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flowdb.SetTaskWorkContext(db, "child", wc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := flowdb.CreateWorkContextSourceAnchor(db, flowdb.WorkContextSourceAnchor{
+		WorkContextID: wc.ID,
+		Source:        "github",
+		AnchorType:    "github_pr",
+		ExternalID:    "acme/repo#9",
+		URL:           "https://github.com/acme/repo/pull/9",
+		Label:         "PR #9",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := appendTaskContextPack("base prompt", db, root, "child")
+	for _, want := range []string{"# ContextPack", "Dependencies And Upstream Outputs", "upstream", "Ledger handoff shipped", "UNTRUSTED external evidence"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Upstream dependencies — their changes may NOT") {
+		t.Fatalf("prompt should use structured ContextPack, not legacy dependency note:\n%s", got)
+	}
+}
+
 func TestBuildBootstrapPromptForKindWithEmptyKind(t *testing.T) {
 	// Defensive: an empty kind string (legacy rows that somehow didn't
 	// migrate) should fall through to the regular-task variant.
@@ -1455,6 +1505,38 @@ func TestCmdDoHereIdempotent(t *testing.T) {
 	}
 	if rc := cmdDo([]string{"idem-task", "--here"}); rc != 0 {
 		t.Errorf("second --here rc=%d, want 0 (idempotent)", rc)
+	}
+}
+
+func TestCmdDoHereCodexIdempotentIgnoresInheritedClaudeSession(t *testing.T) {
+	setupFlowRoot(t)
+	if rc := cmdAdd([]string{"task", "Codex Idem", "--slug", "codex-idem", "--agent", "codex"}); rc != 0 {
+		t.Fatalf("seed codex task rc=%d", rc)
+	}
+	const codexSID = "019e3c18-1149-7532-a1c0-31a4cfedb296"
+	const inheritedClaudeSID = "f00ba111-2222-4333-8444-555555555555"
+	db := openFlowDB(t)
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_id=?, session_provider='codex', harness='codex', session_started=?, status='in-progress' WHERE slug='codex-idem'`,
+		codexSID, flowdb.NowISO(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	t.Setenv("CODEX_THREAD_ID", codexSID)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", inheritedClaudeSID)
+	if rc := cmdDo([]string{"codex-idem", "--here"}); rc != 0 {
+		t.Errorf("codex --here rc=%d, want 0 when the current Codex session is already bound", rc)
+	}
+
+	db = openFlowDB(t)
+	task, _ := flowdb.GetTask(db, "codex-idem")
+	if task.SessionProvider != sessionProviderCodex {
+		t.Errorf("session_provider=%q, want codex", task.SessionProvider)
+	}
+	if !task.SessionID.Valid || task.SessionID.String != codexSID {
+		t.Errorf("session_id=%+v, want %s", task.SessionID, codexSID)
 	}
 }
 

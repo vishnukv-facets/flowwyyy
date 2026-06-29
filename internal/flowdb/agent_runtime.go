@@ -2,6 +2,7 @@ package flowdb
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -13,14 +14,15 @@ import (
 // session sequence number when the hook supplies one (0 falls back to
 // unconditional apply for legacy hooks).
 type AgentRuntimeStateInput struct {
-	Provider  string
-	SessionID string
-	TaskSlug  string
-	Status    string
-	EventKind string
-	Message   string
-	Seq       int64
-	RawJSON   string
+	Provider      string
+	SessionID     string
+	TaskSlug      string
+	WorkContextID string
+	Status        string
+	EventKind     string
+	Message       string
+	Seq           int64
+	RawJSON       string
 }
 
 // UpsertAgentRuntimeState records the latest runtime state for a session.
@@ -49,12 +51,13 @@ func UpsertAgentRuntimeState(db *sql.DB, input AgentRuntimeStateInput) error {
 	if eventKind == "" {
 		eventKind = status
 	}
-	_, err := db.Exec(
+	res, err := db.Exec(
 		`INSERT INTO agent_runtime_states (
-			provider, session_id, task_slug, status, event_kind, message, updated_at, last_seq, raw_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			provider, session_id, task_slug, work_context_id, status, event_kind, message, updated_at, last_seq, raw_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(provider, session_id) DO UPDATE SET
 			task_slug = excluded.task_slug,
+			work_context_id = COALESCE(excluded.work_context_id, agent_runtime_states.work_context_id),
 			status = excluded.status,
 			event_kind = excluded.event_kind,
 			message = excluded.message,
@@ -63,9 +66,53 @@ func UpsertAgentRuntimeState(db *sql.DB, input AgentRuntimeStateInput) error {
 			raw_json = excluded.raw_json
 		WHERE excluded.last_seq = 0
 		   OR excluded.last_seq >= agent_runtime_states.last_seq`,
-		provider, sessionID, nullStringOrTrimmed(input.TaskSlug), status, eventKind,
+		provider, sessionID, nullStringOrTrimmed(input.TaskSlug), nullStringOrTrimmed(input.WorkContextID), status, eventKind,
 		nullStringOrTrimmed(input.Message), NowISO(), input.Seq, nullStringOrTrimmed(input.RawJSON),
 	)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected > 0 {
+		if err := appendSessionBoundWorkEvent(db, provider, sessionID, input); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func appendSessionBoundWorkEvent(db *sql.DB, provider, sessionID string, input AgentRuntimeStateInput) error {
+	taskSlug := strings.TrimSpace(input.TaskSlug)
+	if taskSlug == "" {
+		return nil
+	}
+	workContextID := strings.TrimSpace(input.WorkContextID)
+	projectSlug := ""
+	if task, err := GetTask(db, taskSlug); err == nil && task != nil {
+		if task.ProjectSlug.Valid {
+			projectSlug = task.ProjectSlug.String
+		}
+		if workContextID == "" && task.WorkContextID.Valid {
+			workContextID = task.WorkContextID.String
+		}
+	}
+	meta, _ := json.Marshal(map[string]any{
+		"event_kind": strings.TrimSpace(input.EventKind),
+		"status":     strings.TrimSpace(input.Status),
+	})
+	_, _, err := AppendWorkEventLog(db, WorkEventLogEntry{
+		EventID:       "session-bound:" + provider + ":" + sessionID + ":" + taskSlug,
+		EventType:     "session_bound",
+		Provider:      provider,
+		SessionID:     sessionID,
+		TaskSlug:      taskSlug,
+		ProjectSlug:   projectSlug,
+		WorkContextID: workContextID,
+		ActorKind:     "agent",
+		ActorID:       provider + ":" + sessionID,
+		Source:        "flow",
+		ExternalID:    provider + ":" + sessionID,
+		MetadataJSON:  string(meta),
+	})
 	return err
 }
 
@@ -98,13 +145,13 @@ func AgentRuntimeStateBySessionID(db *sql.DB, provider, sessionID string) (*Agen
 		return nil, sql.ErrNoRows
 	}
 	row := db.QueryRow(
-		`SELECT provider, session_id, task_slug, status, event_kind, message, updated_at, last_seq, raw_json
+		`SELECT provider, session_id, task_slug, work_context_id, status, event_kind, message, updated_at, last_seq, raw_json
 		 FROM agent_runtime_states
 		 WHERE provider = ? AND session_id = ?`,
 		provider, sessionID,
 	)
 	var state AgentRuntimeState
-	if err := row.Scan(&state.Provider, &state.SessionID, &state.TaskSlug, &state.Status, &state.EventKind, &state.Message, &state.UpdatedAt, &state.LastSeq, &state.RawJSON); err != nil {
+	if err := row.Scan(&state.Provider, &state.SessionID, &state.TaskSlug, &state.WorkContextID, &state.Status, &state.EventKind, &state.Message, &state.UpdatedAt, &state.LastSeq, &state.RawJSON); err != nil {
 		return nil, err
 	}
 	return &state, nil

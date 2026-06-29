@@ -231,6 +231,7 @@ func runMigrations(db *sql.DB) error {
 	// that predate them. (Fresh DBs already have them from schemaDDL.)
 	for _, col := range []string{
 		"schedule_spec", "schedule_input", "schedule_paused_at",
+		"schedule_hold_reason", "schedule_hold_until",
 		"next_fire_at", "last_fired_at", "last_fire_run_slug",
 	} {
 		has, err = columnExists(db, "playbooks", col)
@@ -449,6 +450,26 @@ func runMigrations(db *sql.DB) error {
 	// session store. Old DBs need a table rebuild.
 	if err := migrateTasksSessionInvariant(db); err != nil {
 		return fmt.Errorf("migrate session invariant: %w", err)
+	}
+
+	for _, col := range []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{"tasks", "work_context_id", `ALTER TABLE tasks ADD COLUMN work_context_id TEXT REFERENCES work_contexts(id) ON DELETE SET NULL`},
+		{"chats", "work_context_id", `ALTER TABLE chats ADD COLUMN work_context_id TEXT REFERENCES work_contexts(id) ON DELETE SET NULL`},
+		{"agent_runtime_states", "work_context_id", `ALTER TABLE agent_runtime_states ADD COLUMN work_context_id TEXT REFERENCES work_contexts(id) ON DELETE SET NULL`},
+	} {
+		has, err := columnExists(db, col.table, col.name)
+		if err != nil {
+			return err
+		}
+		if !has {
+			if _, err := db.Exec(col.ddl); err != nil {
+				return fmt.Errorf("add %s.%s: %w", col.table, col.name, err)
+			}
+		}
 	}
 
 	// Indexes that depend on columns added above. Safe to run after every

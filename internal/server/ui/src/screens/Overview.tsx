@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Link, useLocation } from "wouter";
 import {
   ArrowRight,
@@ -20,12 +21,16 @@ import {
   PieChart,
   Trophy,
   RefreshCw,
+  Trash2,
+  X,
 } from "lucide-react";
 import {
   useAction,
   useChats,
+  useDismissProviderQueue,
   useInbox,
   useOverview,
+  useProviderQueue,
   useProviderUsage,
   useQuote,
   useTasks,
@@ -33,6 +38,7 @@ import {
 } from "../lib/query";
 import { useDocumentTitle } from "../lib/useDocumentTitle";
 import { AgentCard } from "../components/AgentCard";
+import { Modal } from "../components/Modal";
 import {
   EmptyState,
   ErrorNote,
@@ -72,6 +78,7 @@ import type {
   InboxFeedEntry,
   ModelCount,
   PlaybookRun,
+  ProviderQueueItem,
   ProjectMC,
   TaskView,
   TokenDay,
@@ -216,17 +223,37 @@ function providerUsageTier(u?: {
   return "usage-ok";
 }
 
-function ProviderUsageTip({ provider }: { provider: string }) {
+function ProviderUsageTip({
+  provider,
+  onInspectQueue,
+}: {
+  provider: string;
+  onInspectQueue: () => void;
+}) {
   const { data, isLoading, error } = useProviderUsage(provider);
   const action = useAction();
   const title = provider === "codex" ? "Codex quota" : "Claude quota";
   const recheck = () => action.mutate({ kind: "recheck-provider-limits" });
+  const queued = data?.queued_actions ?? 0;
   const queueLine = data?.queued_actions
     ? `${data.queued_actions} queued action${data.queued_actions === 1 ? "" : "s"}`
     : "No held automation";
   const nextCheck = fmtReset(
     data?.next_queue_run_after || data?.limit_reset_at,
   );
+  const inspectButton = queued ? (
+    <button
+      type="button"
+      className="usage-recheck"
+      onClick={(e) => {
+        e.stopPropagation();
+        onInspectQueue();
+      }}
+    >
+      <ArrowRight size={13} />
+      <span>Inspect</span>
+    </button>
+  ) : null;
   if (isLoading) {
     return (
       <div className="usage-tip">
@@ -239,87 +266,262 @@ function ProviderUsageTip({ provider }: { provider: string }) {
   }
   if (error || !data?.available) {
     return (
-      <div className="usage-tip">
-        <div className="ftip-head">
-          <span className="ftip-count">{title}</span>
-          <span className="ftip-date">unavailable</span>
-        </div>
-        <div className="ftip-more">
-          {data?.reason ||
-            (error as Error)?.message ||
-            "usage source unavailable"}
-        </div>
-        <div className="usage-hold">
-          <div>
-            <strong>{queueLine}</strong>
-            {nextCheck ? <span>next check {nextCheck}</span> : null}
+      <>
+        <div className="usage-tip">
+          <div className="ftip-head">
+            <span className="ftip-count">{title}</span>
+            <span className="ftip-date">unavailable</span>
           </div>
-          <button
-            type="button"
-            className="usage-recheck"
-            disabled={action.isPending}
-            onClick={(e) => {
-              e.stopPropagation();
-              recheck();
-            }}
-          >
-            <RefreshCw size={13} />
-            <span>Recheck</span>
-          </button>
+          <div className="ftip-more">
+            {data?.reason ||
+              (error as Error)?.message ||
+              "usage source unavailable"}
+          </div>
+          <div className="usage-hold">
+            <div>
+              <strong>{queueLine}</strong>
+              {nextCheck ? <span>next check {nextCheck}</span> : null}
+            </div>
+            <div className="usage-hold-actions">
+              {inspectButton}
+              <button
+                type="button"
+                className="usage-recheck"
+                disabled={action.isPending}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  recheck();
+                }}
+              >
+                <RefreshCw size={13} />
+                <span>Recheck</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
   return (
-    <div className="usage-tip">
-      <div className="ftip-head">
-        <span className="ftip-count">{title}</span>
-        <span className={`ftip-date${data.limited ? " warn" : ""}`}>
-          {data.limited
-            ? "limited"
-            : data.observed_at
-              ? `seen ${ago(data.observed_at)}`
-              : "live"}
+    <>
+      <div className="usage-tip">
+        <div className="ftip-head">
+          <span className="ftip-count">{title}</span>
+          <span className={`ftip-date${data.limited ? " warn" : ""}`}>
+            {data.limited
+              ? "limited"
+              : data.observed_at
+                ? `seen ${ago(data.observed_at)}`
+                : "live"}
+          </span>
+        </div>
+        <div className="usage-windows">
+          {data.windows.map((w) => (
+            <div className="usage-window" key={w.id}>
+              <div className="usage-window-top">
+                <span className="mono">{w.label}</span>
+                <span>{w.remaining_percent}% left</span>
+              </div>
+              <div className="usage-bar">
+                <span style={{ width: `${w.used_percent}%` }} />
+              </div>
+              <div className="usage-reset">{fmtReset(w.reset_at)}</div>
+            </div>
+          ))}
+        </div>
+        <div className={`usage-hold${data.limited ? " limited" : ""}`}>
+          <div>
+            <strong>{queueLine}</strong>
+            {nextCheck ? (
+              <span>
+                {data.limited ? "reset" : "next check"} {nextCheck}
+              </span>
+            ) : null}
+          </div>
+          <div className="usage-hold-actions">
+            {inspectButton}
+            <button
+              type="button"
+              className="usage-recheck"
+              disabled={action.isPending}
+              onClick={(e) => {
+                e.stopPropagation();
+                recheck();
+              }}
+            >
+              <RefreshCw size={13} />
+              <span>Recheck</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+function ProviderQueueModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { data, isLoading, error } = useProviderQueue(open);
+  const dismiss = useDismissProviderQueue();
+  const items = data?.items ?? [];
+  const [selectedID, setSelectedID] = useState<number | null>(null);
+  const selected = items.find((item) => item.id === selectedID) ?? items[0] ?? null;
+  if (!open) return null;
+  return createPortal(
+    <Modal
+      open={open}
+      onClose={onClose}
+      width={1040}
+      title="Queued provider actions"
+      scrimClassName="provider-queue-scrim"
+      className="provider-queue-modal"
+      bodyClassName="provider-queue-modal-body"
+      footer={
+        <>
+          <button type="button" className="btn ghost sm" onClick={onClose}>
+            <X size={14} /> Close
+          </button>
+          <div className="spacer" />
+          <button
+            type="button"
+            className="btn ghost sm danger"
+            disabled={dismiss.isPending || items.length === 0}
+            onClick={() => dismiss.mutate({ all: true })}
+          >
+            <Trash2 size={14} /> Dismiss all
+          </button>
+        </>
+      }
+    >
+      {isLoading ? (
+        <Loading rows={4} />
+      ) : error ? (
+        <ErrorNote error={error} />
+      ) : items.length === 0 ? (
+        <EmptyState
+          icon={<RefreshCw size={28} />}
+          title="No queued actions"
+          hint="Provider-held automation will appear here when quota limits pause it."
+        />
+      ) : (
+        <div className="provider-queue-panes">
+          <section className="provider-queue-pane provider-queue-list-pane">
+            <div className="provider-queue-pane-head">
+              <span>Held actions</span>
+              <span className="tag">{items.length}</span>
+            </div>
+            <div className="provider-queue-list">
+              {items.map((item) => (
+                <ProviderQueueListItem
+                  key={item.id}
+                  item={item}
+                  selected={item.id === selected?.id}
+                  onSelect={() => setSelectedID(item.id)}
+                />
+              ))}
+            </div>
+          </section>
+          <section className="provider-queue-pane provider-queue-detail-pane">
+            {selected && (
+              <ProviderQueueDetail
+                item={selected}
+                pending={dismiss.isPending}
+                onDismiss={() => dismiss.mutate({ id: selected.id })}
+              />
+            )}
+          </section>
+        </div>
+      )}
+    </Modal>,
+    document.body,
+  );
+}
+
+function ProviderQueueListItem({
+  item,
+  selected,
+  onSelect,
+}: {
+  item: ProviderQueueItem;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={`provider-queue-row${selected ? " selected" : ""}`}
+      onClick={onSelect}
+    >
+      <div className="provider-queue-head">
+        <span className="tag">{providerQueueKindLabel(item.kind)}</span>
+        <span className="tag">
+          <ProviderIcon provider={item.provider} size={12} /> {item.provider}
         </span>
       </div>
-      <div className="usage-windows">
-        {data.windows.map((w) => (
-          <div className="usage-window" key={w.id}>
-            <div className="usage-window-top">
-              <span className="mono">{w.label}</span>
-              <span>{w.remaining_percent}% left</span>
-            </div>
-            <div className="usage-bar">
-              <span style={{ width: `${w.used_percent}%` }} />
-            </div>
-            <div className="usage-reset">{fmtReset(w.reset_at)}</div>
-          </div>
-        ))}
+      {item.target ? <div className="provider-queue-target mono">{item.target}</div> : null}
+      <div className="provider-queue-summary">{item.summary}</div>
+      <div className="provider-queue-meta">
+        <span>held {fmtReset(item.run_after)}</span>
+        <span>queued {ago(item.created_at)}</span>
       </div>
-      <div className={`usage-hold${data.limited ? " limited" : ""}`}>
+    </button>
+  );
+}
+
+function ProviderQueueDetail({
+  item,
+  pending,
+  onDismiss,
+}: {
+  item: ProviderQueueItem;
+  pending: boolean;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="provider-queue-detail">
+      <div className="provider-queue-detail-head">
         <div>
-          <strong>{queueLine}</strong>
-          {nextCheck ? (
-            <span>
-              {data.limited ? "reset" : "next check"} {nextCheck}
+          <div className="provider-queue-detail-title">{item.summary}</div>
+          <div className="provider-queue-detail-sub">
+            <span className="tag">{providerQueueKindLabel(item.kind)}</span>
+            <span className="tag">
+              <ProviderIcon provider={item.provider} size={12} /> {item.provider}
             </span>
-          ) : null}
+          </div>
         </div>
-        <button
-          type="button"
-          className="usage-recheck"
-          disabled={action.isPending}
-          onClick={(e) => {
-            e.stopPropagation();
-            recheck();
-          }}
-        >
-          <RefreshCw size={13} />
-          <span>Recheck</span>
+        <button type="button" className="btn ghost sm danger provider-queue-dismiss" disabled={pending} onClick={onDismiss}>
+          <Trash2 size={13} /> Dismiss
         </button>
+      </div>
+      <div className="provider-queue-fields">
+        <div><span>Target</span><strong>{item.target || "none"}</strong></div>
+        <div><span>Held until</span><strong>{fmtReset(item.run_after)}</strong></div>
+        <div><span>Queued</span><strong>{ago(item.created_at)}</strong></div>
+        <div><span>Attempts</span><strong>{item.attempts}</strong></div>
+        {item.last_error ? <div className="wide"><span>Last error</span><strong>{item.last_error}</strong></div> : null}
+      </div>
+      <div className="provider-queue-payload">
+        <div className="provider-queue-pane-head">
+          <span>Payload</span>
+        </div>
+        <pre>{formatProviderQueuePayload(item.payload_json)}</pre>
       </div>
     </div>
   );
+}
+
+function providerQueueKindLabel(kind: string): string {
+  if (kind === "slack_event") return "Slack";
+  if (kind === "github_event") return "GitHub";
+  if (kind === "open_task") return "Open task";
+  return kind;
+}
+
+function formatProviderQueuePayload(payload: string): string {
+  try {
+    return JSON.stringify(JSON.parse(payload), null, 2);
+  } catch {
+    return payload;
+  }
 }
 
 // Local YYYY-MM-DD for "today" — heatmap dates are YYYY-MM-DD, so string
@@ -1440,6 +1642,7 @@ export function Overview() {
   const { text: greeting, hourKey } = useGreeting();
   const { data: quote } = useQuote(hourKey);
   const usageTip = useFloatTip();
+  const [providerQueueOpen, setProviderQueueOpen] = useState(false);
   // Provider quota drives the env-pill ring tier (green→yellow→orange→red).
   // Shares React Query's cache with the click-popover, so no extra fetches.
   const claudeUsage = useProviderUsage("claude");
@@ -1600,7 +1803,13 @@ export function Overview() {
                 onClick={(e) =>
                   usageTip.show(
                     e.currentTarget,
-                    <ProviderUsageTip provider={c.id} />,
+                    <ProviderUsageTip
+                      provider={c.id}
+                      onInspectQueue={() => {
+                        usageTip.hide();
+                        setProviderQueueOpen(true);
+                      }}
+                    />,
                   )
                 }
               >
@@ -1619,6 +1828,10 @@ export function Overview() {
         </div>
       </div>
       {usageTip.portal}
+      <ProviderQueueModal
+        open={providerQueueOpen}
+        onClose={() => setProviderQueueOpen(false)}
+      />
 
       <div className="card pulse" style={{ marginBottom: 18 }}>
         {stats.map((s) => (

@@ -47,6 +47,7 @@ type Task struct {
 	ParentSlug         sql.NullString // set by `flow spawn --parent`
 	ForkedFromSlug     sql.NullString
 	ForkReason         sql.NullString
+	WorkContextID      sql.NullString
 	Priority           string
 	WorkDir            string
 	WaitingOn          sql.NullString
@@ -461,15 +462,16 @@ type Workdir struct {
 // It is intentionally separate from tasks.status, which is durable workflow
 // state such as backlog/in-progress/done.
 type AgentRuntimeState struct {
-	Provider  string
-	SessionID string
-	TaskSlug  sql.NullString
-	Status    string
-	EventKind string
-	Message   sql.NullString
-	UpdatedAt string
-	LastSeq   int64
-	RawJSON   sql.NullString
+	Provider      string
+	SessionID     string
+	TaskSlug      sql.NullString
+	WorkContextID sql.NullString
+	Status        string
+	EventKind     string
+	Message       sql.NullString
+	UpdatedAt     string
+	LastSeq       int64
+	RawJSON       sql.NullString
 }
 
 // MonitorEventAction records the single action flow took for a monitor event.
@@ -735,13 +737,13 @@ func ListProjects(db *sql.DB, filter ProjectFilter) ([]*Project, error) {
 
 // ---------- task queries ----------
 
-const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, effort, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
+const TaskCols = "slug, name, project_slug, status, kind, playbook_slug, parent_slug, forked_from_slug, fork_reason, work_context_id, priority, work_dir, waiting_on, due_date, assignee, permission_mode, model, effort, status_changed_at, session_provider, harness, session_id, session_started, session_last_resumed, session_path, worktree_path, inbox_seen_at, created_at, updated_at, archived_at, deleted_at, auto_run_status, auto_run_pid, auto_run_started, auto_run_finished, auto_run_log"
 
 func ScanTask(row interface{ Scan(dest ...any) error }) (*Task, error) {
 	var t Task
 	var harness sql.NullString
 	err := row.Scan(
-		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason,
+		&t.Slug, &t.Name, &t.ProjectSlug, &t.Status, &t.Kind, &t.PlaybookSlug, &t.ParentSlug, &t.ForkedFromSlug, &t.ForkReason, &t.WorkContextID,
 		&t.Priority, &t.WorkDir,
 		&t.WaitingOn, &t.DueDate, &t.Assignee, &t.PermissionMode, &t.Model, &t.Effort, &t.StatusChangedAt, &t.SessionProvider, &harness, &t.SessionID,
 		&t.SessionStarted, &t.SessionLastResumed, &t.SessionPath, &t.WorktreePath, &t.InboxSeenAt, &t.CreatedAt, &t.UpdatedAt, &t.ArchivedAt, &t.DeletedAt,
@@ -898,17 +900,20 @@ type Playbook struct {
 	// Scheduling (all nullable). ScheduleSpec is the canonical cron/descriptor
 	// (see internal/schedule); ScheduleInput is the operator's original phrase.
 	// SchedulePausedAt set => schedule retained but not firing. NextFireAt is
-	// the computed next fire; NULL when unscheduled or paused.
-	ScheduleSpec     sql.NullString
-	ScheduleInput    sql.NullString
-	SchedulePausedAt sql.NullString
-	NextFireAt       sql.NullString
-	LastFiredAt      sql.NullString
-	LastFireRunSlug  sql.NullString
-	CreatedAt        string
-	UpdatedAt        string
-	ArchivedAt       sql.NullString
-	DeletedAt        sql.NullString
+	// the computed next fire; NULL when unscheduled or paused. ScheduleHold*
+	// records temporary, auto-resuming holds such as provider credit limits.
+	ScheduleSpec       sql.NullString
+	ScheduleInput      sql.NullString
+	SchedulePausedAt   sql.NullString
+	ScheduleHoldReason sql.NullString
+	ScheduleHoldUntil  sql.NullString
+	NextFireAt         sql.NullString
+	LastFiredAt        sql.NullString
+	LastFireRunSlug    sql.NullString
+	CreatedAt          string
+	UpdatedAt          string
+	ArchivedAt         sql.NullString
+	DeletedAt          sql.NullString
 }
 
 // PlaybookFilter holds optional filters for ListPlaybooks.
@@ -921,13 +926,13 @@ type PlaybookFilter struct {
 
 // ---------- playbook queries ----------
 
-const PlaybookCols = "slug, name, project_slug, work_dir, schedule_spec, schedule_input, schedule_paused_at, next_fire_at, last_fired_at, last_fire_run_slug, created_at, updated_at, archived_at, deleted_at"
+const PlaybookCols = "slug, name, project_slug, work_dir, schedule_spec, schedule_input, schedule_paused_at, schedule_hold_reason, schedule_hold_until, next_fire_at, last_fired_at, last_fire_run_slug, created_at, updated_at, archived_at, deleted_at"
 
 func ScanPlaybook(row interface{ Scan(dest ...any) error }) (*Playbook, error) {
 	var p Playbook
 	err := row.Scan(
 		&p.Slug, &p.Name, &p.ProjectSlug, &p.WorkDir,
-		&p.ScheduleSpec, &p.ScheduleInput, &p.SchedulePausedAt, &p.NextFireAt, &p.LastFiredAt, &p.LastFireRunSlug,
+		&p.ScheduleSpec, &p.ScheduleInput, &p.SchedulePausedAt, &p.ScheduleHoldReason, &p.ScheduleHoldUntil, &p.NextFireAt, &p.LastFiredAt, &p.LastFireRunSlug,
 		&p.CreatedAt, &p.UpdatedAt, &p.ArchivedAt, &p.DeletedAt,
 	)
 	if err != nil {
@@ -1189,7 +1194,8 @@ func UpsertPlaybook(db *sql.DB, pb *Playbook) error {
 // flag — re-scheduling a paused playbook is an implicit resume.
 func SetPlaybookSchedule(db *sql.DB, slug, spec, input, nextFireAt string) error {
 	res, err := db.Exec(
-		`UPDATE playbooks SET schedule_spec=?, schedule_input=?, schedule_paused_at=NULL, next_fire_at=?, updated_at=? WHERE slug=?`,
+		`UPDATE playbooks SET schedule_spec=?, schedule_input=?, schedule_paused_at=NULL,
+		 schedule_hold_reason=NULL, schedule_hold_until=NULL, next_fire_at=?, updated_at=? WHERE slug=?`,
 		spec, input, nextFireAt, NowISO(), slug,
 	)
 	return affectedPlaybookRow(res, err, "set schedule", slug)
@@ -1199,7 +1205,8 @@ func SetPlaybookSchedule(db *sql.DB, slug, spec, input, nextFireAt string) error
 // history for display).
 func ClearPlaybookSchedule(db *sql.DB, slug string) error {
 	res, err := db.Exec(
-		`UPDATE playbooks SET schedule_spec=NULL, schedule_input=NULL, schedule_paused_at=NULL, next_fire_at=NULL, updated_at=? WHERE slug=?`,
+		`UPDATE playbooks SET schedule_spec=NULL, schedule_input=NULL, schedule_paused_at=NULL,
+		 schedule_hold_reason=NULL, schedule_hold_until=NULL, next_fire_at=NULL, updated_at=? WHERE slug=?`,
 		NowISO(), slug,
 	)
 	return affectedPlaybookRow(res, err, "clear schedule", slug)
@@ -1210,7 +1217,8 @@ func ClearPlaybookSchedule(db *sql.DB, slug string) error {
 func PausePlaybookSchedule(db *sql.DB, slug string) error {
 	now := NowISO()
 	res, err := db.Exec(
-		`UPDATE playbooks SET schedule_paused_at=?, next_fire_at=NULL, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
+		`UPDATE playbooks SET schedule_paused_at=?, schedule_hold_reason=NULL,
+		 schedule_hold_until=NULL, next_fire_at=NULL, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
 		now, now, slug,
 	)
 	return affectedPlaybookRow(res, err, "pause schedule", slug)
@@ -1219,10 +1227,24 @@ func PausePlaybookSchedule(db *sql.DB, slug string) error {
 // ResumePlaybookSchedule clears the paused flag and arms the next fire.
 func ResumePlaybookSchedule(db *sql.DB, slug, nextFireAt string) error {
 	res, err := db.Exec(
-		`UPDATE playbooks SET schedule_paused_at=NULL, next_fire_at=?, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
+		`UPDATE playbooks SET schedule_paused_at=NULL, schedule_hold_reason=NULL,
+		 schedule_hold_until=NULL, next_fire_at=?, updated_at=? WHERE slug=? AND schedule_spec IS NOT NULL`,
 		nextFireAt, NowISO(), slug,
 	)
 	return affectedPlaybookRow(res, err, "resume schedule", slug)
+}
+
+// HoldPlaybookSchedule records a temporary, auto-resuming hold. Unlike a manual
+// pause, schedule_paused_at stays NULL so DuePlaybooks can fire once nextFireAt
+// reaches the hold-until/reset time.
+func HoldPlaybookSchedule(db *sql.DB, slug, reason, holdUntil string) error {
+	res, err := db.Exec(
+		`UPDATE playbooks SET schedule_paused_at=NULL, schedule_hold_reason=?,
+		 schedule_hold_until=?, next_fire_at=?, updated_at=?
+		 WHERE slug=? AND schedule_spec IS NOT NULL`,
+		NullIfEmpty(reason), NullIfEmpty(holdUntil), NullIfEmpty(holdUntil), NowISO(), slug,
+	)
+	return affectedPlaybookRow(res, err, "hold schedule", slug)
 }
 
 // SetPlaybookNextFire advances only the next-fire time, without stamping a
@@ -1230,7 +1252,8 @@ func ResumePlaybookSchedule(db *sql.DB, slug, nextFireAt string) error {
 // due playbook doesn't hot-loop the scheduler.
 func SetPlaybookNextFire(db *sql.DB, slug, nextFireAt string) error {
 	res, err := db.Exec(
-		`UPDATE playbooks SET next_fire_at=?, updated_at=? WHERE slug=?`,
+		`UPDATE playbooks SET schedule_hold_reason=NULL, schedule_hold_until=NULL,
+		 next_fire_at=?, updated_at=? WHERE slug=?`,
 		nextFireAt, NowISO(), slug,
 	)
 	return affectedPlaybookRow(res, err, "set next fire", slug)
@@ -1240,7 +1263,8 @@ func SetPlaybookNextFire(db *sql.DB, slug, nextFireAt string) error {
 // advances next_fire_at to the recomputed value.
 func RecordPlaybookFired(db *sql.DB, slug, firedAt, nextFireAt, runSlug string) error {
 	res, err := db.Exec(
-		`UPDATE playbooks SET last_fired_at=?, last_fire_run_slug=?, next_fire_at=?, updated_at=? WHERE slug=?`,
+		`UPDATE playbooks SET last_fired_at=?, last_fire_run_slug=?,
+		 schedule_hold_reason=NULL, schedule_hold_until=NULL, next_fire_at=?, updated_at=? WHERE slug=?`,
 		firedAt, runSlug, nextFireAt, NowISO(), slug,
 	)
 	return affectedPlaybookRow(res, err, "record fired", slug)
@@ -1353,6 +1377,9 @@ func RenameProject(db *sql.DB, oldSlug, newSlug string) error {
 	if _, err := tx.Exec(`UPDATE owners SET project_slug=?, updated_at=? WHERE project_slug=?`, newSlug, now, oldSlug); err != nil {
 		return fmt.Errorf("cascade owners.project_slug: %w", err)
 	}
+	if _, err := tx.Exec(`UPDATE work_event_log SET project_slug=? WHERE project_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade work_event_log.project_slug: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -1416,6 +1443,9 @@ func RenameTask(db *sql.DB, oldSlug, newSlug string) error {
 	}
 	if _, err := tx.Exec(`UPDATE agent_runtime_states SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
 		return fmt.Errorf("cascade agent_runtime_states.task_slug: %w", err)
+	}
+	if _, err := tx.Exec(`UPDATE work_event_log SET task_slug=? WHERE task_slug=?`, newSlug, oldSlug); err != nil {
+		return fmt.Errorf("cascade work_event_log.task_slug: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {

@@ -23,9 +23,11 @@ import (
 	"flow/internal/flowdb"
 	"flow/internal/steering"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -130,10 +132,43 @@ var autoRunner = func(req autoRunRequest) error {
 		argv = append(argv, claudePermissionArgs(req.PermissionMode)...)
 		cmd = exec.Command("claude", argv...)
 	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var tail boundedTail
+	tail.max = 8192
+	cmd.Stdout = io.MultiWriter(os.Stdout, &tail)
+	cmd.Stderr = io.MultiWriter(os.Stderr, &tail)
 	cmd.Env = autoRunEnv(req.FlowRoot, req.TaskSlug, provider, req.PermissionMode)
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if output := strings.TrimSpace(tail.String()); output != "" {
+			return fmt.Errorf("%w: %s", err, output)
+		}
+		return err
+	}
+	return nil
+}
+
+type boundedTail struct {
+	max int
+	buf []byte
+}
+
+func (b *boundedTail) Write(p []byte) (int, error) {
+	if b.max <= 0 {
+		return len(p), nil
+	}
+	if len(p) >= b.max {
+		b.buf = append(b.buf[:0], p[len(p)-b.max:]...)
+		return len(p), nil
+	}
+	b.buf = append(b.buf, p...)
+	if len(b.buf) > b.max {
+		copy(b.buf, b.buf[len(b.buf)-b.max:])
+		b.buf = b.buf[:b.max]
+	}
+	return len(p), nil
+}
+
+func (b *boundedTail) String() string {
+	return string(b.buf)
 }
 
 var codexExecVersion = func() string {
@@ -348,13 +383,11 @@ func cmdAutoExec(args []string) int {
 	if task.PlaybookSlug.Valid {
 		playbookSlug = task.PlaybookSlug.String
 	}
+	root, _ := flowRoot()
 	prompt := buildAutoBootstrapPrompt(slug, task.Kind, playbookSlug)
 
-	// Fork adaptation 6: append DependencyBootstrapNote for non-playbook-run tasks.
 	if task.Kind != "playbook_run" {
-		if note := flowdb.DependencyBootstrapNote(db, slug); note != "" {
-			prompt += "\n\n" + note
-		}
+		prompt = appendTaskContextPack(prompt, db, root, slug)
 	}
 
 	// Fork adaptation 2: append the operator's one-off instruction.
@@ -367,7 +400,6 @@ func cmdAutoExec(args []string) int {
 		sessionID = task.SessionID.String
 	}
 	cwd, _ := os.Getwd()
-	root, _ := flowRoot()
 	requestedModel := ""
 	if task.Model.Valid && strings.TrimSpace(task.Model.String) != "" {
 		requestedModel = task.Model.String
@@ -431,6 +463,56 @@ func cmdAutoExec(args []string) int {
 		printCodexAutoHeader(req)
 	}
 	runErr := autoRunner(req)
+	limitResets := providerLimitResetTimes(runErr)
+	if providerCreditLimited(runErr) {
+		retryProvider := alternateAutoProvider(provider)
+		retryTask, retrySessionID, retryModel, retryEffort, retryErr := prepareAutoProviderRetry(db, task, retryProvider, *modelFlag)
+		if retryErr != nil {
+			fmt.Fprintf(os.Stderr, "warning: prepare %s retry for %q: %v\n", retryProvider, slug, retryErr)
+		} else {
+			fmt.Fprintf(os.Stderr, "auto run for %q hit %s credits/limit; retrying with %s\n", slug, provider, retryProvider)
+			task = retryTask
+			provider = retryProvider
+			sessionID = retrySessionID
+			model = retryModel
+			effort = retryEffort
+			run.Provider = provider
+			run.PermissionMode = permissionMode
+			run.ResolvedModel = sql.NullString{}
+			if model != "" {
+				run.ResolvedModel = sql.NullString{String: model, Valid: true}
+			}
+			run.SessionID = sql.NullString{}
+			if sessionID != "" {
+				run.SessionID = sql.NullString{String: sessionID, Valid: true}
+			}
+			run.InputSummary = sql.NullString{String: autoBrainRunInputSummary(task, provider, requestedModel, model, permissionMode, *withInstr, playbookSlug, launchMeta), Valid: true}
+			run.Status = "running"
+			run.UpdatedAt = flowdb.NowISO()
+			if err := flowdb.UpsertBrainRun(db, run); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: record brain run retry: %v\n", err)
+			}
+			req.Provider = provider
+			req.SessionID = sessionID
+			req.Model = model
+			req.Effort = effort
+			if provider == sessionProviderCodex {
+				printCodexAutoHeader(req)
+			}
+			firstErr := runErr
+			runErr = autoRunner(req)
+			limitResets = append(limitResets, providerLimitResetTimes(runErr)...)
+			if runErr != nil {
+				if providerCreditLimited(runErr) {
+					holdPlaybookScheduleForProviderLimit(db, playbookSlug, limitResets)
+				}
+				runErr = fmt.Errorf("%s failed with provider credits/limit; retry with %s failed: %w", providerNameBeforeRetry(retryProvider), retryProvider, runErr)
+				if firstErr != nil {
+					runErr = fmt.Errorf("%v; %w", firstErr, runErr)
+				}
+			}
+		}
+	}
 
 	// Re-read status: the session may have called `flow done` on itself.
 	// The self-done is the authoritative success signal.
@@ -464,6 +546,135 @@ func cmdAutoExec(args []string) int {
 	}
 	fmt.Printf("auto run for %q finished: %s\n", slug, status)
 	return 0
+}
+
+func providerNameBeforeRetry(retryProvider string) string {
+	if retryProvider == sessionProviderCodex {
+		return sessionProviderClaude
+	}
+	return sessionProviderCodex
+}
+
+func alternateAutoProvider(provider string) string {
+	if provider == sessionProviderCodex {
+		return sessionProviderClaude
+	}
+	return sessionProviderCodex
+}
+
+func providerCreditLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"usage limit",
+		"rate limit",
+		"rate_limit",
+		"quota",
+		"insufficient_quota",
+		"exhausted",
+		"credit balance",
+		"credits",
+		"billing",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var rfc3339InText = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})`)
+
+func providerLimitResetTimes(err error) []time.Time {
+	if err == nil {
+		return nil
+	}
+	matches := rfc3339InText.FindAllString(err.Error(), -1)
+	out := make([]time.Time, 0, len(matches))
+	for _, m := range matches {
+		if ts, parseErr := time.Parse(time.RFC3339, m); parseErr == nil {
+			out = append(out, ts.UTC())
+		}
+	}
+	return out
+}
+
+func earliestResetTime(times []time.Time) (time.Time, bool) {
+	var earliest time.Time
+	for _, ts := range times {
+		if ts.IsZero() {
+			continue
+		}
+		if earliest.IsZero() || ts.Before(earliest) {
+			earliest = ts
+		}
+	}
+	if earliest.IsZero() {
+		return time.Time{}, false
+	}
+	return earliest, true
+}
+
+func holdPlaybookScheduleForProviderLimit(db *sql.DB, playbookSlug string, resets []time.Time) {
+	if strings.TrimSpace(playbookSlug) == "" {
+		return
+	}
+	until, ok := earliestResetTime(resets)
+	if !ok {
+		until = time.Now().UTC().Add(time.Hour)
+	}
+	nextFire := until.UTC().Format(time.RFC3339)
+	if err := flowdb.HoldPlaybookSchedule(db, playbookSlug, "provider_limit", nextFire); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: hold playbook %q until provider reset: %v\n", playbookSlug, err)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "playbook %q: both providers are credit/limit blocked; next fire held until %s\n", playbookSlug, nextFire)
+}
+
+func prepareAutoProviderRetry(db *sql.DB, task *flowdb.Task, provider, modelFlag string) (*flowdb.Task, string, string, string, error) {
+	harnessName, err := harnessNameForProvider(provider)
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	sessionID := ""
+	var sessionIDValue any
+	if provider == sessionProviderClaude {
+		id, idErr := newUUID()
+		if idErr != nil {
+			return nil, "", "", "", fmt.Errorf("generate claude retry session id: %w", idErr)
+		}
+		sessionID = id
+		sessionIDValue = id
+	}
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`UPDATE tasks SET session_provider=?, harness=?, session_id=?, session_started=?, updated_at=? WHERE slug=?`,
+		provider, harnessName, sessionIDValue, now, now, task.Slug,
+	); err != nil {
+		return nil, "", "", "", fmt.Errorf("switch task provider: %w", err)
+	}
+	reloaded, err := flowdb.GetTask(db, task.Slug)
+	if err != nil {
+		return nil, "", "", "", fmt.Errorf("reload switched task: %w", err)
+	}
+	model := resolveRetryModel(provider, reloaded, modelFlag)
+	effort, err := resolveLaunchEffort(provider, reloaded, model)
+	if err != nil {
+		return nil, "", "", "", err
+	}
+	return reloaded, sessionID, model, effort, nil
+}
+
+func resolveRetryModel(provider string, task *flowdb.Task, modelFlag string) string {
+	if strings.TrimSpace(modelFlag) != "" {
+		return flowdb.NormalizeModel(modelFlag)
+	}
+	if task != nil && task.Model.Valid && strings.TrimSpace(task.Model.String) != "" {
+		return flowdb.NormalizeModel(task.Model.String)
+	}
+	return resolveLaunchModel(provider, task, true)
 }
 
 func printCodexAutoHeader(req autoRunRequest) {

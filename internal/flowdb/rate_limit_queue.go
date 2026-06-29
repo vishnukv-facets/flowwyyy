@@ -80,6 +80,39 @@ func ListReadyRateLimitQueue(db *sql.DB, now string, limit int) ([]RateLimitQueu
 	return out, rows.Err()
 }
 
+// ListPendingRateLimitQueue returns currently held actions for operator
+// inspection. It includes future rows; replay readiness is handled separately.
+func ListPendingRateLimitQueue(db *sql.DB, limit int) ([]RateLimitQueueItem, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	rows, err := db.Query(
+		`SELECT id, kind, provider, payload_json, run_after, status, attempts,
+		        last_error, created_at, updated_at
+		   FROM rate_limit_queue
+		  WHERE status = 'pending'
+		  ORDER BY run_after ASC, id ASC
+		  LIMIT ?`,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RateLimitQueueItem
+	for rows.Next() {
+		var it RateLimitQueueItem
+		if err := rows.Scan(
+			&it.ID, &it.Kind, &it.Provider, &it.PayloadJSON, &it.RunAfter, &it.Status,
+			&it.Attempts, &it.LastError, &it.CreatedAt, &it.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
 // NextRateLimitQueueRunAfter returns the next pending run_after timestamp.
 func NextRateLimitQueueRunAfter(db *sql.DB) (string, bool, error) {
 	var runAfter string
@@ -107,6 +140,30 @@ func AckRateLimitQueue(db *sql.DB, id int64) error {
 		  WHERE id = ?`,
 		NowISO(),
 		id,
+	)
+	return err
+}
+
+// DismissRateLimitQueue drops one pending held action from future replay. The
+// row is kept as done with a diagnostic note rather than deleted.
+func DismissRateLimitQueue(db *sql.DB, id int64) error {
+	_, err := db.Exec(
+		`UPDATE rate_limit_queue
+		    SET status = 'done', last_error = 'dismissed by operator', updated_at = ?
+		  WHERE id = ? AND status = 'pending'`,
+		NowISO(),
+		id,
+	)
+	return err
+}
+
+// DismissAllRateLimitQueue drops every pending held action from future replay.
+func DismissAllRateLimitQueue(db *sql.DB) error {
+	_, err := db.Exec(
+		`UPDATE rate_limit_queue
+		    SET status = 'done', last_error = 'dismissed by operator', updated_at = ?
+		  WHERE status = 'pending'`,
+		NowISO(),
 	)
 	return err
 }

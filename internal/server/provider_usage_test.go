@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +154,53 @@ func TestProviderUsageIncludesQueuedAutomation(t *testing.T) {
 	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=claude")
 	if got.QueuedActions != 1 || got.NextQueueRunAfter != next {
 		t.Fatalf("queue fields = count:%d next:%q; want 1 %q", got.QueuedActions, got.NextQueueRunAfter, next)
+	}
+}
+
+func TestProviderQueueAPIListsAndDismisses(t *testing.T) {
+	root, db := testRootDB(t)
+	next := "2026-06-25T12:00:00Z"
+	id1, err := flowdb.EnqueueRateLimitQueue(db, flowdb.RateLimitQueueSlackEvent, "claude", []byte(`{"kind":"message","channel":"C1","text":"hello"}`), next)
+	if err != nil {
+		t.Fatalf("enqueue slack: %v", err)
+	}
+	if _, err := flowdb.EnqueueRateLimitQueue(db, flowdb.RateLimitQueueOpenTask, "codex", []byte(`{"slug":"demo-task"}`), "2026-06-25T13:00:00Z"); err != nil {
+		t.Fatalf("enqueue open: %v", err)
+	}
+	srv := authedTestHandler(New(Config{DB: db, FlowRoot: root}))
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/provider-queue", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listed providerQueueResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if listed.Count != 2 || len(listed.Items) != 2 {
+		t.Fatalf("listed = %+v; want two items", listed)
+	}
+	if listed.Items[0].ID != id1 || listed.Items[0].Summary == "" || listed.Items[1].Target != "demo-task" {
+		t.Fatalf("unexpected listed items: %+v", listed.Items)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/provider-queue/dismiss", strings.NewReader(`{"id":`+fmt.Sprint(id1)+`}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dismiss status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if count, err := flowdb.CountPendingRateLimitQueue(db); err != nil || count != 1 {
+		t.Fatalf("pending after dismiss one = %d err=%v; want 1,nil", count, err)
+	}
+
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/provider-queue/dismiss", strings.NewReader(`{"all":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dismiss all status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if count, err := flowdb.CountPendingRateLimitQueue(db); err != nil || count != 0 {
+		t.Fatalf("pending after dismiss all = %d err=%v; want 0,nil", count, err)
 	}
 }
 

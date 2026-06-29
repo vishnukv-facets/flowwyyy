@@ -409,6 +409,7 @@ func TestRenameTaskCascadesTaskSlugReferences(t *testing.T) {
 	assertCount(`SELECT COUNT(*) FROM task_dependencies WHERE child_slug = 'new-task' AND parent_slug = 'parent-task'`, 1)
 	assertCount(`SELECT COUNT(*) FROM task_dependencies WHERE child_slug = 'child-task' AND parent_slug = 'new-task'`, 1)
 	assertCount(`SELECT COUNT(*) FROM task_tags WHERE task_slug = 'new-task' AND tag = 'slack'`, 1)
+	assertCount(`SELECT COUNT(*) FROM work_event_log WHERE task_slug = 'new-task' AND event_type = 'session_bound'`, 1)
 	state, err := AgentRuntimeStateBySessionID(db, "claude", "session-1")
 	if err != nil {
 		t.Fatal(err)
@@ -808,6 +809,26 @@ func TestPlaybookScheduleLifecycle(t *testing.T) {
 		t.Fatalf("resumed should be due, got %d", len(due))
 	}
 
+	// Provider-limit hold is an auto-resuming pause: not due before reset,
+	// due after reset, and distinct from manual schedule_paused_at.
+	holdUntil := now.Add(30 * time.Minute).UTC().Format(time.RFC3339)
+	if err := HoldPlaybookSchedule(db, "digest", "provider_limit", holdUntil); err != nil {
+		t.Fatal(err)
+	}
+	pb, _ = GetPlaybook(db, "digest")
+	if !pb.ScheduleHoldReason.Valid || pb.ScheduleHoldReason.String != "provider_limit" || !pb.ScheduleHoldUntil.Valid || pb.ScheduleHoldUntil.String != holdUntil {
+		t.Errorf("hold fields not stored: %+v", pb)
+	}
+	if pb.SchedulePausedAt.Valid {
+		t.Errorf("provider-limit hold should not set manual pause: %+v", pb)
+	}
+	if due, _ := DuePlaybooks(db, now.Format(time.RFC3339)); len(due) != 0 {
+		t.Fatalf("held schedule should not be due before reset, got %d", len(due))
+	}
+	if due, _ := DuePlaybooks(db, now.Add(time.Hour).Format(time.RFC3339)); len(due) != 1 {
+		t.Fatalf("held schedule should become due after reset, got %d", len(due))
+	}
+
 	// Record a fire advances next_fire and stamps history.
 	if err := RecordPlaybookFired(db, "digest", now.Format(time.RFC3339), future, "digest--run-1"); err != nil {
 		t.Fatal(err)
@@ -815,6 +836,9 @@ func TestPlaybookScheduleLifecycle(t *testing.T) {
 	pb, _ = GetPlaybook(db, "digest")
 	if pb.LastFireRunSlug.String != "digest--run-1" || pb.NextFireAt.String != future {
 		t.Errorf("record fired not stamped: %+v", pb)
+	}
+	if pb.ScheduleHoldReason.Valid || pb.ScheduleHoldUntil.Valid {
+		t.Errorf("record fired should clear provider-limit hold: %+v", pb)
 	}
 
 	// Clear removes the schedule.

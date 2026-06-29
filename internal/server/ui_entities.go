@@ -106,17 +106,19 @@ func (s *Server) uiPlaybooks() ([]uiPlaybook, error) {
 			runs = append(runs, uiPlaybookRun{Name: r.Name, Status: r.Status, CreatedAt: r.CreatedAt})
 		}
 		out = append(out, uiPlaybook{
-			Slug:           p.Slug,
-			Name:           p.Name,
-			Project:        p.ProjectSlug,
-			RunsWeek:       p.RunCount7d,
-			LastMin:        lastMin,
-			Spark:          lastSevenFromThirty(p.RunDays30),
-			Runs:           runs,
-			WorkDir:        p.WorkDir,
-			Schedule:       p.Schedule,
-			SchedulePaused: p.SchedulePaused,
-			NextFireAt:     p.NextFireAt,
+			Slug:               p.Slug,
+			Name:               p.Name,
+			Project:            p.ProjectSlug,
+			RunsWeek:           p.RunCount7d,
+			LastMin:            lastMin,
+			Spark:              lastSevenFromThirty(p.RunDays30),
+			Runs:               runs,
+			WorkDir:            p.WorkDir,
+			Schedule:           p.Schedule,
+			SchedulePaused:     p.SchedulePaused,
+			ScheduleHoldReason: p.ScheduleHoldReason,
+			ScheduleHoldUntil:  p.ScheduleHoldUntil,
+			NextFireAt:         p.NextFireAt,
 		})
 	}
 	return out, nil

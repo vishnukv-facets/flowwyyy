@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useEffect, useId, type ReactNode } from 'react'
 import { FlowMark } from './FlowMark'
 
 // Lightweight modal: scrim + centered panel, Esc / scrim-click to close.
@@ -8,6 +8,9 @@ export function Modal({
   title,
   children,
   footer,
+  className = '',
+  scrimClassName = '',
+  bodyClassName = '',
   width = 560,
 }: {
   open: boolean
@@ -15,8 +18,12 @@ export function Modal({
   title: ReactNode
   children: ReactNode
   footer?: ReactNode
+  className?: string
+  scrimClassName?: string
+  bodyClassName?: string
   width?: number
 }) {
+  const titleID = useId()
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
@@ -28,24 +35,31 @@ export function Modal({
 
   if (!open) return null
   return (
-    <div className="scrim" onMouseDown={onClose}>
+    <div
+      className={`scrim${scrimClassName ? ` ${scrimClassName}` : ''}`}
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+      role="presentation"
+    >
       <div
-        className="modal"
+        className={`modal${className ? ` ${className}` : ''}`}
         style={{ width }}
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleID}
       >
         <div className="modal-head">
           <div className="modal-title">
             <FlowMark size={22} className="modal-mark" animated={false} />
-            <span className="h-lg">{title}</span>
+            <span id={titleID} className="h-lg">{title}</span>
           </div>
-          <button className="btn icon ghost sm" onClick={onClose} aria-label="Close">
+          <button type="button" className="btn icon ghost sm" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </div>
-        <div className="modal-body">{children}</div>
+        <div className={`modal-body${bodyClassName ? ` ${bodyClassName}` : ''}`}>{children}</div>
         {footer && <div className="modal-foot">{footer}</div>}
       </div>
     </div>
