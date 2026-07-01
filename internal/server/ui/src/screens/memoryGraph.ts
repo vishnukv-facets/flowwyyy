@@ -6,7 +6,7 @@ export interface MemoryGraphFilters {
   provider: string
 }
 
-export interface MemoryGraphNode {
+export interface MemoryGraphNode extends Record<string, unknown> {
   id: string
   label: string
   provider: string
