@@ -139,6 +139,63 @@ export function fmtUSD(n: number): string {
   return `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
 }
 
+export function cacheAwareTokens(tokens: number, cached?: number): string {
+  if (!cached || cached <= 0) return compactTokens(tokens)
+  return `${compactTokens(tokens)} (+ ${compactTokens(cached)} cached)`
+}
+
+export function usageCostBreakdown(
+  cost?: number,
+  fresh?: number,
+  cacheRead?: number,
+  cacheCreation?: number,
+): string {
+  if (!cost) return ''
+  const hasSplit = !!(fresh || cacheRead || cacheCreation)
+  if (!hasSplit) return `est. ${fmtUSD(cost)} full bill incl. cache`
+  return `est. ${fmtUSD(cost)} full bill: fresh ${fmtUSD(fresh ?? 0)}, cache read ${fmtUSD(cacheRead ?? 0)}, cache write ${fmtUSD(cacheCreation ?? 0)}`
+}
+
+export function tokenUsageTitle({
+  tokens,
+  label = 'tokens this session',
+  cacheReadTokens,
+  cacheCreationTokens,
+  cost,
+  costFresh,
+  costCacheRead,
+  costCacheCreation,
+  contextUsed,
+  contextMax,
+}: {
+  tokens: number
+  label?: string
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+  cost?: number
+  costFresh?: number
+  costCacheRead?: number
+  costCacheCreation?: number
+  contextUsed?: number
+  contextMax?: number
+}): string {
+  const parts = [
+    `${tokens.toLocaleString()} ${label} (input + output + cache writes; cache reads excluded)`,
+  ]
+  if (cacheReadTokens && cacheReadTokens > 0) {
+    parts.push(`${cacheReadTokens.toLocaleString()} cache-read tokens`)
+  }
+  if (cacheCreationTokens && cacheCreationTokens > 0) {
+    parts.push(`${cacheCreationTokens.toLocaleString()} cache-creation tokens`)
+  }
+  const costPart = usageCostBreakdown(cost, costFresh, costCacheRead, costCacheCreation)
+  if (costPart) parts.push(costPart)
+  if (contextUsed != null && contextMax != null) {
+    parts.push(`context ${contextUsed.toLocaleString()} / ${contextMax.toLocaleString()}`)
+  }
+  return parts.join(' · ')
+}
+
 export function titleCase(s: string): string {
   return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }

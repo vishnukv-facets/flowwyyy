@@ -269,8 +269,11 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 		accumulateTranscriptLookupEvents(stats, rec)
 		// Session tokens = cumulative input + output + cache CREATION, EXCLUDING
 		// cache reads — the basis Claude Code's /stats uses (see processedTokens).
-		fresh := rec.Message.Usage.processedTokens()
+		usage := rec.Message.Usage
+		fresh := usage.processedTokens()
 		stats.TokensSession += fresh
+		stats.CacheReadTokens += usage.cacheReadTokens()
+		stats.CacheCreationTokens += usage.cacheCreationTokens()
 		if day := localDay(rec.Timestamp); day != "" {
 			// Per-day tokens, same basis as TokensSession.
 			if fresh > 0 {
@@ -283,7 +286,11 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 			// priced at this turn's own model rate — that's what makes the
 			// dollar figure track Claude Code's /cost, since cache reads
 			// dominate a long session's bill.
-			if cost := rec.Message.Usage.billedCostUSD(modelTokenRate(stats.Model)); cost > 0 {
+			split := usage.billedCostSplitUSD(modelTokenRate(stats.Model))
+			stats.CostFresh += split.Fresh
+			stats.CostCacheRead += split.CacheRead
+			stats.CostCacheCreation += split.CacheCreation
+			if cost := split.total(); cost > 0 {
 				if stats.CostByDay == nil {
 					stats.CostByDay = map[string]float64{}
 				}
@@ -364,7 +371,12 @@ func accumulateTranscriptUsage(stats *transcriptUsageStats, line []byte) {
 				}
 				stats.TokensByDay[day] += delta
 				rate := modelTokenRate(stats.Model)
-				cost := turnCostUSD(deltaIn, deltaOut, rate) + cacheReadCostUSD(deltaCached, rate)
+				freshCost := turnCostUSD(deltaIn, deltaOut, rate)
+				cacheReadCost := cacheReadCostUSD(deltaCached, rate)
+				cost := freshCost + cacheReadCost
+				stats.CacheReadTokens += deltaCached
+				stats.CostFresh += freshCost
+				stats.CostCacheRead += cacheReadCost
 				if cost > 0 {
 					if stats.CostByDay == nil {
 						stats.CostByDay = map[string]float64{}

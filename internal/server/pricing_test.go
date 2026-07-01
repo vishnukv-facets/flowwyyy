@@ -56,6 +56,33 @@ func TestAccumulateTranscriptUsageBucketsClaudeCostByDay(t *testing.T) {
 	}
 }
 
+func TestAccumulateTranscriptUsageExposesClaudeCacheSplit(t *testing.T) {
+	var stats transcriptUsageStats
+	const day = "2026-06-01T12:00:00Z"
+	accumulateTranscriptUsage(&stats, usageLine(day, 1_000_000, 9_000_000, 1_000_000))
+	line := []byte(`{"type":"assistant","timestamp":"` + day + `","requestId":"req_1",` +
+		`"message":{"id":"msg_1","model":"claude-opus-4-8","usage":{` +
+		`"output_tokens":1000000,"cache_creation_input_tokens":3000000,` +
+		`"cache_creation":{"ephemeral_5m_input_tokens":2000000,"ephemeral_1h_input_tokens":1000000}}}}`)
+	accumulateTranscriptUsage(&stats, line)
+
+	if got := stats.CacheReadTokens; got != 9_000_000 {
+		t.Errorf("CacheReadTokens = %d, want 9,000,000", got)
+	}
+	if got := stats.CacheCreationTokens; got != 3_000_000 {
+		t.Errorf("CacheCreationTokens = %d, want 3,000,000", got)
+	}
+	if !ratesClose(stats.CostFresh, 55.0) {
+		t.Errorf("CostFresh = %g, want 55.00", stats.CostFresh)
+	}
+	if !ratesClose(stats.CostCacheRead, 4.5) {
+		t.Errorf("CostCacheRead = %g, want 4.50", stats.CostCacheRead)
+	}
+	if !ratesClose(stats.CostCacheCreation, 22.5) {
+		t.Errorf("CostCacheCreation = %g, want 22.50", stats.CostCacheCreation)
+	}
+}
+
 // Cache-creation tokens bill at a premium on the input rate: 1.25x for the
 // 5-minute TTL, 2x for the 1-hour TTL. The breakdown must be priced separately.
 func TestAccumulateTranscriptUsageClaudeCacheCreationCost(t *testing.T) {
@@ -122,6 +149,30 @@ func TestAccumulateTranscriptUsageBucketsCodexCostByDay(t *testing.T) {
 	d := localDay(day)
 	if got := stats.CostByDay[d]; !ratesClose(got, 35.5) {
 		t.Errorf("CostByDay[%s] = %g, want 35.50 (cached input billed at 0.1x)", d, got)
+	}
+}
+
+func TestAccumulateTranscriptUsageExposesCodexCacheReadDeltas(t *testing.T) {
+	var stats transcriptUsageStats
+	const day = "2026-06-01T12:00:00Z"
+	accumulateTranscriptUsage(&stats, []byte(`{"type":"turn_context","timestamp":"`+day+`","payload":{"model":"gpt-5.5"}}`))
+	accumulateTranscriptUsage(&stats, codexUsageLine(day, 2_000_000, 1_000_000, 1_000_000, 0))
+	accumulateTranscriptUsage(&stats, codexUsageLine(day, 3_000_000, 1_500_000, 1_200_000, 0))
+
+	if got := stats.CacheReadTokens; got != 1_500_000 {
+		t.Errorf("CacheReadTokens = %d, want 1,500,000 (running-total deltas)", got)
+	}
+	if got := stats.CacheCreationTokens; got != 0 {
+		t.Errorf("CacheCreationTokens = %d, want 0 for Codex", got)
+	}
+	if !ratesClose(stats.CostFresh, 43.5) {
+		t.Errorf("CostFresh = %g, want 43.50", stats.CostFresh)
+	}
+	if !ratesClose(stats.CostCacheRead, 0.75) {
+		t.Errorf("CostCacheRead = %g, want 0.75", stats.CostCacheRead)
+	}
+	if !ratesClose(stats.CostCacheCreation, 0) {
+		t.Errorf("CostCacheCreation = %g, want 0", stats.CostCacheCreation)
 	}
 }
 

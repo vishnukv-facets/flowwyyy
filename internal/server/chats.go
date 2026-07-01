@@ -83,7 +83,7 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 		return nil, err
 	}
 	for _, c := range chats {
-		tokens, cost, occupancyPct := s.chatUsage(c)
+		usage, occupancyPct := s.chatUsage(c)
 		out = append(out, chatView{
 			Slug:           c.Slug,
 			Title:          c.Title,
@@ -95,8 +95,8 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 			Muted:          c.MutedAt.Valid,
 			Live:           s.terminals != nil && s.terminals.running(c.Slug),
 			LastReply:      s.chatLastReply(c),
-			Tokens:         tokens,
-			CostUSD:        cost,
+			Tokens:         usage.TokensSession,
+			CostUSD:        usage.CostSession,
 			OccupancyPct:   occupancyPct,
 		})
 	}
@@ -104,21 +104,21 @@ func (s *Server) listChats(includeArchived bool) ([]chatView, error) {
 }
 
 // chatUsage resolves a chat's session transcript ONCE and returns its cumulative
-// session tokens (cache-excluded Σ), full billed cost (cache included), and current
-// context-window occupancy as a 0–100 % (the same used/max the /compact worker
-// reads — GAP-5). All zero when the chat has no resolvable session yet. Memoized
-// via transcriptCache, so it stays cheap on the buildUIData hot path.
-func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyPct int) {
+// usage split plus current context-window occupancy as a 0–100 % (the same
+// used/max the /compact worker reads — GAP-5). All zero when the chat has no
+// resolvable session yet. Memoized via transcriptCache, so it stays cheap on the
+// buildUIData hot path.
+func (s *Server) chatUsage(c *flowdb.Chat) (sessionUsageSummary, int) {
 	if c == nil || !c.SessionID.Valid || strings.TrimSpace(c.SessionID.String) == "" {
-		return 0, 0, 0
+		return sessionUsageSummary{}, 0
 	}
 	absRoot, err := filepath.Abs(strings.TrimSpace(s.cfg.FlowRoot))
 	if err != nil {
-		return 0, 0, 0
+		return sessionUsageSummary{}, 0
 	}
 	provider, err := flowdb.NormalizeSessionProvider(c.Provider)
 	if err != nil {
-		return 0, 0, 0
+		return sessionUsageSummary{}, 0
 	}
 	path, err := resolveSessionJSONLPath(&flowdb.Task{
 		Slug:            c.Slug,
@@ -127,20 +127,18 @@ func (s *Server) chatUsage(c *flowdb.Chat) (tokens int, cost float64, occupancyP
 		SessionID:       sql.NullString{String: strings.TrimSpace(c.SessionID.String), Valid: true},
 	})
 	if err != nil || path == "" {
-		return 0, 0, 0
+		return sessionUsageSummary{}, 0
 	}
 	entry, err := s.transcripts.get(path)
 	if err != nil {
-		return 0, 0, 0
+		return sessionUsageSummary{}, 0
 	}
-	for _, v := range entry.usage.CostByDay {
-		cost += v
-	}
-	tokens = entry.usage.TokensSession
+	usage := usageSummaryFromStats(entry.usage)
+	var occupancyPct int
 	if used, max := steererCompactUsage(provider, entry.usage); max > 0 {
 		occupancyPct = min(used*100/max, 100)
 	}
-	return tokens, cost, occupancyPct
+	return usage, occupancyPct
 }
 
 // chatLastReply returns a one-line preview of the agent's most recent response
@@ -219,13 +217,24 @@ func (s *Server) chatStatAgents() []uiAgent {
 		if perr != nil {
 			continue
 		}
-		tokens, cost, _ := s.chatUsage(c)
-		if tokens == 0 && cost == 0 {
+		usage, _ := s.chatUsage(c)
+		if usage.TokensSession == 0 && usage.CostSession == 0 {
 			continue // nothing burned yet / transcript unresolved — don't inflate the count
 		}
 		// Origin lets buildUIStats attribute steerer chats to the "Steering" slice
 		// (GAP-12) distinct from UI/Slack chats, while still counting in the totals.
-		out = append(out, uiAgent{Slug: c.Slug, Provider: provider, Origin: c.Origin, TokensSession: tokens, CostSession: cost})
+		out = append(out, uiAgent{
+			Slug:                c.Slug,
+			Provider:            provider,
+			Origin:              c.Origin,
+			TokensSession:       usage.TokensSession,
+			CostSession:         usage.CostSession,
+			CacheReadTokens:     usage.CacheReadTokens,
+			CacheCreationTokens: usage.CacheCreationTokens,
+			CostFresh:           usage.CostFresh,
+			CostCacheRead:       usage.CostCacheRead,
+			CostCacheCreation:   usage.CostCacheCreation,
+		})
 	}
 	return out
 }

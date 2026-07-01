@@ -240,25 +240,45 @@ type uiModelCount struct {
 // 12-week heatmap shown on the dashboard) and how many context tokens each
 // provider has in play across all tracked sessions.
 type uiStats struct {
-	CurrentStreak  int     `json:"current_streak"` // consecutive active days ending today
-	LongestStreak  int     `json:"longest_streak"` // longest active-day run in the window
-	ActiveDays     int     `json:"active_days"`    // active days within the 12-week window
-	TokensTotal    int     `json:"tokens_total"`
-	TokensClaude   int     `json:"tokens_claude"`
-	TokensCodex    int     `json:"tokens_codex"`
-	CostTotal      float64 `json:"cost_total,omitempty"`
-	CostClaude     float64 `json:"cost_claude,omitempty"`
-	CostCodex      float64 `json:"cost_codex,omitempty"`
-	SessionsTotal  int     `json:"sessions_total"`
-	SessionsClaude int     `json:"sessions_claude"`
-	SessionsCodex  int     `json:"sessions_codex"`
+	CurrentStreak           int     `json:"current_streak"` // consecutive active days ending today
+	LongestStreak           int     `json:"longest_streak"` // longest active-day run in the window
+	ActiveDays              int     `json:"active_days"`    // active days within the 12-week window
+	TokensTotal             int     `json:"tokens_total"`
+	TokensClaude            int     `json:"tokens_claude"`
+	TokensCodex             int     `json:"tokens_codex"`
+	CostTotal               float64 `json:"cost_total,omitempty"`
+	CostClaude              float64 `json:"cost_claude,omitempty"`
+	CostCodex               float64 `json:"cost_codex,omitempty"`
+	CacheReadTotal          int     `json:"cache_read_total,omitempty"`
+	CacheReadClaude         int     `json:"cache_read_claude,omitempty"`
+	CacheReadCodex          int     `json:"cache_read_codex,omitempty"`
+	CacheCreationTotal      int     `json:"cache_creation_total,omitempty"`
+	CacheCreationClaude     int     `json:"cache_creation_claude,omitempty"`
+	CacheCreationCodex      int     `json:"cache_creation_codex,omitempty"`
+	CostFreshTotal          float64 `json:"cost_fresh_total,omitempty"`
+	CostFreshClaude         float64 `json:"cost_fresh_claude,omitempty"`
+	CostFreshCodex          float64 `json:"cost_fresh_codex,omitempty"`
+	CostCacheReadTotal      float64 `json:"cost_cache_read_total,omitempty"`
+	CostCacheReadClaude     float64 `json:"cost_cache_read_claude,omitempty"`
+	CostCacheReadCodex      float64 `json:"cost_cache_read_codex,omitempty"`
+	CostCacheCreationTotal  float64 `json:"cost_cache_creation_total,omitempty"`
+	CostCacheCreationClaude float64 `json:"cost_cache_creation_claude,omitempty"`
+	CostCacheCreationCodex  float64 `json:"cost_cache_creation_codex,omitempty"`
+	SessionsTotal           int     `json:"sessions_total"`
+	SessionsClaude          int     `json:"sessions_claude"`
+	SessionsCodex           int     `json:"sessions_codex"`
 	// Steering slice (GAP-12): the always-on per-channel steerer sessions
 	// (origin="steerer" chats) cut out of the totals so the operator can watch
 	// ongoing background spend. A SUBSET of the per-provider totals above (a
 	// forked channel shows up in both Claude and Codex), not additive.
-	TokensSteering   int     `json:"tokens_steering,omitempty"`
-	CostSteering     float64 `json:"cost_steering,omitempty"`
-	SessionsSteering int     `json:"sessions_steering,omitempty"`
+	TokensSteering            int     `json:"tokens_steering,omitempty"`
+	CostSteering              float64 `json:"cost_steering,omitempty"`
+	SessionsSteering          int     `json:"sessions_steering,omitempty"`
+	CacheReadSteering         int     `json:"cache_read_steering,omitempty"`
+	CacheCreationSteering     int     `json:"cache_creation_steering,omitempty"`
+	CostFreshSteering         float64 `json:"cost_fresh_steering,omitempty"`
+	CostCacheReadSteering     float64 `json:"cost_cache_read_steering,omitempty"`
+	CostCacheCreationSteering float64 `json:"cost_cache_creation_steering,omitempty"`
 }
 
 type uiTrash struct {
@@ -299,37 +319,42 @@ type uiAgent struct {
 	Provider       string        `json:"provider"`
 	// Origin tags a chat-backed agent ("steerer" | "slack" | "ui"); empty for
 	// task sessions. Lets buildUIStats attribute the Steering slice (GAP-12).
-	Origin          string         `json:"origin,omitempty"`
-	PermissionMode  string         `json:"permission_mode"`
-	Priority        string         `json:"priority"`
-	Status          string         `json:"status"`
-	TaskStatus      string         `json:"task_status"`
-	RuntimeStatus   string         `json:"runtime_status"`
-	RuntimeEvent    string         `json:"runtime_event,omitempty"`
-	RuntimeSource   string         `json:"runtime_source,omitempty"`
-	HookHealth      *uiHookHealth  `json:"hook_health,omitempty"`
-	SessionID       string         `json:"session_id"`
-	StartedMin      int            `json:"started_min"`
-	LastActivitySec int            `json:"last_activity_sec"`
-	LastAction      string         `json:"last_action"`
-	WaitingFor      *uiWaitingFor  `json:"waiting_for,omitempty"`
-	Diff            uiDiff         `json:"diff"`
-	TokensUsed      int            `json:"tokens_used"`
-	TokensMax       int            `json:"tokens_max"`
-	TokensSession   int            `json:"tokens_session"`
-	CostSession     float64        `json:"cost_session,omitempty"`
-	Activity        []int          `json:"activity"`
-	Tags            []string       `json:"tags"`
-	Summary         string         `json:"summary"`
-	NextStep        string         `json:"next_step"`
-	Transcript      []uiTranscript `json:"transcript,omitempty"`
-	Brief           string         `json:"brief,omitempty"`
-	RecentTools     []uiRecentTool `json:"recent_tools,omitempty"`
-	DiffFiles       []uiDiffFile   `json:"diff_files,omitempty"`
-	BriefPath       string         `json:"brief_path,omitempty"`
-	Updates         []FileRef      `json:"updates,omitempty"`
-	AuxFiles        []FileRef      `json:"aux_files,omitempty"`
-	Terminal        uiTerminal     `json:"terminal"`
+	Origin              string         `json:"origin,omitempty"`
+	PermissionMode      string         `json:"permission_mode"`
+	Priority            string         `json:"priority"`
+	Status              string         `json:"status"`
+	TaskStatus          string         `json:"task_status"`
+	RuntimeStatus       string         `json:"runtime_status"`
+	RuntimeEvent        string         `json:"runtime_event,omitempty"`
+	RuntimeSource       string         `json:"runtime_source,omitempty"`
+	HookHealth          *uiHookHealth  `json:"hook_health,omitempty"`
+	SessionID           string         `json:"session_id"`
+	StartedMin          int            `json:"started_min"`
+	LastActivitySec     int            `json:"last_activity_sec"`
+	LastAction          string         `json:"last_action"`
+	WaitingFor          *uiWaitingFor  `json:"waiting_for,omitempty"`
+	Diff                uiDiff         `json:"diff"`
+	TokensUsed          int            `json:"tokens_used"`
+	TokensMax           int            `json:"tokens_max"`
+	TokensSession       int            `json:"tokens_session"`
+	CostSession         float64        `json:"cost_session,omitempty"`
+	CacheReadTokens     int            `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int            `json:"cache_creation_tokens,omitempty"`
+	CostFresh           float64        `json:"cost_fresh,omitempty"`
+	CostCacheRead       float64        `json:"cost_cache_read,omitempty"`
+	CostCacheCreation   float64        `json:"cost_cache_creation,omitempty"`
+	Activity            []int          `json:"activity"`
+	Tags                []string       `json:"tags"`
+	Summary             string         `json:"summary"`
+	NextStep            string         `json:"next_step"`
+	Transcript          []uiTranscript `json:"transcript,omitempty"`
+	Brief               string         `json:"brief,omitempty"`
+	RecentTools         []uiRecentTool `json:"recent_tools,omitempty"`
+	DiffFiles           []uiDiffFile   `json:"diff_files,omitempty"`
+	BriefPath           string         `json:"brief_path,omitempty"`
+	Updates             []FileRef      `json:"updates,omitempty"`
+	AuxFiles            []FileRef      `json:"aux_files,omitempty"`
+	Terminal            uiTerminal     `json:"terminal"`
 	// Monitored reports whether a persistent background monitor is watching
 	// this task's inbox (independent of whether the session is live).
 	Monitored bool `json:"monitored"`
@@ -725,12 +750,17 @@ func (s *Server) floatingSessionList() []floatingSessionInfo {
 }
 
 type taskSessionInsights struct {
-	ActivityAt    string
-	LastAction    string
-	TokensUsed    int // current context-window occupancy (latest turn)
-	TokensMax     int
-	TokensSession int     // cumulative tokens used this session (the CLI's Σ)
-	CostSession   float64 // estimated USD for this session's full billed usage, cache included (all-time)
+	ActivityAt          string
+	LastAction          string
+	TokensUsed          int // current context-window occupancy (latest turn)
+	TokensMax           int
+	TokensSession       int     // cumulative tokens used this session (the CLI's Σ)
+	CostSession         float64 // estimated USD for this session's full billed usage, cache included (all-time)
+	CacheReadTokens     int
+	CacheCreationTokens int
+	CostFresh           float64
+	CostCacheRead       float64
+	CostCacheCreation   float64
 }
 
 // runtimeStateStaleForRunning returns true when a hook-driven "running"

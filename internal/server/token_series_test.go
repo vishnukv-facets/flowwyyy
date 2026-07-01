@@ -154,3 +154,50 @@ func TestBuildUIStatsSteeringSlice(t *testing.T) {
 		t.Errorf("provider split = claude %d / codex %d, want 1200 / 400", stats.TokensClaude, stats.TokensCodex)
 	}
 }
+
+func TestBuildUIStatsCacheBreakdownIncludesSteering(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.Local)
+	live := []uiAgent{{
+		Slug:                "claude-task",
+		Provider:            "claude",
+		TokensSession:       1000,
+		CostSession:         3.50,
+		CacheReadTokens:     9000,
+		CacheCreationTokens: 200,
+		CostFresh:           2.00,
+		CostCacheRead:       1.00,
+		CostCacheCreation:   0.50,
+	}}
+	chats := []uiAgent{{
+		Slug:              "chat-steer-c1",
+		Provider:          "codex",
+		Origin:            "steerer",
+		TokensSession:     400,
+		CostSession:       1.25,
+		CacheReadTokens:   6000,
+		CostFresh:         0.75,
+		CostCacheRead:     0.50,
+		CostCacheCreation: 0,
+	}}
+
+	stats := buildUIStats(live, nil, chats, nil, now)
+
+	if stats.CacheReadTotal != 15_000 {
+		t.Errorf("CacheReadTotal = %d, want 15000", stats.CacheReadTotal)
+	}
+	if stats.CacheCreationTotal != 200 {
+		t.Errorf("CacheCreationTotal = %d, want 200", stats.CacheCreationTotal)
+	}
+	if stats.CacheReadClaude != 9_000 || stats.CacheReadCodex != 6_000 {
+		t.Errorf("provider cache read = claude %d / codex %d, want 9000 / 6000", stats.CacheReadClaude, stats.CacheReadCodex)
+	}
+	if stats.CacheReadSteering != 6_000 {
+		t.Errorf("CacheReadSteering = %d, want 6000", stats.CacheReadSteering)
+	}
+	if !ratesClose(stats.CostFreshTotal, 2.75) || !ratesClose(stats.CostCacheReadTotal, 1.50) || !ratesClose(stats.CostCacheCreationTotal, 0.50) {
+		t.Errorf("cost split total = fresh %g / read %g / write %g, want 2.75 / 1.50 / 0.50", stats.CostFreshTotal, stats.CostCacheReadTotal, stats.CostCacheCreationTotal)
+	}
+	if !ratesClose(stats.CostFreshSteering, 0.75) || !ratesClose(stats.CostCacheReadSteering, 0.50) || !ratesClose(stats.CostCacheCreationSteering, 0) {
+		t.Errorf("steering cost split = fresh %g / read %g / write %g, want 0.75 / 0.50 / 0", stats.CostFreshSteering, stats.CostCacheReadSteering, stats.CostCacheCreationSteering)
+	}
+}

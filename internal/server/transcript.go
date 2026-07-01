@@ -226,12 +226,20 @@ type transcriptUsageStats struct {
 	// CostByDay is the estimated USD cost of each day's BILLED tokens. Unlike
 	// TokensByDay (cache-excluded "work"), cost counts the full bill — fresh
 	// input + output PLUS cache reads and cache creation at their cache
-	// multipliers (see billedCostUSD) — because that is what's actually charged
-	// and what makes the figure track Claude Code's own /cost. Each turn is
+	// multipliers (see billedCostSplitUSD) — because that is what's actually
+	// charged and what makes the figure track Claude Code's own /cost. Each turn is
 	// priced at its own model's rate (see pricing.go), so a day's figure blends
 	// however many models/providers were active that day. Turns whose model has
 	// no published rate contribute 0, so this is a floor, not an invoice.
 	CostByDay map[string]float64
+	// CacheReadTokens and CacheCreationTokens are all-time session totals. They
+	// are kept beside TokensSession so the UI can show "N (+ cached)" without
+	// changing TokensSession's cache-excluded semantics.
+	CacheReadTokens     int
+	CacheCreationTokens int
+	CostFresh           float64
+	CostCacheRead       float64
+	CostCacheCreation   float64
 	// LookupEvents are raw retrieval-like tool calls found while scanning the
 	// transcript. They stay raw here because own-task bootstrap reads can only
 	// be filtered once the caller knows which task slug owns this session path.
@@ -329,6 +337,10 @@ func (u transcriptTokenUsage) total() int {
 // exposed as CachedInputTokens, so freshInput subtracts it.
 func (u transcriptTokenUsage) processedTokens() int {
 	return u.freshInput() + u.freshOutput() + u.CacheCreationInputTokens
+}
+
+func (u transcriptTokenUsage) cacheCreationTokens() int {
+	return u.CacheCreationInputTokens
 }
 
 // freshInput is the genuinely-fresh input for a turn: InputTokens minus the

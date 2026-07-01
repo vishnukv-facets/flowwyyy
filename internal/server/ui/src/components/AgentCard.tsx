@@ -2,7 +2,7 @@ import { useLocation } from 'wouter'
 import type { MouseEvent } from 'react'
 import { GitBranch, Clock3, Radar, Coins, AlertTriangle, ExternalLink, PictureInPicture2, GitFork, Loader2, RotateCcw } from 'lucide-react'
 import type { UiAgent } from '../lib/types'
-import { fromMinutes, fromSeconds, compact, compactTokens, fmtUSD } from '../lib/format'
+import { fromMinutes, fromSeconds, compact, cacheAwareTokens, fmtUSD, tokenUsageTitle } from '../lib/format'
 import { ProviderIcon, Sparkline, StatusDot, TokenBar } from './ui'
 import { NudgeComposer } from './NudgeComposer'
 import { clickable } from '../lib/a11y'
@@ -170,11 +170,19 @@ export function AgentCard({
         {agent.tokens_session > 0 && (
           <span
             className="tag tok-pill"
-            title={`${agent.tokens_session.toLocaleString()} tokens this session (input + output + cache writes; cache reads excluded)${
-              agent.cost_session ? ` · est. ${fmtUSD(agent.cost_session)} full bill incl. cache` : ''
-            } · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
+            title={tokenUsageTitle({
+              tokens: agent.tokens_session,
+              cacheReadTokens: agent.cache_read_tokens,
+              cacheCreationTokens: agent.cache_creation_tokens,
+              cost: agent.cost_session,
+              costFresh: agent.cost_fresh,
+              costCacheRead: agent.cost_cache_read,
+              costCacheCreation: agent.cost_cache_creation,
+              contextUsed: agent.tokens_used,
+              contextMax: agent.tokens_max,
+            })}
           >
-            <Coins size={11} /> {compactTokens(agent.tokens_session)} tok
+            <Coins size={11} /> {cacheAwareTokens(agent.tokens_session, agent.cache_read_tokens)} tok
             {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
           </span>
         )}

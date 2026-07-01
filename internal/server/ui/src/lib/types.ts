@@ -639,6 +639,11 @@ export interface UiAgent {
   tokens_max: number;
   tokens_session: number;
   cost_session?: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
+  cost_fresh?: number;
+  cost_cache_read?: number;
+  cost_cache_creation?: number;
   activity: number[];
   tags: string[];
   summary: string;
@@ -826,6 +831,21 @@ export interface UiStats {
   cost_total?: number;
   cost_claude?: number;
   cost_codex?: number;
+  cache_read_total?: number;
+  cache_read_claude?: number;
+  cache_read_codex?: number;
+  cache_creation_total?: number;
+  cache_creation_claude?: number;
+  cache_creation_codex?: number;
+  cost_fresh_total?: number;
+  cost_fresh_claude?: number;
+  cost_fresh_codex?: number;
+  cost_cache_read_total?: number;
+  cost_cache_read_claude?: number;
+  cost_cache_read_codex?: number;
+  cost_cache_creation_total?: number;
+  cost_cache_creation_claude?: number;
+  cost_cache_creation_codex?: number;
   sessions_total: number;
   sessions_claude: number;
   sessions_codex: number;
@@ -834,6 +854,11 @@ export interface UiStats {
   tokens_steering?: number;
   cost_steering?: number;
   sessions_steering?: number;
+  cache_read_steering?: number;
+  cache_creation_steering?: number;
+  cost_fresh_steering?: number;
+  cost_cache_read_steering?: number;
+  cost_cache_creation_steering?: number;
 }
 
 export interface FlowDBObject {

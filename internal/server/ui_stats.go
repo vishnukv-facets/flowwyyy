@@ -359,6 +359,11 @@ func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now tim
 			// occupancy shown on each card's X/max bar — a different axis.)
 			st.TokensTotal += a.TokensSession
 			st.CostTotal += a.CostSession
+			st.CacheReadTotal += a.CacheReadTokens
+			st.CacheCreationTotal += a.CacheCreationTokens
+			st.CostFreshTotal += a.CostFresh
+			st.CostCacheReadTotal += a.CostCacheRead
+			st.CostCacheCreationTotal += a.CostCacheCreation
 			st.SessionsTotal++
 			// Steering slice (GAP-12): origin="steerer" chats are a distinct cut of
 			// the same totals (not additive) so the always-on steerer's background
@@ -366,6 +371,11 @@ func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now tim
 			if a.Origin == "steerer" {
 				st.TokensSteering += a.TokensSession
 				st.CostSteering += a.CostSession
+				st.CacheReadSteering += a.CacheReadTokens
+				st.CacheCreationSteering += a.CacheCreationTokens
+				st.CostFreshSteering += a.CostFresh
+				st.CostCacheReadSteering += a.CostCacheRead
+				st.CostCacheCreationSteering += a.CostCacheCreation
 				st.SessionsSteering++
 			}
 			// Every session is exactly one of codex / claude: the builder defaults
@@ -374,10 +384,20 @@ func buildUIStats(live, done, chats []uiAgent, tokenSeries []uiTokenDay, now tim
 			if strings.EqualFold(strings.TrimSpace(a.Provider), agents.ProviderCodex) {
 				st.TokensCodex += a.TokensSession
 				st.CostCodex += a.CostSession
+				st.CacheReadCodex += a.CacheReadTokens
+				st.CacheCreationCodex += a.CacheCreationTokens
+				st.CostFreshCodex += a.CostFresh
+				st.CostCacheReadCodex += a.CostCacheRead
+				st.CostCacheCreationCodex += a.CostCacheCreation
 				st.SessionsCodex++
 			} else {
 				st.TokensClaude += a.TokensSession
 				st.CostClaude += a.CostSession
+				st.CacheReadClaude += a.CacheReadTokens
+				st.CacheCreationClaude += a.CacheCreationTokens
+				st.CostFreshClaude += a.CostFresh
+				st.CostCacheReadClaude += a.CostCacheRead
+				st.CostCacheCreationClaude += a.CostCacheCreation
 				st.SessionsClaude++
 			}
 		}
