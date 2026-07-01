@@ -24,6 +24,12 @@ func TestContextWindowForModel(t *testing.T) {
 	if got := contextWindowForModel("claude", "claude-opus-4-8[1m]"); got != 1000000 {
 		t.Fatalf("opus-4-8[1m] = %d, want 1000000", got)
 	}
+	if got := contextWindowForModel("claude", "claude-sonnet-5"); got != 1000000 {
+		t.Fatalf("sonnet-5 = %d, want 1000000", got)
+	}
+	if got := contextWindowForModel("claude", "claude-sonnet-5-20260701"); got != 1000000 {
+		t.Fatalf("dated sonnet-5 = %d, want 1000000", got)
+	}
 	// Older Opus 4 (pre-4.6) stays 200k; the [1m] tag still bumps it.
 	if got := contextWindowForModel("claude", "claude-opus-4-1"); got != 200000 {
 		t.Fatalf("opus-4-1 = %d, want 200000", got)

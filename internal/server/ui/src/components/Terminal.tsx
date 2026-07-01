@@ -364,7 +364,18 @@ export function TaskTerminal({
     // follow the moment the user scrolls up to read history, and restore it when
     // they scroll (or jump) back to the bottom — native terminal behavior.
     let follow = true
+    let preserveFollowDepth = 0
     const atBottom = () => term.buffer.active.viewportY >= term.buffer.active.baseY
+    const preserveFollowDuring = (fn: () => void) => {
+      preserveFollowDepth += 1
+      try {
+        fn()
+      } finally {
+        requestAnimationFrame(() => {
+          preserveFollowDepth = Math.max(0, preserveFollowDepth - 1)
+        })
+      }
+    }
 
     const send = (obj: unknown) => {
       if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
@@ -444,6 +455,14 @@ export function TaskTerminal({
     // Keep the follow flag + bottom-jump button honest for xterm-local scroll
     // sources such as Shift+PageUp or the bottom jump button.
     const scrollDisposable = term.onScroll(() => {
+      if (preserveFollowDepth > 0 && follow) {
+        requestAnimationFrame(() => {
+          if (destroyed) return
+          if (follow) term.scrollToBottom()
+          syncBottomJump()
+        })
+        return
+      }
       follow = atBottom()
       syncBottomJump()
     })
@@ -577,14 +596,16 @@ export function TaskTerminal({
       if (resizeFrame) cancelAnimationFrame(resizeFrame)
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0
-        fitNow()
-        term.refresh(0, Math.max(0, term.rows - 1))
-        // A fit can change cols and reflow the whole buffer; xterm preserves the
-        // top visible line, not the bottom, so the tail slides below the fold.
-        // Re-pinning here while following is the step the one-shot version
-        // missed — it's exactly why a manual resize used to be the workaround.
-        if (follow) term.scrollToBottom()
-        syncBottomJump()
+        preserveFollowDuring(() => {
+          fitNow()
+          term.refresh(0, Math.max(0, term.rows - 1))
+          // A fit can change cols and reflow the whole buffer; xterm preserves the
+          // top visible line, not the bottom, so the tail slides below the fold.
+          // Re-pinning here while following is the step the one-shot version
+          // missed — it's exactly why a manual resize used to be the workaround.
+          if (follow) term.scrollToBottom()
+          syncBottomJump()
+        })
         openWS()
       })
     }
@@ -647,18 +668,25 @@ export function TaskTerminal({
           return
         }
         if (m.type === 'output' && m.data != null) {
+          preserveFollowDepth += 1
           term.write(m.data, () => {
-            // The first output frame is the history replay — refit to it.
-            if (!sawFirstOutput) {
-              sawFirstOutput = true
-              fitNow()
+            try {
+              // The first output frame is the history replay — refit to it.
+              if (!sawFirstOutput) {
+                sawFirstOutput = true
+                fitNow()
+              }
+              // Re-pin on EVERY drained write while following — not just the first.
+              // The replay's tail (live prompt + footer) parses after the initial
+              // pin, so pinning here keeps the input box glued to the bottom as the
+              // stream settles. No-op once already at the bottom.
+              if (follow) term.scrollToBottom()
+              else syncBottomJump()
+            } finally {
+              requestAnimationFrame(() => {
+                preserveFollowDepth = Math.max(0, preserveFollowDepth - 1)
+              })
             }
-            // Re-pin on EVERY drained write while following — not just the first.
-            // The replay's tail (live prompt + footer) parses after the initial
-            // pin, so pinning here keeps the input box glued to the bottom as the
-            // stream settles. No-op once already at the bottom.
-            if (follow) term.scrollToBottom()
-            else syncBottomJump()
           })
         } else if (m.type === 'status') notifyStatus('status', m.message ?? '')
         else if (m.type === 'error') notifyStatus('error', m.message ?? 'terminal error')

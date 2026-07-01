@@ -1,7 +1,6 @@
 package monitor
 
 import (
-	"database/sql"
 	"fmt"
 	"os"
 	"strconv"
@@ -61,26 +60,6 @@ type trackedGitHubPR struct {
 	Owner  string
 	Repo   string
 	Number int
-}
-
-func trackedGitHubPRs(db *sql.DB) ([]trackedGitHubPR, error) {
-	rows, err := db.Query(`SELECT DISTINCT tag FROM task_tags WHERE tag LIKE 'gh-pr:%'`)
-	if err != nil {
-		return nil, fmt.Errorf("list tracked github prs: %w", err)
-	}
-	defer rows.Close()
-	var out []trackedGitHubPR
-	for rows.Next() {
-		var tag string
-		if err := rows.Scan(&tag); err != nil {
-			return nil, err
-		}
-		pr, ok := parseGitHubRefTag(tag, "gh-pr:")
-		if ok {
-			out = append(out, pr)
-		}
-	}
-	return out, rows.Err()
 }
 
 func parseGitHubRefTag(tag, prefix string) (trackedGitHubPR, bool) {

@@ -96,11 +96,6 @@ func setGitHubSecret(account, value string) error {
 	return keyring.Set(githubKeyringService, account, value)
 }
 
-// deleteGitHubSecret removes a GitHub App secret from the keyring.
-func deleteGitHubSecret(account string) error {
-	return keyringDelete(githubKeyringService, account)
-}
-
 // storeGitHubSecret persists a GitHub App secret to the keyring AND exports it
 // to the process env so it takes effect live (the webhook handler and SDK read
 // env). An empty value clears the secret from both.

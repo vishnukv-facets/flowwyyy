@@ -398,23 +398,6 @@ func askFlowSearchTerms(query string) string {
 	return strings.Join(terms, " ")
 }
 
-func filterTaskViews(tasks []TaskView, keep func(TaskView) bool) []TaskView {
-	var out []TaskView
-	for _, task := range tasks {
-		if keep(task) {
-			out = append(out, task)
-		}
-	}
-	return out
-}
-
-func takeTaskViews(in []TaskView, n int) []TaskView {
-	if len(in) <= n {
-		return in
-	}
-	return in[:n]
-}
-
 func takeFeedItems(in []flowdb.FeedItem, n int) []flowdb.FeedItem {
 	if len(in) <= n {
 		return in

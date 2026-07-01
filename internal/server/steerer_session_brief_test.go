@@ -25,6 +25,9 @@ func TestSteererSessionBriefContract(t *testing.T) {
 		"Open attention workstreams",
 		"Active task",
 		"flow attention resolve",
+		"flow attention resolve <card-id>",
+		"Never use `flow attention act <id> dismiss` for context_only",
+		"dismiss is operator feedback for noise",
 		"Customer-facing DMs still get drafts",
 		"--context-only --thread-key",
 		"never", // surface-only: never auto-send a reply
@@ -33,6 +36,9 @@ func TestSteererSessionBriefContract(t *testing.T) {
 		if !strings.Contains(b, want) {
 			t.Errorf("steerer brief missing %q", want)
 		}
+	}
+	if strings.Contains(b, "--action drop --context-only") {
+		t.Errorf("steerer brief must not instruct context_only turns to drop/resolve through surface")
 	}
 }
 

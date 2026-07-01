@@ -203,6 +203,7 @@ func TestGitHubDispatcher_SecondPREventAppendsWithoutDuplicateTask(t *testing.T)
 }
 
 func TestGitHubDispatcher_ReviewCommentAppendsToTrackedPR(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat")
 	db := dispatcherTestDB(t)
 	_, _, _, restore := stubDispatcherIO(t)
 	defer restore()
@@ -218,7 +219,7 @@ func TestGitHubDispatcher_ReviewCommentAppendsToTrackedPR(t *testing.T) {
 		Repo:      "flow-manager",
 		Number:    42,
 		CommentID: "PRRC_kwDOAAABBB",
-		Author:    "reviewer",
+		Author:    "OctoCat",
 		Body:      "Please tighten the idempotency test.",
 		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#discussion_r1",
 		EventKey:  "review-comment:PRRC_kwDOAAABBB",
@@ -593,6 +594,75 @@ func TestGitHubDispatcher_PRTopLevelCommentAppendsToTrackedPR(t *testing.T) {
 	}
 	if entries[0].Event.Text != ev.Body || entries[0].Event.URL != ev.URL {
 		t.Fatalf("event payload lost: %+v", entries[0].Event)
+	}
+}
+
+func TestGitHubDispatcher_SelfAuthoredAckCommentStillAppends(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat")
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "IC_ack",
+		Author:    "OctoCat",
+		Body:      "On it — reviewing this now.\n\n<!-- flow-agent-ack -->",
+		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#issuecomment-ack",
+		EventKey:  "issue-comment:IC_ack",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("self-authored ack should still reach inbox, got %d", len(entries))
+	}
+	rows, err := flowdb.ListWorkEventLog(db, flowdb.WorkEventLogFilter{EventType: "github_comment", TaskSlug: "tracked-pr"})
+	if err != nil {
+		t.Fatalf("ListWorkEventLog: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("self-authored ack should still record work events, got %d", len(rows))
+	}
+}
+
+func TestGitHubDispatcher_SelfAuthoredActionCommentWithMarkerStillAppends(t *testing.T) {
+	t.Setenv("FLOW_GH_SELF_LOGINS", "octocat")
+	db := dispatcherTestDB(t)
+	_, _, _, restore := stubDispatcherIO(t)
+	defer restore()
+	seedGitHubTask(t, "tracked-pr", db, "gh-pr:Facets-cloud/flow-manager#42")
+
+	d := NewGitHubDispatcher(db, nil)
+	ev := GitHubEvent{
+		Kind:      GitHubEventPRComment,
+		Owner:     "Facets-cloud",
+		Repo:      "flow-manager",
+		Number:    42,
+		CommentID: "IC_action",
+		Author:    "octocat",
+		Body:      "Please fix the failing test before merging.\n\n<!-- flow-agent-ack -->",
+		URL:       "https://github.com/Facets-cloud/flow-manager/pull/42#issuecomment-action",
+		EventKey:  "issue-comment:IC_action",
+	}
+	if err := d.Dispatch(context.Background(), ev); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	entries, err := ReadInboxEntries("tracked-pr")
+	if err != nil {
+		t.Fatalf("read inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("actionable self-authored comment should reach inbox, got %d", len(entries))
 	}
 }
 

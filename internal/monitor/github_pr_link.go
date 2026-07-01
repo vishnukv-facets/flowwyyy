@@ -26,8 +26,8 @@ var ghPRURLForWorktree = ghpr.OpenURLForBranch
 // case) wouldn't be polled — its comments, reviews, and head updates would
 // never reach the task until completion. Running the same linking each GitHub
 // poll cycle for untagged in-progress tasks closes that gap: a PR opened
-// mid-task gets tagged within one cycle, after which trackedGitHubPRs polls it
-// normally.
+// mid-task gets tagged within one cycle, after which the GitHub monitor polls
+// it normally.
 //
 // Gated to tasks with a worktree: that's both the correctness signal (the PR
 // lookup must run against the task's OWN branch checkout, not a shared work_dir

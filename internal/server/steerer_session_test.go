@@ -102,6 +102,12 @@ func TestSteererChatSlugForCard(t *testing.T) {
 			wantOK:   true,
 		},
 		{
+			name:     "slack card prefers stored channel over person-keyed thread",
+			item:     flowdb.FeedItem{Source: "slack", ThreadKey: "UOMENDRA:1781260302.168129", Channel: "D03HFQ402DU"},
+			wantSlug: steererChatSlug("D03HFQ402DU"),
+			wantOK:   true,
+		},
+		{
 			name:     "github card → gh-<repo>-<num> chat",
 			item:     flowdb.FeedItem{Source: "github", Channel: "Facets-cloud/agent-factory", ThreadKey: "Facets-cloud/agent-factory:gh-issue:Facets-cloud/agent-factory#7"},
 			wantSlug: steererChatSlug("gh-Facets-cloud-agent-factory-7"),

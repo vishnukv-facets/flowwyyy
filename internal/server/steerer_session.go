@@ -571,10 +571,23 @@ func steererSendReplyPrompt(item flowdb.FeedItem, channel, threadTS, text, instr
 	return b.String()
 }
 
+func slackCardThreadTarget(item flowdb.FeedItem) (channel, threadTS string) {
+	tkChannel, tkTS := splitThreadKey(item.ThreadKey)
+	channel = strings.TrimSpace(item.Channel)
+	if channel == "" {
+		channel = strings.TrimSpace(tkChannel)
+	}
+	threadTS = strings.TrimSpace(item.TS)
+	if threadTS == "" {
+		threadTS = strings.TrimSpace(tkTS)
+	}
+	return channel, threadTS
+}
+
 // postApprovedReplyViaChat routes an operator-approved send-reply through the
 // channel's existing per-channel steerer chat instead of an ephemeral send session.
-// Returns handled=false (caller falls back to the ephemeral floating session) when
-// sessions are off, the source isn't Slack, or no chat exists for the channel yet.
+// Returns handled=false when sessions are off, the source isn't Slack, or no chat
+// exists for the channel yet.
 // Per-slug serialized like DeliverToChannelSession so it never races a live turn.
 func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructions string) (bool, error) {
 	if !steering.SteererSessionsEnabled() || s == nil || s.cfg.DB == nil || s.terminals == nil {
@@ -583,14 +596,14 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 	if item.Source != "slack" {
 		return false, nil // GitHub posts via the gh agent; only Slack posts via the chat
 	}
-	channel, threadTS := splitThreadKey(item.ThreadKey)
+	channel, threadTS := slackCardThreadTarget(item)
 	if strings.TrimSpace(channel) == "" {
 		return false, nil
 	}
 	slug := steererChatSlug(channel)
 	chat, err := flowdb.GetChat(s.cfg.DB, slug)
 	if err != nil || chat == nil {
-		return false, nil // no live chat for this channel → fall back to ephemeral
+		return false, nil
 	}
 	slot := s.steererSlot(slug)
 	slot.mu.Lock()
@@ -650,10 +663,7 @@ func steererChatSlugForCard(item flowdb.FeedItem) (string, bool) {
 		}
 		return steererChatSlug("gh-" + strings.ReplaceAll(repo, "/", "-") + "-" + num), true
 	default: // slack and Slack-shaped sources
-		channel, _ := splitThreadKey(item.ThreadKey)
-		if strings.TrimSpace(channel) == "" {
-			channel = strings.TrimSpace(item.Channel)
-		}
+		channel, _ := slackCardThreadTarget(item)
 		if strings.TrimSpace(channel) == "" {
 			return "", false
 		}

@@ -1,12 +1,13 @@
-import { useState } from 'react'
-import { Archive, ArchiveRestore, ArrowLeftRight, Bell, BellOff, Check, MessagesSquare, Pencil, Play, Trash2, X } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { Archive, ArchiveRestore, ArrowLeftRight, Bell, BellOff, Check, ChevronDown, MessagesSquare, Pencil, Play, TerminalSquare, Trash2, X } from 'lucide-react'
 import { useAction, useChats } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { useFloatingTerminals } from '../lib/floatingTerminals'
+import { TaskTerminal } from '../components/Terminal'
 import { EmptyState, ErrorNote, Loading, ProviderIcon, SourceIcon } from '../components/ui'
 import { ago, compactTokens, fmtUSD, PROVIDER_LABEL } from '../lib/format'
 import { confirmAction } from '../lib/confirm'
-import type { Chat } from '../lib/types'
+import type { ActionResponse, Chat } from '../lib/types'
 
 // Chats — the adhoc Ask Flow / Slack chat sessions started outside the task
 // flow. Each row reopens its session into a floating terminal, or
@@ -58,13 +59,17 @@ export function Chats() {
 
 function ChatRow({ chat }: { chat: Chat }) {
   const action = useAction()
-  const { open: openFloatingTerminal } = useFloatingTerminals()
+  const { open: openFloatingTerminal, minimize: minimizeFloatingTerminal } = useFloatingTerminals()
   const providerLabel = PROVIDER_LABEL[chat.provider] ?? chat.provider
   const isSlack = chat.origin === 'slack'
   const isSteerer = chat.origin === 'steerer'
   const src = chatSource(chat)
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(chat.title)
+  const [draft, setDraft] = useState('')
+  const renameInputRef = useRef<HTMLInputElement>(null)
+  const [inlineTerminal, setInlineTerminal] = useState<ActionResponse['floating_terminal'] | null>(null)
+  const [inlineStatus, setInlineStatus] = useState('disconnected')
+  const inlineOpen = !!inlineTerminal
 
   const saveRename = () => {
     const name = draft.trim()
@@ -101,6 +106,25 @@ function ChatRow({ chat }: { chat: Chat }) {
     )
   }
 
+  const toggleInlineTerminal = () => {
+    if (inlineOpen) {
+      setInlineTerminal(null)
+      return
+    }
+    if (action.isPending) return
+    action.mutate(
+      { kind: 'chat-reopen', slug: chat.slug },
+      {
+        onSuccess: (resp) => {
+          if (!resp.floating_terminal) return
+          setInlineStatus('connecting')
+          setInlineTerminal(resp.floating_terminal)
+          minimizeFloatingTerminal(resp.floating_terminal.id)
+        },
+      },
+    )
+  }
+
   const toggleArchive = () => {
     if (action.isPending) return
     action.mutate({ kind: chat.archived ? 'chat-unarchive' : 'chat-archive', slug: chat.slug })
@@ -123,144 +147,195 @@ function ChatRow({ chat }: { chat: Chat }) {
     action.mutate({ kind: 'chat-delete', slug: chat.slug })
   }
 
+  const beginRename = () => {
+    setDraft(chat.title)
+    setEditing(true)
+    requestAnimationFrame(() => renameInputRef.current?.focus())
+  }
+
   return (
-    <div className="card row gap chat-row" style={{ alignItems: 'center', padding: '12px 14px' }}>
-      <span
-        className={`dot ${chat.live ? 'running' : 'idle'}`}
-        title={chat.live ? 'working — agent is processing a command' : 'idle'}
-      />
-      <div className="col" style={{ gap: 4, minWidth: 0, flex: 1 }}>
-        <div className="row gap" style={{ alignItems: 'center' }}>
-          {editing ? (
-            <input
-              className="input sm"
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') saveRename()
-                if (e.key === 'Escape') setEditing(false)
-              }}
-              style={{ flex: 1, minWidth: 0 }}
+    <div className="card chat-row">
+      <div className="chat-row-main">
+        <span
+          className={`dot ${chat.live ? 'running' : 'idle'}`}
+          title={chat.live ? 'working — agent is processing a command' : 'idle'}
+        />
+        <div className="col" style={{ gap: 4, minWidth: 0, flex: 1 }}>
+          <div className="row gap" style={{ alignItems: 'center' }}>
+            {editing ? (
+              <input
+                ref={renameInputRef}
+                className="input sm"
+                aria-label="Chat name"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') saveRename()
+                  if (e.key === 'Escape') setEditing(false)
+                }}
+                style={{ flex: 1, minWidth: 0 }}
+              />
+            ) : (
+              <strong className="clip">{chat.title || 'New chat'}</strong>
+            )}
+            {!editing && src ? (
+              <span
+                className="chat-source"
+                title={`${src.source === 'github' ? 'GitHub' : 'Slack'} · ${src.id}`}
+              >
+                <SourceIcon source={src.source} size={11} />
+                {/* Skip the text when it would just repeat the chat name (channels,
+                    where name === id) — keep it where it adds info (DMs/groups). */}
+                {src.id !== chat.title.trim() ? <span className="chat-source-id">{src.id}</span> : null}
+              </span>
+            ) : null}
+            {editing ? (
+              <>
+                <button type="button" className="btn icon ghost sm" title="Save name" aria-label="Save name" onClick={saveRename}>
+                  <Check size={13} />
+                </button>
+                <button type="button" className="btn icon ghost sm" title="Cancel" aria-label="Cancel rename" onClick={() => setEditing(false)}>
+                  <X size={13} />
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                className="btn icon ghost sm chat-rename"
+                title="Rename chat"
+                aria-label="Rename chat"
+                onClick={beginRename}
+              >
+                <Pencil size={12} />
+              </button>
+            )}
+            {chat.live ? <span className="faint">working…</span> : null}
+            {chat.muted ? <span className="badge warn" title="Muted — no events are forwarded to this chat">muted</span> : null}
+            {chat.archived ? <span className="badge">archived</span> : null}
+          </div>
+          {chat.last_reply ? (
+            <div className="faint clip" style={{ fontSize: 12 }} title={chat.last_reply}>
+              <span style={{ opacity: 0.6 }}>↳ </span>
+              {chat.last_reply}
+            </div>
+          ) : null}
+          <div className="row gap faint" style={{ alignItems: 'center', fontSize: 12 }}>
+            <span className="row gap" style={{ alignItems: 'center', gap: 5 }}>
+              <ProviderIcon provider={chat.provider} size={13} />
+              {providerLabel}
+            </span>
+            {isSlack ? (
+              <span className="badge accent" title="Started from Slack">
+                <SourceIcon source="slack" size={11} /> Slack
+              </span>
+            ) : null}
+            {isSteerer ? (
+              <span className="badge" title="Always-on attention steerer session">Steering</span>
+            ) : null}
+            {chat.tokens ? (
+              <span className="mono" title="Cumulative session tokens · estimated cost">
+                {compactTokens(chat.tokens)} tok · ~{fmtUSD(chat.cost_usd ?? 0)}
+              </span>
+            ) : null}
+            {chat.occupancy_pct ? <CtxDial pct={chat.occupancy_pct} /> : null}
+            <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
+          </div>
+        </div>
+        <div className="chat-actions">
+          {/* Secondary actions roll out to the LEFT of Reopen on hover/focus (grid
+              0fr→1fr) so Reopen stays pinned to the right corner. State that matters
+              at rest (muted/archived) is shown as a badge by the title. */}
+          <div className="chat-actions-rollout">
+            <div className="row gap chat-actions-secondary" style={{ alignItems: 'center' }}>
+              {isSteerer ? (
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={action.isPending}
+                  title={`Switch to ${chat.provider === 'codex' ? 'Claude' : 'Codex'}`}
+                  onClick={switchProvider}
+                >
+                  <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
+                </button>
+              ) : null}
+              {isSteerer ? (
+                <button
+                  type="button"
+                  className={`btn ghost sm${chat.muted ? ' primary' : ''}`}
+                  disabled={action.isPending}
+                  title={chat.muted ? 'Unmute — resume forwarding events to this chat' : 'Mute — stop forwarding events to this chat until unmuted'}
+                  onClick={toggleMute}
+                >
+                  {chat.muted ? <Bell size={13} /> : <BellOff size={13} />}
+                  {chat.muted ? 'Unmute' : 'Mute'}
+                </button>
+              ) : null}
+              <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>
+                {chat.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
+                {chat.archived ? 'Unarchive' : 'Archive'}
+              </button>
+              <button
+                type="button"
+                className="btn icon ghost sm"
+                title="Delete chat"
+                aria-label="Delete chat"
+                disabled={action.isPending}
+                onClick={remove}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          </div>
+          <div className="chat-open-group" aria-label="Open chat session">
+            <button type="button" className="btn sm chat-reopen" disabled={action.isPending} onClick={reopen}>
+              <Play size={13} /> Reopen
+            </button>
+            <button
+              type="button"
+              className={`btn icon sm chat-inline-toggle${inlineOpen ? ' active' : ''}`}
+              title={inlineOpen ? 'Hide inline terminal' : 'Open inline terminal'}
+              aria-label={inlineOpen ? 'Hide inline terminal' : 'Open inline terminal'}
+              aria-expanded={inlineOpen}
+              disabled={action.isPending && !inlineOpen}
+              onClick={toggleInlineTerminal}
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        </div>
+      </div>
+      {inlineTerminal ? (
+        <div className="chat-inline-terminal">
+          <div className="chat-inline-head">
+            <div className="chat-inline-title">
+              <TerminalSquare size={14} />
+              <span className="clip">{inlineTerminal.title || chat.title || chat.slug}</span>
+            </div>
+            <span className="provider-chip">
+              <ProviderIcon provider={inlineTerminal.provider} size={13} />
+              {PROVIDER_LABEL[inlineTerminal.provider] ?? inlineTerminal.provider}
+            </span>
+            <span className="mono faint">{inlineStatus}</span>
+            <button
+              type="button"
+              className="btn icon ghost sm"
+              title="Close inline terminal"
+              aria-label="Close inline terminal"
+              onClick={() => setInlineTerminal(null)}
+            >
+              <X size={14} />
+            </button>
+          </div>
+          <div className="chat-inline-body">
+            <TaskTerminal
+              slug={inlineTerminal.id}
+              kind="floating"
+              provider={inlineTerminal.provider}
+              onStatus={(kind, message) => setInlineStatus(kind === 'open' ? 'connected' : message || kind)}
             />
-          ) : (
-            <strong className="clip">{chat.title || 'New chat'}</strong>
-          )}
-          {!editing && src ? (
-            <span
-              className="chat-source"
-              title={`${src.source === 'github' ? 'GitHub' : 'Slack'} · ${src.id}`}
-            >
-              <SourceIcon source={src.source} size={11} />
-              {/* Skip the text when it would just repeat the chat name (channels,
-                  where name === id) — keep it where it adds info (DMs/groups). */}
-              {src.id !== chat.title.trim() ? <span className="chat-source-id">{src.id}</span> : null}
-            </span>
-          ) : null}
-          {editing ? (
-            <>
-              <button type="button" className="btn icon ghost sm" title="Save name" aria-label="Save name" onClick={saveRename}>
-                <Check size={13} />
-              </button>
-              <button type="button" className="btn icon ghost sm" title="Cancel" aria-label="Cancel rename" onClick={() => setEditing(false)}>
-                <X size={13} />
-              </button>
-            </>
-          ) : (
-            <button
-              type="button"
-              className="btn icon ghost sm chat-rename"
-              title="Rename chat"
-              aria-label="Rename chat"
-              onClick={() => {
-                setDraft(chat.title)
-                setEditing(true)
-              }}
-            >
-              <Pencil size={12} />
-            </button>
-          )}
-          {chat.live ? <span className="faint">working…</span> : null}
-          {chat.muted ? <span className="badge warn" title="Muted — no events are forwarded to this chat">muted</span> : null}
-          {chat.archived ? <span className="badge">archived</span> : null}
-        </div>
-        {chat.last_reply ? (
-          <div className="faint clip" style={{ fontSize: 12 }} title={chat.last_reply}>
-            <span style={{ opacity: 0.6 }}>↳ </span>
-            {chat.last_reply}
-          </div>
-        ) : null}
-        <div className="row gap faint" style={{ alignItems: 'center', fontSize: 12 }}>
-          <span className="row gap" style={{ alignItems: 'center', gap: 5 }}>
-            <ProviderIcon provider={chat.provider} size={13} />
-            {providerLabel}
-          </span>
-          {isSlack ? (
-            <span className="badge accent" title="Started from Slack">
-              <SourceIcon source="slack" size={11} /> Slack
-            </span>
-          ) : null}
-          {isSteerer ? (
-            <span className="badge" title="Always-on attention steerer session">Steering</span>
-          ) : null}
-          {chat.tokens ? (
-            <span className="mono" title="Cumulative session tokens · estimated cost">
-              {compactTokens(chat.tokens)} tok · ~{fmtUSD(chat.cost_usd ?? 0)}
-            </span>
-          ) : null}
-          {chat.occupancy_pct ? <CtxDial pct={chat.occupancy_pct} /> : null}
-          <span className="mono" title={chat.last_activity_at}>{ago(chat.last_activity_at)}</span>
-        </div>
-      </div>
-      <div className="chat-actions">
-        {/* Secondary actions roll out to the LEFT of Reopen on hover/focus (grid
-            0fr→1fr) so Reopen stays pinned to the right corner. State that matters
-            at rest (muted/archived) is shown as a badge by the title. */}
-        <div className="chat-actions-rollout">
-          <div className="row gap chat-actions-secondary" style={{ alignItems: 'center' }}>
-          {isSteerer ? (
-            <button
-              type="button"
-              className="btn ghost sm"
-              disabled={action.isPending}
-              title={`Switch to ${chat.provider === 'codex' ? 'Claude' : 'Codex'}`}
-              onClick={switchProvider}
-            >
-              <ArrowLeftRight size={13} /> {chat.provider === 'codex' ? 'Claude' : 'Codex'}
-            </button>
-          ) : null}
-          {isSteerer ? (
-            <button
-              type="button"
-              className={`btn ghost sm${chat.muted ? ' primary' : ''}`}
-              disabled={action.isPending}
-              title={chat.muted ? 'Unmute — resume forwarding events to this chat' : 'Mute — stop forwarding events to this chat until unmuted'}
-              onClick={toggleMute}
-            >
-              {chat.muted ? <Bell size={13} /> : <BellOff size={13} />}
-              {chat.muted ? 'Unmute' : 'Mute'}
-            </button>
-          ) : null}
-          <button type="button" className="btn ghost sm" disabled={action.isPending} onClick={toggleArchive}>
-            {chat.archived ? <ArchiveRestore size={13} /> : <Archive size={13} />}
-            {chat.archived ? 'Unarchive' : 'Archive'}
-          </button>
-          <button
-            type="button"
-            className="btn icon ghost sm"
-            title="Delete chat"
-            aria-label="Delete chat"
-            disabled={action.isPending}
-            onClick={remove}
-          >
-            <Trash2 size={13} />
-          </button>
           </div>
         </div>
-        <button type="button" className="btn sm chat-reopen" disabled={action.isPending} onClick={reopen}>
-          <Play size={13} /> Reopen
-        </button>
-      </div>
+      ) : null}
     </div>
   )
 }

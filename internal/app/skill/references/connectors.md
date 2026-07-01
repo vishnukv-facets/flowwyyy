@@ -346,10 +346,11 @@ voice, before you start the substantive work:
 - **When woken by a new `pr_review_comment`, `pr_review_changes_requested`,
   `pr_comment`, or `issue_comment`**, post a short reactive ack on that item
   ("On it — reviewing this now.") before doing the work.
-- **Every ack MUST end with the marker line `<!-- flow-agent-ack -->`** on its
-  own line. The monitor matches this exact marker to recognize the comment as
-  your own ack and drop it, so your ack never wakes you in a loop. Omit it and
-  you will re-trigger yourself on the next poll.
+- **Every ack should end with the marker line `<!-- flow-agent-ack -->`** on its
+  own line. The marker is an agent-readable cue, not a monitor-side filter:
+  GitHub comments and reviews still enter the inbox/work-event path. If you see
+  the marker later, decide from the surrounding content whether to ignore a pure
+  ack or act on a substantive new instruction.
 - **Ack once per item, not per event.** Before the bootstrap ack, scan the
   item's existing comments (`gh pr view <n> --comments` / `gh issue view <n>
   --comments`) for `flow-agent-ack`; if one is already present, skip the
@@ -368,10 +369,10 @@ voice, before you start the substantive work:
 
 **Anti-patterns specific to GitHub tasks:**
 
-- **Do not re-action your own ack.** A comment you authored that carries the
-  `flow-agent-ack` marker is your acknowledgement; the monitor already drops it,
-  but if you ever see one in the inbox, ignore it — never treat it as a new
-  instruction.
+- **Do not blindly re-action your own ack.** A comment you authored that carries
+  the `flow-agent-ack` marker is usually your acknowledgement. If it appears in
+  the inbox, decide from content: ignore a pure ack, but proceed on any new
+  instruction or substantive review text.
 - **Do not approve on monitor signal alone.** The listener can reopen a
   review task after new commits, but approval only happens after you have
   verified the current diff and checks.

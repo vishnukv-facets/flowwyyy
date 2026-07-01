@@ -414,9 +414,10 @@ func contextWindowForProvider(provider string) int {
 }
 
 // contextWindowForModel returns the provider's context cap, refined by model
-// when known. Claude Opus 4.6+ ships a 1M context window (some model ids also
-// carry a "[1m]" suffix); Sonnet, Haiku, and older Opus are 200k. Codex's window
-// comes from the JSONL (model_context_window), handled by the caller.
+// when known. Claude Opus 4.6+ and Sonnet 5+ ship a 1M context window (some
+// model ids also carry a "[1m]" suffix); Haiku and older Claude models are 200k.
+// Codex's window comes from the JSONL (model_context_window), handled by the
+// caller.
 func contextWindowForModel(provider, model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if m == "" {
@@ -433,14 +434,14 @@ func contextWindowForModel(provider, model string) int {
 }
 
 // claudeHas1MContext reports whether a (lowercased) Claude model id has the 1M
-// context window. True for an explicit "[1m]" tag, any Opus 5+, and Opus 4.6+
-// (4-6 / 4-7 / 4-8 / 4-9 …). Earlier Opus 4 (4-0..4-5), Sonnet, and Haiku are
-// 200k. Parsing the minor digit (rather than listing each release) keeps new
-// Opus 4.x models correct without a code change — the gap that made every
-// opus-4-8 session mis-read as 200k and clamp to a bogus "381k/381k" bar.
+// context window.
 func claudeHas1MContext(m string) bool {
 	if strings.Contains(m, "[1m]") {
 		return true
+	}
+	if idx := strings.Index(m, "sonnet-"); idx >= 0 {
+		major, _, ok := leadingInt(m[idx+len("sonnet-"):])
+		return ok && major >= 5
 	}
 	idx := strings.Index(m, "opus-")
 	if idx < 0 {
