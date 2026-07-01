@@ -4312,9 +4312,24 @@ select.input {
   font-size: 12.5px;
 }
 .stats-tok-val {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 112px;
+  line-height: 1.12;
   font-size: 13px;
   color: var(--text);
   font-variant-numeric: tabular-nums;
+}
+.stats-tok-main {
+  white-space: nowrap;
+}
+.stats-tok-cache {
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+  white-space: nowrap;
 }
 .stats-tok-cost {
   font-size: 12px;
@@ -4337,6 +4352,10 @@ select.input {
   font-weight: 600;
 }
 .stats-tok-total .stats-tok-val {
+  font-weight: 600;
+}
+.stats-tok-total .stats-tok-cache {
+  color: var(--text-2);
   font-weight: 600;
 }
 .stats-tok-total .stats-tok-cost {

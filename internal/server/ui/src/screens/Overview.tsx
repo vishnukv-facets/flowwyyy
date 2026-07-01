@@ -49,7 +49,7 @@ import {
   Stat,
 } from "../components/ui";
 import { useFloatTip } from "../components/FloatTip";
-import { ago, compactTokens, dueTone, fmtUSD } from "../lib/format";
+import { ago, compactTokens, dueTone, fmtUSD, tokenUsageTitle } from "../lib/format";
 import { agendaCount, bucketByDue, type DueBuckets } from "../lib/agenda";
 import {
   throughputByWeek,
@@ -795,6 +795,17 @@ function briefingUpdateHref(
 // across every tracked session — the SUM of each session's "tok" pill, so the
 // panel and the cards agree. Uses the real Claude/Codex logos so the split
 // reads at a glance.
+function statsTokenValue(tokens: number, cached?: number): ReactNode {
+  return (
+    <>
+      <span className="stats-tok-main">{compactTokens(tokens)}</span>
+      {cached && cached > 0 ? (
+        <span className="stats-tok-cache">(+ {compactTokens(cached)} cached)</span>
+      ) : null}
+    </>
+  );
+}
+
 function StatsPanel({ stats }: { stats: UiStats }) {
   return (
     <div className="stats-panel">
@@ -822,12 +833,24 @@ function StatsPanel({ stats }: { stats: UiStats }) {
         tokens &amp; est. cost · flow-managed sessions
       </div>
       <div className="stats-tokens">
-        <div className="stats-tok-row">
+        <div
+          className="stats-tok-row"
+          title={tokenUsageTitle({
+            tokens: stats.tokens_claude,
+            label: "tokens across Claude sessions",
+            cacheReadTokens: stats.cache_read_claude,
+            cacheCreationTokens: stats.cache_creation_claude,
+            cost: stats.cost_claude,
+            costFresh: stats.cost_fresh_claude,
+            costCacheRead: stats.cost_cache_read_claude,
+            costCacheCreation: stats.cost_cache_creation_claude,
+          })}
+        >
           <span className="stats-tok-name">
             <ProviderIcon provider="claude" size={14} /> Claude
           </span>
           <span className="mono stats-tok-val">
-            {compactTokens(stats.tokens_claude)}
+            {statsTokenValue(stats.tokens_claude, stats.cache_read_claude)}
           </span>
           <span className="mono stats-tok-cost">
             ~{fmtUSD(stats.cost_claude ?? 0)}
@@ -836,12 +859,24 @@ function StatsPanel({ stats }: { stats: UiStats }) {
             {stats.sessions_claude} sess
           </span>
         </div>
-        <div className="stats-tok-row">
+        <div
+          className="stats-tok-row"
+          title={tokenUsageTitle({
+            tokens: stats.tokens_codex,
+            label: "tokens across Codex sessions",
+            cacheReadTokens: stats.cache_read_codex,
+            cacheCreationTokens: stats.cache_creation_codex,
+            cost: stats.cost_codex,
+            costFresh: stats.cost_fresh_codex,
+            costCacheRead: stats.cost_cache_read_codex,
+            costCacheCreation: stats.cost_cache_creation_codex,
+          })}
+        >
           <span className="stats-tok-name">
             <ProviderIcon provider="codex" size={14} /> Codex
           </span>
           <span className="mono stats-tok-val">
-            {compactTokens(stats.tokens_codex)}
+            {statsTokenValue(stats.tokens_codex, stats.cache_read_codex)}
           </span>
           <span className="mono stats-tok-cost">
             ~{fmtUSD(stats.cost_codex ?? 0)}
@@ -850,10 +885,22 @@ function StatsPanel({ stats }: { stats: UiStats }) {
             {stats.sessions_codex} sess
           </span>
         </div>
-        <div className="stats-tok-row stats-tok-total">
+        <div
+          className="stats-tok-row stats-tok-total"
+          title={tokenUsageTitle({
+            tokens: stats.tokens_total,
+            label: "tokens across flow-managed sessions",
+            cacheReadTokens: stats.cache_read_total,
+            cacheCreationTokens: stats.cache_creation_total,
+            cost: stats.cost_total,
+            costFresh: stats.cost_fresh_total,
+            costCacheRead: stats.cost_cache_read_total,
+            costCacheCreation: stats.cost_cache_creation_total,
+          })}
+        >
           <span className="stats-tok-name">Combined</span>
           <span className="mono stats-tok-val">
-            {compactTokens(stats.tokens_total)}
+            {statsTokenValue(stats.tokens_total, stats.cache_read_total)}
           </span>
           <span className="mono stats-tok-cost">
             ~{fmtUSD(stats.cost_total ?? 0)}
@@ -865,11 +912,20 @@ function StatsPanel({ stats }: { stats: UiStats }) {
         {stats.sessions_steering ? (
           <div
             className="stats-tok-row"
-            title="Always-on attention steerer sessions — a subset of the totals above, broken out so ongoing background spend is visible."
+            title={`Always-on attention steerer sessions — a subset of the totals above, broken out so ongoing background spend is visible. ${tokenUsageTitle({
+              tokens: stats.tokens_steering ?? 0,
+              label: "tokens across Steering sessions",
+              cacheReadTokens: stats.cache_read_steering,
+              cacheCreationTokens: stats.cache_creation_steering,
+              cost: stats.cost_steering,
+              costFresh: stats.cost_fresh_steering,
+              costCacheRead: stats.cost_cache_read_steering,
+              costCacheCreation: stats.cost_cache_creation_steering,
+            })}`}
           >
             <span className="stats-tok-name faint">↳ Steering</span>
             <span className="mono stats-tok-val">
-              {compactTokens(stats.tokens_steering ?? 0)}
+              {statsTokenValue(stats.tokens_steering ?? 0, stats.cache_read_steering)}
             </span>
             <span className="mono stats-tok-cost">
               ~{fmtUSD(stats.cost_steering ?? 0)}

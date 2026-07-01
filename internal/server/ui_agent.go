@@ -205,52 +205,57 @@ func (s *Server) uiAgent(tv TaskView, live map[string]bool) uiAgent {
 		tokensUsed = tokensMax
 	}
 	agent := uiAgent{
-		Slug:            tv.Slug,
-		Name:            tv.Name,
-		Project:         tv.ProjectSlug,
-		Kind:            tv.Kind,
-		PlaybookSlug:    tv.PlaybookSlug,
-		Parent:          tv.Parent,
-		Parents:         tv.Parents,
-		Children:        tv.Children,
-		ForkedFromSlug:  tv.ForkedFromSlug,
-		ForkedFrom:      tv.ForkedFrom,
-		ForkReason:      tv.ForkReason,
-		Forks:           tv.Forks,
-		Branch:          branch,
-		Branches:        branches,
-		WorkDir:         workDir,
-		Provider:        provider,
-		PermissionMode:  permissionMode,
-		Priority:        tv.Priority,
-		Status:          status,
-		TaskStatus:      tv.Status,
-		RuntimeStatus:   status,
-		RuntimeEvent:    runtimeEvent,
-		RuntimeSource:   runtimeSource,
-		Monitored:       s.inboxMonitors != nil && s.inboxMonitors.running(tv.Slug),
-		HookHealth:      s.agentHookHealth(tv, provider, fullTranscript, hookRuntime),
-		SessionID:       sessionID,
-		StartedMin:      minutesSince(startedAt),
-		LastActivitySec: lastActivity,
-		LastAction:      lastAction,
-		Diff:            diff,
-		DiffFiles:       files,
-		TokensUsed:      tokensUsed,
-		TokensMax:       tokensMax,
-		TokensSession:   insights.TokensSession,
-		CostSession:     insights.CostSession,
-		Activity:        toolCallActivitySeries(fullTranscript, time.Now()),
-		Tags:            tv.Tags,
-		Summary:         summary,
-		NextStep:        nextStep,
-		Transcript:      transcript,
-		Brief:           readMarkdownSummary(tv.BriefPath),
-		RecentTools:     recentTools(transcript),
-		BriefPath:       tv.BriefPath,
-		Updates:         tv.Updates,
-		AuxFiles:        tv.AuxFiles,
-		Terminal:        terminalSample(withTaskWorkDir(tv, workDir), provider, transcript, terminalMode),
+		Slug:                tv.Slug,
+		Name:                tv.Name,
+		Project:             tv.ProjectSlug,
+		Kind:                tv.Kind,
+		PlaybookSlug:        tv.PlaybookSlug,
+		Parent:              tv.Parent,
+		Parents:             tv.Parents,
+		Children:            tv.Children,
+		ForkedFromSlug:      tv.ForkedFromSlug,
+		ForkedFrom:          tv.ForkedFrom,
+		ForkReason:          tv.ForkReason,
+		Forks:               tv.Forks,
+		Branch:              branch,
+		Branches:            branches,
+		WorkDir:             workDir,
+		Provider:            provider,
+		PermissionMode:      permissionMode,
+		Priority:            tv.Priority,
+		Status:              status,
+		TaskStatus:          tv.Status,
+		RuntimeStatus:       status,
+		RuntimeEvent:        runtimeEvent,
+		RuntimeSource:       runtimeSource,
+		Monitored:           s.inboxMonitors != nil && s.inboxMonitors.running(tv.Slug),
+		HookHealth:          s.agentHookHealth(tv, provider, fullTranscript, hookRuntime),
+		SessionID:           sessionID,
+		StartedMin:          minutesSince(startedAt),
+		LastActivitySec:     lastActivity,
+		LastAction:          lastAction,
+		Diff:                diff,
+		DiffFiles:           files,
+		TokensUsed:          tokensUsed,
+		TokensMax:           tokensMax,
+		TokensSession:       insights.TokensSession,
+		CostSession:         insights.CostSession,
+		CacheReadTokens:     insights.CacheReadTokens,
+		CacheCreationTokens: insights.CacheCreationTokens,
+		CostFresh:           insights.CostFresh,
+		CostCacheRead:       insights.CostCacheRead,
+		CostCacheCreation:   insights.CostCacheCreation,
+		Activity:            toolCallActivitySeries(fullTranscript, time.Now()),
+		Tags:                tv.Tags,
+		Summary:             summary,
+		NextStep:            nextStep,
+		Transcript:          transcript,
+		Brief:               readMarkdownSummary(tv.BriefPath),
+		RecentTools:         recentTools(transcript),
+		BriefPath:           tv.BriefPath,
+		Updates:             tv.Updates,
+		AuxFiles:            tv.AuxFiles,
+		Terminal:            terminalSample(withTaskWorkDir(tv, workDir), provider, transcript, terminalMode),
 	}
 	if tv.WaitingOn != nil {
 		agent.WaitingFor = &uiWaitingFor{Kind: "flow", Cmd: "flow update task " + tv.Slug + " --clear-waiting", Why: *tv.WaitingOn}
@@ -322,6 +327,31 @@ func withTaskWorkDir(tv TaskView, workDir string) TaskView {
 	return tv
 }
 
+type sessionUsageSummary struct {
+	TokensSession       int
+	CostSession         float64
+	CacheReadTokens     int
+	CacheCreationTokens int
+	CostFresh           float64
+	CostCacheRead       float64
+	CostCacheCreation   float64
+}
+
+func usageSummaryFromStats(stats transcriptUsageStats) sessionUsageSummary {
+	out := sessionUsageSummary{
+		TokensSession:       stats.TokensSession,
+		CacheReadTokens:     stats.CacheReadTokens,
+		CacheCreationTokens: stats.CacheCreationTokens,
+		CostFresh:           stats.CostFresh,
+		CostCacheRead:       stats.CostCacheRead,
+		CostCacheCreation:   stats.CostCacheCreation,
+	}
+	for _, c := range stats.CostByDay {
+		out.CostSession += c
+	}
+	return out
+}
+
 func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript []uiTranscript) taskSessionInsights {
 	insights := taskSessionInsights{TokensMax: contextWindowForProvider(provider)}
 	if action := latestTranscriptAction(transcript); action != "" {
@@ -348,20 +378,21 @@ func (s *Server) sessionInsightsForTask(tv TaskView, provider string, transcript
 	}
 	insights.ActivityAt = entry.mtime.Format(time.RFC3339)
 	stats := entry.usage
+	usage := usageSummaryFromStats(stats)
 	insights.ActivityAt = laterTimestamp(insights.ActivityAt, stats.LastTimestamp)
 	if stats.TokensUsed > 0 {
 		insights.TokensUsed = stats.TokensUsed
 	}
-	if stats.TokensSession > 0 {
-		insights.TokensSession = stats.TokensSession
-	}
-	// All-time estimated cost = sum over every day the session was active. This
-	// is the full billed cost (cache included), so it does NOT track
+	insights.TokensSession = usage.TokensSession
+	// CostSession is the full billed cost (cache included), so it does NOT track
 	// TokensSession (cache-excluded work) one-to-one — cache reads cost money but
 	// aren't counted as work.
-	for _, c := range stats.CostByDay {
-		insights.CostSession += c
-	}
+	insights.CostSession = usage.CostSession
+	insights.CacheReadTokens = usage.CacheReadTokens
+	insights.CacheCreationTokens = usage.CacheCreationTokens
+	insights.CostFresh = usage.CostFresh
+	insights.CostCacheRead = usage.CostCacheRead
+	insights.CostCacheCreation = usage.CostCacheCreation
 	if stats.TokensMax > 0 {
 		insights.TokensMax = stats.TokensMax
 	} else if stats.Model != "" {

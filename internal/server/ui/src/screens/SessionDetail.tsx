@@ -69,7 +69,7 @@ import { Modal } from '../components/Modal'
 import { AgentPicker, EffortPicker, ModelPicker, PermissionPicker } from '../components/pickers'
 import { TerminalIcon } from '../components/TerminalIcon'
 import { ContextRing, EmptyState, ErrorNote, Loading, ProviderIcon, StatusBadge, StatusDot } from '../components/ui'
-import { compactTokens, dateTime, fromMinutes, fromSeconds, fmtUSD } from '../lib/format'
+import { cacheAwareTokens, dateTime, fromMinutes, fromSeconds, fmtUSD, tokenUsageTitle } from '../lib/format'
 
 type Tab = 'brief' | 'diff' | 'transcript' | 'updates' | 'artifacts' | 'tree' | 'auto'
 
@@ -261,11 +261,19 @@ export function SessionDetail({ slug }: { slug: string }) {
       {agent && agent.tokens_session > 0 && (
         <span
           className="tag tok-pill"
-          title={`${agent.tokens_session.toLocaleString()} tokens this session (input + output + cache writes; cache reads excluded)${
-            agent.cost_session ? ` · est. ${fmtUSD(agent.cost_session)} full bill incl. cache` : ''
-          } · context ${agent.tokens_used.toLocaleString()} / ${agent.tokens_max.toLocaleString()}`}
+          title={tokenUsageTitle({
+            tokens: agent.tokens_session,
+            cacheReadTokens: agent.cache_read_tokens,
+            cacheCreationTokens: agent.cache_creation_tokens,
+            cost: agent.cost_session,
+            costFresh: agent.cost_fresh,
+            costCacheRead: agent.cost_cache_read,
+            costCacheCreation: agent.cost_cache_creation,
+            contextUsed: agent.tokens_used,
+            contextMax: agent.tokens_max,
+          })}
         >
-          <Coins size={12} /> {compactTokens(agent.tokens_session)} tok
+          <Coins size={12} /> {cacheAwareTokens(agent.tokens_session, agent.cache_read_tokens)} tok
           {agent.cost_session ? <span className="tok-pill-cost"> · ~{fmtUSD(agent.cost_session)}</span> : null}
         </span>
       )}
