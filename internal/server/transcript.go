@@ -226,8 +226,8 @@ type transcriptUsageStats struct {
 	// CostByDay is the estimated USD cost of each day's BILLED tokens. Unlike
 	// TokensByDay (cache-excluded "work"), cost counts the full bill — fresh
 	// input + output PLUS cache reads and cache creation at their cache
-	// multipliers (see billedCostUSD) — because that is what's actually charged
-	// and what makes the figure track Claude Code's own /cost. Each turn is
+	// multipliers (see billedCostSplitUSD) — because that is what's actually
+	// charged and what makes the figure track Claude Code's own /cost. Each turn is
 	// priced at its own model's rate (see pricing.go), so a day's figure blends
 	// however many models/providers were active that day. Turns whose model has
 	// no published rate contribute 0, so this is a floor, not an invoice.

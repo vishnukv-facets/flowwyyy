@@ -29,6 +29,16 @@ func attentionTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func stubFlowCommand(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "flow")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("stub flow command: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestRenderAttentionFeed(t *testing.T) {
 	items := []flowdb.FeedItem{
 		{ID: "abc123", Source: "slack", ThreadKey: "C1:1.1", SuggestedAction: "make_task", Confidence: 0.88, Urgency: "urgent", MatchedTask: "", Summary: "Customer wants rollout date"},
@@ -238,6 +248,7 @@ func TestCmdAttentionSurfaceContextJSONFile(t *testing.T) {
 
 func TestCmdAttentionSurfaceAskTaskAgentSkipsAutoAct(t *testing.T) {
 	db := attentionTestDB(t)
+	stubFlowCommand(t)
 	if _, err := db.Exec(`INSERT INTO tasks (slug, name, status, priority, work_dir, created_at, updated_at) VALUES (?, ?, 'backlog', 'medium', ?, ?, ?)`,
 		"owner-task", "Owner task", t.TempDir(), "2026-06-05T10:00:00Z", "2026-06-05T10:00:00Z"); err != nil {
 		t.Fatalf("seed task: %v", err)

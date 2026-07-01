@@ -35,9 +35,9 @@ type modelPrice struct {
 // published list prices, not a billed invoice — but unlike the token "work"
 // figures it sits beside (which exclude caching), the dollar estimate counts
 // the FULL bill: fresh input + output PLUS cache reads and cache creation
-// priced at their cache multipliers (see billedCostUSD). On a long agentic
+// priced at their cache multipliers (see billedCostSplitUSD). On a long agentic
 // session cache reads dominate the bill, so excluding them understated cost by
-// multiples — this table + billedCostUSD is what makes the figure track Claude
+// multiples — this table + billedCostSplitUSD is what makes the figure track Claude
 // Code's own /cost.
 //
 // Sources (captured 2026-06): Anthropic model pricing (Fable 5 $10/$50, Opus
@@ -116,15 +116,4 @@ func (u transcriptTokenUsage) billedCostSplitUSD(rate tokenRate) tokenCostSplit 
 		CacheRead:     cacheReadCostUSD(u.cacheReadTokens(), rate),
 		CacheCreation: u.cacheCreationCostUSD(rate),
 	}
-}
-
-// billedCostUSD prices a turn's FULL billed usage at the given rate — fresh
-// input + output PLUS cache reads and cache creation. The token metric
-// (processedTokens) excludes cache READS; the bill does not. Cache reads
-// bill at 0.1x input, 5-minute cache writes at 1.25x, 1-hour writes at 2x.
-// Used by the Claude path, where each assistant turn carries its own complete
-// usage. (Codex prices deltas of a running total, so it uses turnCostUSD +
-// cacheReadCostUSD instead.)
-func (u transcriptTokenUsage) billedCostUSD(rate tokenRate) float64 {
-	return u.billedCostSplitUSD(rate).total()
 }
