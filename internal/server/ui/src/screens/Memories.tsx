@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Brain, Search } from 'lucide-react'
+import { Brain, Search, X } from 'lucide-react'
 import { useMemorySources, queryClient } from '../lib/query'
 import { useDocumentTitle } from '../lib/useDocumentTitle'
 import { apiPost } from '../lib/api'
@@ -7,7 +7,7 @@ import { EmptyState, Loading } from '../components/ui'
 import { DocEditor, type Backlink } from '../components/DocEditor'
 import { wikiRefs } from '../lib/wikiRefs'
 import { MemoryGraphCanvas } from '../components/memoryGraph/MemoryGraphCanvas'
-import { buildMemoryGraph } from './memoryGraph'
+import { buildMemoryGraph, isGraphableMemorySource } from './memoryGraph'
 import type { MemorySource } from '../lib/types'
 
 const EMPTY_MEMORY_SOURCES: MemorySource[] = []
@@ -16,31 +16,34 @@ export function Memories() {
   useDocumentTitle('Memories')
   const { data, isLoading } = useMemorySources()
   const sources = data ?? EMPTY_MEMORY_SOURCES
+  const graphSources = useMemo(() => sources.filter(isGraphableMemorySource), [sources])
   const [selected, setSelected] = useState<string | null>(null)
+  const [detailId, setDetailId] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [provider, setProvider] = useState('')
 
   const providers = useMemo(() => {
     const seen = new Set<string>()
-    for (const source of sources) {
+    for (const source of graphSources) {
       if (source.provider) seen.add(source.provider)
     }
     return Array.from(seen).sort()
-  }, [sources])
+  }, [graphSources])
 
-  const graph = useMemo(() => buildMemoryGraph(sources, { query: q, provider }), [sources, q, provider])
-  const selectedId = selected && graph.nodes.some((node) => node.id === selected) ? selected : graph.nodes[0]?.id ?? null
-  const active = selectedId ? sources.find((source) => source.id === selectedId) : undefined
+  const graph = useMemo(() => buildMemoryGraph(graphSources, { query: q, provider }), [graphSources, q, provider])
+  const selectedId = selected && graph.nodes.some((node) => node.id === selected) ? selected : null
+  const activeId = detailId && graph.nodes.some((node) => node.id === detailId) ? detailId : null
+  const active = activeId ? graphSources.find((source) => source.id === activeId) : undefined
 
   const backlinks = useMemo<Backlink[]>(() => {
     if (!active) return []
     const name = active.label.trim().toLowerCase()
-    return sources.flatMap((source) =>
+    return graphSources.flatMap((source) =>
       source.id !== active.id && wikiRefs(source.content ?? '').includes(name)
         ? [{ name: source.label, onOpen: () => setSelected(source.id) }]
         : [],
     )
-  }, [sources, active])
+  }, [graphSources, active])
 
   if (isLoading) return <div className="page"><Loading rows={5} /></div>
   if (sources.length === 0) {
@@ -59,8 +62,11 @@ export function Memories() {
 
   const onWikiLink = (target: string) => {
     const t = target.toLowerCase()
-    const hit = sources.find((source) => source.label.trim().toLowerCase() === t)
-    if (hit) setSelected(hit.id)
+    const hit = graphSources.find((source) => source.label.trim().toLowerCase() === t)
+    if (hit) {
+      setSelected(hit.id)
+      setDetailId(hit.id)
+    }
   }
 
   return (
@@ -114,15 +120,26 @@ export function Memories() {
                 graph={graph}
                 selectedId={selectedId}
                 onSelectNode={(node) => setSelected(node.id)}
+                onOpenDetails={(node) => {
+                  setSelected(node.id)
+                  setDetailId(node.id)
+                }}
                 onClearSelection={() => setSelected(null)}
               />
             )}
           </div>
-          <aside className="memory-graph-inspector">
+          <aside className={`memory-graph-inspector${active ? ' open' : ''}`} aria-hidden={!active}>
             {active ? (
               <div className="memory-graph-inspector-inner">
-                <div className="eyebrow" style={{ marginBottom: 4 }}>{active.scope} · {active.kind}</div>
-                <div className="detail-title" style={{ fontSize: 19 }}>{active.label}</div>
+                <div className="memory-graph-inspector-head">
+                  <div>
+                    <div className="eyebrow" style={{ marginBottom: 4 }}>{active.scope} · {active.kind}</div>
+                    <div className="detail-title" style={{ fontSize: 19 }}>{active.label}</div>
+                  </div>
+                  <button type="button" className="memory-graph-inspector-close" aria-label="Close memory details" onClick={() => setDetailId(null)}>
+                    <X size={15} />
+                  </button>
+                </div>
                 <div className="detail-ref" style={{ marginBottom: 16 }}>{active.path}</div>
                 {active.error ? (
                   <div className="error-note">{active.error}</div>
@@ -140,7 +157,7 @@ export function Memories() {
                 )}
               </div>
             ) : (
-              <div className="memory-graph-inspector-empty">Select an agent memory source.</div>
+              <div className="memory-graph-inspector-empty">Select Details on a memory node.</div>
             )}
           </aside>
         </div>
