@@ -1,15 +1,15 @@
-# Memory Graph Redesign Design
+# Agent Memory Graph Redesign Design
 
 ## Summary
 
-Replace the current Memories list/detail page with a graph-first memory visualizer. The first slice uses the existing `@xyflow/react` and `dagre` stack already present in the UI, not a new 3D dependency. This keeps the scope small while proving whether graph navigation is useful for agent memory.
+Replace the current Agent Memories list/detail page with a graph-first agent memory visualizer. The first slice uses the existing `@xyflow/react` and `dagre` stack already present in the UI, not a new 3D dependency. This keeps the scope small while proving whether graph navigation is useful for agent memory.
 
-The page still edits the same memory files through the existing `/api/memory` save flow. The data source remains `/api/memory/sources`.
+The page still edits the same agent memory files through the existing `/api/memory` save flow. The data source remains `/api/memory/sources`, which is backed by agent source discovery, not Flow knowledge-base memory.
 
 ## Goals
 
-- Show one graph node per memory source.
-- Draw edges from existing `[[wiki link]]` references in memory source content.
+- Show one graph node per agent memory source.
+- Draw edges from existing `[[wiki link]]` references in agent memory source content.
 - Replace the current list-first page with graph-first navigation.
 - Keep source search and provider filtering.
 - Keep the existing `DocEditor`, wiki-link navigation, backlinks, and save behavior.
@@ -19,6 +19,7 @@ The page still edits the same memory files through the existing `/api/memory` sa
 
 - Do not add true 3D rendering in this slice.
 - Do not add a new memory API or storage layer.
+- Do not include Flow KB sources or present this as Flow memory.
 - Do not infer semantic links with embeddings or LLM calls.
 - Do not rewrite the existing editor.
 
@@ -29,16 +30,16 @@ The page still edits the same memory files through the existing `/api/memory` sa
 - left pane: searchable flat source list
 - right pane: selected source metadata and `DocEditor`
 
-The component already computes backlinks by scanning `[[label]]` references in memory source content. That same logic can power graph edges.
+The component already computes backlinks by scanning `[[label]]` references in agent memory source content. That same logic can power graph edges.
 
-The query hook `useMemorySources()` calls `/api/memory/sources` and returns `MemorySource[]`.
+The query hook `useMemorySources()` calls `/api/memory/sources` and returns `MemorySource[]`. On the server, `uiAgentMemorySourcesWithContent` builds this list from `memorysrc.AgentSources(...)`. `memorysrc.FlowKBSources(...)` is separate and is not part of this screen.
 
 ## Proposed UX
 
 The page becomes a graph canvas with an inspector/editor panel.
 
 - The canvas is the primary surface.
-- Each memory source appears as a node.
+- Each agent memory source appears as a node.
 - Nodes are colored or badged by provider and muted when unavailable.
 - Edges represent explicit `[[wiki link]]` references.
 - Selecting a node opens the editor panel for that source.
@@ -58,7 +59,7 @@ The editor panel keeps the existing behavior:
 
 Add a small graph-shaping layer inside the Memories screen area:
 
-- `buildMemoryGraph(sources, filters)` converts `MemorySource[]` into graph nodes and edges.
+- `buildMemoryGraph(sources, filters)` converts agent `MemorySource[]` into graph nodes and edges.
 - Nodes use source `id` as the graph node id.
 - Edges are created by resolving `[[wiki link]]` targets to source labels.
 - Duplicate labels resolve to the first matching filtered source, matching the current simple wiki-link behavior.
