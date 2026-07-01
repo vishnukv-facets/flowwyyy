@@ -84,6 +84,13 @@ func waitForSharedSessionReady(name string, stable, timeout time.Duration) {
 // the human-input wait — see flushWakes. Returns nil on a successful inject OR a
 // successful buffer.
 func (h *terminalHub) wakeTask(slug, prompt string) error {
+	if h.browserDraftActive(slug) {
+		if err := h.wakes.push(slug, prompt); err != nil {
+			return fmt.Errorf("buffer wake for %s: %w", slug, err)
+		}
+		fmt.Fprintf(os.Stderr, "[term-wake %s] browser draft is unsent; buffered wake (delivers after submit/clear)\n", slug)
+		return nil
+	}
 	if h.awaitingHumanInput(slug) {
 		if err := h.wakes.push(slug, prompt); err != nil {
 			return fmt.Errorf("buffer wake for %s: %w", slug, err)
@@ -355,6 +362,9 @@ func (h *terminalHub) flushWakes(slug string) {
 	go func() {
 		defer h.wakes.endFlush(slug)
 		for {
+			if h.browserDraftActive(slug) {
+				return
+			}
 			if h.awaitingHumanInput(slug) {
 				return
 			}
@@ -369,6 +379,9 @@ func (h *terminalHub) flushWakes(slug string) {
 			if h.awaitingHumanInput(slug) {
 				return // re-blocked between peek and inject; leave it queued
 			}
+			if h.browserDraftActive(slug) {
+				return // operator typed before delivery; leave it queued
+			}
 			if !h.injectWakeRouted(slug, pw.Prompt) {
 				return // no live session right now; keep buffered for next attach
 			}
@@ -376,6 +389,13 @@ func (h *terminalHub) flushWakes(slug string) {
 			time.Sleep(wakeFlushGap)
 		}
 	}()
+}
+
+func (h *terminalHub) browserDraftActive(slug string) bool {
+	h.mu.Lock()
+	sess := h.sessions[slug]
+	h.mu.Unlock()
+	return sess != nil && sess.running() && sess.hasBrowserDraft()
 }
 
 // injectWakeRouted delivers a buffered wake by the same routing a fresh wake

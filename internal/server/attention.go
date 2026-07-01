@@ -497,6 +497,15 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
 		}
 		return actionResponse{OK: true, Message: "dismissed " + id}, http.StatusOK
+	case "merge-into", "merge_into":
+		keepID := strings.TrimSpace(req.MergeTarget)
+		if keepID == "" {
+			return actionResponse{OK: false, Message: "merge-into requires merge_target"}, http.StatusBadRequest
+		}
+		if _, err := steering.MergeFeedDuplicates(s.cfg.DB, keepID, []string{id}); err != nil {
+			return actionResponse{OK: false, Message: err.Error()}, http.StatusInternalServerError
+		}
+		return actionResponse{OK: true, Message: "merged " + id + " into " + keepID}, http.StatusOK
 	case "mute-channel", "mute-sender", "mute-thread":
 		return s.attentionMute(req.AttentionAction, item)
 	case "retriage", "re-triage":
@@ -513,6 +522,15 @@ func (s *Server) attentionAct(req actionRequest) (actionResponse, int) {
 		s.publishUIChange("attention")
 		launchAttentionRetriage(s, item)
 		return actionResponse{OK: true, Message: "re-running triage — the card will update with the fresh decision"}, http.StatusOK
+	case "correction-retriage", "correction_retriage":
+		if s.cascade == nil {
+			return actionResponse{OK: false, Message: "steering cascade is not running"}, http.StatusServiceUnavailable
+		}
+		now := time.Now().UTC().Format(time.RFC3339)
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, id, now)
+		s.publishUIChange("attention")
+		launchAttentionCorrectionRetriage(s, item)
+		return actionResponse{OK: true, Message: "re-running triage with correction context"}, http.StatusOK
 	case "correct":
 		// The steerer misread this thread; the operator supplies the real context.
 		// Store it on the thread's running understanding (authoritative ground truth

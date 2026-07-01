@@ -475,6 +475,51 @@ func TestListOpenClubCandidates(t *testing.T) {
 	}
 }
 
+func TestAttentionWorkstreamAliasesCanonicalThread(t *testing.T) {
+	db := openTempDB(t)
+	defer db.Close()
+
+	keep := FeedItem{
+		ID:              "keep",
+		Source:          "slack",
+		ThreadKey:       "D1:100.0",
+		SuggestedAction: "make_task",
+		Summary:         "Goniyo cert-manager IRSA migration",
+		Channel:         "D1",
+		ChannelType:     "im",
+		Status:          "new",
+		CreatedAt:       "2026-06-05T10:00:00Z",
+	}
+	if _, err := UpsertFeedItem(db, keep); err != nil {
+		t.Fatalf("seed keep: %v", err)
+	}
+	ws, err := EnsureAttentionWorkstreamForFeed(db, keep, "D1:100.0", "2026-06-05T10:00:00Z")
+	if err != nil {
+		t.Fatalf("EnsureAttentionWorkstreamForFeed keep: %v", err)
+	}
+	if ws.ID == "" || ws.CanonicalThreadKey != "D1:100.0" || ws.CanonicalFeedItemID != "keep" {
+		t.Fatalf("workstream = %+v", ws)
+	}
+
+	keep.Summary = "Goniyo cert-manager IRSA migration plus smoke failure"
+	ws2, err := EnsureAttentionWorkstreamForFeed(db, keep, "D1:110.0", "2026-06-05T10:05:00Z")
+	if err != nil {
+		t.Fatalf("EnsureAttentionWorkstreamForFeed alias: %v", err)
+	}
+	if ws2.ID != ws.ID {
+		t.Fatalf("alias created a second workstream: %+v vs %+v", ws2, ws)
+	}
+	for _, key := range []string{"D1:100.0", "D1:110.0"} {
+		got, ok, err := AttentionWorkstreamByThreadKey(db, key)
+		if err != nil || !ok {
+			t.Fatalf("AttentionWorkstreamByThreadKey(%q) ok=%v err=%v", key, ok, err)
+		}
+		if got.ID != ws.ID || got.CanonicalThreadKey != "D1:100.0" || got.CanonicalFeedItemID != "keep" {
+			t.Fatalf("workstream for %s = %+v, want canonical keep", key, got)
+		}
+	}
+}
+
 func feedIDs(items []FeedItem) []string {
 	out := make([]string, len(items))
 	for i, it := range items {

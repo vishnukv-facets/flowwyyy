@@ -31,8 +31,11 @@ type SteererDelivery struct {
 	Author      string
 	Text        string        // cleaned message text (mentions resolved to names)
 	Context     ThreadContext // deterministic context pack for this event
-	ContextOnly bool
-	SelfEcho    bool
+	// ContextJSONFile is an optional server-written path containing Context. When
+	// present, the steerer should pass it directly to flow attention surface.
+	ContextJSONFile string
+	ContextOnly     bool
+	SelfEcho        bool
 }
 
 // SteererSessionSink is the steering→server boundary (GAP-1). The cascade resolves

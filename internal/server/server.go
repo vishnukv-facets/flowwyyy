@@ -520,15 +520,6 @@ func (s *Server) ListenAndServe(addr string) int {
 			} else if n > 0 {
 				fmt.Fprintf(os.Stderr, "[thread-tag backfill] linked %d existing task(s) to their source thread\n", n)
 			}
-			// Then re-check open make_task cards: any whose thread now resolves to
-			// an existing (incl. archived) task flips to forward instead of nagging
-			// to create a duplicate.
-			m, rerr := steering.ReconcileOpenFeedMatches(s.cfg.DB, monitor.NewStderrLogger("[feed reconcile] "))
-			if rerr != nil {
-				fmt.Fprintf(os.Stderr, "[feed reconcile] %v\n", rerr)
-			} else if m > 0 {
-				fmt.Fprintf(os.Stderr, "[feed reconcile] flipped %d open card(s) to forward an existing task\n", m)
-			}
 			// Clear any 'drop'-verdict cards that an earlier bug surfaced — they're
 			// cascade-classified noise and shouldn't sit in the active feed.
 			d, derr := steering.DismissSurfacedDropCards(s.cfg.DB, monitor.NewStderrLogger("[feed reconcile] "))

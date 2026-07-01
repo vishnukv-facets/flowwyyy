@@ -270,6 +270,43 @@ func TestAttentionActConfirmHandoff(t *testing.T) {
 	}
 }
 
+func TestAttentionActMergeIntoRecordsWorkstreamAlias(t *testing.T) {
+	s, db := attentionTestServer(t)
+	for _, item := range []flowdb.FeedItem{
+		{
+			ID: "keep", Source: "slack", ThreadKey: "D1:100.0", SuggestedAction: "make_task",
+			Summary: "cert-manager IRSA migration", Channel: "D1", ChannelType: "im", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+		},
+		{
+			ID: "dupe", Source: "slack", ThreadKey: "D1:110.0", SuggestedAction: "make_task",
+			Summary: "cert-manager smoke timeout", Channel: "D1", ChannelType: "im", Status: "new", CreatedAt: "2026-06-05T10:01:00Z",
+		},
+	} {
+		if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+			t.Fatalf("seed %s: %v", item.ID, err)
+		}
+	}
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "dupe", AttentionAction: "merge-into", MergeTarget: "keep"})
+	if status != http.StatusOK || !resp.OK {
+		t.Fatalf("merge-into = (%+v, %d), want OK 200", resp, status)
+	}
+	dupe, err := flowdb.GetFeedItem(db, "dupe")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if dupe.Status != "acted" {
+		t.Fatalf("dupe status = %q, want acted", dupe.Status)
+	}
+	ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, "D1:110.0")
+	if err != nil || !ok {
+		t.Fatalf("alias ok=%v err=%v", ok, err)
+	}
+	if ws.CanonicalFeedItemID != "keep" || ws.CanonicalThreadKey != "D1:100.0" {
+		t.Fatalf("workstream = %+v, want keep/D1:100.0", ws)
+	}
+}
+
 func TestAttentionActDismiss(t *testing.T) {
 	s, db := attentionTestServer(t)
 	seedFeedItem(t, db, "d1", "new")
@@ -503,6 +540,27 @@ func TestAttentionActRetriageAndOpenSignalsRecordFeedback(t *testing.T) {
 	}
 	if seen["retriage"] != "retriaged" || seen["open_source"] != "opened" {
 		t.Errorf("feedback signals mismatch: %+v", fb)
+	}
+}
+
+func TestAttentionActCorrectionRetriageUsesCorrectionPath(t *testing.T) {
+	s, db := attentionTestServer(t)
+	seedFeedItem(t, db, "corr-ret", "new")
+	s.cascade = steering.NewCascade(db, steering.WatchConfig{})
+	oldLaunch := launchAttentionCorrectionRetriage
+	launched := false
+	launchAttentionCorrectionRetriage = func(s *Server, item flowdb.FeedItem) {
+		launched = true
+		_ = flowdb.SetFeedRetriaging(s.cfg.DB, item.ID, "")
+	}
+	t.Cleanup(func() { launchAttentionCorrectionRetriage = oldLaunch })
+
+	resp, status := s.runAction(actionRequest{Kind: "attention-act", Target: "corr-ret", AttentionAction: "correction-retriage"})
+	if status != 200 || !resp.OK {
+		t.Fatalf("correction-retriage = (%+v, %d), want OK 200", resp, status)
+	}
+	if !launched {
+		t.Fatal("correction retriage launcher was not called")
 	}
 }
 

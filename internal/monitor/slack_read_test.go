@@ -3,7 +3,9 @@ package monitor
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/slack-go/slack"
 )
@@ -205,6 +207,22 @@ func TestConversationHistoryNormalizesOptions(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].TS != "1.0" {
 		t.Fatalf("messages = %+v", got)
+	}
+}
+
+func TestConversationHistoryRateLimitNamesRetryAt(t *testing.T) {
+	old := slackConversationHistoryFn
+	t.Cleanup(func() { slackConversationHistoryFn = old })
+	slackConversationHistoryFn = func(_ context.Context, _ string, _ SlackHistoryOptions) ([]SlackMessage, error) {
+		return nil, &slack.RateLimitedError{RetryAfter: 10 * time.Second}
+	}
+
+	_, err := ConversationHistory(context.Background(), "xoxp-x", SlackHistoryOptions{ChannelID: "C1"})
+	if err == nil {
+		t.Fatal("expected rate limit error")
+	}
+	if !strings.Contains(err.Error(), "retry at ") || !strings.Contains(err.Error(), "10s") {
+		t.Fatalf("err = %q, want retry duration and absolute retry time", err.Error())
 	}
 }
 

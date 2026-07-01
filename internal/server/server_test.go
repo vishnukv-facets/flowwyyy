@@ -100,12 +100,19 @@ func TestTaskAPISeparatesArtifactsDirectoryFromAuxFiles(t *testing.T) {
 	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	nestedReport := filepath.Join(artifactDir, "ai-spend-to-outcome-metrics-research.md")
+	nestedReport := filepath.Join(artifactDir, "post-rohit-audit-20260701", "report.md")
+	if err := os.MkdirAll(filepath.Dir(nestedReport), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(nestedReport, []byte("# AI Spend Research\n\nnested-artifact-marker\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	csvArtifact := filepath.Join(artifactDir, "raw-data.csv")
+	csvArtifact := filepath.Join(artifactDir, "000-raw-data.csv")
 	if err := os.WriteFile(csvArtifact, []byte("metric,value\nlead-time,12\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(csvArtifact, oldTime, oldTime); err != nil {
 		t.Fatal(err)
 	}
 	// inbox.md is flow's coordination mirror, surfaced via the Inbox screen — it
@@ -142,14 +149,20 @@ func TestTaskAPISeparatesArtifactsDirectoryFromAuxFiles(t *testing.T) {
 	if len(task.Artifacts) != 2 {
 		t.Fatalf("artifacts = %#v, want markdown report and csv artifact", task.Artifacts)
 	}
-	nested, ok := artifactsByName["ai-spend-to-outcome-metrics-research.md"]
+	nested, ok := artifactsByName["post-rohit-audit-20260701/report.md"]
 	if !ok {
 		t.Fatalf("artifacts = %#v, want nested markdown report", task.Artifacts)
 	}
-	if !strings.Contains(nested.Path, string(os.PathSeparator)+"artifacts"+string(os.PathSeparator)) {
+	if nested.Filename != "post-rohit-audit-20260701/report.md" {
+		t.Fatalf("nested artifact filename = %q, want relative path", nested.Filename)
+	}
+	if !strings.Contains(nested.Path, filepath.Join("artifacts", "post-rohit-audit-20260701", "report.md")) {
 		t.Fatalf("nested artifact path = %q, want file under artifacts directory", nested.Path)
 	}
-	if _, ok := artifactsByName["raw-data.csv"]; !ok {
+	if task.Artifacts[0].Filename != "post-rohit-audit-20260701/report.md" {
+		t.Fatalf("first artifact = %q, want newest nested report first", task.Artifacts[0].Filename)
+	}
+	if _, ok := artifactsByName["000-raw-data.csv"]; !ok {
 		t.Fatalf("artifacts = %#v, want non-markdown csv artifact", task.Artifacts)
 	}
 
@@ -163,12 +176,22 @@ func TestTaskAPISeparatesArtifactsDirectoryFromAuxFiles(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/artifacts/ai-spend-to-outcome-metrics-research.md", nil))
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/artifacts/post-rohit-audit-20260701/report.md", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("artifact content status = %d", rec.Code)
 	}
 	if !strings.Contains(rec.Body.String(), "nested-artifact-marker") {
 		t.Fatalf("artifact body = %q", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	encodedArtifact := url.PathEscape("post-rohit-audit-20260701/report.md")
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/tasks/build-ui/artifacts/"+encodedArtifact, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("encoded artifact content status = %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "nested-artifact-marker") {
+		t.Fatalf("encoded artifact body = %q", rec.Body.String())
 	}
 }
 
@@ -347,6 +370,37 @@ func TestFormatGuardedInboxWakePromptWithholdsUntrustedBodies(t *testing.T) {
 	// Trusted flow coordination is still delivered inline.
 	if !strings.Contains(prompt, "parent says proceed") {
 		t.Fatalf("guarded prompt dropped trusted flow_tell:\n%s", prompt)
+	}
+}
+
+func TestFormatGuardedInboxWakePromptStillAllowsGitHubSourceInspection(t *testing.T) {
+	const body = "please update the migration"
+	const url = "https://github.com/acme/app/pull/7#discussion_r1"
+	entries := []monitor.InboxEntry{{
+		Event: monitor.InboundEvent{
+			Kind:        "pr_review_comment",
+			ChannelType: "github",
+			Channel:     "acme/app",
+			UserID:      "reviewer",
+			Text:        body,
+			URL:         url,
+		},
+		Meta: monitor.InboxEventMeta{Source: "github", Actionable: true},
+	}}
+
+	prompt := formatGuardedInboxWakePrompt("review-task", entries)
+	if strings.Contains(prompt, body) {
+		t.Fatalf("guarded prompt leaked review body:\n%s", prompt)
+	}
+	for _, want := range []string{
+		"github pr_review_comment",
+		url,
+		"inspect the listed GitHub source URL",
+		"Do not read inbox.jsonl",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("guarded GitHub prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

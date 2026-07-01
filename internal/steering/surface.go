@@ -3,6 +3,7 @@ package steering
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -12,20 +13,22 @@ import (
 // SurfaceCardParams is the structured verdict a per-channel steerer session
 // emits via `flow attention surface`.
 type SurfaceCardParams struct {
-	Source      string
-	Channel     string
-	ChannelType string
-	ThreadKey   string
-	TS          string
-	ThreadTS    string
-	Author      string
-	Action      string
-	MatchedTask string
-	Summary     string
-	Draft       string
-	Confidence  float64
-	Reason      string
-	ContextOnly bool
+	Source       string
+	Channel      string
+	ChannelType  string
+	ThreadKey    string
+	TS           string
+	ThreadTS     string
+	Author       string
+	Action       string
+	MatchedTask  string
+	Summary      string
+	Draft        string
+	Confidence   float64
+	Reason       string
+	ContextJSON  string
+	AskTaskAgent bool
+	ContextOnly  bool
 }
 
 const surfaceClubWindow = 12 * time.Hour
@@ -33,10 +36,9 @@ const surfaceClubWindow = 12 * time.Hour
 // SurfaceCard validates a proposed thread_key against open cards in the same
 // channel, then records the thread decision and optionally surfaces a feed row.
 func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, bool, error) {
-	_ = ctx
 	rawKey := p.Channel + ":" + firstNonEmpty(p.ThreadTS, p.TS)
-	key := validateSurfaceThreadKey(db, p, rawKey)
 	action := firstNonEmpty(p.Action, string(ActionDrop))
+	key := validateSurfaceThreadKey(db, p, rawKey)
 	now := flowdb.NowISO()
 	v := Verdict{
 		Source:          p.Source,
@@ -58,12 +60,18 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 		Confidence:      p.Confidence,
 		Draft:           SanitizeOperatorText(p.Draft),
 		Reason:          SanitizeOperatorText(p.Reason),
+		ContextJSON:     strings.TrimSpace(p.ContextJSON),
 		Channel:         p.Channel,
 		ChannelType:     p.ChannelType,
 		Author:          p.Author,
 		TS:              p.TS,
 		Status:          "new",
 		CreatedAt:       now,
+	}
+	if p.AskTaskAgent {
+		if Action(action) != ActionForward || strings.TrimSpace(item.MatchedTask) == "" {
+			return "", false, fmt.Errorf("steering: ask task agent requires action=forward and matched_task")
+		}
 	}
 
 	if Action(action) == ActionDrop {
@@ -74,6 +82,10 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 
 	if p.ContextOnly {
 		id, refreshed, err := refreshOpenSurfaceCard(db, item)
+		if err == nil && refreshed {
+			item.ID = id
+			err = ensureSurfaceWorkstream(db, item, rawKey, now)
+		}
 		recordSurfaceThreadDecision(db, key, v, p.TS, now)
 		return id, refreshed, err
 	}
@@ -81,6 +93,17 @@ func SurfaceCard(ctx context.Context, db *sql.DB, p SurfaceCardParams) (string, 
 	id, surfaced, err := flowdb.UpsertFeedItemSurfaced(db, item)
 	if err != nil {
 		return "", false, err
+	}
+	item.ID = id
+	if surfaced {
+		if err := ensureSurfaceWorkstream(db, item, rawKey, now); err != nil {
+			return "", false, err
+		}
+	}
+	if p.AskTaskAgent {
+		if _, err := RequestHandoff(ctx, db, item, "attention-router"); err != nil {
+			return "", false, err
+		}
 	}
 	recordSurfaceThreadDecision(db, key, v, p.TS, now)
 	return id, surfaced, nil
@@ -108,6 +131,9 @@ func resolveOpenSurfaceCard(db *sql.DB, threadKey, at string) (string, bool, err
 }
 
 func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) string {
+	if key := workstreamCanonicalThreadKey(db, rawKey); key != "" {
+		return key
+	}
 	proposed := strings.TrimSpace(p.ThreadKey)
 	if proposed == "" || proposed == rawKey {
 		return rawKey
@@ -121,6 +147,19 @@ func validateSurfaceThreadKey(db *sql.DB, p SurfaceCardParams, rawKey string) st
 		return proposed
 	}
 	return rawKey
+}
+
+func ensureSurfaceWorkstream(db *sql.DB, item flowdb.FeedItem, rawKey, now string) error {
+	_, err := flowdb.EnsureAttentionWorkstreamForFeed(db, item, rawKey, now)
+	return err
+}
+
+func workstreamCanonicalThreadKey(db *sql.DB, rawKey string) string {
+	ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, rawKey)
+	if err != nil || !ok || ws.Status != "open" {
+		return ""
+	}
+	return ws.CanonicalThreadKey
 }
 
 func anchorIndex(anchors []flowdb.FeedItem, threadKey string) int {

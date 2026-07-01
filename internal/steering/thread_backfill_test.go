@@ -85,65 +85,6 @@ func TestBackfillFeedTaskThreadTags(t *testing.T) {
 	}
 }
 
-func TestReconcileOpenFeedMatches(t *testing.T) {
-	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
-	if err != nil {
-		t.Fatalf("OpenDB: %v", err)
-	}
-	defer db.Close()
-
-	// An ARCHIVED in-progress task tracks PR #550 (the screenshot case).
-	now := flowdb.NowISO()
-	if _, err := db.Exec(
-		`INSERT INTO tasks (slug, name, status, priority, work_dir, permission_mode, session_provider, session_id, archived_at, status_changed_at, created_at, updated_at)
-		 VALUES ('gh-pr-550','PR 550','in-progress','high',?,'default','claude','sess-550',?,?,?,?)`,
-		t.TempDir(), now, now, now, now,
-	); err != nil {
-		t.Fatalf("seed archived task: %v", err)
-	}
-	if err := flowdb.AddTaskTag(db, "gh-pr-550", "gh-pr:o/r#550"); err != nil {
-		t.Fatalf("tag: %v", err)
-	}
-
-	// An open make_task card for that PR, written while the task was invisible.
-	card := flowdb.FeedItem{
-		ID: "rc1", Source: "github", ThreadKey: "o/r:gh-pr:o/r#550",
-		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T11:50:04Z",
-	}
-	if _, err := flowdb.UpsertFeedItem(db, card); err != nil {
-		t.Fatalf("seed card: %v", err)
-	}
-	// A make_task card with NO tracking task → must stay make_task.
-	noMatch := flowdb.FeedItem{
-		ID: "rc2", Source: "slack", ThreadKey: "C_x:1.1",
-		SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T11:50:04Z",
-	}
-	if _, err := flowdb.UpsertFeedItem(db, noMatch); err != nil {
-		t.Fatalf("seed no-match card: %v", err)
-	}
-
-	n, err := ReconcileOpenFeedMatches(db, nil)
-	if err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("flipped = %d, want 1", n)
-	}
-	got, _ := flowdb.GetFeedItem(db, "rc1")
-	if got.SuggestedAction != "forward" || got.MatchedTask != "gh-pr-550" {
-		t.Errorf("card rc1 = action %q matched %q, want forward / gh-pr-550", got.SuggestedAction, got.MatchedTask)
-	}
-	still, _ := flowdb.GetFeedItem(db, "rc2")
-	if still.SuggestedAction != "make_task" {
-		t.Errorf("card rc2 action = %q, want make_task (no tracking task)", still.SuggestedAction)
-	}
-
-	// Idempotent: rc1 is now forward, so a second pass flips nothing.
-	if n2, _ := ReconcileOpenFeedMatches(db, nil); n2 != 0 {
-		t.Errorf("second pass flipped = %d, want 0", n2)
-	}
-}
-
 func TestDismissSurfacedDropCards(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {

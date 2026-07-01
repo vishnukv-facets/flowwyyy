@@ -90,3 +90,16 @@ func TestAskFlowChangedIncludesInboxWorkEvents(t *testing.T) {
 		t.Fatalf("missing source citation: %#v", res.Citations)
 	}
 }
+
+func TestAskFlowTaskCitationsUseSessionRoutes(t *testing.T) {
+	task := TaskView{Slug: "build-ui", Name: "Build UI"}
+	if got := taskCitation(task).URL; got != "/session/build-ui" {
+		t.Fatalf("task citation URL = %q", got)
+	}
+	if got := taskSummaryCitation(TaskSummary{Slug: "build-ui", Name: "Build UI"}).URL; got != "/session/build-ui" {
+		t.Fatalf("task summary citation URL = %q", got)
+	}
+	if got := updateCitation(task, FileRef{Filename: "2026-07-01-note.md"}).URL; got != "/session/build-ui" {
+		t.Fatalf("update citation URL = %q", got)
+	}
+}

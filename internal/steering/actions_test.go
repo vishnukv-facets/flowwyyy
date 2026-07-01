@@ -114,6 +114,57 @@ func TestMakeTaskFromFeed(t *testing.T) {
 	}
 }
 
+func TestMakeTaskFromFeedIncludesContextPack(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	spawns, _ := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID:              "mkctx",
+		Source:          "slack",
+		ThreadKey:       "D1:200.1",
+		Summary:         "Omendra needs a release guardrail decision",
+		SuggestedAction: "make_task",
+		ContextJSON: `{
+			"parent": {
+				"kind": "message",
+				"author": "U_OMENDRA",
+				"text": "destroy not allowed before validation"
+			},
+			"messages": [{
+				"kind": "reply",
+				"author": "U_OMENDRA",
+				"text": "This is blocking the migration release."
+			}]
+		}`,
+		Status:    "new",
+		CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	if len(*spawns) != 1 {
+		t.Fatalf("taskSpawner calls = %d, want 1", len(*spawns))
+	}
+	brief := (*spawns)[0].brief
+	for _, want := range []string{
+		"Source context",
+		"destroy not allowed before validation",
+		"This is blocking the migration release.",
+	} {
+		if !strings.Contains(brief, want) {
+			t.Fatalf("spawned task brief missing %q:\n%s", want, brief)
+		}
+	}
+}
+
 func TestFeedTrackingTag(t *testing.T) {
 	cases := []struct {
 		name string
@@ -201,6 +252,34 @@ func TestMakeTaskFromFeedRecordsFeedback(t *testing.T) {
 	}
 }
 
+func TestMakeTaskFromFeedRecordsWorkstreamOwner(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "mk-owner", Source: "slack", ThreadKey: "D1:100.0", Channel: "D1", ChannelType: "im",
+		Summary: "cert-manager IRSA migration", SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := MakeTaskFromFeed(context.Background(), db, item); err != nil {
+		t.Fatalf("MakeTaskFromFeed: %v", err)
+	}
+	ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, "D1:100.0")
+	if err != nil || !ok {
+		t.Fatalf("workstream ok=%v err=%v", ok, err)
+	}
+	if ws.OwnerTaskSlug != FeedTaskSlug(item) {
+		t.Fatalf("owner = %q, want %q", ws.OwnerTaskSlug, FeedTaskSlug(item))
+	}
+}
+
 func TestMakeTaskFromFeedRecordsWorkEvent(t *testing.T) {
 	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
 	if err != nil {
@@ -267,6 +346,43 @@ func TestDismissFeedRecordsFeedback(t *testing.T) {
 	}
 	if got[0].FinalAction != "dismiss" || got[0].Outcome != "dismissed" || got[0].Channel != "C_noise" {
 		t.Errorf("dismiss feedback mismatch: %+v", got[0])
+	}
+}
+
+func TestMergeFeedDuplicatesRecordsWorkstreamAliases(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	for _, item := range []flowdb.FeedItem{
+		{
+			ID: "keep", Source: "slack", ThreadKey: "D1:100.0", SuggestedAction: "make_task",
+			Summary: "cert-manager IRSA migration", Channel: "D1", ChannelType: "im", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+		},
+		{
+			ID: "dupe", Source: "slack", ThreadKey: "D1:110.0", SuggestedAction: "make_task",
+			Summary: "cert-manager smoke timeout", Channel: "D1", ChannelType: "im", Status: "new", CreatedAt: "2026-06-05T10:01:00Z",
+		},
+	} {
+		if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+			t.Fatalf("seed %s: %v", item.ID, err)
+		}
+	}
+
+	n, err := MergeFeedDuplicates(db, "keep", []string{"dupe"})
+	if err != nil {
+		t.Fatalf("MergeFeedDuplicates: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("merged = %d, want 1", n)
+	}
+	ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, "D1:110.0")
+	if err != nil || !ok {
+		t.Fatalf("duplicate alias ok=%v err=%v", ok, err)
+	}
+	if ws.CanonicalThreadKey != "D1:100.0" || ws.CanonicalFeedItemID != "keep" {
+		t.Fatalf("workstream = %+v, want canonical D1:100.0 keep", ws)
 	}
 }
 
@@ -669,6 +785,39 @@ func TestRequestHandoffSendsCorrelationAndLeavesFeedNew(t *testing.T) {
 	got, _ := flowdb.GetFeedItem(db, "hr1")
 	if got.Status != "new" || got.LinkedTask != "" {
 		t.Fatalf("request must leave feed item open, got %+v", got)
+	}
+}
+
+func TestRequestHandoffReusesPendingForSameReceiver(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+	_, tells := stubActionIO(t)
+
+	item := flowdb.FeedItem{
+		ID: "hr-reuse", Source: "slack", ThreadKey: "C1:handoff-reuse",
+		Summary: "same pending handoff", SuggestedAction: "forward", MatchedTask: "rollout-task",
+		Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}
+	if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+
+	first, err := RequestHandoff(context.Background(), db, item, "attention-router")
+	if err != nil {
+		t.Fatalf("first RequestHandoff: %v", err)
+	}
+	second, err := RequestHandoff(context.Background(), db, item, "attention-router")
+	if err != nil {
+		t.Fatalf("second RequestHandoff: %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("second handoff id = %q, want existing %q", second.ID, first.ID)
+	}
+	if len(*tells) != 1 {
+		t.Fatalf("task tell calls = %+v, want one", *tells)
 	}
 }
 

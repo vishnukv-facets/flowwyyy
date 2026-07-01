@@ -96,6 +96,8 @@ func readClaudeProviderUsage(flowRoot string) providerUsageResponse {
 		if err != nil {
 			return unavailableUsage("claude", err.Error())
 		}
+		hadWindows := len(windows) > 0
+		windows = unexpiredUsageWindows(windows, time.Now())
 		if stale {
 			if len(windows) > 0 {
 				out := annotateUsageLimit(providerUsageResponse{Provider: "claude", Available: true, Source: path, ObservedAt: observed, Windows: windows})
@@ -106,6 +108,9 @@ func readClaudeProviderUsage(flowRoot string) providerUsageResponse {
 			return unavailableUsage("claude", "flow Claude usage capture is stale")
 		}
 		if len(windows) == 0 {
+			if hadWindows {
+				return unavailableUsage("claude", "flow Claude usage capture expired")
+			}
 			return unavailableUsage("claude", "flow Claude usage capture has no rate_limits")
 		}
 		return annotateUsageLimit(providerUsageResponse{Provider: "claude", Available: true, Source: path, ObservedAt: observed, Windows: windows})
@@ -157,6 +162,18 @@ func claudeUsageWindows(data []byte) ([]providerUsageWindow, error) {
 		}
 	}
 	return out, nil
+}
+
+func unexpiredUsageWindows(windows []providerUsageWindow, now time.Time) []providerUsageWindow {
+	out := windows[:0]
+	for _, win := range windows {
+		reset, err := time.Parse(time.RFC3339, strings.TrimSpace(win.ResetAt))
+		if err == nil && !reset.After(now) {
+			continue
+		}
+		out = append(out, win)
+	}
+	return out
 }
 
 // codexUsageLiveTTL bounds how often flow calls the live ChatGPT usage

@@ -417,6 +417,9 @@ create tasks, or change policy.
      hides/resolves the card only; it does not mute the source. If a later event
      arrives on the same thread, Flow reopens that thread's feed row with the
      refreshed, collated thread summary instead of treating it as unrelated.
+   - `flow attention resolve <id>` when you are a steerer session and the
+     operator's own context-only reply already handled the card. This is queue
+     cleanup only; it does not send, forward, or record feedback.
    - `flow attention act <id> make-task` when it should become tracked work.
    - `flow attention act <id> forward` when it belongs with an existing task.
      If a matched task is shown, prefer forwarding to that task over creating a
@@ -430,6 +433,22 @@ create tasks, or change policy.
    - `flow attention act <id> confirm-handoff` when the match looks plausible
      but you want the matched task's agent to accept or decline before the card
      is marked handled.
+   - `flow attention merge <keep-id> <duplicate-id>...` when two open cards are
+     the same workstream. This keeps the chosen card open and resolves the
+     duplicate card(s); it does not record feedback.
+   Steerer sessions receive rebuilt per-turn context with known workstreams,
+   open cards, active task candidates, and exact commands. Use that injected
+   context after transcript compaction instead of relying on memory alone.
+   When a steerer needs facts from an existing task session, it can use
+   `flow tell <task-slug> "<specific question plus source/card context>"`;
+   this wakes the task through the normal inbox monitor. Use
+   `--action forward --matched-task <slug> --ask-task-agent` when the task
+   may own the work and should accept/decline the handoff. Use
+   `flow read ask "<question>" --key <stable-key>` only for a structured
+   operator/Flow pending question, not for task-to-task asks; use
+   `flow read say "<finding>" --key <stable-key>` for structured status.
+   When the steerer uses `--ask-task-agent`, the card waits for that
+   accept/decline response and is not auto-acted by the server.
    Mission Control also exposes retriage, mute-channel, mute-sender,
    mute-thread, make-task-start, open-source/open-session, and send-reply.
 4. Use `flow attention feedback --group <dimension>` when you need the

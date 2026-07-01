@@ -128,6 +128,45 @@ func TestSteererChatSlugForCard(t *testing.T) {
 	}
 }
 
+func TestSteererChatSessionClosed(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	if steererChatSessionClosed(db, "claude", "missing") {
+		t.Fatal("missing runtime state should not be treated as closed")
+	}
+
+	if err := flowdb.UpsertAgentRuntimeState(db, flowdb.AgentRuntimeStateInput{
+		Provider:  "claude",
+		SessionID: "live-session",
+		Status:    "waiting",
+		EventKind: "idle_prompt",
+	}); err != nil {
+		t.Fatalf("upsert waiting state: %v", err)
+	}
+	if steererChatSessionClosed(db, "claude", "live-session") {
+		t.Fatal("wakeable waiting sessions should not be treated as closed")
+	}
+
+	for _, status := range []string{"released", "dead"} {
+		sessionID := "closed-" + status
+		if err := flowdb.UpsertAgentRuntimeState(db, flowdb.AgentRuntimeStateInput{
+			Provider:  "claude",
+			SessionID: sessionID,
+			Status:    status,
+			EventKind: "session_end",
+		}); err != nil {
+			t.Fatalf("upsert %s state: %v", status, err)
+		}
+		if !steererChatSessionClosed(db, "claude", sessionID) {
+			t.Fatalf("%s session should be treated as closed", status)
+		}
+	}
+}
+
 func TestSteererCaptureKBPromptInstructsInContextWrite(t *testing.T) {
 	item := flowdb.FeedItem{ID: "ck1", Source: "slack", ThreadKey: "C1:123.45", Summary: "Team standardized on RFC3339 timestamps everywhere"}
 	got := steererCaptureKBPrompt(item, "/Users/x/.flow/kb")
@@ -264,8 +303,9 @@ func TestRenderSteererTurn(t *testing.T) {
 	out := renderSteererTurn(steering.SteererDelivery{
 		Source: "slack", Channel: "C1", ChannelType: "channel",
 		TS: "100.1", ThreadTS: "100.1", Author: "U1", Text: "list the repo names",
+		ContextJSONFile: "/tmp/flow-context.json",
 	})
-	for _, want := range []string{"slack", "C1", "100.1", "U1", "list the repo names", "UNTRUSTED external evidence"} {
+	for _, want := range []string{"slack", "C1", "100.1", "U1", "context_json_file=/tmp/flow-context.json", "action=reply with --draft", "flow tell <task-slug>", "flow read ask only", "list the repo names", "UNTRUSTED external evidence"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered turn missing %q:\n%s", want, out)
 		}
@@ -276,6 +316,164 @@ func TestRenderSteererTurn(t *testing.T) {
 	}
 	if !strings.Contains(ctxOnly, "may refresh or resolve an existing open card") {
 		t.Errorf("operator context_only turn must mention existing-card revalidation:\n%s", ctxOnly)
+	}
+}
+
+func TestWriteSteererContextJSONFile(t *testing.T) {
+	root := t.TempDir()
+	path := writeSteererContextJSONFile(root, "D/1", steering.SteererDelivery{
+		TS: "100.1",
+		Context: steering.ThreadContext{
+			Source:    "slack",
+			ThreadKey: "D1:100.1",
+			Summary:   "source context",
+		},
+	})
+	if path == "" {
+		t.Fatal("expected context json path")
+	}
+	if !strings.Contains(path, filepath.Join("steerer_context", "D_1", "100.1.json")) {
+		t.Fatalf("path = %q, want sanitized steerer_context path", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !strings.Contains(string(raw), `"thread_key": "D1:100.1"`) {
+		t.Fatalf("context file missing context: %s", raw)
+	}
+}
+
+func TestAppendSteererActiveCards(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID:              "cert1",
+		Source:          "slack",
+		ThreadKey:       "D1:100.0",
+		SuggestedAction: "make_task",
+		Summary:         "Goniyo cert-manager IRSA migration needs follow-up",
+		Reason:          "same Omendra cert-manager workstream",
+		Channel:         "D1",
+		ChannelType:     "im",
+		Author:          "U_OMENDRA",
+		TS:              "100.0",
+		Status:          "new",
+		CreatedAt:       flowdb.NowISO(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := appendSteererActiveCards("base turn", db, steering.SteererDelivery{Channel: "D1", ChannelType: "im"})
+	for _, want := range []string{
+		"base turn",
+		"Open attention workstreams in this conversation",
+		"id=cert1",
+		"thread_key=D1:100.0",
+		"action=make_task",
+		"Goniyo cert-manager IRSA migration",
+		"continue card: add --thread-key D1:100.0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("active-card context missing %q:\n%s", want, got)
+		}
+	}
+	ctxOnly := appendSteererActiveCards("base turn", db, steering.SteererDelivery{Channel: "D1", ChannelType: "im", ContextOnly: true})
+	if !strings.Contains(ctxOnly, "flow attention resolve cert1") {
+		t.Fatalf("context-only turn should inject resolve command:\n%s", ctxOnly)
+	}
+
+	empty := appendSteererActiveCards("base turn", db, steering.SteererDelivery{Channel: "D2", ChannelType: "im"})
+	if empty != "base turn" {
+		t.Fatalf("empty active-card context should be omitted:\n%s", empty)
+	}
+}
+
+func TestAppendSteererActiveCardsInjectsTaskCandidates(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, session_provider, created_at, updated_at)
+		 VALUES (?, ?, 'backlog', 'high', ?, 'claude', ?, ?)`,
+		"certmanager-niyo-irsa", "Create Niyo cert-manager IRSA cross-account role flavor", t.TempDir(), now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got := appendSteererActiveCards("base turn", db, steering.SteererDelivery{
+		Channel: "D1", ChannelType: "im",
+		Text: "cert-manager IRSA smoke timeout on niyo-common-platform prod",
+	})
+	for _, want := range []string{
+		"Active task candidates to consider",
+		"certmanager-niyo-irsa",
+		"brief=",
+		"need facts from this task: flow tell certmanager-niyo-irsa",
+		"--action forward --matched-task certmanager-niyo-irsa --ask-task-agent",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("task candidate context missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestAppendSteererActiveCardsOmitsTaskCandidatesForContextOnly(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	now := flowdb.NowISO()
+	if _, err := db.Exec(
+		`INSERT INTO tasks (slug, name, status, priority, work_dir, session_provider, created_at, updated_at)
+		 VALUES (?, ?, 'backlog', 'high', ?, 'claude', ?, ?)`,
+		"certmanager-niyo-irsa", "Create Niyo cert-manager IRSA cross-account role flavor", t.TempDir(), now, now,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	got := appendSteererActiveCards("base turn", db, steering.SteererDelivery{
+		Channel: "D1", ChannelType: "im", ContextOnly: true,
+		Text: "cert-manager IRSA smoke timeout on niyo-common-platform prod",
+	})
+	if strings.Contains(got, "Active task candidates to consider") || strings.Contains(got, "certmanager-niyo-irsa") {
+		t.Fatalf("context_only turn should not inject task candidates:\n%s", got)
+	}
+}
+
+func TestAppendSteererActiveCardsInjectsCurrentWorkstreamAlias(t *testing.T) {
+	db, err := flowdb.OpenDB(filepath.Join(t.TempDir(), "flow.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	item := flowdb.FeedItem{
+		ID: "cert1", Source: "slack", ThreadKey: "D1:100.0", SuggestedAction: "forward",
+		MatchedTask: "certmanager-niyo-irsa", Summary: "cert-manager IRSA migration", Channel: "D1",
+		Status: "acted", CreatedAt: flowdb.NowISO(),
+	}
+	if _, err := flowdb.EnsureAttentionWorkstreamForFeed(db, item, "D1:120.0", flowdb.NowISO()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := appendSteererActiveCards("base turn", db, steering.SteererDelivery{Channel: "D1", ThreadTS: "120.0"})
+	for _, want := range []string{
+		"Known workstream for this source root",
+		"canonical_thread_key=D1:100.0",
+		"owner_task=certmanager-niyo-irsa",
+		"need facts from owner task: flow tell certmanager-niyo-irsa",
+		"--action forward --matched-task certmanager-niyo-irsa --ask-task-agent",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("current workstream context missing %q:\n%s", want, got)
+		}
 	}
 }
 

@@ -224,6 +224,7 @@ function StepCreateApp({ st, active, onDone }: { st: SlackSetupStatus; active: b
           <input
             className="input mono"
             type="password"
+            aria-label="Slack app configuration token"
             autoComplete="off"
             placeholder="xoxe.xoxp-…"
             value={token}
@@ -285,6 +286,7 @@ function StepAppToken({ st, active, onDone }: { st: SlackSetupStatus; active: bo
         <input
           className="input mono"
           type="password"
+          aria-label="Slack app-level token"
           autoComplete="off"
           placeholder="xapp-…"
           value={token}
@@ -421,6 +423,11 @@ function FinishedSummary({ st, onRefetch }: { st: SlackSetupStatus; onRefetch: (
             <div className="slack-error">
               No user token came back — DM following won't work. Reinstall and approve the
               user-scope prompt.
+            </div>
+          )}
+          {st.needs_reinstall && (
+            <div className="slack-error">
+              Slack app scopes changed. Reinstall to refresh user token scopes.
             </div>
           )}
         </div>

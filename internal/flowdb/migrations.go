@@ -225,6 +225,16 @@ func runMigrations(db *sql.DB) error {
 		}
 	}
 
+	has, err = columnExists(db, "attention_workstreams", "owner_task_slug")
+	if err != nil {
+		return err
+	}
+	if !has {
+		if _, err := db.Exec(`ALTER TABLE attention_workstreams ADD COLUMN owner_task_slug TEXT`); err != nil {
+			return fmt.Errorf("add attention_workstreams.owner_task_slug: %w", err)
+		}
+	}
+
 	// playbooks table: the table itself is created via schemaDDL on every
 	// OpenDB, but CREATE TABLE IF NOT EXISTS never adds NEW columns to an
 	// existing table — so the scheduling columns need explicit ALTERs for DBs

@@ -28,6 +28,10 @@ func cmdAttention(args []string) int {
 		return cmdAttentionSurface(rest)
 	case "act":
 		return cmdAttentionAct(rest)
+	case "resolve":
+		return cmdAttentionResolve(rest)
+	case "merge":
+		return cmdAttentionMerge(rest)
 	case "handoff":
 		return cmdAttentionHandoff(rest)
 	case "sent":
@@ -39,7 +43,7 @@ func cmdAttention(args []string) int {
 	case "calibration":
 		return cmdAttentionCalibration(rest)
 	default:
-		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|surface|act|handoff|sent|trace|feedback|calibration)\n", sub)
+		fmt.Fprintf(os.Stderr, "error: unknown attention subcommand %q (want list|surface|act|resolve|merge|handoff|sent|trace|feedback|calibration)\n", sub)
 		printAttentionUsage()
 		return 2
 	}
@@ -49,8 +53,10 @@ func printAttentionUsage() {
 	fmt.Println(`flow attention — review and act on the attention feed
 
   flow attention list [--status new|acted|dismissed|snoozed|all]   (default: new)
-  flow attention surface --channel <id> --ts <ts> [--thread-key <key>] [--context-only]
+  flow attention surface --channel <id> --ts <ts> [--thread-key <key>] [--context-json-file <path>] [--ask-task-agent] [--context-only]
   flow attention act <id> <make-task|forward|confirm-handoff|dismiss>
+  flow attention resolve <id>
+  flow attention merge <keep-id> <duplicate-id>...
   flow attention handoff accept <correlation-id> --reason "<why>"
   flow attention handoff decline <correlation-id> --reason "<why>"
   flow attention sent <id> [--close-floating <floating-id>]
@@ -102,7 +108,10 @@ func cmdAttentionSurface(args []string) int {
 	summary := fs.String("summary", "", "<=140 char card summary")
 	draft := fs.String("draft", "", "drafted reply, if any")
 	reason := fs.String("reason", "", "why")
+	contextJSON := fs.String("context-json", "", "serialized source context JSON")
+	contextJSONFile := fs.String("context-json-file", "", "path to serialized source context JSON")
 	confidence := fs.Float64("confidence", 0, "0..1")
+	askTaskAgent := fs.Bool("ask-task-agent", false, "ask matched task agent to accept/decline this handoff")
 	contextOnly := fs.Bool("context-only", false, "memory-only: never surface a card")
 	if handled, rc := parseFlagSet(fs, args); handled {
 		return rc
@@ -110,6 +119,15 @@ func cmdAttentionSurface(args []string) int {
 	if strings.TrimSpace(*channel) == "" || strings.TrimSpace(*ts) == "" {
 		fmt.Fprintln(os.Stderr, "error: --channel and --ts are required")
 		return 2
+	}
+	ctxJSON := strings.TrimSpace(*contextJSON)
+	if path := strings.TrimSpace(*contextJSONFile); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: read --context-json-file: %v\n", err)
+			return 1
+		}
+		ctxJSON = strings.TrimSpace(string(data))
 	}
 
 	db, rc := openAttentionDB()
@@ -119,20 +137,22 @@ func cmdAttentionSurface(args []string) int {
 	defer db.Close()
 
 	id, surfaced, err := steering.SurfaceCard(context.Background(), db, steering.SurfaceCardParams{
-		Source:      *source,
-		Channel:     *channel,
-		ChannelType: *channelType,
-		ThreadKey:   *threadKey,
-		TS:          *ts,
-		ThreadTS:    *threadTS,
-		Author:      *author,
-		Action:      *action,
-		MatchedTask: *matchedTask,
-		Summary:     *summary,
-		Draft:       *draft,
-		Confidence:  *confidence,
-		Reason:      *reason,
-		ContextOnly: *contextOnly,
+		Source:       *source,
+		Channel:      *channel,
+		ChannelType:  *channelType,
+		ThreadKey:    *threadKey,
+		TS:           *ts,
+		ThreadTS:     *threadTS,
+		Author:       *author,
+		Action:       *action,
+		MatchedTask:  *matchedTask,
+		Summary:      *summary,
+		Draft:        *draft,
+		Confidence:   *confidence,
+		Reason:       *reason,
+		ContextJSON:  ctxJSON,
+		AskTaskAgent: *askTaskAgent,
+		ContextOnly:  *contextOnly,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -143,7 +163,7 @@ func cmdAttentionSurface(args []string) int {
 	// cascade gates inline; the session path can't (it has no live policy and no
 	// terminal hub for replies), so it delegates to the server here. Best-effort:
 	// no server / no autonomy opted in ⇒ the card simply waits for manual action.
-	if surfaced && strings.TrimSpace(id) != "" {
+	if surfaced && strings.TrimSpace(id) != "" && !*askTaskAgent {
 		requestAttentionAutoActBestEffort(id)
 	}
 	fmt.Printf("surfaced=%v id=%s\n", surfaced, id)
@@ -226,6 +246,48 @@ func cmdAttentionAct(args []string) int {
 	}
 }
 
+func cmdAttentionMerge(args []string) int {
+	if leadingHelpArg(args) || len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: flow attention merge <keep-id> <duplicate-id>...")
+		return 2
+	}
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+	n, err := steering.MergeFeedDuplicates(db, args[0], args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("merged %d duplicate(s) into %s\n", n, args[0])
+	return 0
+}
+
+func cmdAttentionResolve(args []string) int {
+	if leadingHelpArg(args) || len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: flow attention resolve <id>")
+		return 2
+	}
+	db, rc := openAttentionDB()
+	if rc != 0 {
+		return rc
+	}
+	defer db.Close()
+	item, err := flowdb.GetFeedItem(db, args[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: no feed item with id %q\n", args[0])
+		return 1
+	}
+	if err := flowdb.SetFeedItemActed(db, item.ID, item.LinkedTask, time.Now().UTC().Format(time.RFC3339)); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Printf("resolved %s\n", item.ID)
+	return 0
+}
+
 func cmdAttentionHandoff(args []string) int {
 	if leadingHelpArg(args) || len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: flow attention handoff <accept|decline|respond> <correlation-id> [verdict] --reason <why>")
@@ -272,8 +334,65 @@ func cmdAttentionHandoff(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	if h.Status == "declined" {
+		if err := recordDeclinedHandoffCorrection(db, h); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+	}
 	fmt.Printf("%s %s (%s)\n", h.Status, h.ID, h.Receiver)
 	return 0
+}
+
+func recordDeclinedHandoffCorrection(db *sql.DB, h flowdb.AttentionHandoff) error {
+	item, err := flowdb.GetFeedItem(db, h.FeedItemID)
+	if err != nil {
+		return err
+	}
+	text := handoffDeclineCorrectionText(h)
+	if err := flowdb.AppendThreadOperatorCorrection(db, item.ThreadKey, flowdb.ThreadOperatorCorrection{
+		At:   time.Now().UTC().Format(time.RFC3339),
+		Text: text,
+	}); err != nil {
+		return err
+	}
+	requestAttentionCorrectionRetriageBestEffort(item.ID)
+	return nil
+}
+
+func handoffDeclineCorrectionText(h flowdb.AttentionHandoff) string {
+	receiver := strings.TrimSpace(h.Receiver)
+	if receiver == "" {
+		receiver = "matched task"
+	}
+	reason := strings.TrimSpace(h.Reason)
+	if reason == "" {
+		reason = "no reason provided"
+	}
+	return fmt.Sprintf("%s declined this attention handoff: %s. Re-decide routing with this answer as task-supplied evidence.", receiver, reason)
+}
+
+func requestAttentionCorrectionRetriageBestEffort(feedID string) {
+	base := serverBaseFromHookURL()
+	if base == "" {
+		return
+	}
+	payload := fmt.Sprintf(`{"kind":"attention-act","target":%q,"attention_action":"correction-retriage"}`, feedID)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/actions", strings.NewReader(payload))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := uiSessionToken(); tok != "" {
+		req.Header.Set("X-Flow-Session-Token", tok)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
 }
 
 // cmdAttentionSent marks a feed item 'acted' (sent) — the bookkeeping step an

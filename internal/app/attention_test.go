@@ -2,8 +2,12 @@ package app
 
 import (
 	"database/sql"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -96,8 +100,84 @@ func TestCmdAttentionSentErrors(t *testing.T) {
 	}
 }
 
+func TestCmdAttentionResolveMarksCardActed(t *testing.T) {
+	db := attentionTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{ID: "r1", Source: "slack", ThreadKey: "D1:1.1", SuggestedAction: "make_task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if rc := cmdAttention([]string{"resolve", "r1"}); rc != 0 {
+		t.Fatalf("resolve rc = %d, want 0", rc)
+	}
+	got, err := flowdb.GetFeedItem(db, "r1")
+	if err != nil {
+		t.Fatalf("GetFeedItem: %v", err)
+	}
+	if got.Status != "acted" || got.ActedAt == "" {
+		t.Fatalf("resolved card = %+v, want acted", got)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "r1"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 0 {
+		t.Fatalf("resolve should not record feedback, got %+v", fb)
+	}
+}
+
+func TestCmdAttentionMergeKeepsPrimaryAndResolvesDuplicate(t *testing.T) {
+	db := attentionTestDB(t)
+	for _, item := range []flowdb.FeedItem{
+		{ID: "keep", Source: "slack", ThreadKey: "D1:100.0", SuggestedAction: "make_task", Summary: "cert-manager IRSA migration", Channel: "D1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"},
+		{ID: "dupe", Source: "slack", ThreadKey: "D1:110.0", SuggestedAction: "make_task", Summary: "cert-manager smoke timeout", Channel: "D1", Status: "new", CreatedAt: "2026-06-05T10:01:00Z"},
+	} {
+		if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+			t.Fatalf("seed %s: %v", item.ID, err)
+		}
+	}
+
+	if rc := cmdAttention([]string{"merge", "keep", "dupe"}); rc != 0 {
+		t.Fatalf("merge rc = %d, want 0", rc)
+	}
+	keep, _ := flowdb.GetFeedItem(db, "keep")
+	dupe, _ := flowdb.GetFeedItem(db, "dupe")
+	if keep.Status != "new" {
+		t.Fatalf("kept card should stay new, got %+v", keep)
+	}
+	if dupe.Status != "acted" || dupe.ActedAt == "" {
+		t.Fatalf("duplicate should be acted, got %+v", dupe)
+	}
+	fb, err := flowdb.ListAttentionFeedback(db, flowdb.AttentionFeedbackFilter{FeedItemID: "dupe"})
+	if err != nil {
+		t.Fatalf("ListAttentionFeedback: %v", err)
+	}
+	if len(fb) != 0 {
+		t.Fatalf("merge maintenance must not record feedback, got %+v", fb)
+	}
+}
+
+func TestCmdAttentionMergeRejectsDifferentChannels(t *testing.T) {
+	db := attentionTestDB(t)
+	for _, item := range []flowdb.FeedItem{
+		{ID: "keep", Source: "slack", ThreadKey: "D1:100.0", SuggestedAction: "make_task", Channel: "D1", Status: "new", CreatedAt: "2026-06-05T10:00:00Z"},
+		{ID: "other", Source: "slack", ThreadKey: "D2:100.0", SuggestedAction: "make_task", Channel: "D2", Status: "new", CreatedAt: "2026-06-05T10:01:00Z"},
+	} {
+		if _, err := flowdb.UpsertFeedItem(db, item); err != nil {
+			t.Fatalf("seed %s: %v", item.ID, err)
+		}
+	}
+
+	if rc := cmdAttention([]string{"merge", "keep", "other"}); rc != 1 {
+		t.Fatalf("merge different channels rc = %d, want 1", rc)
+	}
+	other, _ := flowdb.GetFeedItem(db, "other")
+	if other.Status != "new" {
+		t.Fatalf("different-channel duplicate should remain new, got %+v", other)
+	}
+}
+
 func TestCmdAttentionSurface(t *testing.T) {
 	db := attentionTestDB(t)
+	contextJSON := `{"parent":{"text":"destroy not allowed before validation"},"messages":[{"text":"blocking release"}]}`
 	if rc := cmdAttention([]string{
 		"surface",
 		"--source", "slack",
@@ -107,6 +187,7 @@ func TestCmdAttentionSurface(t *testing.T) {
 		"--action", "digest_only",
 		"--summary", "hi",
 		"--confidence", "0.5",
+		"--context-json", contextJSON,
 	}); rc != 0 {
 		t.Fatalf("surface rc = %d, want 0", rc)
 	}
@@ -116,6 +197,88 @@ func TestCmdAttentionSurface(t *testing.T) {
 	}
 	if len(items) != 1 || items[0].ThreadKey != "C1:100.1" {
 		t.Fatalf("want 1 card under C1:100.1, got %+v", items)
+	}
+	if items[0].ContextJSON != contextJSON {
+		t.Fatalf("context json = %q, want %q", items[0].ContextJSON, contextJSON)
+	}
+}
+
+func TestCmdAttentionSurfaceContextJSONFile(t *testing.T) {
+	db := attentionTestDB(t)
+	contextJSON := `{"parent":{"text":"exact source context"},"messages":[]}`
+	path := filepath.Join(t.TempDir(), "context.json")
+	if err := os.WriteFile(path, []byte(contextJSON), 0o644); err != nil {
+		t.Fatalf("write context file: %v", err)
+	}
+
+	if rc := cmdAttention([]string{
+		"surface",
+		"--source", "slack",
+		"--channel", "C1",
+		"--channel-type", "channel",
+		"--ts", "101.1",
+		"--action", "make_task",
+		"--summary", "needs decision",
+		"--confidence", "0.8",
+		"--context-json-file", path,
+	}); rc != 0 {
+		t.Fatalf("surface rc = %d, want 0", rc)
+	}
+	items, err := flowdb.ListFeedItems(db, "new")
+	if err != nil {
+		t.Fatalf("ListFeedItems: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("want 1 card, got %+v", items)
+	}
+	if items[0].ContextJSON != contextJSON {
+		t.Fatalf("context json = %q, want %q", items[0].ContextJSON, contextJSON)
+	}
+}
+
+func TestCmdAttentionSurfaceAskTaskAgentSkipsAutoAct(t *testing.T) {
+	db := attentionTestDB(t)
+	if _, err := db.Exec(`INSERT INTO tasks (slug, name, status, priority, work_dir, created_at, updated_at) VALUES (?, ?, 'backlog', 'medium', ?, ?, ?)`,
+		"owner-task", "Owner task", t.TempDir(), "2026-06-05T10:00:00Z", "2026-06-05T10:00:00Z"); err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	var autoActCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/actions" {
+			autoActCalls.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	t.Setenv("FLOW_HOOK_URL", srv.URL+"/api/hooks/agent")
+
+	if rc := cmdAttention([]string{
+		"surface",
+		"--source", "slack",
+		"--channel", "C1",
+		"--channel-type", "channel",
+		"--ts", "102.1",
+		"--action", "forward",
+		"--matched-task", "owner-task",
+		"--summary", "needs owner confirmation",
+		"--confidence", "0.9",
+		"--ask-task-agent",
+	}); rc != 0 {
+		t.Fatalf("surface rc = %d, want 0", rc)
+	}
+	items, err := flowdb.ListFeedItems(db, "new")
+	if err != nil {
+		t.Fatalf("ListFeedItems: %v", err)
+	}
+	if len(items) != 1 || items[0].MatchedTask != "owner-task" {
+		t.Fatalf("want surfaced forward card, got %+v", items)
+	}
+	if _, ok, err := flowdb.LatestAttentionHandoffForFeed(db, items[0].ID); err != nil || !ok {
+		t.Fatalf("handoff ok=%v err=%v, want pending handoff", ok, err)
+	}
+	if got := autoActCalls.Load(); got != 0 {
+		t.Fatalf("ask-task-agent must not call attention-autoact, got %d calls", got)
 	}
 }
 
@@ -153,6 +316,41 @@ func TestCmdAttentionHandoffAcceptAndMalformed(t *testing.T) {
 	item, _ := flowdb.GetFeedItem(db, "ha-cli")
 	if item.Status != "acted" || item.LinkedTask != "owner-task" {
 		t.Fatalf("accepted handoff should act/link feed item, got %+v", item)
+	}
+}
+
+func TestCmdAttentionHandoffDeclineRecordsCorrection(t *testing.T) {
+	db := attentionTestDB(t)
+	if _, err := flowdb.UpsertFeedItem(db, flowdb.FeedItem{
+		ID: "hd-cli", Source: "slack", ThreadKey: "C1:decline-cli", SuggestedAction: "forward",
+		MatchedTask: "wrong-task", Status: "new", CreatedAt: "2026-06-05T10:00:00Z",
+	}); err != nil {
+		t.Fatalf("seed feed: %v", err)
+	}
+	h, err := flowdb.CreateAttentionHandoff(db, flowdb.AttentionHandoff{
+		FeedItemID: "hd-cli", Sender: "attention-router", Receiver: "wrong-task",
+		Context: "Summary: maybe belongs here", RequestedVerdict: "accept_or_decline",
+		RequestedAt: "2026-06-05T10:01:00Z", ExpiresAt: "2026-06-05T11:01:00Z",
+	})
+	if err != nil {
+		t.Fatalf("CreateAttentionHandoff: %v", err)
+	}
+
+	if rc := cmdAttentionHandoff([]string{"decline", h.ID, "--reason", "this belongs to certmanager-niyo-irsa"}); rc != 0 {
+		t.Fatalf("decline rc = %d, want 0", rc)
+	}
+	state, ok, err := flowdb.GetThreadState(db, "C1:decline-cli")
+	if err != nil || !ok {
+		t.Fatalf("GetThreadState ok=%v err=%v", ok, err)
+	}
+	if len(state.OperatorCorrections) != 1 {
+		t.Fatalf("corrections = %+v, want one decline correction", state.OperatorCorrections)
+	}
+	got := state.OperatorCorrections[0].Text
+	for _, want := range []string{"wrong-task declined", "this belongs to certmanager-niyo-irsa"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("correction missing %q: %q", want, got)
+		}
 	}
 }
 

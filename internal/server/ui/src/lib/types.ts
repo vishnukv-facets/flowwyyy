@@ -1100,6 +1100,7 @@ export interface SlackSetupStatus {
   listener_running: boolean;
   listener_connected: boolean;
   listener_suppressed: boolean;
+  needs_reinstall: boolean;
 }
 
 // GitHubSetupStatus drives the resumable Connect-GitHub (App-manifest) wizard,
@@ -1220,6 +1221,7 @@ export interface ActionRequest {
   mkdir?: boolean;
   no_open?: boolean;
   attention_action?: string;
+  merge_target?: string;
   reply_text?: string;
   reply_instructions?: string;
   correction_text?: string;

@@ -502,6 +502,7 @@ func TestOpenDBCreatesSteeringTraceHotPathIndexes(t *testing.T) {
 		"idx_steering_trace_source_created_id",
 		"idx_steering_trace_disposition_source_created_id",
 		"idx_steering_trace_funnel",
+		"idx_steering_trace_session_delivery",
 	} {
 		var got string
 		err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='index' AND name=?`, name).Scan(&got)

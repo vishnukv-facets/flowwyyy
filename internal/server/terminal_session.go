@@ -326,6 +326,70 @@ func (s *terminalSession) write(data string) error {
 	return err
 }
 
+func (s *terminalSession) noteBrowserInput(data string) bool {
+	if s == nil || data == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	next, cleared := terminalDraftRunesAfter(s.browserDraftRunes, data)
+	s.browserDraftRunes = next
+	return cleared
+}
+
+func (s *terminalSession) hasBrowserDraft() bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.browserDraftRunes > 0
+}
+
+func terminalDraftRunesAfter(current int, data string) (int, bool) {
+	before := current
+	for len(data) > 0 {
+		switch data[0] {
+		case '\r', '\x03': // Enter submits; Ctrl-C clears.
+			current = 0
+			data = data[1:]
+		case '\b', '\x7f':
+			if current > 0 {
+				current--
+			}
+			data = data[1:]
+		case '\x1b':
+			data = data[skipTerminalEscape(data):]
+		default:
+			r, size := utf8.DecodeRuneInString(data)
+			if r == utf8.RuneError && size == 1 {
+				data = data[1:]
+				continue
+			}
+			if r >= ' ' && r != '\x7f' {
+				current++
+			}
+			data = data[size:]
+		}
+	}
+	return current, before > 0 && current == 0
+}
+
+func skipTerminalEscape(data string) int {
+	if len(data) < 2 {
+		return len(data)
+	}
+	if data[1] == '[' {
+		for i := 2; i < len(data); i++ {
+			if data[i] >= 0x40 && data[i] <= 0x7e {
+				return i + 1
+			}
+		}
+		return len(data)
+	}
+	return 2
+}
+
 func normalizeTerminalClientSize(cols, rows int) (int, int) {
 	if cols <= 0 {
 		cols = 120
@@ -453,7 +517,11 @@ func (c *terminalClient) readLoop(sess *terminalSession) {
 		switch msg.Type {
 		case "input":
 			if input := stripTerminalGeneratedInput(msg.Data); input != "" {
+				clearedDraft := sess.noteBrowserInput(input)
 				_ = sess.write(input)
+				if clearedDraft && sess.hub != nil {
+					sess.hub.scheduleWakeFlush(sess.slug, time.Now().Add(250*time.Millisecond))
+				}
 			}
 		case "resize":
 			_ = sess.resizeFrom(c, msg.Cols, msg.Rows)

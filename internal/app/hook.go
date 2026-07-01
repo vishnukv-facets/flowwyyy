@@ -46,6 +46,8 @@ func cmdHook(args []string) int {
 		return cmdHookUserPromptSubmit(rest)
 	case "claude-statusline":
 		return cmdHookClaudeStatusLine(rest)
+	case "__refresh-network-status":
+		return cmdHookRefreshNetworkStatus(rest)
 	case "codex-run":
 		return cmdHookCodexRun(rest)
 	case "agent-event":

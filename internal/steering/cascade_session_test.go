@@ -45,6 +45,15 @@ func newSessionTestCascade(t *testing.T, sink SteererSessionSink) *Cascade {
 	return c
 }
 
+func recordSessionTraces(t *testing.T, c *Cascade) {
+	t.Helper()
+	c.trace = func(tr flowdb.SteeringTrace) {
+		if err := flowdb.InsertSteeringTrace(c.DB, tr); err != nil {
+			t.Fatalf("InsertSteeringTrace: %v", err)
+		}
+	}
+}
+
 func sessSlackMsg(channel, ts, user, text string) monitor.InboundEvent {
 	return monitor.InboundEvent{Kind: "message", Channel: channel, ChannelType: "channel", TS: ts, ThreadTS: ts, UserID: user, Text: text}
 }
@@ -112,6 +121,42 @@ func TestObserveOperatorSelfFeedsContextOnly(t *testing.T) {
 	}
 }
 
+func TestObserveOperatorSelfDuplicateSessionDeliverySkipped(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	recordSessionTraces(t, c)
+	ev := sessSlackMsg("C1", "100.1", "UOP", "is this sorted?")
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe first: %v", err)
+	}
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe duplicate: %v", err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("duplicate self-authored message must wake session once, got %d", len(sink.calls))
+	}
+	traces, err := flowdb.ListSteeringTrace(c.DB, flowdb.TraceFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace: %v", err)
+	}
+	if !hasDuplicateSessionTrace(traces) {
+		t.Fatalf("traces = %+v, want dropped/cache duplicate session delivery", traces)
+	}
+}
+
+func TestObserveOperatorSelfUnwatchedChannelDoesNotOpenSession(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	if err := c.Observe(context.Background(), sessSlackMsg("C_RANDOM", "100.1", "UOP", "just chatting")); err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	if len(sink.calls) != 0 {
+		t.Fatalf("unwatched self-authored channel must not open a session, got %+v", sink.calls)
+	}
+}
+
 func TestObserveSelfEchoFeedsSelfEcho(t *testing.T) {
 	t.Setenv("FLOW_STEERING_SESSIONS", "1")
 	sink := &fakeSessionSink{}
@@ -121,6 +166,23 @@ func TestObserveSelfEchoFeedsSelfEcho(t *testing.T) {
 	}
 	if len(sink.calls) != 1 || !sink.calls[0].p.ContextOnly || !sink.calls[0].p.SelfEcho {
 		t.Fatalf("bot echo must feed context_only+self_echo, got %+v", sink.calls)
+	}
+}
+
+func TestObserveSelfEchoDuplicateSessionDeliverySkipped(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	recordSessionTraces(t, c)
+	ev := sessSlackMsg("C1", "100.1", "BOT", "On it, checking now.")
+	if err := c.ObserveSelfAuthored(context.Background(), ev); err != nil {
+		t.Fatalf("ObserveSelfAuthored first: %v", err)
+	}
+	if err := c.ObserveSelfAuthored(context.Background(), ev); err != nil {
+		t.Fatalf("ObserveSelfAuthored duplicate: %v", err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("duplicate self echo must wake session once, got %d", len(sink.calls))
 	}
 }
 
@@ -161,6 +223,23 @@ func TestObserveBatchOperatorSelfFeedsContextOnly(t *testing.T) {
 	}
 }
 
+func TestObserveBatchSkipsDeliveredOperatorSelf(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	sink := &fakeSessionSink{}
+	c := newSessionTestCascade(t, sink)
+	recordSessionTraces(t, c)
+	ev := sessSlackMsg("C1", "100.1", "UOP", "is this sorted?")
+	if err := c.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe live: %v", err)
+	}
+	if err := c.ObserveBatch(context.Background(), []monitor.InboundEvent{ev}); err != nil {
+		t.Fatalf("ObserveBatch duplicate: %v", err)
+	}
+	if len(sink.calls) != 1 {
+		t.Fatalf("live+backfill duplicate must wake session once, got %d", len(sink.calls))
+	}
+}
+
 func TestObserveBatchFlagOffDoesNotDeliver(t *testing.T) {
 	t.Setenv("FLOW_STEERING_SESSIONS", "off")
 	sink := &fakeSessionSink{}
@@ -172,6 +251,49 @@ func TestObserveBatchFlagOffDoesNotDeliver(t *testing.T) {
 	if len(sink.calls) != 0 {
 		t.Fatalf("flag off must not deliver to sink, got %d", len(sink.calls))
 	}
+}
+
+func TestObserveSurvivorDuplicateSkippedAcrossCascadeInstances(t *testing.T) {
+	t.Setenv("FLOW_STEERING_SESSIONS", "1")
+	db := surfaceTestDB(t)
+	cfg := WatchConfig{WatchedChannels: map[string]bool{"C1": true}, Identity: OperatorIdentity{UserIDs: []string{"UOP"}}}
+	ev := sessSlackMsg("C1", "100.1", "U2", "hello")
+
+	firstSink := &fakeSessionSink{}
+	first := NewCascade(db, cfg)
+	first.SessionSink = firstSink
+	if err := first.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe first: %v", err)
+	}
+	if len(firstSink.calls) != 1 {
+		t.Fatalf("first cascade must deliver once, got %d", len(firstSink.calls))
+	}
+
+	secondSink := &fakeSessionSink{}
+	second := NewCascade(db, cfg)
+	second.SessionSink = secondSink
+	if err := second.Observe(context.Background(), ev); err != nil {
+		t.Fatalf("Observe duplicate: %v", err)
+	}
+	if len(secondSink.calls) != 0 {
+		t.Fatalf("persisted duplicate must not wake restarted session, got %d", len(secondSink.calls))
+	}
+	traces, err := flowdb.ListSteeringTrace(db, flowdb.TraceFilter{Limit: 10})
+	if err != nil {
+		t.Fatalf("ListSteeringTrace: %v", err)
+	}
+	if !hasDuplicateSessionTrace(traces) {
+		t.Fatalf("traces = %+v, want dropped/cache duplicate session delivery", traces)
+	}
+}
+
+func hasDuplicateSessionTrace(traces []flowdb.SteeringTrace) bool {
+	for _, tr := range traces {
+		if tr.Disposition == "dropped" && tr.StageReached == "cache" && tr.DropReason == "duplicate session delivery" {
+			return true
+		}
+	}
+	return false
 }
 
 func TestObserveFailOpenFallsThrough(t *testing.T) {

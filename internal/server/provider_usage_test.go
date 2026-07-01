@@ -43,10 +43,12 @@ func TestProviderUsageClaudeStatuslineCache(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	reset5h := time.Now().Add(5 * time.Hour).Unix()
+	reset7d := time.Now().Add(7 * 24 * time.Hour).Unix()
 	if err := os.WriteFile(cache, []byte(`{
 		"rate_limits": {
-			"five_hour": {"used_percentage": 37, "resets_at": 1782397800},
-			"seven_day": {"used_percentage": 67, "resets_at": 1782752400}
+			"five_hour": {"used_percentage": 37, "resets_at": `+fmt.Sprint(reset5h)+`},
+			"seven_day": {"used_percentage": 67, "resets_at": `+fmt.Sprint(reset7d)+`}
 		}
 	}`), 0o644); err != nil {
 		t.Fatal(err)
@@ -65,7 +67,7 @@ func TestProviderUsageClaudeStatuslineCache(t *testing.T) {
 	if got.Windows[1].ID != "seven_day" || got.Windows[1].Label != "7d" || got.Windows[1].UsedPercent != 67 || got.Windows[1].RemainingPercent != 33 {
 		t.Fatalf("seven-day window = %+v", got.Windows[1])
 	}
-	wantReset := time.Unix(1782397800, 0).UTC().Format(time.RFC3339)
+	wantReset := time.Unix(reset5h, 0).UTC().Format(time.RFC3339)
 	if got.Windows[0].ResetAt != wantReset {
 		t.Fatalf("reset_at = %q, want %q", got.Windows[0].ResetAt, wantReset)
 	}
@@ -77,7 +79,8 @@ func TestProviderUsageReadsFreshValues(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeClaudeUsageCache(t, cache, 10, 1782397800)
+	reset := time.Now().Add(5 * time.Hour).Unix()
+	writeClaudeUsageCache(t, cache, 10, reset)
 	s := New(Config{DB: db, FlowRoot: root})
 
 	first := requestProviderUsage(t, s, "/api/provider-usage?provider=claude")
@@ -85,7 +88,7 @@ func TestProviderUsageReadsFreshValues(t *testing.T) {
 		t.Fatalf("first used = %d, want 10", first.Windows[0].UsedPercent)
 	}
 
-	writeClaudeUsageCache(t, cache, 88, 1782397800)
+	writeClaudeUsageCache(t, cache, 88, reset)
 	second := requestProviderUsage(t, s, "/api/provider-usage?provider=claude")
 	if second.Windows[0].UsedPercent != 88 {
 		t.Fatalf("second used = %d, want fresh value 88", second.Windows[0].UsedPercent)
@@ -110,6 +113,28 @@ func TestProviderUsageMarksLimitReached(t *testing.T) {
 	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=claude")
 	if !got.Limited || got.LimitResetAt != reset {
 		t.Fatalf("limit fields = limited:%v reset:%q; want true %q", got.Limited, got.LimitResetAt, reset)
+	}
+}
+
+func TestProviderUsageIgnoresExpiredClaudeWindows(t *testing.T) {
+	root, db := testRootDB(t)
+	cache := filepath.Join(root, "provider_usage", "claude.json")
+	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	expired := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	if err := os.WriteFile(cache, []byte(`{
+		"rate_limits": {
+			"five_hour": {"used_percentage": 1, "resets_at": "`+expired+`"},
+			"seven_day": {"used_percentage": 62, "resets_at": "`+expired+`"}
+		}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := requestProviderUsage(t, New(Config{DB: db, FlowRoot: root}), "/api/provider-usage?provider=claude")
+	if got.Available || len(got.Windows) != 0 || !strings.Contains(got.Reason, "expired") {
+		t.Fatalf("usage = %+v; want unavailable expired Claude usage", got)
 	}
 }
 
@@ -145,7 +170,7 @@ func TestProviderUsageIncludesQueuedAutomation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeClaudeUsageCache(t, cache, 25, 1782397800)
+	writeClaudeUsageCache(t, cache, 25, time.Now().Add(5*time.Hour).Unix())
 	next := "2026-06-25T12:00:00Z"
 	if _, err := flowdb.EnqueueRateLimitQueue(db, flowdb.RateLimitQueueSlackEvent, "claude", []byte(`{"kind":"message"}`), next); err != nil {
 		t.Fatalf("enqueue queue: %v", err)

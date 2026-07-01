@@ -434,7 +434,7 @@ func taskCitation(task TaskView) AskFlowCitation {
 		Type:  "task",
 		Slug:  task.Slug,
 		Title: task.Name,
-		URL:   "/task/" + task.Slug,
+		URL:   searchResultURL("task", task.Slug),
 	}
 }
 
@@ -443,7 +443,7 @@ func taskSummaryCitation(task TaskSummary) AskFlowCitation {
 		Type:  "task",
 		Slug:  task.Slug,
 		Title: task.Name,
-		URL:   "/task/" + task.Slug,
+		URL:   searchResultURL("task", task.Slug),
 	}
 }
 
@@ -452,7 +452,7 @@ func updateCitation(task TaskView, file FileRef) AskFlowCitation {
 		Type:       "update",
 		Slug:       task.Slug,
 		Title:      task.Name + " update " + file.Filename,
-		URL:        "/task/" + task.Slug,
+		URL:        searchResultURL("task", task.Slug),
 		SourcePath: file.Path,
 	}
 }

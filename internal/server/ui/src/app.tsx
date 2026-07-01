@@ -33,6 +33,7 @@ export function App() {
         <Route path="/analytics" component={Analytics} />
         <Route path="/sessions" component={Sessions} />
         <Route path="/session/:slug">{(p) => <SessionDetail slug={p.slug} />}</Route>
+        <Route path="/task/:slug">{(p) => <SessionDetail slug={p.slug} />}</Route>
         <Route path="/tasks" component={Tasks} />
         <Route path="/owners" component={Owners} />
         <Route path="/graph" component={BrainGraph} />

@@ -1,6 +1,7 @@
 package flowdb
 
 import (
+	"crypto/sha256"
 	"database/sql"
 	"fmt"
 	"strconv"
@@ -36,6 +37,160 @@ type FeedItem struct {
 	RetriagingAt      string // RFC3339, set while an operator-forced re-triage is in flight; cleared on completion
 	CreatedAt         string // RFC3339
 	ActedAt           string // RFC3339, set when status leaves 'new'
+}
+
+// AttentionWorkstream is the durable identity layer above source thread roots:
+// multiple Slack roots can map to one canonical feed card/workstream.
+type AttentionWorkstream struct {
+	ID                  string
+	Source              string
+	Channel             string
+	ChannelType         string
+	CanonicalThreadKey  string
+	CanonicalFeedItemID string
+	OwnerTaskSlug       string
+	Summary             string
+	Status              string
+	CreatedAt           string
+	UpdatedAt           string
+}
+
+// EnsureAttentionWorkstreamForFeed records item.ThreadKey as the canonical
+// workstream key and aliases rawThreadKey to it. rawThreadKey may differ when
+// the steerer merged a new source root into an existing card.
+func EnsureAttentionWorkstreamForFeed(db *sql.DB, item FeedItem, rawThreadKey, at string) (AttentionWorkstream, error) {
+	canonical := strings.TrimSpace(item.ThreadKey)
+	if canonical == "" {
+		return AttentionWorkstream{}, fmt.Errorf("flowdb: attention workstream requires canonical thread key")
+	}
+	raw := strings.TrimSpace(rawThreadKey)
+	if raw == "" {
+		raw = canonical
+	}
+	if at == "" {
+		at = NowISO()
+	}
+	ws, ok, err := AttentionWorkstreamByThreadKey(db, canonical)
+	if err != nil {
+		return AttentionWorkstream{}, err
+	}
+	if !ok {
+		ws, ok, err = AttentionWorkstreamByThreadKey(db, raw)
+		if err != nil {
+			return AttentionWorkstream{}, err
+		}
+	}
+	if !ok {
+		ws = AttentionWorkstream{
+			ID:                 attentionWorkstreamID(canonical),
+			CanonicalThreadKey: canonical,
+			CreatedAt:          at,
+		}
+	}
+	ws.Source = item.Source
+	ws.Channel = item.Channel
+	ws.ChannelType = item.ChannelType
+	ws.CanonicalThreadKey = canonical
+	ws.CanonicalFeedItemID = item.ID
+	if owner := firstNonEmptyString(item.MatchedTask, item.LinkedTask); owner != "" {
+		ws.OwnerTaskSlug = owner
+	}
+	ws.Summary = item.Summary
+	ws.Status = "open"
+	ws.UpdatedAt = at
+
+	if _, err := db.Exec(
+		`INSERT INTO attention_workstreams (
+		   id, source, channel, channel_type, canonical_thread_key, canonical_feed_item_id,
+		   owner_task_slug, summary, status, created_at, updated_at
+		 ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   source=excluded.source,
+		   channel=excluded.channel,
+		   channel_type=excluded.channel_type,
+		   canonical_thread_key=excluded.canonical_thread_key,
+		   canonical_feed_item_id=excluded.canonical_feed_item_id,
+		   owner_task_slug=COALESCE(excluded.owner_task_slug, attention_workstreams.owner_task_slug),
+		   summary=excluded.summary,
+		   status=excluded.status,
+		   updated_at=excluded.updated_at`,
+		ws.ID, ws.Source, NullIfEmpty(ws.Channel), NullIfEmpty(ws.ChannelType), ws.CanonicalThreadKey, NullIfEmpty(ws.CanonicalFeedItemID),
+		NullIfEmpty(ws.OwnerTaskSlug), ws.Summary, ws.Status, ws.CreatedAt, ws.UpdatedAt,
+	); err != nil {
+		return AttentionWorkstream{}, fmt.Errorf("flowdb: upsert attention workstream: %w", err)
+	}
+	for _, key := range []string{canonical, raw} {
+		if err := upsertAttentionWorkstreamAlias(db, ws, item, key, at); err != nil {
+			return AttentionWorkstream{}, err
+		}
+	}
+	return ws, nil
+}
+
+func upsertAttentionWorkstreamAlias(db *sql.DB, ws AttentionWorkstream, item FeedItem, threadKey, at string) error {
+	threadKey = strings.TrimSpace(threadKey)
+	if threadKey == "" {
+		return nil
+	}
+	_, err := db.Exec(
+		`INSERT INTO attention_workstream_aliases (
+		   thread_key, workstream_id, feed_item_id, source, channel, created_at, updated_at
+		 ) VALUES (?,?,?,?,?,?,?)
+		 ON CONFLICT(thread_key) DO UPDATE SET
+		   workstream_id=excluded.workstream_id,
+		   feed_item_id=excluded.feed_item_id,
+		   source=excluded.source,
+		   channel=excluded.channel,
+		   updated_at=excluded.updated_at`,
+		threadKey, ws.ID, NullIfEmpty(item.ID), item.Source, NullIfEmpty(item.Channel), at, at,
+	)
+	if err != nil {
+		return fmt.Errorf("flowdb: upsert attention workstream alias: %w", err)
+	}
+	return nil
+}
+
+// AttentionWorkstreamByThreadKey returns the workstream aliased to threadKey.
+func AttentionWorkstreamByThreadKey(db *sql.DB, threadKey string) (AttentionWorkstream, bool, error) {
+	threadKey = strings.TrimSpace(threadKey)
+	if threadKey == "" {
+		return AttentionWorkstream{}, false, nil
+	}
+	var ws AttentionWorkstream
+	var channel, channelType, feedID, owner sql.NullString
+	err := db.QueryRow(
+		`SELECT w.id, w.source, w.channel, w.channel_type, w.canonical_thread_key,
+		        w.canonical_feed_item_id, w.owner_task_slug, w.summary, w.status, w.created_at, w.updated_at
+		   FROM attention_workstream_aliases a
+		   JOIN attention_workstreams w ON w.id = a.workstream_id
+		  WHERE a.thread_key = ?`,
+		threadKey,
+	).Scan(&ws.ID, &ws.Source, &channel, &channelType, &ws.CanonicalThreadKey, &feedID, &owner, &ws.Summary, &ws.Status, &ws.CreatedAt, &ws.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return AttentionWorkstream{}, false, nil
+	}
+	if err != nil {
+		return AttentionWorkstream{}, false, fmt.Errorf("flowdb: attention workstream by thread key: %w", err)
+	}
+	ws.Channel = channel.String
+	ws.ChannelType = channelType.String
+	ws.CanonicalFeedItemID = feedID.String
+	ws.OwnerTaskSlug = owner.String
+	return ws, true, nil
+}
+
+func attentionWorkstreamID(threadKey string) string {
+	sum := sha256.Sum256([]byte(threadKey))
+	return fmt.Sprintf("aws-%x", sum[:8])
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 // SetFeedRetriaging marks a feed item as having an in-flight re-triage (at = now)
@@ -306,26 +461,6 @@ func LatestFeedItemByThread(db *sql.DB, threadKey string) (FeedItem, bool, error
 		return FeedItem{}, false, nil
 	}
 	return items[0], true, nil
-}
-
-// SetFeedItemAction rewrites a still-'new' feed item's suggested action and
-// matched task in place. Used to reconcile open cards when a tracking task is
-// (re)discovered after the card was written — e.g. flipping make_task → forward
-// once we find the existing (possibly archived) task for the thread. No-op
-// unless the row is still 'new', so it never disturbs an already-acted card.
-func SetFeedItemAction(db *sql.DB, id, action, matchedTask string) error {
-	res, err := db.Exec(
-		`UPDATE attention_feed SET suggested_action = ?, matched_task = ? WHERE id = ? AND status = 'new'`,
-		action, NullIfEmpty(matchedTask), id,
-	)
-	if err != nil {
-		return fmt.Errorf("flowdb: set feed action: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("flowdb: no open feed item with id %q", id)
-	}
-	return nil
 }
 
 // SetFeedItemStatus moves a feed item to a new lifecycle status and stamps

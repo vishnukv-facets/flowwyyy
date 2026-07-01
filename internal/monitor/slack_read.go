@@ -2,8 +2,10 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/slack-go/slack"
 )
@@ -273,7 +275,11 @@ func ConversationHistory(ctx context.Context, token string, opts SlackHistoryOpt
 	if opts.Limit <= 0 {
 		opts.Limit = 50
 	}
-	return slackConversationHistoryFn(ctx, token, opts)
+	msgs, err := slackConversationHistoryFn(ctx, token, opts)
+	if err != nil {
+		return nil, slackReadError(err)
+	}
+	return msgs, nil
 }
 
 var slackConversationRepliesFn = func(ctx context.Context, token, channelID, threadTS string, limit int) ([]SlackMessage, error) {
@@ -310,7 +316,20 @@ func ConversationReplies(ctx context.Context, token, channelID, threadTS string,
 	if limit <= 0 {
 		limit = 100
 	}
-	return slackConversationRepliesFn(ctx, token, channelID, threadTS, limit)
+	msgs, err := slackConversationRepliesFn(ctx, token, channelID, threadTS, limit)
+	if err != nil {
+		return nil, slackReadError(err)
+	}
+	return msgs, nil
+}
+
+func slackReadError(err error) error {
+	var rateLimited *slack.RateLimitedError
+	if errors.As(err, &rateLimited) {
+		retryAt := time.Now().Add(rateLimited.RetryAfter).Format(time.RFC3339)
+		return fmt.Errorf("slack rate limit exceeded; retry after %s (retry at %s)", rateLimited.RetryAfter, retryAt)
+	}
+	return err
 }
 
 func slackMessageFromAPI(ctx context.Context, api *slack.Client, channelID string, m slack.Message) SlackMessage {

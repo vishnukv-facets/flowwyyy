@@ -114,3 +114,39 @@ func TestWakeTaskBuffersWhileAwaitingHumanInput(t *testing.T) {
 		t.Fatal("awaitingHumanInput should be false after leaving elicitation")
 	}
 }
+
+func TestWakeTaskBuffersWhileBrowserDraftExists(t *testing.T) {
+	root := t.TempDir()
+	db, err := flowdb.OpenDB(filepath.Join(root, "flow.db"))
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	const slug = "demo"
+	s := New(Config{DB: db, FlowRoot: root})
+	sess := &terminalSession{slug: slug, done: make(chan struct{}), clients: map[*terminalClient]struct{}{}}
+	if cleared := sess.noteBrowserInput("draft reply"); cleared {
+		t.Fatal("plain input should not clear the draft")
+	}
+	if !sess.hasBrowserDraft() {
+		t.Fatal("session should report a browser draft after unsent input")
+	}
+	s.terminals.mu.Lock()
+	s.terminals.sessions[slug] = sess
+	s.terminals.mu.Unlock()
+
+	if err := s.terminals.wakeTask(slug, "new Slack message"); err != nil {
+		t.Fatalf("wakeTask: %v", err)
+	}
+	pw, ok := s.terminals.wakes.peek(slug)
+	if !ok || pw.Prompt != "new Slack message" {
+		t.Fatalf("expected wake to be queued while draft exists; got %q,%v", pw.Prompt, ok)
+	}
+	if cleared := sess.noteBrowserInput("\r"); !cleared {
+		t.Fatal("Enter should clear the browser draft")
+	}
+	if sess.hasBrowserDraft() {
+		t.Fatal("session should not report a browser draft after Enter")
+	}
+}

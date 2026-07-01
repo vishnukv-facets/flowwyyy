@@ -111,8 +111,8 @@ func (s *Server) handleTaskRoute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		serveMarkdown(w, path)
-	case len(parts) == 3 && parts[1] == "artifacts":
-		path, err := fileForEntity(s.cfg.FlowRoot, "tasks", slug, "artifacts", parts[2])
+	case len(parts) >= 3 && parts[1] == "artifacts":
+		path, err := fileForEntity(s.cfg.FlowRoot, "tasks", slug, "artifacts", strings.Join(parts[2:], "/"))
 		if err != nil {
 			writeError(w, err, http.StatusBadRequest)
 			return

@@ -54,6 +54,10 @@ type actionRequest struct {
 	// make-task | forward | dismiss | send-reply. Target carries the feed item id.
 	AttentionAction string `json:"attention_action,omitempty"`
 
+	// MergeTarget is the kept attention feed item id for attention_action=merge-into.
+	// Target carries the duplicate feed item id.
+	MergeTarget string `json:"merge_target,omitempty"`
+
 	// ReplyText is the operator's edited draft for the send-reply attention
 	// action. Empty falls back to the feed item's stored Draft.
 	ReplyText string `json:"reply_text,omitempty"`

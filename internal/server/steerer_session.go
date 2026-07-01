@@ -7,9 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"flow/internal/contextpack"
 	"flow/internal/flowdb"
@@ -157,8 +159,17 @@ func renderSteererTurn(p steering.SteererDelivery) string {
 		kind = "context_only operator update — absorb into memory; may refresh or resolve an existing open card only; do NOT reply"
 	}
 	fmt.Fprintf(&b, "## Steerer turn — %s\n", kind)
-	fmt.Fprintf(&b, "source=%s channel=%s channel_type=%s ts=%s thread_ts=%s author=%s\n\n",
+	fmt.Fprintf(&b, "source=%s channel=%s channel_type=%s ts=%s thread_ts=%s author=%s\n",
 		p.Source, p.Channel, p.ChannelType, p.TS, p.ThreadTS, p.Author)
+	if path := strings.TrimSpace(p.ContextJSONFile); path != "" {
+		fmt.Fprintf(&b, "context_json_file=%s\n", path)
+	}
+	b.WriteString("\n")
+	b.WriteString("Trusted routing reminder:\n")
+	b.WriteString("- If the sender asked a question and you can answer now, surface action=reply with --draft; do not use make_task just to relay the answer.\n")
+	b.WriteString("- Customer-facing DMs still get drafts for operator approval. Never post the reply yourself unless an operator-approved send turn says so.\n")
+	b.WriteString("- Need facts from an existing task? Use flow tell <task-slug> with a specific question; use forward --matched-task <slug> --ask-task-agent when the task should own/accept the work.\n")
+	b.WriteString("- Use flow read ask only for operator/Flow pending questions, not task-to-task asks. After a task/operator answer, continue the existing card and draft the reply if the source is waiting.\n\n")
 	b.WriteString(steererUntrustedFenceLine)
 	b.WriteString("\n\n")
 	if t := strings.TrimSpace(p.Text); t != "" {
@@ -207,6 +218,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 	if err := validateSlug(slug); err != nil {
 		return fmt.Errorf("steerer session: %w", err)
 	}
+	p = s.attachSteererContextJSONFile(key, p)
 
 	slot := s.steererSlot(slug)
 	slot.mu.Lock()
@@ -230,7 +242,7 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 	case steererActWake:
 		slot.state = steererSlotLive
 		slot.lastDeliveryAt = time.Now()
-		turn := s.appendSteererChatContextPack(renderSteererTurnForProvider(p, chat.Provider), chat)
+		turn := s.appendSteererChatContextPack(s.appendSteererActiveCards(renderSteererTurnForProvider(p, chat.Provider), p), chat)
 		// On laptop wake a session resuming from suspension may still be settling;
 		// gate the paste on quiescence so it lands in a ready input box, not mid-render.
 		s.terminals.waitForSessionReady(slug, steererWakeStable, steererWakeTimeout)
@@ -241,14 +253,277 @@ func (s *Server) DeliverToChannelSession(key string, p steering.SteererDelivery)
 		return flowdb.TouchChat(s.cfg.DB, slug, flowdb.NowISO())
 	case steererActResume:
 		s.maybeUpgradeSteererTitle(chat, p, key)
-		turn := s.appendSteererChatContextPack(renderSteererTurnForProvider(p, chat.Provider), chat)
+		turn := s.appendSteererChatContextPack(s.appendSteererActiveCards(renderSteererTurnForProvider(p, chat.Provider), p), chat)
 		return s.resumeSteererChat(slot, chat, turn)
 	default: // steererActStart
 		title := s.resolveSteererChatTitle(context.Background(), p, key)
 		provider := steererSessionProvider()
-		turn := renderSteererTurnForProvider(p, provider)
+		turn := s.appendSteererActiveCards(renderSteererTurnForProvider(p, provider), p)
 		return s.startNewSteererChat(slot, slug, turn, title, provider)
 	}
+}
+
+func (s *Server) appendSteererActiveCards(turn string, p steering.SteererDelivery) string {
+	if s == nil || s.cfg.DB == nil {
+		return turn
+	}
+	return appendSteererActiveCards(turn, s.cfg.DB, p)
+}
+
+func appendSteererActiveCards(turn string, db *sql.DB, p steering.SteererDelivery) string {
+	since := time.Now().Add(-surfaceOpenCardWindow()).UTC().Format(time.RFC3339)
+	items, err := flowdb.ListOpenClubCandidates(db, p.Channel, "", since, 8)
+	if err != nil {
+		return turn
+	}
+	currentWS, hasCurrentWS := steererCurrentWorkstream(db, p)
+	var candidates []*flowdb.Task
+	if !p.ContextOnly {
+		candidates = steererTaskCandidates(db, p, items, 5)
+	}
+	if len(items) == 0 && len(candidates) == 0 && !hasCurrentWS {
+		return turn
+	}
+	var b strings.Builder
+	b.WriteString(turn)
+	if !strings.HasSuffix(turn, "\n") {
+		b.WriteString("\n")
+	}
+	if hasCurrentWS {
+		b.WriteString("\nKnown workstream for this source root:\n")
+		fmt.Fprintf(&b, "- workstream=%s canonical_thread_key=%s", currentWS.ID, currentWS.CanonicalThreadKey)
+		if currentWS.CanonicalFeedItemID != "" {
+			fmt.Fprintf(&b, " card_id=%s", currentWS.CanonicalFeedItemID)
+		}
+		b.WriteString("\n")
+		if currentWS.OwnerTaskSlug != "" {
+			fmt.Fprintf(&b, "  owner_task=%s\n", currentWS.OwnerTaskSlug)
+			fmt.Fprintf(&b, "  need facts from owner task: flow tell %s \"<specific question plus this source/card context>\"\n", currentWS.OwnerTaskSlug)
+			fmt.Fprintf(&b, "  if this message belongs there: --action forward --matched-task %s --ask-task-agent\n", currentWS.OwnerTaskSlug)
+		}
+		fmt.Fprintf(&b, "  continue card: add --thread-key %s to flow attention surface\n", currentWS.CanonicalThreadKey)
+	}
+	if len(items) > 0 {
+		b.WriteString("\nOpen attention workstreams in this conversation:\n")
+		for _, it := range items {
+			owner := steererCardOwnerTask(db, it)
+			fmt.Fprintf(&b, "- id=%s thread_key=%s action=%s confidence=%.2f summary=%s\n",
+				it.ID, it.ThreadKey, it.SuggestedAction, it.Confidence, clipSteererLine(it.Summary, 180))
+			if owner != "" {
+				if task, err := flowdb.GetTask(db, owner); err == nil && task != nil {
+					fmt.Fprintf(&b, "  owner_task=%s (%s)\n", owner, clipSteererLine(task.Name, 120))
+				} else {
+					fmt.Fprintf(&b, "  owner_task=%s\n", owner)
+				}
+			}
+			if reason := strings.TrimSpace(it.Reason); reason != "" {
+				fmt.Fprintf(&b, "  reason=%s\n", clipSteererLine(reason, 220))
+			}
+			fmt.Fprintf(&b, "  continue card: add --thread-key %s to flow attention surface\n", it.ThreadKey)
+			if owner != "" {
+				fmt.Fprintf(&b, "  need facts from owner task: flow tell %s \"<specific question plus this source/card context>\"\n", owner)
+				fmt.Fprintf(&b, "  ask owner task: use --action forward --matched-task %s --ask-task-agent\n", owner)
+			}
+			if p.ContextOnly && !p.SelfEcho {
+				fmt.Fprintf(&b, "  if the operator's message handled this card: flow attention resolve %s\n", it.ID)
+			}
+		}
+		b.WriteString("Do not create a duplicate card for these workstreams. Continue, forward/ask, or resolve using the commands above.\n")
+	}
+	if len(candidates) > 0 {
+		b.WriteString("\nActive task candidates to consider (hints only; read the task brief/updates before matching):\n")
+		for _, c := range candidates {
+			fmt.Fprintf(&b, "- %s (%s): %s\n", c.Slug, c.Status, clipSteererLine(c.Name, 140))
+			if dir := monitor.TaskDir(c.Slug); dir != "" {
+				fmt.Fprintf(&b, "  brief=%s/brief.md updates=%s/updates/\n", dir, dir)
+			}
+			fmt.Fprintf(&b, "  need facts from this task: flow tell %s \"<specific question plus this source/card context>\"\n", c.Slug)
+			fmt.Fprintf(&b, "  if this owns the message: --action forward --matched-task %s --ask-task-agent\n", c.Slug)
+		}
+	}
+	return b.String()
+}
+
+func (s *Server) attachSteererContextJSONFile(key string, p steering.SteererDelivery) steering.SteererDelivery {
+	if strings.TrimSpace(p.ContextJSONFile) != "" {
+		return p
+	}
+	root, err := s.absFlowRoot()
+	if err != nil {
+		return p
+	}
+	if path := writeSteererContextJSONFile(root, key, p); path != "" {
+		p.ContextJSONFile = path
+	}
+	return p
+}
+
+func writeSteererContextJSONFile(root, key string, p steering.SteererDelivery) string {
+	raw, err := json.MarshalIndent(p.Context, "", "  ")
+	if err != nil || len(raw) == 0 || string(raw) == "{}" {
+		return ""
+	}
+	dir := filepath.Join(root, "steerer_context", steererContextPathPart(key))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return ""
+	}
+	name := steererContextPathPart(firstNonEmpty(p.TS, p.ThreadTS, time.Now().UTC().Format("20060102T150405.000000000Z"))) + ".json"
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return ""
+	}
+	return path
+}
+
+func steererContextPathPart(s string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '-' || r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "event"
+	}
+	return b.String()
+}
+
+func steererCurrentWorkstream(db *sql.DB, p steering.SteererDelivery) (flowdb.AttentionWorkstream, bool) {
+	for _, key := range []string{
+		p.Context.ThreadKey,
+		monitor.ThreadKey(p.Channel, p.ThreadTS),
+		monitor.ThreadKey(p.Channel, p.TS),
+	} {
+		ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, key)
+		if err == nil && ok && ws.Status == "open" {
+			return ws, true
+		}
+	}
+	return flowdb.AttentionWorkstream{}, false
+}
+
+func steererCardOwnerTask(db *sql.DB, it flowdb.FeedItem) string {
+	for _, slug := range []string{it.MatchedTask, it.LinkedTask} {
+		if s := strings.TrimSpace(slug); s != "" {
+			return s
+		}
+	}
+	if ws, ok, err := flowdb.AttentionWorkstreamByThreadKey(db, it.ThreadKey); err == nil && ok {
+		return strings.TrimSpace(ws.OwnerTaskSlug)
+	}
+	return ""
+}
+
+func steererTaskCandidates(db *sql.DB, p steering.SteererDelivery, items []flowdb.FeedItem, limit int) []*flowdb.Task {
+	if db == nil || limit <= 0 {
+		return nil
+	}
+	needle := steererCandidateText(p, items)
+	tokens := steererTokens(needle)
+	if len(tokens) < 2 {
+		return nil
+	}
+	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{IncludeArchived: true})
+	if err != nil {
+		return nil
+	}
+	type scored struct {
+		task  *flowdb.Task
+		score int
+	}
+	var scoredTasks []scored
+	for _, task := range tasks {
+		if task == nil || task.DeletedAt.Valid || task.Status == "done" {
+			continue
+		}
+		score := steererOverlap(tokens, steererTokens(task.Slug+" "+task.Name))
+		if score < 2 {
+			continue
+		}
+		scoredTasks = append(scoredTasks, scored{task: task, score: score})
+	}
+	for i := 0; i < len(scoredTasks); i++ {
+		for j := i + 1; j < len(scoredTasks); j++ {
+			if scoredTasks[j].score > scoredTasks[i].score {
+				scoredTasks[i], scoredTasks[j] = scoredTasks[j], scoredTasks[i]
+			}
+		}
+	}
+	var out []*flowdb.Task
+	for _, st := range scoredTasks {
+		out = append(out, st.task)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func steererCandidateText(p steering.SteererDelivery, items []flowdb.FeedItem) string {
+	var parts []string
+	parts = append(parts, p.Text, p.Context.Summary)
+	if p.Context.Parent != nil {
+		parts = append(parts, p.Context.Parent.Text)
+	}
+	for _, msg := range p.Context.Messages {
+		parts = append(parts, msg.Text)
+	}
+	for _, it := range items {
+		parts = append(parts, it.Summary, it.Reason, it.MatchedTask, it.LinkedTask)
+	}
+	return strings.Join(parts, " ")
+}
+
+func steererTokens(text string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, tok := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if len(tok) < 4 {
+			continue
+		}
+		if _, stop := steererStopTokens[tok]; stop {
+			continue
+		}
+		out[tok] = struct{}{}
+		if tok == "certmanager" {
+			out["cert"] = struct{}{}
+			out["manager"] = struct{}{}
+		}
+	}
+	return out
+}
+
+func steererOverlap(a, b map[string]struct{}) int {
+	n := 0
+	for tok := range a {
+		if _, ok := b[tok]; ok {
+			n++
+		}
+	}
+	return n
+}
+
+var steererStopTokens = map[string]struct{}{
+	"about": {}, "action": {}, "after": {}, "already": {}, "also": {}, "because": {}, "before": {},
+	"card": {}, "check": {}, "done": {}, "from": {}, "have": {}, "here": {}, "message": {}, "need": {},
+	"needs": {}, "operator": {}, "please": {}, "question": {}, "same": {}, "should": {}, "source": {},
+	"that": {}, "their": {}, "there": {}, "this": {}, "with": {}, "would": {},
+}
+
+func surfaceOpenCardWindow() time.Duration {
+	return 12 * time.Hour
+}
+
+func clipSteererLine(s string, n int) string {
+	s = strings.ReplaceAll(strings.TrimSpace(s), "\n", " ")
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
 }
 
 func (s *Server) appendSteererChatContextPack(turn string, chat *flowdb.Chat) string {
@@ -321,6 +596,10 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
 	prompt := steererSendReplyPrompt(item, channel, threadTS, text, instructions)
+	provider, err := flowdb.NormalizeSessionProvider(chat.Provider)
+	if err != nil {
+		return false, fmt.Errorf("steerer send-reply: %w", err)
+	}
 	if s.terminals.running(slug) {
 		slot.state = steererSlotLive
 		if err := s.terminals.wakeTask(slug, prompt); err != nil {
@@ -328,10 +607,29 @@ func (s *Server) postApprovedReplyViaChat(item flowdb.FeedItem, text, instructio
 		}
 		return true, nil
 	}
+	if steererChatSessionClosed(s.cfg.DB, provider, chat.SessionID.String) {
+		if err := s.startNewSteererChat(slot, slug, prompt, chat.Title, provider); err != nil {
+			return false, fmt.Errorf("steerer send-reply: start fresh %q: %w", slug, err)
+		}
+		return true, nil
+	}
 	if err := s.resumeSteererChat(slot, chat, prompt); err != nil {
 		return false, fmt.Errorf("steerer send-reply: resume %q: %w", slug, err)
 	}
 	return true, nil
+}
+
+func steererChatSessionClosed(db *sql.DB, provider, sessionID string) bool {
+	state, err := flowdb.AgentRuntimeStateBySessionID(db, provider, sessionID)
+	if err != nil {
+		return false
+	}
+	switch state.Status {
+	case "dead", "released":
+		return true
+	default:
+		return false
+	}
 }
 
 // steererChatSlugForCard derives the chat slug of the per-channel session that

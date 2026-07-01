@@ -123,15 +123,16 @@ type terminalSession struct {
 	tty        *os.File
 	done       chan struct{}
 
-	mu           sync.Mutex
-	clients      map[*terminalClient]struct{}
-	scrollback   []byte
-	closed       bool
-	exitStatus   string
-	lastOutputAt time.Time
-	resizeOwner  *terminalClient
-	cols         int
-	rows         int
+	mu                sync.Mutex
+	clients           map[*terminalClient]struct{}
+	scrollback        []byte
+	closed            bool
+	exitStatus        string
+	lastOutputAt      time.Time
+	resizeOwner       *terminalClient
+	cols              int
+	rows              int
+	browserDraftRunes int
 }
 
 type terminalClient struct {

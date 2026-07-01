@@ -330,7 +330,7 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 		if r.PostForm.Get("code") != "thecode" {
 			t.Errorf("code not forwarded: %v", r.PostForm)
 		}
-		fmt.Fprint(w, `{"ok":true,"access_token":"xoxb-new","bot_user_id":"UBOTNEW","authed_user":{"id":"UNEWUSER","access_token":"xoxp-new"},"team":{"name":"Testers"}}`)
+		fmt.Fprintf(w, `{"ok":true,"access_token":"xoxb-new","bot_user_id":"UBOTNEW","authed_user":{"id":"UNEWUSER","access_token":"xoxp-new","scope":"%s"},"team":{"name":"Testers"}}`, strings.Join(slackManifestUserScopes, ","))
 	})
 
 	dance, err := srv.startSlackOAuthDance("client-1", "secret-1", 0)
@@ -407,6 +407,40 @@ func TestSlackOAuthDanceRoundTrip(t *testing.T) {
 	status, _, _, team := dance2.snapshot()
 	if status != "done" || team != "Testers" {
 		t.Fatalf("dance status = %s team = %s", status, team)
+	}
+}
+
+func TestSlackOAuthCallbackRejectsUserTokenWithoutSearchScope(t *testing.T) {
+	root, db := testRootDB(t)
+	srv := New(Config{DB: db, FlowRoot: root, CommandPath: "/bin/false"})
+	clearSlackSetupEnv(t)
+
+	mockSlackAPI(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/oauth.v2.access" {
+			t.Errorf("unexpected call %s", r.URL.Path)
+		}
+		scopes := make([]string, 0, len(slackManifestUserScopes)-1)
+		for _, scope := range slackManifestUserScopes {
+			if scope != "search:read" {
+				scopes = append(scopes, scope)
+			}
+		}
+		fmt.Fprintf(w, `{"ok":true,"access_token":"xoxb-new","bot_user_id":"UBOTNEW","authed_user":{"id":"UNEWUSER","access_token":"xoxp-new","scope":"%s"},"team":{"name":"Testers"}}`, strings.Join(scopes, ","))
+	})
+
+	dance := &slackOAuthDance{state: "state-1", expires: time.Now().Add(time.Minute), status: "waiting"}
+	req := httptest.NewRequest("GET", slackOAuthCallbackPath+"?state=state-1&code=thecode", nil)
+	rec := httptest.NewRecorder()
+	srv.handleSlackOAuthCallback(rec, req, dance, "client-1", "secret-1", "https://localhost:8790"+slackOAuthCallbackPath)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d body %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "search:read") {
+		t.Fatalf("missing scope not explained: %s", rec.Body.String())
+	}
+	if os.Getenv("FLOW_SLACK_USER_TOKEN") != "" || os.Getenv("FLOW_SLACK_MANIFEST_REV") != "" {
+		t.Fatalf("bad token/rev persisted: token=%q rev=%q", os.Getenv("FLOW_SLACK_USER_TOKEN"), os.Getenv("FLOW_SLACK_MANIFEST_REV"))
 	}
 }
 

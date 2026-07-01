@@ -66,47 +66,6 @@ func BackfillFeedTaskThreadTags(db *sql.DB, logf func(string, ...any)) (int, err
 	return tagged, nil
 }
 
-// ReconcileOpenFeedMatches re-checks every still-'new' make_task card against the
-// current task graph and flips it to forward when a task already tracks the
-// thread. Cards written while the tracking task was invisible (the archived-task
-// blind spot) otherwise keep nagging "make task" for work that already has a home.
-// Runs on boot alongside the tag backfill — deterministic, no network. Returns
-// the number of cards reconciled.
-func ReconcileOpenFeedMatches(db *sql.DB, logf func(string, ...any)) (int, error) {
-	if db == nil {
-		return 0, nil
-	}
-	items, err := flowdb.ListFeedItems(db, "new")
-	if err != nil {
-		return 0, fmt.Errorf("steering: reconcile list new feed: %w", err)
-	}
-	flipped := 0
-	for _, item := range items {
-		if item.SuggestedAction != string(ActionMakeTask) || item.MatchedTask != "" {
-			continue
-		}
-		tag := feedTrackingTag(item)
-		if tag == "" {
-			continue
-		}
-		slug, ok := findTaskByTag(db, tag)
-		if !ok {
-			continue
-		}
-		if err := flowdb.SetFeedItemAction(db, item.ID, string(ActionForward), slug); err != nil {
-			if logf != nil {
-				logf("reconcile: flip %s → forward(%s): %v", item.ID, slug, err)
-			}
-			continue
-		}
-		flipped++
-		if logf != nil {
-			logf("reconcile: card %s now forwards to existing task %s", item.ID, slug)
-		}
-	}
-	return flipped, nil
-}
-
 // DismissSurfacedDropCards clears feed cards that should never have been
 // surfaced: still-'new' rows whose suggested action is 'drop' (cascade-classified
 // noise that an earlier bug let through to the feed). They move to 'dismissed' —
@@ -135,23 +94,6 @@ func DismissSurfacedDropCards(db *sql.DB, logf func(string, ...any)) (int, error
 		dismissed++
 	}
 	return dismissed, nil
-}
-
-// findTaskByTag returns the slug of a task carrying tag, preferring a non-done
-// one and INCLUDING archived tasks (an archived task still tracks its thread).
-// Mirrors matchExistingTask's selection but keyed directly on a tag. ok=false
-// when no task carries the tag.
-func findTaskByTag(db *sql.DB, tag string) (string, bool) {
-	tasks, err := flowdb.ListTasks(db, flowdb.TaskFilter{Tag: flowdb.NormalizeTag(tag), IncludeArchived: true})
-	if err != nil || len(tasks) == 0 {
-		return "", false
-	}
-	for _, t := range tasks {
-		if t != nil && t.Status != "done" {
-			return t.Slug, true
-		}
-	}
-	return tasks[0].Slug, true
 }
 
 func containsTag(tags []string, want string) bool {

@@ -59,7 +59,7 @@ const slackSetupDefaultOAuthPort = 8790
 // re-approve). Persisted as FLOW_SLACK_MANIFEST_REV after create-app and
 // successful OAuth; status compares the stored value to this constant and sets
 // NeedsReinstall when they differ.
-const slackManifestRev = "5"
+const slackManifestRev = "6"
 
 // slackOAuthCallbackPath is the path component of the registered redirect URL.
 const slackOAuthCallbackPath = "/api/slack/oauth/callback"
@@ -383,11 +383,12 @@ func (a *slackSetupAPI) checkAppToken(ctx context.Context, appToken string) erro
 }
 
 type slackOAuthResult struct {
-	BotToken  string
-	UserToken string
-	UserID    string
-	BotUserID string
-	Team      string
+	BotToken   string
+	UserToken  string
+	UserScopes []string
+	UserID     string
+	BotUserID  string
+	Team       string
 }
 
 func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecret, code, redirectURI string) (slackOAuthResult, error) {
@@ -398,6 +399,7 @@ func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecre
 		AuthedUser  struct {
 			ID          string `json:"id"`
 			AccessToken string `json:"access_token"`
+			Scope       string `json:"scope"`
 		} `json:"authed_user"`
 		Team struct {
 			Name string `json:"name"`
@@ -416,12 +418,43 @@ func (a *slackSetupAPI) exchangeOAuth(ctx context.Context, clientID, clientSecre
 		return slackOAuthResult{}, err
 	}
 	return slackOAuthResult{
-		BotToken:  out.AccessToken,
-		UserToken: out.AuthedUser.AccessToken,
-		UserID:    out.AuthedUser.ID,
-		BotUserID: out.BotUserID,
-		Team:      out.Team.Name,
+		BotToken:   out.AccessToken,
+		UserToken:  out.AuthedUser.AccessToken,
+		UserScopes: splitSlackScopeList(out.AuthedUser.Scope),
+		UserID:     out.AuthedUser.ID,
+		BotUserID:  out.BotUserID,
+		Team:       out.Team.Name,
 	}, nil
+}
+
+func splitSlackScopeList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t' || r == '\n'
+	})
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func missingSlackOAuthUserScopes(got []string) []string {
+	have := map[string]bool{}
+	for _, s := range got {
+		have[strings.TrimSpace(s)] = true
+	}
+	var missing []string
+	for _, want := range slackManifestUserScopes {
+		if !have[want] {
+			missing = append(missing, want)
+		}
+	}
+	return missing
 }
 
 // ---------------------------------------------------------------------------
@@ -709,6 +742,11 @@ func (s *Server) handleSlackOAuthCallback(w http.ResponseWriter, r *http.Request
 	tokens, err := newSlackSetupAPI().exchangeOAuth(ctx, clientID, clientSecret, code, redirectURI)
 	if err != nil {
 		fail(http.StatusBadGateway, "token exchange failed: "+err.Error(), err.Error())
+		return
+	}
+	if missing := missingSlackOAuthUserScopes(tokens.UserScopes); len(missing) > 0 {
+		msg := "Slack returned a user token missing required scope(s): " + strings.Join(missing, ", ") + ". Recreate the Slack app so its manifest includes the new user scopes, then install again."
+		fail(http.StatusBadGateway, msg, msg)
 		return
 	}
 

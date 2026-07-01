@@ -62,6 +62,10 @@ Attention
                      show Attention Router cards awaiting operator review
   flow attention act <id> <make-task|forward|confirm-handoff|dismiss>
                      perform a simple operator-approved feed action
+  flow attention resolve <id>
+                     mark an open card handled without feedback or external action
+  flow attention merge <keep-id> <duplicate-id>...
+                     keep one open card and resolve duplicate cards in the same conversation
   flow attention sent <id> [--close-floating <floating-id>]
                      mark an approved send-reply card sent after confirmed post
   flow attention trace [--since 24h] [--disposition dropped|surfaced|error|all] [--limit 50]
@@ -71,6 +75,11 @@ Attention
   flow attention calibration
                      per (action × raw confidence band): the observed operator-agreement
                      rate (calibrated confidence) vs the raw band the model emitted
+  flow attention surface --channel <id> --ts <ts> [--matched-task <slug>]
+                     [--context-json-file <path>] [--ask-task-agent]
+                     internal steerer path: persist a card; --ask-task-agent
+                     sends the existing accept/decline handoff via flow tell
+                     and waits for that verdict instead of auto-acting
   flow attention handoff accept <correlation-id> --reason "<why>"
                      accept an Attention confirmed handoff from this task's inbox
   flow attention handoff decline <correlation-id> --reason "<why>"

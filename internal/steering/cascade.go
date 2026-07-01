@@ -452,11 +452,21 @@ func (c *Cascade) ObserveSelfAuthored(ctx context.Context, ev monitor.InboundEve
 	if !ok {
 		return nil
 	}
+	start := c.now()
+	tr := c.newTrace(ev, "self_echo", c.cleanText(ctx, ev.Text))
+	if c.skipDuplicateSessionDelivery(ev, tr, start) {
+		return nil
+	}
 	p := c.buildSteererDelivery(ctx, ev, true)
 	p.SelfEcho = true
 	if err := c.SessionSink.DeliverToChannelSession(key, p); err != nil {
 		c.log("steerer session self-echo delivery failed for %s: %v", key, err)
+		tr.Disposition, tr.StageReached, tr.Error = "error", "session", err.Error()
+		c.emitTrace(tr, start)
+		return nil
 	}
+	tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-echo → context_only"
+	c.emitTrace(tr, start)
 	return nil
 }
 
@@ -475,6 +485,9 @@ func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.Inbou
 	if !ok {
 		return false
 	}
+	if c.skipDuplicateSessionDelivery(ev, tr, start) {
+		return true
+	}
 	if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, false)); err != nil {
 		c.log("steerer session delivery failed for %s: %v; falling back to cold triage", key, err)
 		tr.Error = appendCascadeError(tr.Error, "session delivery failed: "+err.Error())
@@ -492,13 +505,19 @@ func (c *Cascade) deliverSurvivorToSession(ctx context.Context, ev monitor.Inbou
 // returns false so the caller emits the normal Stage-0 drop trace (fail-open).
 // Mirror of the inline block observe() used to carry; shared so ObserveBatch
 // gets the same behavior.
-func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time) bool {
+func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time, cfg WatchConfig) bool {
 	if !SteererSessionsEnabled() || c.SessionSink == nil {
+		return false
+	}
+	if !selfAuthoredSessionInScope(ev, cfg) {
 		return false
 	}
 	key, ok := sessionKeyForEvent(ev, c.GitHubCanonicalNum)
 	if !ok {
 		return false
+	}
+	if c.skipDuplicateSessionDelivery(ev, tr, start) {
+		return true
 	}
 	if err := c.SessionSink.DeliverToChannelSession(key, c.buildSteererDelivery(ctx, ev, true)); err != nil {
 		c.log("steerer session context-only delivery failed for %s: %v", key, err)
@@ -507,6 +526,28 @@ func (c *Cascade) deliverSelfAuthoredToSession(ctx context.Context, ev monitor.I
 	tr.Disposition, tr.StageReached, tr.DropReason = "delivered", "session", "self-authored → context_only"
 	c.emitTrace(tr, start)
 	return true
+}
+
+func (c *Cascade) skipDuplicateSessionDelivery(ev monitor.InboundEvent, tr *flowdb.SteeringTrace, start time.Time) bool {
+	seen, err := flowdb.HasDeliveredSteeringSessionEvent(c.DB, connectorOf(ev), ev.Channel, ev.TS)
+	if err != nil {
+		c.log("steerer session delivery dedupe check failed for %s/%s: %v", ev.Channel, ev.TS, err)
+		return false
+	}
+	if !seen {
+		return false
+	}
+	tr.Disposition, tr.StageReached, tr.DropReason = "dropped", "cache", "duplicate session delivery"
+	c.emitTrace(tr, start)
+	return true
+}
+
+func selfAuthoredSessionInScope(ev monitor.InboundEvent, cfg WatchConfig) bool {
+	probe := ev
+	// Re-run Stage 0 as a normal human message so context_only delivery keeps
+	// the same DM/mention/watched scope instead of creating sessions for noise.
+	probe.UserID = "__flow_non_self_stage0_probe__"
+	return Stage0(probe, cfg).Pass
 }
 
 // observe is the single-event triage path: Stage 0 → verdict cache →
@@ -526,7 +567,7 @@ func (c *Cascade) observe(ctx context.Context, ev monitor.InboundEvent, origin s
 			// Per-channel session model (GAP-10): feed the operator's own message to
 			// the channel session as context_only memory (never surfaced) so the
 			// session reasons correctly about follow-ups.
-			if c.deliverSelfAuthoredToSession(ctx, ev, tr, start) {
+			if c.deliverSelfAuthoredToSession(ctx, ev, tr, start, cfg) {
 				return nil
 			}
 		}
@@ -861,7 +902,7 @@ func (c *Cascade) ObserveBatch(ctx context.Context, evs []monitor.InboundEvent) 
 				c.learnFromOperatorReply(ctx, ev, "backfill")
 				// GAP-10 parity with observe(): feed the operator's own backfilled
 				// message into the channel session as context_only memory.
-				if c.deliverSelfAuthoredToSession(ctx, ev, tr, start) {
+				if c.deliverSelfAuthoredToSession(ctx, ev, tr, start, cfg) {
 					continue
 				}
 			}

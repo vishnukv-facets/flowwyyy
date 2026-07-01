@@ -656,7 +656,7 @@ func TestHandleSlackSetupOAuthCallbackMain_ExchangesCode(t *testing.T) {
 		if r.URL.Path != "/oauth.v2.access" {
 			t.Errorf("unexpected path %s", r.URL.Path)
 		}
-		fmt.Fprint(w, `{"ok":true,"access_token":"xoxb-main","authed_user":{"id":"UMAIN","access_token":"xoxp-main"},"team":{"name":"MainTeam"}}`)
+		fmt.Fprintf(w, `{"ok":true,"access_token":"xoxb-main","authed_user":{"id":"UMAIN","access_token":"xoxp-main","scope":"%s"},"team":{"name":"MainTeam"}}`, strings.Join(slackManifestUserScopes, ","))
 	})
 
 	dance, err := srv.startSlackOAuthDance("cid", "csec", 0)

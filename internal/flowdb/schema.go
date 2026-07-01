@@ -394,6 +394,30 @@ CREATE TABLE IF NOT EXISTS attention_handoffs (
     responded_at       TEXT
 );
 
+CREATE TABLE IF NOT EXISTS attention_workstreams (
+    id                     TEXT PRIMARY KEY,
+    source                 TEXT NOT NULL DEFAULT '',
+    channel                TEXT,
+    channel_type           TEXT,
+    canonical_thread_key   TEXT NOT NULL,
+    canonical_feed_item_id TEXT,
+    owner_task_slug        TEXT,
+    summary                TEXT NOT NULL DEFAULT '',
+    status                 TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','closed')),
+    created_at             TEXT NOT NULL,
+    updated_at             TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS attention_workstream_aliases (
+    thread_key    TEXT PRIMARY KEY,
+    workstream_id TEXT NOT NULL REFERENCES attention_workstreams(id) ON DELETE CASCADE,
+    feed_item_id  TEXT,
+    source        TEXT NOT NULL DEFAULT '',
+    channel       TEXT,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
 -- Persistent per-thread "running understanding" for the attention router
 -- (task steerer-thread-memory). Unlike attention_feed — whose coalescing upsert
 -- overwrites every verdict field per event — this row ACCUMULATES across events
@@ -542,6 +566,7 @@ CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_created_id ON steering
 CREATE INDEX IF NOT EXISTS idx_steering_trace_source_created_id ON steering_trace(source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition_source_created_id ON steering_trace(disposition, source, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_funnel ON steering_trace(created_at, disposition, stage_reached);
+CREATE INDEX IF NOT EXISTS idx_steering_trace_session_delivery ON steering_trace(source, channel, ts, disposition, stage_reached);
 CREATE INDEX IF NOT EXISTS idx_search_docs_scope ON search_docs(scope);
 CREATE INDEX IF NOT EXISTS idx_search_docs_entity ON search_docs(entity_type, entity_slug);
 CREATE INDEX IF NOT EXISTS idx_attention_feed_status ON attention_feed(status);
@@ -555,6 +580,7 @@ CREATE INDEX IF NOT EXISTS idx_attention_feedback_band ON attention_feedback(con
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_feed ON attention_handoffs(feed_item_id);
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_receiver ON attention_handoffs(receiver);
 CREATE INDEX IF NOT EXISTS idx_attention_handoffs_status ON attention_handoffs(status);
+CREATE INDEX IF NOT EXISTS idx_attention_workstream_alias_ws ON attention_workstream_aliases(workstream_id);
 CREATE INDEX IF NOT EXISTS idx_steering_trace_disposition ON steering_trace(disposition);
 
 CREATE TABLE IF NOT EXISTS chats (

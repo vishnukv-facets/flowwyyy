@@ -800,28 +800,34 @@ func auxFiles(dir string) []FileRef {
 }
 
 func artifactFiles(dir string) []FileRef {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil
-	}
 	var out []FileRef
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
+	if err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
 		}
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return nil
 		}
-		path := filepath.Join(dir, entry.Name())
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
 		out = append(out, FileRef{
-			Filename: entry.Name(),
+			Filename: rel,
 			Path:     path,
 			MTime:    info.ModTime().Format(time.RFC3339),
 			Size:     info.Size(),
 		})
+		return nil
+	}); err != nil {
+		return nil
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].MTime != out[j].MTime {
+			return out[i].MTime > out[j].MTime
+		}
 		return out[i].Filename < out[j].Filename
 	})
 	return out
@@ -1146,10 +1152,10 @@ func fileForEntity(root, kind, slug, section, filename string) (string, error) {
 		}
 		return filepath.Join(base, filename), nil
 	case "artifacts":
-		if !validFilename(filename) {
+		if !validArtifactPath(filename) {
 			return "", errors.New("invalid filename")
 		}
-		return filepath.Join(base, "artifacts", filename), nil
+		return filepath.Join(base, "artifacts", filepath.FromSlash(filename)), nil
 	default:
 		return "", errors.New("invalid section")
 	}
@@ -1164,6 +1170,22 @@ func validFilename(name string) bool {
 			continue
 		}
 		return false
+	}
+	return true
+}
+
+func validArtifactPath(name string) bool {
+	if name == "" || strings.Contains(name, `\`) || filepath.IsAbs(name) {
+		return false
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(name)))
+	if clean == "." || clean != name || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") {
+		return false
+	}
+	for _, part := range strings.Split(name, "/") {
+		if !validFilename(part) {
+			return false
+		}
 	}
 	return true
 }

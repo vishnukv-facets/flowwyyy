@@ -3,6 +3,7 @@ package flowdb
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // SteeringTrace is one row of the attention-router decision log: the full
@@ -71,6 +72,41 @@ func InsertSteeringTrace(db *sql.DB, t SteeringTrace) error {
 		return fmt.Errorf("flowdb: insert steering trace: %w", err)
 	}
 	return nil
+}
+
+// HasDeliveredSteeringSessionEvent reports whether this exact connector event
+// was already handed to a steerer session. The Slack/live/backfill paths can see
+// the same source message more than once; this check is the persisted guard that
+// keeps those retries from waking the model again.
+func HasDeliveredSteeringSessionEvent(db *sql.DB, source, channel, ts string) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	source = strings.TrimSpace(source)
+	channel = strings.TrimSpace(channel)
+	ts = strings.TrimSpace(ts)
+	if source == "" || channel == "" || ts == "" {
+		return false, nil
+	}
+	var one int
+	err := db.QueryRow(`
+		SELECT 1
+		FROM steering_trace
+		WHERE source = ?
+		  AND channel = ?
+		  AND ts = ?
+		  AND disposition = 'delivered'
+		  AND stage_reached = 'session'
+		LIMIT 1`,
+		source, channel, ts,
+	).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("flowdb: check delivered steering session event: %w", err)
+	}
+	return true, nil
 }
 
 // steeringTraceCols is the SELECT column list shared by ListSteeringTrace and
